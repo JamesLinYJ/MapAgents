@@ -11,9 +11,10 @@
 import type { Database } from '../db/connection.js'
 import type {
   SessionRecord, AgentThreadRecord, AnalysisRun, RunSummary, AgentState,
-  RunEvent, ConversationItem, AgentRuntimeConfig, ArtifactRef,
-  TranscriptEntry, TranscriptEntryKind, ThreadManifest, ThreadMemoryDocument,
-  CompactionRecord, MeteorologicalDatasetRecord,
+  RunEvent, ConversationItem, AgentRuntimeConfig, ArtifactRef, ContentRef,
+  RunCheckpoint, TranscriptEntry, TranscriptEntryKind, ThreadManifest,
+  ThreadMemoryDocument, CompactionRecord, MeteorologicalDatasetRecord,
+  ToolValueRef,
 } from '../schemas/types.js'
 import { makeId, nowUtc, makeShareToken } from '../utils/ids.js'
 import { InMemoryEventBus } from './eventBus.js'
@@ -103,8 +104,8 @@ export class PostgresPlatformStore {
       visibility: 'workspace',
       latestThreadId: null, latestRunId: null, latestUploadedLayerKey: null, latestMeteorologicalDatasetId: null,
     }
-    this.sessions.set(session.id, session)
     await this.conversationStore.saveSession(session)
+    this.sessions.set(session.id, session)
     return session
   }
 
@@ -119,8 +120,8 @@ export class PostgresPlatformStore {
         visibility: 'workspace',
         latestThreadId: null, latestRunId: null, latestUploadedLayerKey: null, latestMeteorologicalDatasetId: null,
       }
-      this.sessions.set(session.id, session)
       await this.conversationStore.saveSession(session)
+      this.sessions.set(session.id, session)
       return session
     }
   }
@@ -135,8 +136,8 @@ export class PostgresPlatformStore {
         visibility: 'workspace',
         latestThreadId: null, latestRunId: null, latestUploadedLayerKey: null, latestMeteorologicalDatasetId: null,
       }
-      this.sessions.set(session.id, session)
       await this.conversationStore.saveSession(session)
+      this.sessions.set(session.id, session)
       return session
     }
   }
@@ -149,9 +150,10 @@ export class PostgresPlatformStore {
 
   async updateSession(sessionId: string, fields: Partial<SessionRecord>): Promise<SessionRecord> {
     const s = this.getSession(sessionId)
-    Object.assign(s, fields)
-    await this.conversationStore.saveSession(s)
-    return s
+    const next = { ...s, ...fields }
+    await this.conversationStore.saveSession(next)
+    this.sessions.set(sessionId, next)
+    return next
   }
 
   async getRuntimeConfig(configKey: string): Promise<Record<string, unknown> | null> {
@@ -205,87 +207,21 @@ export class PostgresPlatformStore {
     sessionId?: string | null
     threadId?: string | null
     filename?: string | null
+    workspaceId?: string | null
     limit?: number
   } = {}): Promise<MeteorologicalDatasetRecord[]> {
     const limit = Math.max(1, Math.min(filters.limit ?? 100, 500))
-    if (filters.filename && filters.threadId && filters.sessionId) {
-      const result = await this.db.execute(sql`
-        SELECT *
-        FROM platform_meteorological_datasets
-        WHERE session_id = ${filters.sessionId}
-          AND thread_id = ${filters.threadId}
-          AND lower(filename) = lower(${filters.filename})
-        ORDER BY updated_at DESC
-        LIMIT ${limit}
-      `)
-      return result.rows.map(row => mapMeteorologicalDatasetRow(row as Record<string, unknown>))
-    }
-    if (filters.filename && filters.threadId) {
-      const result = await this.db.execute(sql`
-        SELECT *
-        FROM platform_meteorological_datasets
-        WHERE thread_id = ${filters.threadId}
-          AND lower(filename) = lower(${filters.filename})
-        ORDER BY updated_at DESC
-        LIMIT ${limit}
-      `)
-      return result.rows.map(row => mapMeteorologicalDatasetRow(row as Record<string, unknown>))
-    }
-    if (filters.filename && filters.sessionId) {
-      const result = await this.db.execute(sql`
-        SELECT *
-        FROM platform_meteorological_datasets
-        WHERE session_id = ${filters.sessionId}
-          AND lower(filename) = lower(${filters.filename})
-        ORDER BY updated_at DESC
-        LIMIT ${limit}
-      `)
-      return result.rows.map(row => mapMeteorologicalDatasetRow(row as Record<string, unknown>))
-    }
-    if (filters.threadId && filters.sessionId) {
-      const result = await this.db.execute(sql`
-        SELECT *
-        FROM platform_meteorological_datasets
-        WHERE session_id = ${filters.sessionId}
-          AND thread_id = ${filters.threadId}
-        ORDER BY updated_at DESC
-        LIMIT ${limit}
-      `)
-      return result.rows.map(row => mapMeteorologicalDatasetRow(row as Record<string, unknown>))
-    }
-    if (filters.threadId) {
-      const result = await this.db.execute(sql`
-        SELECT *
-        FROM platform_meteorological_datasets
-        WHERE thread_id = ${filters.threadId}
-        ORDER BY updated_at DESC
-        LIMIT ${limit}
-      `)
-      return result.rows.map(row => mapMeteorologicalDatasetRow(row as Record<string, unknown>))
-    }
-    if (filters.sessionId) {
-      const result = await this.db.execute(sql`
-        SELECT *
-        FROM platform_meteorological_datasets
-        WHERE session_id = ${filters.sessionId}
-        ORDER BY updated_at DESC
-        LIMIT ${limit}
-      `)
-      return result.rows.map(row => mapMeteorologicalDatasetRow(row as Record<string, unknown>))
-    }
-    if (filters.filename) {
-      const result = await this.db.execute(sql`
-        SELECT *
-        FROM platform_meteorological_datasets
-        WHERE lower(filename) = lower(${filters.filename})
-        ORDER BY updated_at DESC
-        LIMIT ${limit}
-      `)
-      return result.rows.map(row => mapMeteorologicalDatasetRow(row as Record<string, unknown>))
-    }
+    const conditions = [
+      filters.workspaceId ? sql`workspace_id = ${filters.workspaceId}` : null,
+      filters.sessionId ? sql`session_id = ${filters.sessionId}` : null,
+      filters.threadId ? sql`thread_id = ${filters.threadId}` : null,
+      filters.filename ? sql`lower(filename) = lower(${filters.filename})` : null,
+    ].filter((condition): condition is ReturnType<typeof sql> => condition !== null)
+    const whereClause = conditions.length > 0 ? sql`WHERE ${sql.join(conditions, sql` AND `)}` : sql``
     const result = await this.db.execute(sql`
       SELECT *
       FROM platform_meteorological_datasets
+      ${whereClause}
       ORDER BY updated_at DESC
       LIMIT ${limit}
     `)
@@ -301,10 +237,12 @@ export class PostgresPlatformStore {
   }): Promise<MeteorologicalDatasetRecord | null> {
     const explicitDatasetId = filters.datasetId?.trim()
     if (explicitDatasetId && explicitDatasetId !== 'latest_upload') {
+      const workspaceClause = filters.workspaceId ? sql`AND workspace_id = ${filters.workspaceId}` : sql``
       const result = await this.db.execute(sql`
         SELECT *
         FROM platform_meteorological_datasets
         WHERE dataset_id = ${explicitDatasetId}
+        ${workspaceClause}
         LIMIT 1
       `)
       const record = result.rows[0] ? mapMeteorologicalDatasetRow(result.rows[0] as Record<string, unknown>) : null
@@ -314,9 +252,10 @@ export class PostgresPlatformStore {
       sessionId: filters.sessionId,
       threadId: filters.threadId ?? null,
       filename: filters.filename ?? null,
+      workspaceId: filters.workspaceId ?? null,
       limit: 1,
     })
-    return matches.find(record => belongsToWorkspace(record, filters.workspaceId)) ?? null
+    return matches[0] ?? null
   }
 
   async persistArtifact(artifact: ArtifactRef): Promise<void> {
@@ -371,9 +310,9 @@ export class PostgresPlatformStore {
       latestRunStatus: null, latestArtifactId: null, latestArtifactName: null,
       historyPreview: null, conversationPath: null,
     }
+    const manifest = await this.conversationStore.createThread(thread)
     this.threads.set(thread.id, thread)
     this.addToIndex(this.threadIdsBySessionId, sessionId, thread.id)
-    const manifest = await this.conversationStore.createThread(thread)
     this.threadUpdateBus.publish(thread.id, { thread: structuredClone(thread), manifest })
     await this.updateSession(sessionId, { latestThreadId: thread.id })
     return thread
@@ -388,32 +327,33 @@ export class PostgresPlatformStore {
   async updateThread(threadId: string, fields: Partial<AgentThreadRecord>): Promise<AgentThreadRecord> {
     const t = this.getThread(threadId)
     const previousSessionId = t.sessionId
-    Object.assign(t, fields, { updatedAt: nowUtc() })
-    if (previousSessionId !== t.sessionId || t.status === 'deleted') {
+    const next = { ...t, ...fields, updatedAt: nowUtc() }
+    const manifest = await this.conversationStore.saveThread(next)
+    this.threads.set(threadId, next)
+    if (previousSessionId !== next.sessionId || next.status === 'deleted') {
       this.removeFromIndex(this.threadIdsBySessionId, previousSessionId, threadId)
-      if (t.status !== 'deleted') this.addToIndex(this.threadIdsBySessionId, t.sessionId, threadId)
+      if (next.status !== 'deleted') this.addToIndex(this.threadIdsBySessionId, next.sessionId, threadId)
     }
-    const manifest = await this.conversationStore.saveThread(t)
-    this.threadUpdateBus.publish(threadId, { thread: structuredClone(t), manifest })
-    return t
+    this.threadUpdateBus.publish(threadId, { thread: structuredClone(next), manifest })
+    return next
   }
 
   async deleteThread(threadId: string): Promise<void> {
     const t = this.getThread(threadId)
-    t.status = 'deleted'
-    await this.conversationStore.saveThread(t)
+    const next = { ...t, status: 'deleted' as const, updatedAt: nowUtc() }
+    await this.conversationStore.saveThread(next)
     await this.conversationStore.moveThreadToTrash(threadId)
     this.threads.delete(threadId)
-    this.removeFromIndex(this.threadIdsBySessionId, t.sessionId, threadId)
+    this.removeFromIndex(this.threadIdsBySessionId, next.sessionId, threadId)
     const threadRunIds = this.runIdsByThreadId.get(threadId)
     if (threadRunIds) {
-      for (const runId of threadRunIds) this.removeFromIndex(this.runIdsBySessionId, t.sessionId, runId)
+      for (const runId of threadRunIds) this.removeFromIndex(this.runIdsBySessionId, next.sessionId, runId)
       this.runIdsByThreadId.delete(threadId)
     }
-    const session = this.getSession(t.sessionId)
+    const session = this.getSession(next.sessionId)
     if (session.latestThreadId === threadId) {
-      const replacement = this.listThreadsForSession(t.sessionId)[0] ?? null
-      await this.updateSession(t.sessionId, { latestThreadId: replacement?.id ?? null })
+      const replacement = this.listThreadsForSession(next.sessionId)[0] ?? null
+      await this.updateSession(next.sessionId, { latestThreadId: replacement?.id ?? null })
     }
   }
 
@@ -499,50 +439,60 @@ export class PostgresPlatformStore {
         failedStepId: null, failedTool: null,
       },
     }
+    await this.conversationStore.createRun(run)
+    const nextSession = {
+      ...session,
+      latestRunId: run.id,
+      latestThreadId: thread?.id ?? session.latestThreadId,
+    }
+    let nextThread: AgentThreadRecord | null = null
+    if (thread) {
+      nextThread = {
+        ...thread,
+        latestRunId: run.id,
+        latestUserQuery: query,
+        latestRunStatus: run.status,
+        runCount: thread.runCount + 1,
+        updatedAt: now,
+      }
+      await this.conversationStore.saveThread(nextThread)
+    }
+    await this.conversationStore.saveSession(nextSession)
     this.runs.set(run.id, run)
     this.indexRun(run)
-    await this.conversationStore.createRun(run)
+    this.sessions.set(session.id, nextSession)
+    if (nextThread) this.threads.set(nextThread.id, nextThread)
     this.runBus.publish(run.id, structuredClone(run))
-    session.latestRunId = run.id
-    if (thread) {
-      session.latestThreadId = thread.id
-      thread.latestRunId = run.id
-      thread.latestUserQuery = query
-      thread.latestRunStatus = run.status
-      thread.runCount += 1
-      thread.updatedAt = now
-      await this.conversationStore.saveThread(thread)
-    }
-    await this.conversationStore.saveSession(session)
     return run
   }
 
   async updateRunState(runId: string, updates: Partial<AgentState>): Promise<AnalysisRun> {
     const r = this.getRun(runId)
-    Object.assign(r.state, updates)
-    r.updatedAt = nowUtc()
-    await this.conversationStore.saveRun(r)
-    this.runBus.publish(runId, structuredClone(r))
-    return r
+    const next = { ...r, state: { ...r.state, ...updates }, updatedAt: nowUtc() }
+    await this.conversationStore.saveRun(next)
+    this.runs.set(runId, next)
+    this.runBus.publish(runId, structuredClone(next))
+    return next
   }
 
   async updateRunStatus(runId: string, status: AnalysisRun['status']): Promise<AnalysisRun> {
     const run = this.getRun(runId)
-    run.status = status
-    run.updatedAt = nowUtc()
+    const next = { ...run, status, updatedAt: nowUtc() }
+    let nextThread: AgentThreadRecord | null = null
     if (run.threadId) {
       const thread = this.threads.get(run.threadId)
       if (thread) {
-        thread.latestRunStatus = status
-        thread.updatedAt = run.updatedAt
-        await this.conversationStore.saveThread(thread)
+        nextThread = { ...thread, latestRunStatus: status, updatedAt: next.updatedAt }
+        await this.conversationStore.saveThread(nextThread)
       }
     }
-    await this.conversationStore.saveRun(run, {
+    await this.conversationStore.saveRun(next, {
       recoveryStatus: status === 'interrupted' ? 'interrupted' : status === 'requires_action' ? 'requires_action' : 'clean',
     })
-    this.runBus.publish(runId, structuredClone(run))
-    return run
+    this.runs.set(runId, next)
+    if (nextThread) this.threads.set(nextThread.id, nextThread)
+    this.runBus.publish(runId, structuredClone(next))
+    return next
   }
 
   // 派生索引只加速 JSONL 投影读取；清空后可由当前内存快照完整重建。
@@ -588,31 +538,93 @@ export class PostgresPlatformStore {
 
   async completeRun(runId: string, status: string): Promise<AnalysisRun> {
     const r = this.getRun(runId)
-    r.status = status as AnalysisRun['status']
-    r.updatedAt = nowUtc()
+    const next = { ...r, status: status as AnalysisRun['status'], updatedAt: nowUtc() }
+    let nextThread: AgentThreadRecord | null = null
     if (r.threadId) {
       const thread = this.threads.get(r.threadId)
       if (thread) {
-        thread.latestRunStatus = r.status
-        thread.updatedAt = r.updatedAt
-        await this.conversationStore.saveThread(thread)
+        nextThread = { ...thread, latestRunStatus: next.status, updatedAt: next.updatedAt }
+        await this.conversationStore.saveThread(nextThread)
       }
     }
-    await this.conversationStore.saveRun(r, {
-      recoveryStatus: r.status === 'waiting_approval' || r.status === 'requires_action'
+    await this.conversationStore.saveRun(next, {
+      recoveryStatus: next.status === 'waiting_approval' || next.status === 'requires_action'
         ? 'requires_action'
         : 'clean',
     })
     await this.conversationStore.flush()
-    this.runBus.publish(runId, structuredClone(r))
-    return r
+    this.runs.set(runId, next)
+    if (nextThread) this.threads.set(nextThread.id, nextThread)
+    this.runBus.publish(runId, structuredClone(next))
+    return next
+  }
+
+  // --- conversationStore 窄封装 ---
+  //
+  // agent runtime、toolExecutionCoordinator、contextManager、resultPersistence
+  // 只应通过这些封装方法访问底层文件事实源；它们不应直接引用 conversationStore。
+  // PostgresPlatformStore 自身仍可以直接使用 conversationStore 以维护线程/会话/运行/transcript 事实源边界。
+
+  async saveRunCheckpoint(
+    runId: string,
+    fields: Partial<Pick<RunCheckpoint, 'activeEntryId' | 'pendingToolCallIds' | 'recoveryStatus'>> = {},
+  ): Promise<void> {
+    const run = this.getRun(runId)
+    await this.conversationStore.saveRun(run, fields)
+  }
+
+  async getRunCheckpoint(runId: string): Promise<RunCheckpoint> {
+    return this.conversationStore.getRunCheckpoint(runId)
+  }
+
+  async appendAgentTranscript(
+    runId: string,
+    agentId: string,
+    record: Record<string, unknown>,
+  ): Promise<void> {
+    await this.conversationStore.appendAgentTranscript(runId, agentId, record)
+  }
+
+  async saveAgentsSdkState(
+    runId: string,
+    serializedState: string,
+    metadata: { agentsSdkVersion: string; runtimeConfigDigest: string },
+  ): Promise<void> {
+    await this.conversationStore.saveAgentsSdkState(runId, serializedState, metadata)
+  }
+
+  async readAgentsSdkState(runId: string): Promise<string> {
+    return this.conversationStore.readAgentsSdkState(runId)
+  }
+
+  async putConversationObject(
+    content: string | Uint8Array,
+    mediaType = 'application/octet-stream',
+  ): Promise<ContentRef> {
+    return this.conversationStore.putObject(content, mediaType)
+  }
+
+  async readConversationObject(reference: ContentRef): Promise<Uint8Array> {
+    return this.conversationStore.readObject(reference)
+  }
+
+  async appendToolValue(runId: string, value: ToolValueRef): Promise<void> {
+    await this.conversationStore.appendValue(runId, value)
+  }
+
+  async flushConversationStore(): Promise<void> {
+    await this.conversationStore.flush()
+  }
+
+  getConversationStoreRoot(): string {
+    return this.conversationStoreRoot
   }
 
   // --- Events & Items ---
 
-  appendEvent(runId: string, event: RunEvent): void {
+  async appendEvent(runId: string, event: RunEvent): Promise<void> {
+    await this.conversationStore.appendEvent(event)
     this.eventBus.publish(runId, event)
-    this.conversationStore.appendEvent(event)
   }
 
   async listEvents(runId: string): Promise<RunEvent[]> {
@@ -621,12 +633,10 @@ export class PostgresPlatformStore {
     return dedupeById([...persisted, ...current], event => event.eventId)
   }
 
-  appendItem(item: ConversationItem): void {
+  async appendItem(item: ConversationItem): Promise<void> {
+    await this.conversationStore.appendItem(item)
     this.itemBus.publish(item.runId, item)
-    if (item.status !== 'running') {
-      this.conversationStore.appendItem(item)
-      this.updateThreadProjectionFromItem(item)
-    }
+    if (item.status !== 'running') await this.updateThreadProjectionFromItem(item)
   }
 
   async listItems(runId: string): Promise<ConversationItem[]> {
@@ -638,30 +648,29 @@ export class PostgresPlatformStore {
     return [...byItemId.values()].sort((a, b) => a.timestamp.localeCompare(b.timestamp))
   }
 
-  private updateThreadProjectionFromItem(item: ConversationItem): void {
+  private async updateThreadProjectionFromItem(item: ConversationItem): Promise<void> {
     if (!item.threadId) return
     const thread = this.threads.get(item.threadId)
     if (!thread) return
 
-    let changed = false
+    let next = thread
     if (item.itemType === 'message' && item.role === 'assistant') {
       const summary = summarizeAssistantText(item.body ?? '')
       if (summary && thread.latestAssistantSummary !== summary) {
-        thread.latestAssistantSummary = summary
-        changed = true
+        next = { ...next, latestAssistantSummary: summary }
       }
     }
     if (item.itemType === 'result') {
       const run = this.runs.get(item.runId)
       if (run && thread.latestRunStatus !== run.status) {
-        thread.latestRunStatus = run.status
-        changed = true
+        next = { ...next, latestRunStatus: run.status }
       }
     }
 
-    if (!changed) return
-    thread.updatedAt = nowUtc()
-    void this.conversationStore.saveThread(thread)
+    if (next === thread) return
+    next = { ...next, updatedAt: nowUtc() }
+    await this.conversationStore.saveThread(next)
+    this.threads.set(next.id, next)
   }
 
   async getThreadManifest(threadId: string): Promise<ThreadManifest> {
@@ -754,16 +763,15 @@ export class PostgresPlatformStore {
 
   async restoreThread(threadId: string): Promise<AgentThreadRecord> {
     const restored = await this.conversationStore.restoreThread(threadId)
-    restored.thread.status = 'active'
-    restored.thread.updatedAt = nowUtc()
-    this.threads.set(threadId, restored.thread)
-    this.addToIndex(this.threadIdsBySessionId, restored.thread.sessionId, threadId)
+    const nextThread = { ...restored.thread, status: 'active' as const, updatedAt: nowUtc() }
+    await this.conversationStore.saveThread(nextThread, restored.manifest)
+    this.threads.set(threadId, nextThread)
+    this.addToIndex(this.threadIdsBySessionId, nextThread.sessionId, threadId)
     for (const run of this.runs.values()) {
       if (run.threadId === threadId) this.indexRun(run)
     }
-    await this.conversationStore.saveThread(restored.thread, restored.manifest)
-    this.threadUpdateBus.publish(threadId, { thread: structuredClone(restored.thread), manifest: restored.manifest })
-    return restored.thread
+    this.threadUpdateBus.publish(threadId, { thread: structuredClone(nextThread), manifest: restored.manifest })
+    return nextThread
   }
 
   async purgeThread(threadId: string): Promise<void> {

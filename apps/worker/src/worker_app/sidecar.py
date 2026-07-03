@@ -50,6 +50,7 @@ WORKER_MAX_BODY_BYTES = int(os.environ.get("WORKER_MAX_BODY_BYTES", str(16 * 102
 WORKER_MAX_CONCURRENCY = int(os.environ.get("WORKER_MAX_CONCURRENCY", "2"))
 WORKER_CLOCK_SKEW_SECONDS = int(os.environ.get("WORKER_CLOCK_SKEW_SECONDS", "30"))
 WORKER_TOOL_TIMEOUT_SECONDS = float(os.environ.get("WORKER_TOOL_TIMEOUT_SECONDS", "300"))
+WORKER_NONCE_CACHE_MAX = max(1, int(os.environ.get("WORKER_NONCE_CACHE_MAX", "10000")))
 _worker_semaphore = asyncio.Semaphore(WORKER_MAX_CONCURRENCY)
 _seen_nonces: dict[str, int] = {}
 
@@ -138,7 +139,7 @@ def _verify_worker_authorization(
     nonce = payload.get("nonce")
     if not isinstance(nonce, str) or len(nonce) < 16:
         return 403, "Worker 授权 nonce 无效"
-    _purge_expired_nonces(now)
+    _purge_expired_nonces(now, reserve_slots=1)
     if nonce in _seen_nonces:
         return 403, "Worker 授权 nonce 已使用"
     _seen_nonces[nonce] = exp
@@ -154,10 +155,18 @@ def _int_payload(value: Any) -> int | None:
     return value if isinstance(value, int) and value > 0 else None
 
 
-def _purge_expired_nonces(now: int) -> None:
+def _purge_expired_nonces(now: int, reserve_slots: int = 0) -> None:
+    # 清理已过期的 nonce
     expired = [nonce for nonce, exp in _seen_nonces.items() if exp < now]
     for nonce in expired:
         _seen_nonces.pop(nonce, None)
+    # 超容量上限时淘汰最早过期的 nonce（exp 最小优先淘汰）
+    target_size = max(0, WORKER_NONCE_CACHE_MAX - reserve_slots)
+    overflow = len(_seen_nonces) - target_size
+    if overflow > 0:
+        sorted_by_exp = sorted(_seen_nonces.items(), key=lambda item: item[1])
+        for nonce, _exp in sorted_by_exp[:overflow]:
+            _seen_nonces.pop(nonce, None)
 
 
 class ToolRequest(BaseModel):
@@ -685,4 +694,6 @@ async def health():
         "ready": True,
         "runtimeRoot": str(RUNTIME_ROOT),
         "gisMeteorologyAvailable": True,
+        "nonceCacheSize": len(_seen_nonces),
+        "nonceCacheMax": WORKER_NONCE_CACHE_MAX,
     }

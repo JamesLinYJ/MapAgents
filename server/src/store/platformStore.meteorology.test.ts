@@ -42,6 +42,25 @@ describe('PostgresPlatformStore meteorological datasets', () => {
     expect(fixture.queries[0]?.text).toContain('thread_id =')
     expect(fixture.queries[0]?.text).toContain('lower(filename)')
   })
+
+  it('pushes workspace scope into the dataset list SQL query', async () => {
+    const fixture = createMeteorologicalDb([
+      datasetRow('dataset-a', 'session-a', 'thread-a', 'target.nc', '2026-07-01T00:00:00.000Z', 'workspace-a'),
+      datasetRow('dataset-b', 'session-a', 'thread-a', 'target.nc', '2026-07-01T01:00:00.000Z', 'workspace-b'),
+    ])
+    const store = new PostgresPlatformStore(fixture.db, path.join(os.tmpdir(), 'geo-store-meteorology-workspace'))
+
+    const rows = await store.listMeteorologicalDatasets({
+      workspaceId: 'workspace-b',
+      threadId: 'thread-a',
+      filename: 'target.nc',
+    })
+
+    expect(rows.map(row => row.datasetId)).toEqual(['dataset-b'])
+    expect(fixture.queries[0]?.text).toContain('workspace_id =')
+    expect(fixture.queries[0]?.text).toContain('thread_id =')
+    expect(fixture.queries[0]?.text).toContain('lower(filename)')
+  })
 })
 
 interface CapturedQuery {
@@ -67,12 +86,14 @@ function createMeteorologicalDb(rows: DatasetRow[]): { db: Database; queries: Ca
 // 测试目标是确认作用域谓词进入查询，而不是做端到端 SQL 引擎替身。
 function filterRows(rows: DatasetRow[], query: CapturedQuery): DatasetRow[] {
   let valueIndex = 0
+  const workspaceId = query.text.includes('workspace_id =') ? String(query.values[valueIndex++]) : null
   const sessionId = query.text.includes('session_id =') ? String(query.values[valueIndex++]) : null
   const threadId = query.text.includes('thread_id =') ? String(query.values[valueIndex++]) : null
   const filename = query.text.includes('lower(filename)') ? String(query.values[valueIndex++]).toLowerCase() : null
   const limit = Number(query.values.at(-1) ?? rows.length)
 
   return rows
+    .filter(row => !workspaceId || row.workspace_id === workspaceId)
     .filter(row => !sessionId || row.session_id === sessionId)
     .filter(row => !threadId || row.thread_id === threadId)
     .filter(row => !filename || String(row.filename).toLowerCase() === filename)
@@ -86,15 +107,19 @@ function captureQuery(query: unknown): CapturedQuery {
     : []
   const text: string[] = []
   const values: unknown[] = []
-  for (const chunk of chunks) {
+  for (const chunk of chunks) appendQueryChunk(chunk, text, values)
+  return { text: text.join(''), values }
+}
+
+function appendQueryChunk(chunk: unknown, text: string[], values: unknown[]): void {
     if (isStringChunk(chunk)) {
       text.push(chunk.value.join(''))
+    } else if (hasQueryChunks(chunk)) {
+      for (const nested of chunk.queryChunks) appendQueryChunk(nested, text, values)
     } else {
       text.push('?')
       values.push(chunk)
     }
-  }
-  return { text: text.join(''), values }
 }
 
 function isStringChunk(value: unknown): value is { value: string[] } {
@@ -103,15 +128,25 @@ function isStringChunk(value: unknown): value is { value: string[] } {
     && Array.isArray((value as { value?: unknown }).value)
 }
 
+function hasQueryChunks(value: unknown): value is { queryChunks: unknown[] } {
+  return typeof value === 'object'
+    && value !== null
+    && Array.isArray((value as { queryChunks?: unknown }).queryChunks)
+}
+
 function datasetRow(
   datasetId: string,
   sessionId: string,
   threadId: string,
   filename: string,
   updatedAt: string,
+  workspaceId: string | null = null,
 ): DatasetRow {
   return {
     dataset_id: datasetId,
+    workspace_id: workspaceId,
+    created_by_user_id: null,
+    visibility: 'workspace',
     session_id: sessionId,
     thread_id: threadId,
     filename,

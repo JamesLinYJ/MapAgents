@@ -40,9 +40,155 @@ import type {
   WsControlCommand,
   WorkspaceBootstrapSnapshot,
 } from '@geo-agent-platform/shared-types'
+
+// 响应协议校验 — 在关键 HTTP / WS 入口用后端共用的 Zod schema 解析，
+// 避免裸 as T 掩藏协议不匹配。
+import {
+  authMeSchema,
+  sessionRecordSchema,
+  analysisRunSchema,
+  agentThreadRecordSchema,
+  basemapDescriptorSchema,
+  meteorologicalDatasetRecordSchema,
+  meteorologicalJobRecordSchema,
+  agentRuntimeConfigSchema,
+  systemComponentsStatusSchema,
+  toolDescriptorSchema,
+  modelProviderDescriptorSchema,
+  layerDescriptorSchema,
+  memoryFileRecordSchema,
+  memorySearchResultSchema,
+  speechAuthorizationSchema,
+  compactionRecordSchema,
+  threadMemoryDocumentSchema,
+  contextAssemblyReportSchema,
+  conversationItemSchema,
+  runEventSchema,
+  runSummarySchema,
+} from '@geo-agent-platform/shared-types'
 import { wsClient } from '../ws/client'
 import { signOutWithBetterAuth } from './authClient'
 import { API_UNAVAILABLE_MESSAGE, formatApiError, isApiUnavailableMessage } from './errors'
+
+// -- 响应 Schema 校验工具 --------------------------------------------------
+
+/** Zod schema 必需满足的最小 safeParse 接口 */
+export interface SchemaParseError {
+  issues: Array<{ path: PropertyKey[]; message: string }>
+}
+
+/** 兼容 Zod v3/v4 schema 对象的鸭子类型 */
+export type ResponseSchema<T> = {
+  safeParse(data: unknown): { success: true; data: T } | { success: false; error: SchemaParseError }
+}
+
+/** 将单项 schema 组合为数组 schema */
+export function arraySchema<T>(itemSchema: ResponseSchema<T>): ResponseSchema<T[]> {
+  return {
+    safeParse(data: unknown) {
+      if (!Array.isArray(data)) {
+        return {
+          success: false,
+          error: { issues: [{ path: [], message: '预期为数组格式' }] },
+        }
+      }
+      const result: T[] = []
+      for (let i = 0; i < data.length; i++) {
+        const r = itemSchema.safeParse(data[i])
+        if (!r.success) {
+          return {
+            success: false,
+            error: {
+              issues: r.error.issues.map((issue) => ({
+                path: [i, ...issue.path],
+                message: issue.message,
+              })),
+            },
+          }
+        }
+        result.push(r.data)
+      }
+      return { success: true, data: result }
+    },
+  }
+}
+
+/** 将单项 schema 包装为可空 schema */
+export function nullableSchema<T>(itemSchema: ResponseSchema<T>): ResponseSchema<T | null> {
+  return {
+    safeParse(data: unknown) {
+      if (data === null || data === undefined) return { success: true, data: null }
+      return itemSchema.safeParse(data) as { success: true; data: T | null } | { success: false; error: SchemaParseError }
+    },
+  }
+}
+
+// -- 组合 schema -----------------------------------------------------------
+//
+// 对 { items: T[]; nextCursor: string | null } 这类分页响应包装 Zod 校验，
+// 避免后端接口升级后 items 内部字段漂移被裸 as T 掩藏。
+
+function pageItemsSchema<T>(itemSchema: ResponseSchema<T>): ResponseSchema<{ items: T[]; nextCursor: string | null }> {
+  return {
+    safeParse(data: unknown) {
+      if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+        return { success: false, error: { issues: [{ path: [], message: '预期为分页对象' }] } }
+      }
+      const obj = data as Record<string, unknown>
+      if (!Array.isArray(obj.items)) {
+        return { success: false, error: { issues: [{ path: ['items'], message: 'items 字段缺失或不是数组' }] } }
+      }
+      const itemsResult = arraySchema(itemSchema).safeParse(obj.items)
+      if (!itemsResult.success) return { success: false, error: itemsResult.error }
+      return { success: true, data: { items: itemsResult.data, nextCursor: (typeof obj.nextCursor === 'string' ? obj.nextCursor : null) } }
+    },
+  }
+}
+
+const runSummaryPageSchema = pageItemsSchema(runSummarySchema)
+
+const memorySearchResultPageSchema: ResponseSchema<{ matches: MemorySearchResult[]; total: number }> = {
+  safeParse(data: unknown) {
+    if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+      return { success: false, error: { issues: [{ path: [], message: '预期为对象' }] } }
+    }
+    const obj = data as Record<string, unknown>
+    if (!Array.isArray(obj.matches)) {
+      return { success: false, error: { issues: [{ path: ['matches'], message: 'matches 字段缺失或不是数组' }] } }
+    }
+    const matchesResult = arraySchema(memorySearchResultSchema).safeParse(obj.matches)
+    if (!matchesResult.success) return { success: false, error: matchesResult.error }
+    return { success: true, data: { matches: matchesResult.data, total: typeof obj.total === 'number' ? obj.total : 0 } }
+  },
+}
+
+const subscribeRunResponseSchema: ResponseSchema<{ run: AnalysisRun; items: ConversationItem[]; events: RunEvent[] }> = {
+  safeParse(data: unknown) {
+    if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+      return { success: false, error: { issues: [{ path: [], message: '预期为对象' }] } }
+    }
+    const obj = data as Record<string, unknown>
+    const runResult = analysisRunSchema.safeParse(obj.run)
+    if (!runResult.success) return runResult
+    const itemsResult = arraySchema(conversationItemSchema).safeParse(obj.items)
+    if (!itemsResult.success) return itemsResult
+    const eventsResult = arraySchema(runEventSchema).safeParse(obj.events)
+    if (!eventsResult.success) return eventsResult
+    return { success: true, data: { run: runResult.data, items: itemsResult.data, events: eventsResult.data } }
+  },
+}
+
+/** 将 Zod 校验失败信息序列化为稳定中文协议错误 */
+export function formatSchemaValidationError(context: string, issues: SchemaParseError['issues']): string {
+  const detail = issues
+    .slice(0, 5)
+    .map((issue) => {
+      const path = issue.path.length ? issue.path.map(part => String(part)).join('.') : '(根)'
+      return `${path}: ${issue.message}`
+    })
+    .join('；')
+  return `服务响应格式不符合 GeoForge 协议（${context}）：${detail}`
+}
 
 // API 地址解析
 //
@@ -96,8 +242,9 @@ async function extractErrorDetail(response: Response): Promise<string> {
   return text.trim() || response.statusText || `HTTP ${response.status}`
 }
 
-async function requestJson<T>(path: string, init?: RequestInit, timeoutMs = 30_000): Promise<T> {
-  // 通用 JSON 请求入口。
+async function requestJson<T>(path: string, init?: RequestInit, timeoutMs = 30_000, schema?: ResponseSchema<T>): Promise<T> {
+  // 通用 JSON 请求入口 — 支持可选的 Zod schema 校验，
+  // 防止后端协议变更时裸 as T 掩藏字段缺失或类型错误。
   let response: Response
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -126,7 +273,17 @@ async function requestJson<T>(path: string, init?: RequestInit, timeoutMs = 30_0
     throw new Error(formatHttpError(response, await extractErrorDetail(response)))
   }
 
-  return (await response.json()) as T
+  const data = await response.json()
+
+  if (schema) {
+    const parsed = schema.safeParse(data)
+    if (!parsed.success) {
+      throw new Error(formatSchemaValidationError(`HTTP ${path}`, parsed.error.issues))
+    }
+    return parsed.data
+  }
+
+  return data as T
 }
 
 async function requestFormJson<T>(path: string, body: FormData, failurePrefix: string, timeoutMs = 120_000): Promise<T> {
@@ -176,14 +333,28 @@ function formatHttpError(response: Response, detail: string): string {
 }
 
 // 业务控制命令统一走 /ws；响应必须是具有关联请求 ID 的成功/错误 envelope。
-async function requestControl<T>(type: WsControlCommand, payload: Record<string, unknown> = {}): Promise<T> {
+//
+// 可选 schema 参数来自 @geo-agent-platform/shared-types 中的 Zod schema，
+// 校验通过后才返回，失败时抛出稳定中文协议错误。
+async function requestControl<T>(type: WsControlCommand, payload: Record<string, unknown> = {}, schema?: ResponseSchema<T>): Promise<T> {
   const message = await wsClient.send(type, payload)
   if (message.payload.ok !== true) {
     const error = message.payload.error
     const detail = typeof error === 'object' && error && 'message' in error ? String(error.message) : 'WebSocket 命令失败'
     throw new Error(detail)
   }
-  return message.payload.data as T
+
+  const data = message.payload.data
+
+  if (schema) {
+    const parsed = schema.safeParse(data)
+    if (!parsed.success) {
+      throw new Error(formatSchemaValidationError(`WS ${type}`, parsed.error.issues))
+    }
+    return parsed.data
+  }
+
+  return data as T
 }
 
 export async function logout() {
@@ -192,7 +363,7 @@ export async function logout() {
 }
 
 export async function getAuthMe() {
-  const auth = await requestJson<AuthMe>('/api/v1/auth/me')
+  const auth = await requestJson<AuthMe>('/api/v1/auth/me', undefined, 30_000, authMeSchema)
   setAuthContext(auth)
   return auth
 }
@@ -250,10 +421,11 @@ export function listAuditEvents() {
 }
 
 export function createSession() {
-  return requestControl<SessionRecord>('session:get-default')
+  return requestControl<SessionRecord>('session:get-default', {}, sessionRecordSchema)
 }
 
 export function bootstrapWorkspace(sessionId?: string) {
+  // WorkspaceBootstrapSnapshot 暂无独立 Zod schema，保持裸类型断言。
   return requestControl<WorkspaceBootstrapSnapshot>('workspace:bootstrap', { sessionId })
 }
 
@@ -261,31 +433,32 @@ export function getDefaultSession() {
   // 默认工作台会话
   //
   // 返回跨浏览器/设备的稳态服务器端会话。
-  // 前端不再用 localStorage 决定“历史属于哪个会话”，
+  // 前端不再用 localStorage 决定”历史属于哪个会话”，
   // 而是统一从这个端点获取确定性默认会话。
-  return requestControl<SessionRecord>('session:get-default')
+  return requestControl<SessionRecord>('session:get-default', {}, sessionRecordSchema)
 }
 
 export function getSession(sessionId: string) {
-  return requestControl<SessionRecord>('session:get', { sessionId })
+  return requestControl<SessionRecord>('session:get', { sessionId }, sessionRecordSchema)
 }
 
 export function listSessionThreads(sessionId: string) {
   // 任务历史现在以 thread 作为主索引，而不是把每次 run 都当成独立任务。
-  return requestControl<AgentThreadRecord[]>('thread:list', { sessionId })
+  return requestControl<AgentThreadRecord[]>('thread:list', { sessionId }, arraySchema(agentThreadRecordSchema))
 }
 
 export function createThread(sessionId: string, title?: string) {
   // v2 thread/run 模型下，thread 负责承接多轮上下文与历史恢复。
-  return requestControl<AgentThreadRecord>('thread:create', { sessionId, title })
+  return requestControl<AgentThreadRecord>('thread:create', { sessionId, title }, agentThreadRecordSchema)
 }
 
 export function getThread(threadId: string) {
+  // ThreadDetailSnapshot 暂无独立 Zod schema，保持裸类型断言。
   return requestControl<ThreadDetailSnapshot>('thread:get', { threadId })
 }
 
 export function updateThread(threadId: string, title: string) {
-  return requestControl<AgentThreadRecord>('thread:update', { threadId, title })
+  return requestControl<AgentThreadRecord>('thread:update', { threadId, title }, agentThreadRecordSchema)
 }
 
 export function deleteThread(threadId: string) {
@@ -296,7 +469,7 @@ export function listRunSummaries(
   sessionId: string,
   options: { threadId?: string | null; cursor?: string | null; limit?: number } = {},
 ) {
-  return requestControl<RunSummaryPage>('run:list', { sessionId, ...options })
+  return requestControl<RunSummaryPage>('run:list', { sessionId, ...options }, runSummaryPageSchema)
 }
 
 export function getThreadHistory(threadId: string, cursor?: string | null, limit = 100) {
@@ -308,23 +481,23 @@ export function forkThread(threadId: string, entryId: string, title?: string) {
 }
 
 export function compactThread(threadId: string) {
-  return requestControl<CompactionRecord | null>('thread:compact', { threadId })
+  return requestControl<CompactionRecord | null>('thread:compact', { threadId }, nullableSchema(compactionRecordSchema))
 }
 
 export function getThreadContext(threadId: string) {
-  return requestControl<ContextAssemblyReport>('thread:context', { threadId })
+  return requestControl<ContextAssemblyReport>('thread:context', { threadId }, contextAssemblyReportSchema)
 }
 
 export function getThreadMemory(threadId: string) {
-  return requestControl<ThreadMemoryDocument>('thread:memory:get', { threadId })
+  return requestControl<ThreadMemoryDocument>('thread:memory:get', { threadId }, threadMemoryDocumentSchema)
 }
 
 export function updateThreadMemory(threadId: string, content: string, expectedVersion: number) {
-  return requestControl<ThreadMemoryDocument>('thread:memory:update', { threadId, content, expectedVersion })
+  return requestControl<ThreadMemoryDocument>('thread:memory:update', { threadId, content, expectedVersion }, threadMemoryDocumentSchema)
 }
 
 export function rebuildThreadMemory(threadId: string) {
-  return requestControl<ThreadMemoryDocument>('thread:memory:rebuild', { threadId })
+  return requestControl<ThreadMemoryDocument>('thread:memory:rebuild', { threadId }, threadMemoryDocumentSchema)
 }
 
 export function listMemories(scope?: 'private' | 'team') {
@@ -332,7 +505,7 @@ export function listMemories(scope?: 'private' | 'team') {
 }
 
 export function readMemory(scope: 'private' | 'team', relativePath: string) {
-  return requestControl<MemoryFileRecord>('memory:read', { scope, relativePath })
+  return requestControl<MemoryFileRecord>('memory:read', { scope, relativePath }, memoryFileRecordSchema)
 }
 
 export function writeMemory(payload: {
@@ -343,7 +516,7 @@ export function writeMemory(payload: {
   content: string
   relativePath?: string | null
 }) {
-  return requestControl<MemoryFileRecord>('memory:write', payload)
+  return requestControl<MemoryFileRecord>('memory:write', payload, memoryFileRecordSchema)
 }
 
 export function deleteMemory(scope: 'private' | 'team', relativePath: string) {
@@ -351,7 +524,7 @@ export function deleteMemory(scope: 'private' | 'team', relativePath: string) {
 }
 
 export function searchMemories(query: string) {
-  return requestControl<{ matches: MemorySearchResult[]; total: number }>('memory:search', { query })
+  return requestControl<{ matches: MemorySearchResult[]; total: number }>('memory:search', { query }, memorySearchResultPageSchema)
 }
 
 export function extractMemories(threadId: string, runId?: string | null) {
@@ -379,7 +552,7 @@ export function listTrashedThreads(sessionId: string) {
 }
 
 export function restoreThread(threadId: string) {
-  return requestControl<AgentThreadRecord>('thread:trash:restore', { threadId })
+  return requestControl<AgentThreadRecord>('thread:trash:restore', { threadId }, agentThreadRecordSchema)
 }
 
 export function purgeThread(threadId: string) {
@@ -387,11 +560,11 @@ export function purgeThread(threadId: string) {
 }
 
 export function listLayers(sessionId?: string | null, threadId?: string | null) {
-  return requestControl<LayerDescriptor[]>('layer:list', { sessionId, threadId })
+  return requestControl<LayerDescriptor[]>('layer:list', { sessionId, threadId }, arraySchema(layerDescriptorSchema))
 }
 
 export function updateLayer(layerKey: string, payload: Record<string, unknown>) {
-  return requestControl<LayerDescriptor>('layer:update', { layerKey, update: payload })
+  return requestControl<LayerDescriptor>('layer:update', { layerKey, update: payload }, layerDescriptorSchema)
 }
 
 export function deleteLayer(layerKey: string) {
@@ -399,23 +572,23 @@ export function deleteLayer(layerKey: string) {
 }
 
 export function listBasemaps() {
-  return requestJson<BasemapDescriptor[]>('/api/v1/map/basemaps')
+  return requestJson<BasemapDescriptor[]>('/api/v1/map/basemaps', undefined, 30_000, arraySchema(basemapDescriptorSchema))
 }
 
 export function listProviders() {
-  return requestControl<ModelProviderDescriptor[]>('provider:list')
+  return requestControl<ModelProviderDescriptor[]>('provider:list', {}, arraySchema(modelProviderDescriptorSchema))
 }
 
 export function getSystemComponents() {
-  return requestControl<SystemComponentsStatus>('system:get')
+  return requestControl<SystemComponentsStatus>('system:get', {}, systemComponentsStatusSchema)
 }
 
 export function getSpeechAuthorization() {
-  return requestControl<SpeechAuthorization>('speech:authorization')
+  return requestControl<SpeechAuthorization>('speech:authorization', {}, speechAuthorizationSchema)
 }
 
 export function listTools() {
-  return requestControl<ToolDescriptor[]>('tool:list')
+  return requestControl<ToolDescriptor[]>('tool:list', {}, arraySchema(toolDescriptorSchema))
 }
 
 export function listToolCatalogEntries() {
@@ -424,12 +597,12 @@ export function listToolCatalogEntries() {
 
 export function getRuntimeConfig() {
   // runtime config 来自后端持久化配置，而不是前端硬编码默认值。
-  return requestControl<AgentRuntimeConfig>('runtime-config:get')
+  return requestControl<AgentRuntimeConfig>('runtime-config:get', {}, agentRuntimeConfigSchema)
 }
 
 export function updateRuntimeConfig(payload: AgentRuntimeConfig) {
   // 调试页保存配置后，前后端都应立即切到同一份结构化配置。
-  return requestControl<AgentRuntimeConfig>('runtime-config:update', { config: payload })
+  return requestControl<AgentRuntimeConfig>('runtime-config:update', { config: payload }, agentRuntimeConfigSchema)
 }
 
 export function upsertToolCatalogEntry(toolKind: string, toolName: string, payload: Record<string, unknown>, sortOrder?: number) {
@@ -442,12 +615,12 @@ export function deleteToolCatalogEntry(toolKind: string, toolName: string) {
 
 export function startAnalysis(sessionId: string, query: string, provider?: string, model?: string, executionMode: AgentExecutionMode = 'auto') {
   // 新任务直接创建 v2 run；已有 thread 的续跑走 startThreadRun。
-  return requestControl<AnalysisRun>('run:start', { sessionId, query, provider, modelName: model, executionMode })
+  return requestControl<AnalysisRun>('run:start', { sessionId, query, provider, modelName: model, executionMode }, analysisRunSchema)
 }
 
 export function startThreadRun(threadId: string, query: string, provider?: string, model?: string, executionMode: AgentExecutionMode = 'auto') {
-  // v2 明确把“线程”和“运行”拆开，便于任务历史与上下文管理。
-  return requestControl<AnalysisRun>('run:start', { threadId, query, provider, modelName: model, executionMode })
+  // v2 明确把”线程”和”运行”拆开，便于任务历史与上下文管理。
+  return requestControl<AnalysisRun>('run:start', { threadId, query, provider, modelName: model, executionMode }, analysisRunSchema)
 }
 
 export function getRun(runId: string) {
@@ -477,12 +650,12 @@ export function getArtifactMetadata(artifactId: string) {
 
 export function respondDecision(runId: string, decisionId: string, optionId?: string | null, text?: string | null) {
   // 用户决策统一走同一条控制命令；后端按 decision.kind 映射到审批恢复或澄清续跑。
-  return requestControl<AnalysisRun>('run:respond-decision', { runId, decisionId, optionId, text })
+  return requestControl<AnalysisRun>('run:respond-decision', { runId, decisionId, optionId, text }, analysisRunSchema)
 }
 
 export function cancelRun(runId: string) {
   // 中断当前后台 run。后端会取消对应 asyncio task 并回写 cancelled 快照。
-  return requestControl<AnalysisRun>('run:cancel', { runId })
+  return requestControl<AnalysisRun>('run:cancel', { runId }, analysisRunSchema)
 }
 
 export function runTool(payload: Record<string, unknown>) {
@@ -529,11 +702,21 @@ export function listMeteorologicalDatasets(sessionId?: string | null, threadId?:
   if (sessionId) params.set('sessionId', sessionId)
   if (threadId) params.set('threadId', threadId)
   const query = params.toString()
-  return requestJson<MeteorologicalDatasetRecord[]>(`/api/v1/meteorology/datasets${query ? `?${query}` : ''}`)
+  return requestJson<MeteorologicalDatasetRecord[]>(
+    `/api/v1/meteorology/datasets${query ? `?${query}` : ''}`,
+    undefined,
+    30_000,
+    arraySchema(meteorologicalDatasetRecordSchema),
+  )
 }
 
 export function getMeteorologicalJob(jobId: string) {
-  return requestJson<MeteorologicalJobRecord>(`/api/v1/meteorology/jobs/${encodeURIComponent(jobId)}`)
+  return requestJson<MeteorologicalJobRecord>(
+    `/api/v1/meteorology/jobs/${encodeURIComponent(jobId)}`,
+    undefined,
+    30_000,
+    meteorologicalJobRecordSchema,
+  )
 }
 
 
@@ -598,7 +781,7 @@ export interface FileEntry {
 }
 
 export function resumeRun(runId: string) {
-  return requestControl<AnalysisRun>('run:resume', { runId })
+  return requestControl<AnalysisRun>('run:resume', { runId }, analysisRunSchema)
 }
 
 export interface FileListResponse {
@@ -628,7 +811,7 @@ export function deleteAnyFile(fileId: string, threadId?: string | null) {
 }
 
 export function subscribeRun(runId: string) {
-  return requestControl<{ run: AnalysisRun; items: ConversationItem[]; events: RunEvent[] }>('run:subscribe', { runId })
+  return requestControl<{ run: AnalysisRun; items: ConversationItem[]; events: RunEvent[] }>('run:subscribe', { runId }, subscribeRunResponseSchema)
 }
 
 export function unsubscribeRun(runId: string) {

@@ -27,8 +27,8 @@ const envSchema = z.object({
   WEB_BASE_URL: z.string().url().optional(),
   BETTER_AUTH_URL: z.string().url(),
   BETTER_AUTH_SECRET: z.string().min(32),
-  BETTER_AUTH_ALLOW_SIGN_UP: booleanEnvSchema.default(true),
-  BETTER_AUTH_REQUIRE_EMAIL_VERIFICATION: booleanEnvSchema.default(false),
+  BETTER_AUTH_ALLOW_SIGN_UP: booleanEnvSchema.default(false),
+  BETTER_AUTH_REQUIRE_EMAIL_VERIFICATION: booleanEnvSchema.default(true),
   BETTER_AUTH_MIN_PASSWORD_LENGTH: z.coerce.number().int().min(8).default(12),
   CSRF_HEADER_NAME: z.string().min(1).default('x-geoforge-csrf'),
   BOOTSTRAP_ADMIN_EMAIL: z.string().email().optional(),
@@ -87,15 +87,23 @@ let _env: Env | null = null
 
 export function getEnv(): Env {
   if (_env) return _env
-  const result = envSchema.safeParse(process.env)
+  try {
+    _env = parseEnv(process.env)
+  } catch (error) {
+    console.error('[env] 环境变量校验失败:', error instanceof Error ? error.message : String(error))
+    process.exit(1)
+  }
+  return _env
+}
+
+export function parseEnv(input: NodeJS.ProcessEnv): Env {
+  const result = envSchema.safeParse(input)
   if (!result.success) {
     const details = result.error.issues.map(issue => {
       const field = issue.path.join('.') || 'environment'
       return `${field}: ${issue.message}`
     })
-    console.error('[env] 环境变量校验失败:', details.join('；'))
-    process.exit(1)
+    throw new Error(details.join('；'))
   }
-  _env = result.data
-  return _env
+  return result.data
 }

@@ -26,7 +26,7 @@ p = sub, dom, obj, act, eft
 e = some(where (p.eft == allow))
 
 [matchers]
-m = r.sub == p.sub && (p.dom == "*" || r.dom == p.dom) && (p.obj == "*" || r.obj == p.obj) && (p.act == "*" || regexMatch(r.act, p.act))
+m = r.sub == p.sub && (p.dom == "*" || r.dom == p.dom) && (p.obj == "*" || r.obj == p.obj) && actionMatch(r.act, p.act)
 `
 
 export class AuthorizationError extends Error {
@@ -61,9 +61,6 @@ export class AuthorizationService {
     action: RbacAction,
     scope: AuthorizationScope = {},
   ): Promise<boolean> {
-    if (scope.userId && scope.userId === auth.userId && object === 'memory' && ['read', 'create', 'update', 'delete'].includes(action)) {
-      return true
-    }
     const workspaceId = scope.workspaceId ?? auth.defaultWorkspaceId
     const domain = workspaceId ? `workspace:${workspaceId}` : '*'
     const enforcer = await this.enforcer()
@@ -121,8 +118,16 @@ export class AuthorizationService {
   private async enforcer(): Promise<Enforcer> {
     if (!this.enforcerPromise) {
       const model = newModelFromString(RBAC_MODEL)
-      this.enforcerPromise = newEnforcer(model, new CasbinPostgresAdapter(this.db))
+      this.enforcerPromise = newEnforcer(model, new CasbinPostgresAdapter(this.db)).then(enforcer => {
+        enforcer.addFunction('actionMatch', actionMatch)
+        return enforcer
+      })
     }
     return this.enforcerPromise
   }
+}
+
+export function actionMatch(requestAction: unknown, policyAction: unknown): boolean {
+  if (typeof requestAction !== 'string' || typeof policyAction !== 'string') return false
+  return policyAction === '*' || policyAction.split('|').map(item => item.trim()).includes(requestAction)
 }

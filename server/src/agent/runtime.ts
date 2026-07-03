@@ -448,7 +448,7 @@ export class OpenAIAgentsRuntime {
         toolDescription: config.summary,
         customOutputExtractor: async output => {
           for (const item of output.newItems) {
-            await this.store.conversationStore.appendAgentTranscript(options.runId, config.agentId, {
+            await this.store.appendAgentTranscript(options.runId, config.agentId, {
               type: 'completed_item',
               item: item.toJSON(),
             })
@@ -466,7 +466,7 @@ export class OpenAIAgentsRuntime {
           return output.finalOutput
         },
         onStream: async ({ event }) => {
-          await this.store.conversationStore.appendAgentTranscript(options.runId, config.agentId, serializeAgentEvent(event))
+          await this.store.appendAgentTranscript(options.runId, config.agentId, serializeAgentEvent(event))
           const current = this.store.getRun(options.runId)
           const completed = event.type === 'run_item_stream_event' && event.name === 'message_output_created'
           await this.store.updateRunState(options.runId, {
@@ -582,7 +582,7 @@ export class OpenAIAgentsRuntime {
               metadata: { source: 'openai_agents_sandbox' },
             })
           }
-          await this.store.conversationStore.saveRun(this.store.getRun(options.runId), {
+          await this.store.saveRunCheckpoint(options.runId, {
             pendingToolCallIds: [],
             recoveryStatus: 'clean',
           })
@@ -661,6 +661,8 @@ export class OpenAIAgentsRuntime {
       if (interruptions.length) {
         await this.persistSdkState(options.runId, stream.state, assembly)
         await this.persistApprovals(options, interruptions, eventSink, itemSink)
+        await eventSink.flush()
+        await itemSink.flush()
         outcome = 'waiting_approval'
         return outcome
       }
@@ -677,10 +679,12 @@ export class OpenAIAgentsRuntime {
           message: runAfterTools.state.clarification.question,
         })
         await this.persistSdkState(options.runId, stream.state, assembly)
-        await this.store.conversationStore.saveRun(this.store.getRun(options.runId), {
+        await this.store.saveRunCheckpoint(options.runId, {
           pendingToolCallIds: [],
           recoveryStatus: 'clean',
         })
+        await eventSink.flush()
+        await itemSink.flush()
         await this.store.completeRun(options.runId, 'clarification_needed')
         outcome = 'clarification_needed'
         return outcome
@@ -703,10 +707,12 @@ export class OpenAIAgentsRuntime {
         })
       }
       await this.persistSdkState(options.runId, stream.state, assembly)
-      await this.store.conversationStore.saveRun(this.store.getRun(options.runId), {
+      await this.store.saveRunCheckpoint(options.runId, {
         pendingToolCallIds: [],
         recoveryStatus: 'clean',
       })
+      await eventSink.flush()
+      await itemSink.flush()
       outcome = 'completed'
       return outcome
     } finally {
@@ -998,6 +1004,8 @@ export class OpenAIAgentsRuntime {
       })
     }
     await this.store.updateRunState(options.runId, { approvals, decisions })
+    await eventSink.flush()
+    await itemSink.flush()
     await this.store.completeRun(options.runId, 'waiting_approval')
   }
 
@@ -1006,7 +1014,7 @@ export class OpenAIAgentsRuntime {
     state: RunState<AgentsExecutionContext, Agent<AgentsExecutionContext>>,
     assembly: RuntimeAssembly,
   ): Promise<void> {
-    await this.store.conversationStore.saveAgentsSdkState(runId, state.toString(), {
+    await this.store.saveAgentsSdkState(runId, state.toString(), {
       agentsSdkVersion: assembly.sdkVersion,
       runtimeConfigDigest: assembly.configDigest,
     })
@@ -1016,7 +1024,7 @@ export class OpenAIAgentsRuntime {
     assembly: RuntimeAssembly,
     options: RunOptions,
   ): Promise<RunState<AgentsExecutionContext, Agent<AgentsExecutionContext>>> {
-    const checkpoint = await this.store.conversationStore.getRunCheckpoint(options.runId)
+    const checkpoint = await this.store.getRunCheckpoint(options.runId)
     if (checkpoint.orchestrationEngine !== 'openai_agents') {
       throw new Error(`run '${options.runId}' 不是 OpenAI Agents SDK 检查点，不能续跑`)
     }
@@ -1029,7 +1037,7 @@ export class OpenAIAgentsRuntime {
     if (checkpoint.runtimeConfigDigest !== assembly.configDigest) {
       throw new Error(`run '${options.runId}' 运行配置已变化，拒绝恢复`)
     }
-    const serialized = await this.store.conversationStore.readAgentsSdkState(options.runId)
+    const serialized = await this.store.readAgentsSdkState(options.runId)
     return RunState.fromStringWithContext(
       assembly.agent,
       serialized,

@@ -14,10 +14,8 @@
 // 这里不持有 React state，也不参与聊天事实派生。
 
 import type { ConversationItem, TranscriptEntry } from '@geo-agent-platform/shared-types'
-import { runController } from './controllers'
+import { getRunItems } from '../api/client'
 export { mergeConversationItems } from '../features/conversation/timelineProjector'
-
-const { getRunItems } = runController
 
 export function formatUiError(error: unknown, defaultMessage: string) {
   if (error instanceof Error && error.message.trim()) {

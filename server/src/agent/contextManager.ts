@@ -257,7 +257,7 @@ async function hydrateContentReferences(
     if (entry.kind !== 'tool_result' || stringField(entry.payload.content)) return entry
     const reference = parseContentRef(entry.payload.contentRef)
     if (!reference) return entry
-    const bytes = await store.conversationStore.readObject(reference)
+    const bytes = await store.readConversationObject(reference)
     return { ...entry, payload: { ...entry.payload, content: Buffer.from(bytes).toString('utf8') } }
   }))
 }

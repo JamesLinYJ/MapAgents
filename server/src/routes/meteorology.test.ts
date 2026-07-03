@@ -14,7 +14,8 @@ import { Hono } from 'hono'
 import { describe, expect, it } from 'vitest'
 import type { Database } from '../db/connection.js'
 import { PostgresPlatformStore } from '../store/platformStore.js'
-import { meteorologyRoutes } from './meteorology.js'
+import { ensureMeteorologicalTables, meteorologyRoutes } from './meteorology.js'
+import { verifySchema } from '../security/database.js'
 import type { SecurityServices } from '../security/routes.js'
 import type { AuthContext } from '../security/types.js'
 
@@ -82,7 +83,7 @@ function filterRows(rows: DatasetRow[], query: CapturedQuery): DatasetRow[] {
 function captureQuery(query: unknown): CapturedQuery {
   const text: string[] = []
   const values: unknown[] = []
-  for (const chunk of queryChunks(query)) appendQueryChunk(chunk, text, values)
+  for (const chunk of chunksOf(query)) appendQueryChunk(chunk, text, values)
   return { text: text.join(''), values }
 }
 
@@ -179,3 +180,112 @@ function testSecurity(): SecurityServices {
     db: { execute: async () => ({ rows: [] }) } as unknown as Database,
   } as unknown as SecurityServices
 }
+
+// ---------------------------------------------------------------------------
+// Schema verification tests for ensureMeteorologicalTables
+// ---------------------------------------------------------------------------
+
+interface FakeDbConfig {
+  tables: Record<string, string[]>
+}
+
+function meteoFakeDb(config: FakeDbConfig): Database {
+  return {
+    execute: async (query: unknown) => {
+      const text = sqlText(query)
+      if (text.includes('information_schema.tables')) {
+        // The ANY($1::text[]) param is the required table list; return all configured
+        return { rows: Object.keys(config.tables).map(t => ({ table_name: t })) }
+      }
+      if (text.includes('information_schema.columns')) {
+        // Single param: the table name
+        const tableName = String(paramValues(query)[0] ?? '')
+        const columns = config.tables[tableName] ?? []
+        return { rows: columns.map(c => ({ column_name: c })) }
+      }
+      return { rows: [] }
+    },
+  } as unknown as Database
+}
+
+function sqlText(query: unknown): string {
+  const parts: string[] = []
+  for (const chunk of chunksOf(query)) {
+    if (typeof chunk === 'object' && chunk !== null && Array.isArray((chunk as { value?: unknown }).value)) {
+      const arr = (chunk as { value: unknown[] }).value
+      if (arr.every(item => typeof item === 'string')) parts.push(arr.join(''))
+    }
+  }
+  return parts.join('')
+}
+
+function paramValues(query: unknown): unknown[] {
+  const values: unknown[] = []
+  for (const chunk of chunksOf(query)) {
+    // Drizzle queryChunks: string parts are wrapped {value: string[]};
+    // param values are raw scalars — skip objects.
+    if (typeof chunk === 'object' && chunk !== null) continue
+    values.push(chunk)
+  }
+  return values
+}
+
+function chunksOf(value: unknown): unknown[] {
+  const qc = (value as { queryChunks?: unknown[] })?.queryChunks
+  return Array.isArray(qc) ? qc : []
+}
+
+describe('ensureMeteorologicalTables', () => {
+  it('passes when all meteorological tables and columns exist', async () => {
+    const db = meteoFakeDb({
+      tables: {
+        platform_meteorological_datasets: [
+          'dataset_id', 'workspace_id', 'created_by_user_id', 'visibility',
+          'session_id', 'thread_id', 'filename', 'original_filename', 'file_id',
+          'file_relative_path', 'size_bytes', 'content_hash', 'media_type', 'status',
+          'metadata_json', 'created_at', 'updated_at',
+        ],
+        platform_meteorological_jobs: [
+          'job_id', 'dataset_id', 'workspace_id', 'created_by_user_id',
+          'session_id', 'thread_id', 'kind', 'status', 'message',
+          'payload_json', 'created_at', 'updated_at', 'completed_at',
+        ],
+      },
+    })
+    await expect(ensureMeteorologicalTables(db)).resolves.toBeUndefined()
+  })
+
+  it('throws when a meteorological table is missing', async () => {
+    const db = meteoFakeDb({
+      tables: {
+        platform_meteorological_datasets: [
+          'dataset_id', 'workspace_id', 'created_by_user_id', 'visibility',
+          'session_id', 'thread_id', 'filename', 'original_filename', 'file_id',
+          'file_relative_path', 'size_bytes', 'content_hash', 'media_type', 'status',
+          'metadata_json', 'created_at', 'updated_at',
+        ],
+        // missing platform_meteorological_jobs
+      },
+    })
+    await expect(ensureMeteorologicalTables(db)).rejects.toThrow(/缺少表/)
+  })
+
+  it('throws when a meteorological column is missing', async () => {
+    const db = meteoFakeDb({
+      tables: {
+        platform_meteorological_datasets: [
+          'dataset_id', 'session_id', 'thread_id', 'filename', 'original_filename', 'file_id',
+          'file_relative_path', 'size_bytes', 'content_hash', 'media_type', 'status',
+          'metadata_json', 'created_at', 'updated_at',
+          // missing workspace_id, created_by_user_id, visibility
+        ],
+        platform_meteorological_jobs: [
+          'job_id', 'dataset_id', 'workspace_id', 'created_by_user_id',
+          'session_id', 'thread_id', 'kind', 'status', 'message',
+          'payload_json', 'created_at', 'updated_at', 'completed_at',
+        ],
+      },
+    })
+    await expect(ensureMeteorologicalTables(db)).rejects.toThrow(/缺少列/)
+  })
+})

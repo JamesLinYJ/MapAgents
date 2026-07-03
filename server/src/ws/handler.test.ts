@@ -524,6 +524,76 @@ describe('WebSocket run subscriptions', () => {
     expect(isRecord(deleted) ? deleted.deleted : false).toBe(true)
     await close(ws)
   })
+
+  it('rejects speech:authorization when CSRF token is missing', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-csrf-'))
+    const store = new PostgresPlatformStore(noOpDb(), root)
+    await store.initialize()
+
+    const server = createServer((_request, response) => response.end())
+    const wss = createWsHandler(server, {
+      store,
+      toolRegistry: new ToolRegistry(),
+      modelRegistry: new ModelAdapterRegistry(testEnv()),
+      postgis: {} as unknown as PostGisRepository,
+      runtimeRoot: root,
+      security: testSecurity(),
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('测试服务未监听 TCP 地址')
+    cleanups.push(async () => {
+      await new Promise<void>(resolve => wss.close(() => resolve()))
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      await store.conversationStore.flush()
+      await rm(root, { recursive: true, force: true })
+    })
+
+    const ws = await connect(`ws://127.0.0.1:${address.port}/ws`)
+    const response = await rawRequest(ws, 'speech:authorization', {}, 'csrf_speech')
+    expect(response.ok).toBe(false)
+    expect(isRecord(response.payload) && isRecord(response.payload.error) ? response.payload.error.message : '').toContain('CSRF')
+    await close(ws)
+  })
+
+  it('rejects read-type WS commands when auth context is inactive', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-inactive-'))
+    const store = new PostgresPlatformStore(noOpDb(), root)
+    await store.initialize()
+
+    const inactiveSecurity = {
+      ...testSecurity(),
+      auth: {
+        ...testSecurity().auth,
+        isAuthContextActive: async () => false,
+      },
+    }
+
+    const server = createServer((_request, response) => response.end())
+    const wss = createWsHandler(server, {
+      store,
+      toolRegistry: new ToolRegistry(),
+      modelRegistry: new ModelAdapterRegistry(testEnv()),
+      postgis: {} as unknown as PostGisRepository,
+      runtimeRoot: root,
+      security: inactiveSecurity,
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('测试服务未监听 TCP 地址')
+    cleanups.push(async () => {
+      await new Promise<void>(resolve => wss.close(() => resolve()))
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      await store.conversationStore.flush()
+      await rm(root, { recursive: true, force: true })
+    })
+
+    const ws = await connect(`ws://127.0.0.1:${address.port}/ws`)
+    const response = await request(ws, 'session:get-default', {}, 'inactive_read')
+    expect(response.ok).toBe(false)
+    expect(isRecord(response) && isRecord(response.error) ? response.error.message : '').toContain('失效')
+    await close(ws)
+  })
 })
 
 function connect(url: string): Promise<WebSocket> {
@@ -553,6 +623,21 @@ function request(ws: WebSocket, type: string, payload: Record<string, unknown>, 
       }
     })
     ws.send(JSON.stringify({ type, id, payload: { csrfToken: TEST_CSRF, ...payload } }) + '\n')
+  })
+}
+
+function rawRequest(ws: WebSocket, type: string, payload: Record<string, unknown>, id: string): Promise<{ ok: boolean; payload: Record<string, unknown> }> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('WebSocket 响应超时')), 3000)
+    ws.on('message', data => {
+      for (const line of data.toString().split('\n').filter(Boolean)) {
+        const parsed: unknown = JSON.parse(line)
+        if (!isRecord(parsed) || parsed.id !== id) continue
+        clearTimeout(timer)
+        resolve({ ok: isRecord(parsed.payload) ? Boolean(parsed.payload.ok) : false, payload: isRecord(parsed.payload) ? parsed.payload : {} })
+      }
+    })
+    ws.send(JSON.stringify({ type, id, payload }) + '\n')
   })
 }
 

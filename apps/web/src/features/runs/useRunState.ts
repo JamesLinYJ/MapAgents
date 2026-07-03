@@ -91,7 +91,9 @@ type RunAction =
   | { type: 'SET_ITEMS'; items: ConversationItem[] }
   | { type: 'SET_PLACE_RESOLUTION'; placeResolution: RunState['placeResolution'] }
 
-function runReducer(state: RunState, action: RunAction): RunState {
+// 导出 reducer 以便测试直接验证 CLEAR_RUN / SET_RUN 等状态转移；
+// 不依赖 React 渲染环境。
+export function runReducer(state: RunState, action: RunAction): RunState {
   switch (action.type) {
     case 'SET_RUN': {
       const isDifferentRun = state.run?.id !== action.run.id
@@ -169,23 +171,21 @@ export function useRunState() {
   const subscribedRunIdRef = useRef<string | null>(null)
 
   const absorbSnapshot = useCallback((snapshot: { run: AnalysisRun; items: ConversationItem[]; events: RunEvent[] }) => {
-    startTransition(() => {
-      dispatch({
-        type: 'SET_RUN',
-        run: snapshot.run,
-        agentState: snapshot.run.state,
-        intent: snapshot.run.state.parsedIntent ?? undefined,
-        plan: snapshot.run.state.executionPlan ?? undefined,
-        artifacts: snapshot.run.state.artifacts,
-      })
-      dispatch({ type: 'SET_ITEMS', items: snapshot.items })
-      dispatch({ type: 'SET_EVENTS', events: snapshot.events })
+    dispatch({
+      type: 'SET_RUN',
+      run: snapshot.run,
+      agentState: snapshot.run.state,
+      intent: snapshot.run.state.parsedIntent ?? undefined,
+      plan: snapshot.run.state.executionPlan ?? undefined,
+      artifacts: snapshot.run.state.artifacts,
     })
+    dispatch({ type: 'SET_ITEMS', items: snapshot.items })
+    dispatch({ type: 'SET_EVENTS', events: snapshot.events })
     if (snapshot.run.status !== 'running') dispatch({ type: 'SET_SUBMITTING', value: false })
   }, [])
 
   const clearRun = useCallback(() => {
-    startTransition(() => dispatch({ type: 'CLEAR_RUN' }))
+    dispatch({ type: 'CLEAR_RUN' })
   }, [])
 
   const hydrateRun = useCallback(async (runId: string) => {
@@ -196,15 +196,13 @@ export function useRunState() {
   }, [absorbSnapshot])
 
   const acceptRun = useCallback((latestRun: AnalysisRun) => {
-    startTransition(() => {
-      dispatch({
-        type: 'SET_RUN',
-        run: latestRun,
-        agentState: latestRun.state,
-        intent: latestRun.state.parsedIntent ?? undefined,
-        plan: latestRun.state.executionPlan ?? undefined,
-        artifacts: latestRun.state.artifacts,
-      })
+    dispatch({
+      type: 'SET_RUN',
+      run: latestRun,
+      agentState: latestRun.state,
+      intent: latestRun.state.parsedIntent ?? undefined,
+      plan: latestRun.state.executionPlan ?? undefined,
+      artifacts: latestRun.state.artifacts,
     })
   }, [])
 
@@ -231,15 +229,15 @@ export function useRunState() {
   }, [])
 
   const setIntent = useCallback((intent: UserIntent) => {
-    startTransition(() => dispatch({ type: 'SET_INTENT', intent }))
+    dispatch({ type: 'SET_INTENT', intent })
   }, [])
 
   const setPlan = useCallback((plan: ExecutionPlan) => {
-    startTransition(() => dispatch({ type: 'SET_PLAN', plan }))
+    dispatch({ type: 'SET_PLAN', plan })
   }, [])
 
   const appendArtifact = useCallback((artifact: ArtifactRef) => {
-    startTransition(() => dispatch({ type: 'APPEND_ARTIFACT', artifact }))
+    dispatch({ type: 'APPEND_ARTIFACT', artifact })
   }, [])
 
   // WebSocket 订阅是运行实时状态的唯一主线；重连后主动重订阅并吸收完整快照。
@@ -286,7 +284,7 @@ export function useRunState() {
   }, [absorbSnapshot, runId])
 
   const setItems = useCallback((items: ConversationItem[]) => {
-    startTransition(() => dispatch({ type: 'SET_ITEMS', items }))
+    dispatch({ type: 'SET_ITEMS', items })
   }, [])
 
   return {

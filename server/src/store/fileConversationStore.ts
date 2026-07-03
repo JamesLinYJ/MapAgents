@@ -45,6 +45,7 @@ import {
   type TranscriptEntryKind,
 } from '../schemas/types.js'
 import { makeId, nowUtc } from '../utils/ids.js'
+import { z } from 'zod'
 
 const STORE_SCHEMA_VERSION = 2
 const DEFAULT_TRASH_RETENTION_DAYS = 30
@@ -65,6 +66,21 @@ interface RunLocation {
   threadId: string
   directory: string
 }
+
+const threadJournalSchema = z.object({
+  schemaVersion: z.literal(STORE_SCHEMA_VERSION),
+  operationId: z.string(),
+  type: z.literal('appendTranscript'),
+  entry: transcriptEntrySchema,
+  threadFile: z.object({
+    thread: z.custom<AgentThreadRecord>(value => typeof value === 'object' && value !== null),
+    manifest: threadManifestSchema,
+  }),
+  supervisorTranscriptPath: z.string().nullable(),
+  createdAt: z.string(),
+})
+
+type ThreadJournal = z.infer<typeof threadJournalSchema>
 
 export interface ConversationStoreSnapshot {
   sessions: SessionRecord[]
@@ -332,14 +348,14 @@ export class FileConversationStore {
     }
   }
 
-  appendItem(item: ConversationItem): void {
+  appendItem(item: ConversationItem): Promise<void> {
     const location = this.requireRunLocation(item.runId)
-    this.enqueueAppend(path.join(location.directory, 'items.jsonl'), conversationItemSchema.parse(item))
+    return this.enqueueAppend(path.join(location.directory, 'items.jsonl'), conversationItemSchema.parse(item))
   }
 
-  appendEvent(event: RunEvent): void {
+  appendEvent(event: RunEvent): Promise<void> {
     const location = this.requireRunLocation(event.runId)
-    this.enqueueAppend(path.join(location.directory, 'events.jsonl'), runEventSchema.parse(event))
+    return this.enqueueAppend(path.join(location.directory, 'events.jsonl'), runEventSchema.parse(event))
   }
 
   async appendAgentTranscript(
@@ -364,16 +380,16 @@ export class FileConversationStore {
         updatedAt: timestamp,
       })
     }
-    this.enqueueAppend(path.join(directory, 'transcript.jsonl'), {
+    await this.enqueueAppend(path.join(directory, 'transcript.jsonl'), {
       schemaVersion: STORE_SCHEMA_VERSION,
       timestamp: nowUtc(),
       ...record,
     })
   }
 
-  appendValue(runId: string, value: ToolValueRef): void {
+  appendValue(runId: string, value: ToolValueRef): Promise<void> {
     const location = this.requireRunLocation(runId)
-    this.enqueueAppend(path.join(location.directory, 'values.jsonl'), value)
+    return this.enqueueAppend(path.join(location.directory, 'values.jsonl'), value)
   }
 
   async appendArtifact(runId: string, artifact: ArtifactRef): Promise<void> {
@@ -434,22 +450,65 @@ export class FileConversationStore {
         timestamp: nowUtc(),
         payload: input.payload ?? {},
       })
-      await appendJsonLineDurable(path.join(location.directory, 'transcript.jsonl'), entry)
-      if (entry.runId) {
-        const runLocation = this.runLocations.get(entry.runId)
-        if (runLocation) {
-          await appendJsonLineDurable(path.join(runLocation.directory, 'agents', 'supervisor', 'transcript.jsonl'), entry)
-        }
+      const updatedThreadFile = structuredClone(current)
+      updatedThreadFile.manifest.activeLeafEntryId = entry.entryId
+      updatedThreadFile.manifest.lastSequence = entry.seq
+      updatedThreadFile.manifest.transcriptEntryCount += 1
+      updatedThreadFile.manifest.estimatedContextTokens += estimateTokens(JSON.stringify(entry.payload))
+      updatedThreadFile.manifest.updatedAt = entry.timestamp
+      updatedThreadFile.thread.updatedAt = entry.timestamp
+      const supervisorTranscriptPath = entry.runId && this.runLocations.get(entry.runId)
+        ? path.join(this.runLocations.get(entry.runId)!.directory, 'agents', 'supervisor', 'transcript.jsonl')
+        : null
+      const journal: ThreadJournal = {
+        schemaVersion: STORE_SCHEMA_VERSION,
+        operationId: makeId('journal'),
+        type: 'appendTranscript',
+        entry,
+        threadFile: updatedThreadFile,
+        supervisorTranscriptPath,
+        createdAt: nowUtc(),
       }
-      current.manifest.activeLeafEntryId = entry.entryId
-      current.manifest.lastSequence = entry.seq
-      current.manifest.transcriptEntryCount += 1
-      current.manifest.estimatedContextTokens += estimateTokens(JSON.stringify(entry.payload))
-      current.manifest.updatedAt = entry.timestamp
-      current.thread.updatedAt = entry.timestamp
-      await atomicWriteJson(path.join(location.directory, 'thread.json'), current)
+      const journalPath = await this.writeThreadJournal(location.directory, journal)
+      await this.applyThreadJournal(location.directory, journal, journalPath)
       return entry
     })
+  }
+
+  private async writeThreadJournal(directory: string, journal: ThreadJournal): Promise<string> {
+    const journalDirectory = path.join(directory, 'journals')
+    await mkdir(journalDirectory, { recursive: true })
+    const journalPath = path.join(journalDirectory, `${safeId(journal.operationId, 'journalId')}.json`)
+    await atomicWriteJson(journalPath, journal)
+    return journalPath
+  }
+
+  private async applyThreadJournal(directory: string, journal: ThreadJournal, journalPath?: string): Promise<void> {
+    if (journal.type !== 'appendTranscript') return
+    const transcriptPath = path.join(directory, 'transcript.jsonl')
+    if (!await jsonLinesContainId(transcriptPath, 'entryId', journal.entry.entryId)) {
+      await appendJsonLineDurable(transcriptPath, journal.entry)
+    }
+    if (journal.supervisorTranscriptPath && !await jsonLinesContainId(journal.supervisorTranscriptPath, 'entryId', journal.entry.entryId)) {
+      await appendJsonLineDurable(journal.supervisorTranscriptPath, journal.entry)
+    }
+    await atomicWriteJson(path.join(directory, 'thread.json'), journal.threadFile)
+    if (journalPath) await rm(journalPath, { force: true })
+  }
+
+  private async recoverThreadJournals(directory: string): Promise<void> {
+    const journalDirectory = path.join(directory, 'journals')
+    for (const fileName of await listFileNames(journalDirectory)) {
+      if (!fileName.endsWith('.json')) continue
+      const journalPath = path.join(journalDirectory, fileName)
+      const raw = await readRawJson(journalPath)
+      if (!raw) {
+        await rm(journalPath, { force: true })
+        continue
+      }
+      const parsed = threadJournalSchema.parse(raw)
+      await this.applyThreadJournal(directory, parsed, journalPath)
+    }
   }
 
   async readHistory(threadId: string, cursor?: string | null, limit = 100): Promise<ThreadHistoryPage> {
@@ -750,7 +809,13 @@ export class FileConversationStore {
   }
 
   async flush(): Promise<void> {
-    await Promise.all([...this.writeQueues.values()].map(queue => queue.catch(() => undefined)))
+    const results = await Promise.allSettled([...this.writeQueues.values()])
+    const failures = results
+      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+      .map(result => result.reason)
+    if (failures.length > 0) {
+      throw new AggregateError(failures, `conversation store flush 失败：${failures.length} 个写入队列未完成`)
+    }
   }
 
   private async ensureStoreManifest(): Promise<void> {
@@ -771,6 +836,7 @@ export class FileConversationStore {
   private async loadThreadDirectory(sessionId: string, threadId: string, trashed: boolean): Promise<(ThreadFile & { directory: string }) | null> {
     const safeThreadId = safeId(threadId, 'threadId')
     const directory = path.join(this.sessionsRoot, sessionId, trashed ? 'trash' : 'threads', safeThreadId)
+    await this.recoverThreadJournals(directory)
     const loaded = await this.readThreadFileOrNull(directory)
     if (!loaded) return null
     this.threadLocations.set(safeThreadId, { sessionId, directory, trashed })
@@ -802,7 +868,7 @@ export class FileConversationStore {
     return runs
   }
 
-  private enqueueAppend(filePath: string, record: unknown): void {
+  private enqueueAppend(filePath: string, record: unknown): Promise<void> {
     const previous = this.writeQueues.get(filePath)?.catch(error => {
       console.error(`[conversation-store] previous append failed for ${filePath}:`, error instanceof Error ? error.message : String(error))
     }) ?? Promise.resolve()
@@ -811,16 +877,17 @@ export class FileConversationStore {
       await appendJsonLineDurable(filePath, record)
     })
     this.writeQueues.set(filePath, next)
-    void next.catch(error => {
+    const tracked = next.catch(error => {
       console.error(`[conversation-store] append failed for ${filePath}:`, error instanceof Error ? error.message : String(error))
+      throw error
     }).finally(() => {
       if (this.writeQueues.get(filePath) === next) this.writeQueues.delete(filePath)
     })
+    return tracked
   }
 
   private async enqueueAppendAndWait(filePath: string, record: unknown): Promise<void> {
-    this.enqueueAppend(filePath, record)
-    await this.writeQueues.get(filePath)
+    await this.enqueueAppend(filePath, record)
   }
 
   private async readJsonLines<T>(
@@ -946,6 +1013,26 @@ async function recordJsonLineCorruption(
     reason: error instanceof Error ? error.message : String(error),
     detectedAt: nowUtc(),
   })
+}
+
+async function jsonLinesContainId(filePath: string, key: string, expected: string): Promise<boolean> {
+  let text: string
+  try {
+    text = await readFile(filePath, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue
+    try {
+      const parsed: unknown = JSON.parse(line)
+      if (isRecord(parsed) && parsed[key] === expected) return true
+    } catch {
+      // 损坏行由标准读取路径登记；journal 恢复只负责避免重复追加已提交记录。
+    }
+  }
+  return false
 }
 
 async function atomicWriteText(filePath: string, value: string): Promise<void> {

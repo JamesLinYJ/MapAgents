@@ -8,7 +8,7 @@
 //   作者:       JamesLinYJ
 // --------------------------------------------------------------------------
 
-import { boolean, pgTable, text, timestamp, jsonb, index, integer, uniqueIndex } from 'drizzle-orm/pg-core'
+import { boolean, pgTable, text, timestamp, jsonb, index, integer, primaryKey, uniqueIndex } from 'drizzle-orm/pg-core'
 
 export const authUser = pgTable('auth_user', {
   id: text('id').primaryKey(),
@@ -156,7 +156,9 @@ export const toolCatalogEntries = pgTable('tool_catalog_entries', {
   toolKind: text('tool_kind').notNull(),
   payloadJson: jsonb('payload_json').notNull().$type<Record<string, unknown>>(),
   sortOrder: integer('sort_order').notNull().default(0),
-})
+}, (table) => ({
+  pk: primaryKey({ columns: [table.toolName, table.toolKind] }),
+}))
 
 export const platformMeteorologicalDatasets = pgTable('platform_meteorological_datasets', {
   datasetId: text('dataset_id').primaryKey(),

@@ -58,6 +58,6 @@ async function drain(options: LifecycleOptions): Promise<void> {
     new Promise<void>((resolve, reject) => options.server.close(error => error ? reject(error) : resolve())),
     new Promise<void>(resolve => options.wsServer.close(() => resolve())),
   ])
-  await options.store.conversationStore.flush()
+  await options.store.flushConversationStore()
   await options.db.close()
 }

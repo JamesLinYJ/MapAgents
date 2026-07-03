@@ -41,6 +41,10 @@ import { ensureSecurityTables } from './security/database.js'
 import { BetterAuthService } from './security/authService.js'
 import { AuthorizationError, AuthorizationService } from './security/authorizationService.js'
 import { requireHttpAuth, securityRoutes, type SecurityServices } from './security/routes.js'
+import {
+  authRateLimitMiddleware,
+  apiRateLimitMiddleware,
+} from './security/httpRateLimit.js'
 import { installLifecycleManager } from './lifecycle.js'
 
 // GeoForge 不向外部 tracing 后端发送 Agent 数据；Runner 级配置负责每次运行，
@@ -99,8 +103,8 @@ app.get('/health', async c => {
   const health = await checkReadiness()
   return c.json(health, health.status === 'ok' ? 200 : 503)
 })
-app.on(['GET', 'POST'], '/api/auth/*', c => security.auth.handler(c.req.raw))
-app.use('/api/v1/*', (c, next) => requireHttpAuth(security, c, next))
+app.on(['GET', 'POST'], '/api/auth/*', authRateLimitMiddleware, c => security.auth.handler(c.req.raw))
+app.use('/api/v1/*', apiRateLimitMiddleware(security), (c, next) => requireHttpAuth(security, c, next))
 app.route('/', securityRoutes(security))
 app.route('/', fileRoutes(runtimeRoot, store, security, env))
 app.route('/', layerRoutes(postgis, store, security, env))

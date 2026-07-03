@@ -26,6 +26,7 @@ import { makeId, nowUtc } from '../utils/ids.js'
 import type { SecurityServices } from '../security/routes.js'
 import { requireAuth } from '../security/routes.js'
 import type { Env } from '../framework/env.js'
+import { verifySchema } from '../security/database.js'
 
 const METEOROLOGICAL_SUFFIXES = [
   '.nc',
@@ -40,68 +41,23 @@ const METEOROLOGICAL_SUFFIXES = [
   '.bz2',
 ] as const
 
+const METEOROLOGICAL_TABLES: Record<string, string[]> = {
+  platform_meteorological_datasets: [
+    'dataset_id', 'workspace_id', 'created_by_user_id', 'visibility',
+    'session_id', 'thread_id', 'filename', 'original_filename', 'file_id',
+    'file_relative_path', 'size_bytes', 'content_hash', 'media_type', 'status',
+    'metadata_json', 'created_at', 'updated_at',
+  ],
+  platform_meteorological_jobs: [
+    'job_id', 'dataset_id', 'workspace_id', 'created_by_user_id',
+    'session_id', 'thread_id', 'kind', 'status', 'message',
+    'payload_json', 'created_at', 'updated_at', 'completed_at',
+  ],
+}
+
+// ensureMeteorologicalTables 校验气象表及关键列存在；不再执行任何 DDL。
 export async function ensureMeteorologicalTables(db: Database): Promise<void> {
-  // 本地开发没有独立 migration runner；启动时显式创建 canonical 表。
-  // 表名固定使用 meteorological，不提供旧命名兼容表或别名。
-  await db.execute(sql`
-    CREATE TABLE IF NOT EXISTS platform_meteorological_datasets (
-      dataset_id text PRIMARY KEY,
-      workspace_id text,
-      created_by_user_id text,
-      visibility text NOT NULL DEFAULT 'workspace',
-      session_id text NOT NULL,
-      thread_id text,
-      filename text NOT NULL,
-      original_filename text NOT NULL,
-      file_id text,
-      file_relative_path text NOT NULL,
-      size_bytes integer NOT NULL DEFAULT 0,
-      content_hash text,
-      media_type text NOT NULL DEFAULT 'application/octet-stream',
-      status text NOT NULL DEFAULT 'ready',
-      metadata_json jsonb NOT NULL DEFAULT '{}'::jsonb,
-      created_at timestamptz NOT NULL DEFAULT now(),
-      updated_at timestamptz NOT NULL DEFAULT now()
-    )
-  `)
-  await db.execute(sql`
-    CREATE INDEX IF NOT EXISTS idx_meteorological_datasets_session_updated
-    ON platform_meteorological_datasets (session_id, updated_at)
-  `)
-  await db.execute(sql`
-    CREATE INDEX IF NOT EXISTS idx_meteorological_datasets_thread_updated
-    ON platform_meteorological_datasets (thread_id, updated_at)
-  `)
-  await db.execute(sql`
-    CREATE TABLE IF NOT EXISTS platform_meteorological_jobs (
-      job_id text PRIMARY KEY,
-      dataset_id text NOT NULL,
-      workspace_id text,
-      created_by_user_id text,
-      session_id text NOT NULL,
-      thread_id text,
-      kind text NOT NULL,
-      status text NOT NULL,
-      message text,
-      payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
-      created_at timestamptz NOT NULL DEFAULT now(),
-      updated_at timestamptz NOT NULL DEFAULT now(),
-      completed_at timestamptz
-    )
-  `)
-  await db.execute(sql`
-    CREATE INDEX IF NOT EXISTS idx_meteorological_jobs_dataset_updated
-    ON platform_meteorological_jobs (dataset_id, updated_at)
-  `)
-  await db.execute(sql`
-    CREATE INDEX IF NOT EXISTS idx_meteorological_jobs_session_updated
-    ON platform_meteorological_jobs (session_id, updated_at)
-  `)
-  await db.execute(sql`ALTER TABLE platform_meteorological_datasets ADD COLUMN IF NOT EXISTS workspace_id text`)
-  await db.execute(sql`ALTER TABLE platform_meteorological_datasets ADD COLUMN IF NOT EXISTS created_by_user_id text`)
-  await db.execute(sql`ALTER TABLE platform_meteorological_datasets ADD COLUMN IF NOT EXISTS visibility text NOT NULL DEFAULT 'workspace'`)
-  await db.execute(sql`ALTER TABLE platform_meteorological_jobs ADD COLUMN IF NOT EXISTS workspace_id text`)
-  await db.execute(sql`ALTER TABLE platform_meteorological_jobs ADD COLUMN IF NOT EXISTS created_by_user_id text`)
+  await verifySchema(db, METEOROLOGICAL_TABLES)
 }
 
 export function meteorologyRoutes(db: Database, runtimeRoot: string, store: PostgresPlatformStore, security: SecurityServices, env?: Env) {

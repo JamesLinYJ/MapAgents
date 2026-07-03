@@ -15,12 +15,13 @@
 import type { ConversationItem } from '../schemas/types.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 
-type AppendItem = (item: ConversationItem) => void
+type AppendItem = (item: ConversationItem) => void | Promise<void>
 
 export class ItemSink {
   private textBuffers = new Map<string, string>()
   private itemDrafts = new Map<string, ConversationItem>()
   private itemSnapshots = new Map<string, ConversationItem>()
+  private pendingWrites: Promise<void>[] = []
 
   constructor(
     private appendItem: AppendItem,
@@ -134,7 +135,15 @@ export class ItemSink {
 
   private publish(item: ConversationItem): ConversationItem {
     this.itemSnapshots.set(item.itemId, item)
-    this.appendItem(item)
+    const persisted = this.appendItem(item)
+    if (persisted && typeof persisted.then === 'function') this.pendingWrites.push(persisted)
     return item
+  }
+
+  async flush(): Promise<void> {
+    while (this.pendingWrites.length) {
+      const pending = this.pendingWrites.splice(0)
+      await Promise.all(pending)
+    }
   }
 }

@@ -410,11 +410,9 @@ function AppShell() {
     clearRun()
     clearArtifacts()
     setCanonicalThreadItems([])
-    startTransition(() => {
-      setThreadRuns([])
-      setToolRunResult(null)
-      setActiveThreadId(undefined)
-    })
+    setThreadRuns([])
+    setToolRunResult(null)
+    setActiveThreadId(undefined)
   }, [clearArtifacts, clearRun, setActiveThreadId, setThreadRuns, setToolRunResult])
 
   const hydrateRunState = useCallback(
@@ -492,7 +490,7 @@ function AppShell() {
           return
         }
 
-        if (thread) startTransition(() => setActiveThreadId(thread.id))
+        if (thread) setActiveThreadId(thread.id)
         const preferredRunId = runToRestore ?? thread?.latestRunId ?? undefined
         if (!preferredRunId) {
           syncUrl(sessionRecord.id, undefined, thread?.id)
@@ -774,17 +772,15 @@ function AppShell() {
     //
     // 下一次发送消息时因为没有 activeThreadId，会自然走 startAnalysis 创建新 thread。
     // 同时清理上一轮的上传数据显示，保证新 thread 看到干净的工作区。
-    startTransition(() => {
-      setQuery('')
-      clearActiveRunState()
-      clearUploads()
-      setThreadRuns([])
-      setCanonicalThreadItems([])
-      setActiveThreadId(undefined)
-      setActiveNav('analysis')
-      setPanelMode('summary')
-      setActiveSidebarItem('assistant')
-    })
+    setQuery('')
+    clearActiveRunState()
+    clearUploads()
+    setThreadRuns([])
+    setCanonicalThreadItems([])
+    setActiveThreadId(undefined)
+    setActiveNav('analysis')
+    setPanelMode('summary')
+    setActiveSidebarItem('assistant')
     if (session?.id) {
       syncUrl(session.id)
     }
@@ -814,10 +810,8 @@ function AppShell() {
         ])
         const canonicalItems = transcriptEntriesToConversationItems(historyPage.entries)
         const runs = threadPayload.runs ?? []
-        startTransition(() => {
-          setActiveThreadId(threadPayload.thread.id)
-          setThreadRuns(runs)
-        })
+        setActiveThreadId(threadPayload.thread.id)
+        setThreadRuns(runs)
         if (threadPayload.latestRun?.id) {
           await hydrateRunState(threadPayload.latestRun.id)
           setCanonicalThreadItems(canonicalItems)
@@ -914,10 +908,8 @@ function AppShell() {
       const forked = await forkFromMessage(currentThreadId, entryId)
       const history = await getThreadHistory(forked.id, null, 200)
       clearActiveRunState()
-      startTransition(() => {
-        setActiveThreadId(forked.id)
-        setThreadRuns([])
-      })
+      setActiveThreadId(forked.id)
+      setThreadRuns([])
       setCanonicalThreadItems(transcriptEntriesToConversationItems(history.entries))
       syncUrl(session.id, undefined, forked.id)
     } catch (error) {

@@ -41,6 +41,7 @@ import { ItemSink } from '../conversation/itemSink.js'
 import { getEnv } from '../framework/env.js'
 import { AzureSpeechService } from '../speech/azureSpeechService.js'
 import type { SecurityServices } from '../security/routes.js'
+import { WsMessageRateLimiter } from '../security/rateLimiter.js'
 import type { AuthContext } from '../security/types.js'
 import { assertDirectToolRunAllowed } from '../security/toolExecutionPolicy.js'
 
@@ -62,6 +63,7 @@ const MUTATING_COMMANDS = new Set([
   'run:start', 'run:cancel', 'run:resume', 'run:respond-decision',
   'tool:run', 'tool-catalog:upsert', 'tool-catalog:delete',
   'runtime-config:update',
+  'speech:authorization',
   'memory:write', 'memory:delete', 'memory:extract', 'memory:dream', 'memory:session:rebuild',
   'file:delete', 'layer:update', 'layer:delete',
 ])
@@ -73,6 +75,7 @@ export function createWsHandler(server: Server, dependencies: WsDependencies) {
   })
   const files = new RuntimeFileStore(dependencies.runtimeRoot)
   const wss = new WebSocketServer({ noServer: true })
+  const wsRateLimiter = new WsMessageRateLimiter()
 
   server.on('upgrade', async (request, socket, head) => {
     if (!isWsPath(request)) return
@@ -82,6 +85,7 @@ export function createWsHandler(server: Server, dependencies: WsDependencies) {
   })
 
   wss.on('connection', (ws, _request, authContext?: AuthContext) => {
+    const connectionId = makeId('ws_conn')
     const subscriptions = new Map<string, () => void>()
     const keepalive = setInterval(() => send(ws, push('keepalive', {})), 30_000)
 
@@ -92,6 +96,10 @@ export function createWsHandler(server: Server, dependencies: WsDependencies) {
           msg = parseMessage(line)
         } catch (error) {
           send(ws, failure(null, 'invalid_request', formatError(error)))
+          continue
+        }
+        if (!wsRateLimiter.consume(connectionId, msg.type)) {
+          send(ws, failure(msg.id, 'command_failed', '请求过于频繁，请稍后重试。'))
           continue
         }
         try {
@@ -177,7 +185,7 @@ async function authorizeWsMessage(
 ): Promise<void> {
   const security = dependencies.security
   if (!auth) throw new Error('WebSocket 命令需要登录。')
-  if (MUTATING_COMMANDS.has(msg.type) && !(await security.auth.isAuthContextActive(auth))) {
+  if (!(await security.auth.isAuthContextActive(auth))) {
     throw new Error('登录会话已失效，请重新登录。')
   }
   const payload = msg.payload
@@ -638,7 +646,7 @@ async function handleMessage(
     case 'run:resume': {
       const runId = requiredString(payload, 'runId')
       const run = store.getRun(runId)
-      const checkpoint = await store.conversationStore.getRunCheckpoint(runId)
+      const checkpoint = await store.getRunCheckpoint(runId)
       if (checkpoint.pendingToolCallIds.length) {
         await store.updateRunStatus(runId, 'requires_action')
         throw new Error(`运行包含状态未知的工具调用，禁止自动重放：${checkpoint.pendingToolCallIds.join(', ')}`)
@@ -702,7 +710,7 @@ async function handleMessage(
         catalogBackend: 'typescript',
         postgisEnabled: postgisStatus.available,
         postgisError: postgisStatus.error,
-        conversationStoreRoot: store.conversationStoreRoot,
+        conversationStoreRoot: store.getConversationStoreRoot(),
         providers: modelRegistry.descriptors(),
         toolProviders: toolRegistry.providerStatuses(),
       }
@@ -766,6 +774,7 @@ async function executeTool(
   }
   const run = store.getRun(runId)
   const values = new Map(run.state.toolValueRefs.map(ref => [ref.refId, ref]))
+  const pendingToolLogWrites: Promise<void>[] = []
   const context: ToolContext = {
     runId,
     sessionId: run.sessionId,
@@ -792,10 +801,12 @@ async function executeTool(
       return parsed
     },
     log: (_level, message) => {
-      store.appendEvent(runId, {
+      const persisted = store.appendEvent(runId, {
         eventId: makeId('event'), runId, threadId: run.threadId, type: 'tool.completed',
         message, timestamp: nowUtc(), payload: {},
       })
+      pendingToolLogWrites.push(persisted)
+      persisted.catch(error => logNonBlockingError('tool:run:log', error))
     },
   }
   const args = requiredRecord(payload, 'args')
@@ -827,6 +838,8 @@ async function executeTool(
       output: JSON.stringify(result.payload),
       metadata: { resultId: result.resultId, source: result.source, valueRefs: result.valueRefs ?? [], artifacts: result.artifacts ?? [] },
     })
+    await Promise.allSettled(pendingToolLogWrites)
+    await itemSink.flush()
     if (directRun) await store.completeRun(runId, 'completed')
     return { result, run: store.getRun(runId) }
   } catch (error) {
@@ -842,6 +855,8 @@ async function executeTool(
       await store.updateRunState(runId, { errors: [...current.state.errors, message], failedTool: toolName })
       await store.completeRun(runId, 'failed')
     }
+    await Promise.allSettled(pendingToolLogWrites)
+    await itemSink.flush()
     throw error
   }
 }
@@ -1085,6 +1100,10 @@ function requiredRecord(payload: Record<string, unknown>, key: string): Record<s
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function logNonBlockingError(scope: string, error: unknown): void {
+  console.warn(`[ws:${scope}] ${formatError(error)}`)
 }
 
 function formatError(error: unknown): string {

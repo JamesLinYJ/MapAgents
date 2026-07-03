@@ -62,7 +62,7 @@ export class ToolExecutionCoordinator {
       kind: 'tool_call',
       payload: { callId, name: toolName, arguments: args, ledgerStatus: 'prepared' },
     })
-    await this.options.store.conversationStore.saveRun(this.options.store.getRun(this.options.runId), {
+    await this.options.store.saveRunCheckpoint(this.options.runId, {
       pendingToolCallIds: [callId],
       recoveryStatus: 'requires_action',
     })
@@ -125,7 +125,7 @@ export class ToolExecutionCoordinator {
         metadata: { resultId: result.resultId, source: result.source, valueRefs: result.valueRefs ?? [], artifacts: result.artifacts ?? [] },
       })
       await this.appendToolResult(callId, toolName, result)
-      await this.options.store.conversationStore.saveRun(this.options.store.getRun(this.options.runId), {
+      await this.options.store.saveRunCheckpoint(this.options.runId, {
         pendingToolCallIds: [],
         recoveryStatus: 'clean',
       })
@@ -135,7 +135,7 @@ export class ToolExecutionCoordinator {
       await this.appendLedger(callId, toolName, 'failed', message)
       if (itemId) this.options.itemSink.completeItem(itemId, { callId, name: toolName, isError: true, body: message })
       // started 后失败是已知终态，可以清理 pending；进程直接崩溃时不会执行到这里。
-      await this.options.store.conversationStore.saveRun(this.options.store.getRun(this.options.runId), {
+      await this.options.store.saveRunCheckpoint(this.options.runId, {
         pendingToolCallIds: [],
         recoveryStatus: 'clean',
       })
@@ -187,7 +187,7 @@ export class ToolExecutionCoordinator {
       valueRefs: (result.valueRefs ?? []).map(ref => ({ refId: ref.refId, kind: ref.kind, label: ref.label })),
     })
     const contentRef = content.length > this.options.inlineToolResultMaxChars
-      ? await this.options.store.conversationStore.putObject(content, 'application/json')
+      ? await this.options.store.putConversationObject(content, 'application/json')
       : null
     await this.options.store.appendTranscript({
       threadId: this.options.threadId,

@@ -132,6 +132,7 @@ function Set-DefaultEnvironment {
     Set-ProcessDefault 'API_PORT' '8000'
     Set-ProcessDefault 'WORKER_PORT' '8012'
     Set-ProcessDefault 'WORKER_PYTHON' (Resolve-SystemPython)
+    Set-ProcessDefault 'WORKER_SHARED_SECRET' 'development-only-worker-shared-secret-change-before-production'
     Set-ProcessDefault 'WEB_DEV_HOST' '127.0.0.1'
     Set-ProcessDefault 'WEB_DEV_PORT' '5173'
     Set-ProcessDefault 'RUNTIME_ROOT' $RuntimeRoot

@@ -69,7 +69,12 @@ export class PostGisRepository {
     }
     async status(): Promise<{ available: boolean; error: string | null }> {
         try {
-            await this.db.execute(sql `SELECT 1`);
+            const result = await this.db.execute(sql `
+                SELECT PostGIS_Version() AS version
+            `);
+            if (!result.rows[0]?.version) {
+                return { available: false, error: 'PostGIS 扩展未返回版本信息' };
+            }
             return { available: true, error: null };
         }
         catch (error) {

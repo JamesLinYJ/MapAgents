@@ -73,8 +73,10 @@ export async function persistToolExecutionResult(
       valueRefs: refs,
     }],
   })
-  for (const ref of refs) store.conversationStore.appendValue(runId, ref)
-  await Promise.all(artifacts.map(artifact => store.persistArtifact(artifact)))
+  await Promise.all([
+    ...refs.map(ref => store.appendToolValue(runId, ref)),
+    ...artifacts.map(artifact => store.persistArtifact(artifact)),
+  ])
 }
 
 // 计划模式是运行状态，不是普通工具 payload。
