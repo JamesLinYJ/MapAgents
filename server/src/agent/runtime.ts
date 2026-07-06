@@ -15,29 +15,20 @@ import {
   RunState,
   type AgentInputItem,
   type Model,
-  type ModelSettings,
   type RunStreamEvent,
   type RunToolApprovalItem,
 } from '@openai/agents'
 import {
   Capabilities,
-  Manifest,
   SandboxAgent,
   type SandboxSessionLike,
 } from '@openai/agents/sandbox'
-import {
-  DockerSandboxClient,
-  UnixLocalSandboxClient,
-} from '@openai/agents/sandbox/local'
 import type { ToolRegistry } from '../framework/registry.js'
 import type { ModelAdapter, ModelAdapterRegistry } from '../model/registry.js'
 import type {
   AgentRuntimeConfig,
   AnalysisRun,
-  DecisionRequest,
-  RuntimeSandboxConfig,
   ToolValueRef,
-  TranscriptEntry,
 } from '../schemas/types.js'
 import type { PostgresPlatformStore } from '../store/platformStore.js'
 import { ItemSink } from '../conversation/itemSink.js'
@@ -48,7 +39,6 @@ import { RunEventSink, TurnFinalizer } from './turnRunner.js'
 import {
   assembleThreadContext,
   compactThreadIfNeeded,
-  type ConversationChatMessage,
 } from './contextManager.js'
 import { FileAgentsSession } from './fileAgentsSession.js'
 import { createAgentsTools, type AgentsExecutionContext } from './agentsToolBridge.js'
@@ -56,50 +46,40 @@ import { ToolExecutionCoordinator } from './toolExecutionCoordinator.js'
 import { runDeterministicNowcast, shouldRunDeterministicNowcast } from './deterministicNowcastRunner.js'
 import { agentsSdkVersion, runtimeConfigDigest, SDK_STATE_SCHEMA_VERSION } from './agentsRuntimeMetadata.js'
 import type { AuthContext } from '../security/types.js'
+import {
+  assistantText,
+  conversationMessagesToAgentItems,
+  errorMessage,
+  extractReasoningDelta,
+  functionCallId,
+  isAssistantContentCheckpoint,
+  isAssistantMessage,
+  isRecord,
+  modelSettings,
+  parseArguments,
+  parseStructuredJson,
+  requireString,
+  requireThreadId,
+  sdkNativeLedgerStatus,
+  serializeAgentEvent,
+  toolResultText,
+} from './runtimeSdkProjection.js'
+import {
+  approvalDecisionFromRequest,
+  approvalDescription,
+  approvalTitle,
+  resolveDecision,
+  upsertDecision,
+} from './runtimeApprovals.js'
+import {
+  buildSandboxManifest,
+  createConfiguredSandboxSession,
+  type OpenAIAgentsRuntimeOptions,
+} from './runtimeSandbox.js'
+
+export type { OpenAIAgentsRuntimeOptions, SandboxSessionFactory } from './runtimeSandbox.js'
 
 const AGENT_TOOL_NAME = /^[a-zA-Z0-9_-]+$/u
-
-function buildSandboxManifest(options: RunOptions, threadId: string): Manifest {
-  return new Manifest({
-    entries: {
-      'README.md': {
-        type: 'file',
-        content: `# GeoForge Sandbox
-
-本工作区由 GeoForge 运行时为单次 Agent run 创建。
-
-- runId: ${options.runId}
-- threadId: ${threadId}
-- sessionId: ${options.sessionId}
-
-文件、shell 和 patch 操作必须在这个 sandbox 工作区内完成。平台运行时数据、上传文件和气象数据集只能通过已注册工具访问，不要猜测宿主机路径。
-`,
-      },
-    },
-  })
-}
-
-export type SandboxSessionFactory = (
-  manifest: Manifest,
-  config: RuntimeSandboxConfig,
-) => Promise<SandboxSessionLike>
-
-export interface OpenAIAgentsRuntimeOptions {
-  createSandboxSession?: SandboxSessionFactory
-}
-
-async function createConfiguredSandboxSession(
-  manifest: Manifest,
-  config: RuntimeSandboxConfig,
-): Promise<SandboxSessionLike> {
-  if (config.backend === 'docker') {
-    return new DockerSandboxClient({ image: config.dockerImage }).create(manifest)
-  }
-  if (config.backend === 'unix_local') {
-    return new UnixLocalSandboxClient().create(manifest)
-  }
-  throw new Error(`不支持的 sandbox backend：${config.backend}`)
-}
 
 export interface RunOptions {
   runId: string
@@ -1122,235 +1102,3 @@ export class OpenAIAgentsRuntime {
   }
 }
 
-function modelSettings(reasoning = true): ModelSettings {
-  return {
-    parallelToolCalls: false,
-    ...(reasoning ? { reasoning: { effort: 'high' as const } } : {}),
-    retry: {
-      maxRetries: 1,
-      policy: ({ providerAdvice }: { providerAdvice?: { replaySafety?: 'safe' | 'unsafe'; suggested?: boolean } }) =>
-        providerAdvice?.replaySafety === 'safe' && providerAdvice.suggested === true,
-    },
-  }
-}
-
-function conversationMessagesToAgentItems(
-  sourceMessages: ConversationChatMessage[],
-  currentQuery: string,
-  systemPrompt: string,
-): AgentInputItem[] {
-  const items: AgentInputItem[] = []
-  const callNames = new Map<string, string>()
-  let messages = sourceMessages[0]?.role === 'system' && sourceMessages[0].content === systemPrompt
-    ? sourceMessages.slice(1)
-    : [...sourceMessages]
-  let skippedCurrentInput = false
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]
-    if (!skippedCurrentInput && message.role === 'user' && message.content?.trim() === currentQuery.trim()) {
-      messages = [...messages.slice(0, index), ...messages.slice(index + 1)]
-      skippedCurrentInput = true
-      break
-    }
-  }
-  for (const message of messages) {
-    if (message.role === 'system') {
-      items.push({ type: 'message', role: 'system', content: message.content ?? '' })
-    } else if (message.role === 'user') {
-      items.push({ type: 'message', role: 'user', content: message.content ?? '' })
-    } else if (message.role === 'assistant') {
-      if (message.content) {
-        items.push({
-          type: 'message', role: 'assistant', status: 'completed',
-          content: [{ type: 'output_text', text: message.content }],
-        })
-      }
-      for (const call of message.tool_calls ?? []) {
-        callNames.set(call.id, call.function.name)
-        items.push({
-          type: 'function_call', status: 'completed', callId: call.id,
-          name: call.function.name, arguments: call.function.arguments,
-        })
-      }
-    } else if (message.role === 'tool') {
-      if (!message.tool_call_id) throw new Error('历史工具结果缺少 tool_call_id')
-      items.push({
-        type: 'function_call_result',
-        status: 'completed',
-        callId: message.tool_call_id,
-        name: callNames.get(message.tool_call_id) ?? 'tool',
-        output: message.content ?? '',
-      })
-    } else {
-      throw new Error(`不支持的历史消息角色 '${message.role}'`)
-    }
-  }
-  return items
-}
-
-function serializeAgentEvent(event: RunStreamEvent): Record<string, unknown> {
-  if (event.type === 'run_item_stream_event') {
-    return { type: event.type, name: event.name, item: event.item.toJSON() }
-  }
-  if (event.type === 'agent_updated_stream_event') {
-    return { type: event.type, agent: event.agent.name }
-  }
-  return { type: event.type, data: event.data }
-}
-
-function isAssistantMessage(item: AgentInputItem): item is Extract<AgentInputItem, { role: 'assistant' }> {
-  return 'role' in item && item.role === 'assistant'
-}
-
-function assistantText(item: Extract<AgentInputItem, { role: 'assistant' }>): string {
-  return item.content.map(part => {
-    if (part.type === 'output_text') return part.text
-    if (part.type === 'refusal') return part.refusal
-    return ''
-  }).join('').trim()
-}
-
-function isAssistantContentCheckpoint(entry: TranscriptEntry): entry is TranscriptEntry & {
-  kind: 'checkpoint'
-  payload: Record<string, unknown> & { callId: string; content: string }
-} {
-  return entry.kind === 'checkpoint'
-    && entry.payload.type === 'assistant_content_for_tool_call'
-    && typeof entry.payload.callId === 'string'
-    && typeof entry.payload.content === 'string'
-}
-
-function toolResultText(output: Extract<AgentInputItem, { type: 'function_call_result' }>['output']): string {
-  if (typeof output === 'string') return output
-  if (Array.isArray(output)) {
-    const text = output.flatMap(part => part.type === 'input_text' ? [part.text] : []).join('')
-    if (text) return text
-  }
-  if (isRecord(output) && output.type === 'text' && typeof output.text === 'string') return output.text
-  throw new Error('SDK Session 工具结果不是文本')
-}
-
-function extractReasoningDelta(value: unknown): string {
-  if (!isRecord(value)) return ''
-  const choices = Array.isArray(value.choices) ? value.choices : []
-  const first = choices[0]
-  if (!isRecord(first) || !isRecord(first.delta)) return ''
-  const reasoning = first.delta.reasoning ?? first.delta.reasoning_content
-  return typeof reasoning === 'string' ? reasoning : ''
-}
-
-function functionCallId(interruption: RunToolApprovalItem): string | null {
-  const raw = interruption.rawItem
-  return raw.type === 'function_call' && typeof raw.callId === 'string' ? raw.callId : null
-}
-
-function parseArguments(value: string | undefined): Record<string, unknown> {
-  const parsed: unknown = JSON.parse(value ?? '{}')
-  if (!isRecord(parsed)) throw new Error('审批工具参数必须为 JSON object')
-  return parsed
-}
-
-function parseStructuredJson(value: string): Record<string, unknown> {
-  const cleaned = value.trim().replace(/^```json\s*|\s*```$/gu, '')
-  const parsed: unknown = JSON.parse(cleaned)
-  if (!isRecord(parsed)) throw new Error('结构化模型输出必须是 JSON object')
-  return parsed
-}
-
-function approvalTitle(toolName: string, label?: string): string {
-  if (toolName === 'exit_plan_mode') return '接受这个执行计划？'
-  return `批准执行：${label ?? toolName}`
-}
-
-function approvalDescription(toolName: string, description?: string): string {
-  if (toolName === 'exit_plan_mode') {
-    return '计划已准备好。批准后系统会退出只读计划模式，并按这个计划继续执行写入、导出或计算动作。'
-  }
-  return description ?? `工具 ${toolName} 需要审批`
-}
-
-function approvalDecisionFromRequest(request: {
-  approvalId: string
-  action: string
-  title: string
-  description: string
-  status: string
-  payload: Record<string, unknown>
-  createdAt: string
-  resolvedAt: string | null
-}): DecisionRequest {
-  return {
-    decisionId: request.approvalId,
-    kind: 'approval',
-    title: request.title,
-    question: request.title,
-    description: request.description,
-    options: [
-      {
-        optionId: 'approve',
-        label: request.action === 'exit_plan_mode' ? '批准，开始执行' : '批准执行',
-        description: '允许系统继续执行这个动作。',
-        kind: 'approval',
-        reason: null,
-        payload: { approved: true },
-      },
-      {
-        optionId: 'reject',
-        label: request.action === 'exit_plan_mode' ? '退回，继续规划' : '拒绝',
-        description: '拒绝本次动作，运行会按拒绝结果继续。',
-        kind: 'approval',
-        reason: null,
-        payload: { approved: false },
-      },
-    ],
-    allowFreeText: false,
-    status: request.status,
-    payload: {
-      ...request.payload,
-      approvalId: request.approvalId,
-      action: request.action,
-    },
-    createdAt: request.createdAt,
-    resolvedAt: request.resolvedAt,
-  }
-}
-
-function upsertDecision(decisions: DecisionRequest[], decision: DecisionRequest): DecisionRequest[] {
-  return [...decisions.filter(item => item.decisionId !== decision.decisionId), decision]
-}
-
-function resolveDecision(
-  decisions: DecisionRequest[],
-  decisionId: string,
-  status: string,
-  payload: Record<string, unknown>,
-): DecisionRequest[] {
-  const resolvedAt = nowUtc()
-  return decisions.map(decision => decision.decisionId === decisionId
-    ? { ...decision, status, resolvedAt, payload: { ...decision.payload, ...payload } }
-    : decision)
-}
-
-function requireThreadId(threadId: string | null | undefined): string {
-  if (!threadId) throw new Error('连续对话运行必须属于 thread')
-  return threadId
-}
-
-function requireString(value: unknown, field: string): string {
-  if (typeof value !== 'string' || !value) throw new Error(`${field} 不能为空`)
-  return value
-}
-
-function sdkNativeLedgerStatus(status: 'completed' | 'in_progress' | 'incomplete'): 'started' | 'completed' | 'failed' {
-  if (status === 'incomplete') return 'failed'
-  if (status === 'in_progress') return 'started'
-  return 'completed'
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}

@@ -53,9 +53,9 @@ describe('conversation architecture', () => {
       const thread = await store.createThread(session.id, '测试')
       const run = await store.createRun(session.id, '查询杭州', { threadId: thread.id })
 
-      store.appendItem(item({ runId: run.id, threadId: thread.id, role: 'user', body: '查询杭州' }))
-      store.appendItem(item({ runId: run.id, threadId: thread.id, role: 'assistant', body: '杭州有雨。' }))
-      store.appendItem(item({ runId: run.id, threadId: thread.id, itemType: 'result', role: null, body: null, metadata: { resultType: 'success' } }))
+      await store.appendItem(item({ runId: run.id, threadId: thread.id, role: 'user', body: '查询杭州' }))
+      await store.appendItem(item({ runId: run.id, threadId: thread.id, role: 'assistant', body: '杭州有雨。' }))
+      await store.appendItem(item({ runId: run.id, threadId: thread.id, itemType: 'result', role: null, body: null, metadata: { resultType: 'success' } }))
       await store.conversationStore.flush()
 
       const restored = new PostgresPlatformStore(db, dir)

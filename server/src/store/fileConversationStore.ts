@@ -8,12 +8,10 @@
 //   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import {
   mkdir,
-  open,
   readFile,
-  readdir,
   rename,
   rm,
   writeFile,
@@ -46,6 +44,24 @@ import {
 } from '../schemas/types.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 import { z } from 'zod'
+import {
+  appendJsonLineDurable,
+  atomicWriteJson,
+  atomicWriteText,
+  decodeCursor,
+  encodeCursor,
+  estimateTokens,
+  isRecord,
+  jsonLinesContainId,
+  listDirectories,
+  listFileNames,
+  listFilesRecursively,
+  readJson,
+  readRawJson,
+  recordJsonLineCorruption,
+  safeId,
+  stringField,
+} from './fileConversationIo.js'
 
 const STORE_SCHEMA_VERSION = 2
 const DEFAULT_TRASH_RETENTION_DAYS = 30
@@ -984,150 +1000,3 @@ export class FileConversationStore {
     }
   }
 }
-
-async function atomicWriteJson(filePath: string, value: unknown): Promise<void> {
-  await atomicWriteText(filePath, `${JSON.stringify(value, null, 2)}\n`)
-}
-
-async function appendJsonLineDurable(filePath: string, value: unknown): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true })
-  const handle = await open(filePath, 'a', 0o600)
-  try {
-    await handle.writeFile(`${JSON.stringify(value)}\n`, 'utf8')
-    await handle.sync()
-  } finally {
-    await handle.close()
-  }
-}
-
-async function recordJsonLineCorruption(
-  filePath: string,
-  threadId: string,
-  lineNumber: number,
-  error: unknown,
-): Promise<void> {
-  await appendJsonLineDurable(path.join(path.dirname(filePath), 'corruption.jsonl'), {
-    threadId,
-    file: path.basename(filePath),
-    lineNumber,
-    reason: error instanceof Error ? error.message : String(error),
-    detectedAt: nowUtc(),
-  })
-}
-
-async function jsonLinesContainId(filePath: string, key: string, expected: string): Promise<boolean> {
-  let text: string
-  try {
-    text = await readFile(filePath, 'utf8')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
-    throw error
-  }
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue
-    try {
-      const parsed: unknown = JSON.parse(line)
-      if (isRecord(parsed) && parsed[key] === expected) return true
-    } catch {
-      // 损坏行由标准读取路径登记；journal 恢复只负责避免重复追加已提交记录。
-    }
-  }
-  return false
-}
-
-async function atomicWriteText(filePath: string, value: string): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true })
-  const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`
-  const handle = await open(temporary, 'w', 0o600)
-  try {
-    await handle.writeFile(value, 'utf8')
-    await handle.sync()
-  } finally {
-    await handle.close()
-  }
-  await rename(temporary, filePath)
-}
-
-async function readJson<T>(filePath: string, schema: { parse(value: unknown): T }): Promise<T | null> {
-  const raw = await readRawJson(filePath)
-  return raw === null ? null : schema.parse(raw)
-}
-
-async function readRawJson(filePath: string): Promise<Record<string, unknown> | null> {
-  try {
-    const parsed: unknown = JSON.parse(await readFile(filePath, 'utf8'))
-    return isRecord(parsed) ? parsed : null
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw error
-  }
-}
-
-async function listDirectories(root: string): Promise<string[]> {
-  try {
-    return (await readdir(root, { withFileTypes: true }))
-      .filter(entry => entry.isDirectory())
-      .map(entry => entry.name)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-    throw error
-  }
-}
-
-async function listFileNames(root: string): Promise<string[]> {
-  try {
-    return (await readdir(root, { withFileTypes: true }))
-      .filter(entry => entry.isFile())
-      .map(entry => entry.name)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-    throw error
-  }
-}
-
-async function listFilesRecursively(root: string): Promise<string[]> {
-  try {
-    const entries = await readdir(root, { withFileTypes: true })
-    const nested = await Promise.all(entries.map(entry => {
-      const target = path.join(root, entry.name)
-      return entry.isDirectory() ? listFilesRecursively(target) : Promise.resolve([target])
-    }))
-    return nested.flat()
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-    throw error
-  }
-}
-
-function safeId(value: string, field: string): string {
-  const trimmed = value.trim()
-  if (!/^[A-Za-z0-9_-]+$/u.test(trimmed)) throw new Error(`${field} 不是合法标识符`)
-  return trimmed
-}
-
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4)
-}
-
-function encodeCursor(sequence: number): string {
-  return Buffer.from(JSON.stringify({ sequence }), 'utf8').toString('base64url')
-}
-
-function decodeCursor(cursor: string): number {
-  try {
-    const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))
-    if (!isRecord(parsed) || typeof parsed.sequence !== 'number') throw new Error('invalid cursor')
-    return parsed.sequence
-  } catch {
-    throw new Error('history cursor 无效')
-  }
-}
-
-function stringField(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
