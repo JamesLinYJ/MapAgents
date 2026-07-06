@@ -15,7 +15,7 @@ import type { ToolContext, ToolDef, ToolResult, ValueRef } from '../../framework
 import { RuntimeFileStore } from '../../store/fileStore.js'
 import { makeId } from '../../utils/ids.js'
 import { meteorologyToolPrompt } from './prompts.js'
-import { signWorkerRequest } from './workerAuth.js'
+import { callMeteorologyWorker as callWorker } from './meteorologyWorkerClient.js'
 
 const DATASET_SUFFIXES = ['.nc', '.nc4', '.tif', '.tiff', '.grib', '.grb', '.grb2', '.h5', '.hdf5']
 const NETCDF_SUFFIXES = ['.nc', '.nc4']
@@ -814,43 +814,6 @@ async function renderNowcastRaster(args: Record<string, unknown>, ctx: ToolConte
     primarySurface: 'map',
   })
   return result('render_nowcast_raster', worker.message, worker.payload, resultRefs('render_nowcast_raster', '短时临近预报（短临）栅格', worker.payload), [artifact])
-}
-
-async function callWorker(name: string, args: Record<string, unknown>) {
-  const env = getEnv()
-  const url = env.WORKER_URL
-  if (!url) throw new Error('WORKER_URL 未配置')
-  if (!env.WORKER_SHARED_SECRET) throw new Error('WORKER_SHARED_SECRET 未配置')
-  const body = JSON.stringify({ args })
-  const response = await fetch(`${url.replace(/\/$/u, '')}/tools/${name}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: signWorkerRequest(env.WORKER_SHARED_SECRET, name, body),
-    },
-    body,
-    signal: AbortSignal.timeout(env.WORKER_REQUEST_TIMEOUT_MS),
-  })
-  if (!response.ok) {
-    const detail = await response.text()
-    throw new Error(workerErrorDetail(detail) || `Worker HTTP ${response.status}`)
-  }
-  const responseBody: unknown = await response.json()
-  if (!isRecord(responseBody) || !isRecord(responseBody.payload) || typeof responseBody.message !== 'string') {
-    throw new Error(`Worker 工具 "${name}" 返回无效 payload`)
-  }
-  return { message: responseBody.message, payload: responseBody.payload }
-}
-
-function workerErrorDetail(raw: string): string {
-  if (!raw.trim()) return ''
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (isRecord(parsed) && typeof parsed.detail === 'string' && parsed.detail.trim()) return parsed.detail.trim()
-  } catch {
-    // 非 JSON 错误正文原样上浮，避免隐藏 Worker 的真实失败。
-  }
-  return raw.trim()
 }
 
 function result(
