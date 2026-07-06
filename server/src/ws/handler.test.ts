@@ -143,8 +143,8 @@ describe('WebSocket run subscriptions', () => {
     expect(snapshotRunId(firstSnapshot)).toBe(run.id)
     await close(first)
 
-    store.appendItem(conversationItem(run.id, thread.id))
-    store.appendEvent(run.id, runEvent(run.id, thread.id))
+    await store.appendItem(conversationItem(run.id, thread.id))
+    await store.appendEvent(run.id, runEvent(run.id, thread.id))
     await store.updateRunStatus(run.id, 'running')
 
     const second = await connect(url)

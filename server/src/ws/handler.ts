@@ -11,62 +11,35 @@
 import type { Server, IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer, WebSocket } from 'ws'
-import type { AgentRuntimeConfig, AnalysisRun, DecisionRequest } from '../schemas/types.js'
-import type { PostGisRepository } from '../gis/postgis.js'
-import type { ModelAdapterRegistry } from '../model/registry.js'
-import type { ToolRegistry } from '../framework/registry.js'
-import type { ToolContext } from '../framework/types.js'
-import { defaultRuntimeConfig } from '../agent/defaultRuntimeConfig.js'
-import { OpenAIAgentsRuntime, type SandboxSessionFactory } from '../agent/runtime.js'
+import type { AgentRuntimeConfig } from '../schemas/types.js'
+import { OpenAIAgentsRuntime } from '../agent/runtime.js'
 import { RuntimeFileStore } from '../store/fileStore.js'
 import { PostgresPlatformStore, StoreNotFoundError } from '../store/platformStore.js'
-import { makeId, nowUtc } from '../utils/ids.js'
+import { makeId } from '../utils/ids.js'
 import { failure, parseMessage, push, success, type ClientMsg } from './protocol.js'
-import { persistToolExecutionResult, resolveRuntimeValueRef } from '../tools/resultPersistence.js'
+import { sendRunSnapshot, sendWs, snapshotRun, subscribeToRun, subscribeToThread } from './subscriptions.js'
 import { assembleThreadContext, compactThreadIfNeeded } from '../agent/contextManager.js'
-import {
-  createMemoryRuntime,
-  deleteMemory,
-  dreamMemories,
-  extractMemoriesFromThread,
-  listMemories,
-  readMemory,
-  rebuildSessionMemory,
-  searchMemories,
-  writeMemory,
-} from '../memory/service.js'
-import { memoryScopeSchema, memoryTypeSchema } from '../memory/schemas.js'
 import { buildSystemPrompt } from '../agent/prompts.js'
-import { ItemSink } from '../conversation/itemSink.js'
 import { getEnv } from '../framework/env.js'
 import { AzureSpeechService } from '../speech/azureSpeechService.js'
 import type { SecurityServices } from '../security/routes.js'
 import { WsMessageRateLimiter } from '../security/rateLimiter.js'
 import type { AuthContext } from '../security/types.js'
-import { assertDirectToolRunAllowed } from '../security/toolExecutionPolicy.js'
-
-interface WsDependencies {
-  store: PostgresPlatformStore
-  toolRegistry: ToolRegistry
-  modelRegistry: ModelAdapterRegistry
-  postgis: PostGisRepository
-  runtimeRoot: string
-  defaultRuntimeConfig?: AgentRuntimeConfig
-  createSandboxSession?: SandboxSessionFactory
-  security: SecurityServices
-}
-
-const MUTATING_COMMANDS = new Set([
-  'thread:create', 'thread:update', 'thread:delete', 'thread:fork', 'thread:compact',
-  'thread:memory:update', 'thread:memory:rebuild',
-  'thread:trash:restore', 'thread:trash:purge',
-  'run:start', 'run:cancel', 'run:resume', 'run:respond-decision',
-  'tool:run', 'tool-catalog:upsert', 'tool-catalog:delete',
-  'runtime-config:update',
-  'speech:authorization',
-  'memory:write', 'memory:delete', 'memory:extract', 'memory:dream', 'memory:session:rebuild',
-  'file:delete', 'layer:update', 'layer:delete',
-])
+import type { WsDependencies } from './dependencies.js'
+import { assertWsCsrf, authorizeWsMessage, requireWsAuth } from './security.js'
+import { executeTool } from './toolCommand.js'
+import { resolveRuntimeConfig } from './runtimeConfig.js'
+import { respondDecision } from './decisionCommand.js'
+import { handleMemoryCommand } from './memoryCommand.js'
+import { makeSummarizer } from './modelSelectors.js'
+import {
+  formatError,
+  optionalPositiveInteger,
+  optionalString,
+  requiredRecord,
+  requiredRunProvider,
+  requiredString,
+} from './payload.js'
 
 export function createWsHandler(server: Server, dependencies: WsDependencies) {
   const { store } = dependencies
@@ -87,7 +60,7 @@ export function createWsHandler(server: Server, dependencies: WsDependencies) {
   wss.on('connection', (ws, _request, authContext?: AuthContext) => {
     const connectionId = makeId('ws_conn')
     const subscriptions = new Map<string, () => void>()
-    const keepalive = setInterval(() => send(ws, push('keepalive', {})), 30_000)
+    const keepalive = setInterval(() => sendWs(ws, push('keepalive', {})), 30_000)
 
     ws.on('message', async (data) => {
       for (const line of data.toString().split('\n').filter(Boolean)) {
@@ -95,21 +68,21 @@ export function createWsHandler(server: Server, dependencies: WsDependencies) {
         try {
           msg = parseMessage(line)
         } catch (error) {
-          send(ws, failure(null, 'invalid_request', formatError(error)))
+          sendWs(ws, failure(null, 'invalid_request', formatError(error)))
           continue
         }
         if (!wsRateLimiter.consume(connectionId, msg.type)) {
-          send(ws, failure(msg.id, 'command_failed', '请求过于频繁，请稍后重试。'))
+          sendWs(ws, failure(msg.id, 'command_failed', '请求过于频繁，请稍后重试。'))
           continue
         }
         try {
           assertWsCsrf(msg, authContext)
           await authorizeWsMessage(msg, dependencies, authContext ?? null)
           const result = await handleMessage(msg, dependencies, runtime, files, ws, subscriptions, authContext ?? null)
-          send(ws, success(msg.id, result))
+          sendWs(ws, success(msg.id, result))
         } catch (error) {
           const code = error instanceof StoreNotFoundError ? 'not_found' : 'command_failed'
-          send(ws, failure(msg.id, code, formatError(error)))
+          sendWs(ws, failure(msg.id, code, formatError(error)))
         }
       }
     })
@@ -167,130 +140,6 @@ function rejectUpgrade(socket: Duplex, status: number, message: string): void {
   socket.destroy()
 }
 
-function assertWsCsrf(msg: ClientMsg, auth: AuthContext | undefined): void {
-  if (!auth || !MUTATING_COMMANDS.has(msg.type)) return
-  const token = msg.payload.csrfToken
-  if (token !== auth.csrfToken) throw new Error('CSRF 校验失败。')
-}
-
-function requireWsAuth(auth: AuthContext | null): AuthContext {
-  if (!auth) throw new Error('WebSocket 命令需要登录。')
-  return auth
-}
-
-async function authorizeWsMessage(
-  msg: ClientMsg,
-  dependencies: WsDependencies,
-  auth: AuthContext | null,
-): Promise<void> {
-  const security = dependencies.security
-  if (!auth) throw new Error('WebSocket 命令需要登录。')
-  if (!(await security.auth.isAuthContextActive(auth))) {
-    throw new Error('登录会话已失效，请重新登录。')
-  }
-  const payload = msg.payload
-  switch (msg.type) {
-    case 'workspace:bootstrap':
-    case 'session:get-default':
-      await security.authorization.enforce(auth, 'workspace', 'read', { workspaceId: auth.defaultWorkspaceId })
-      return
-    case 'session:get':
-    case 'thread:list':
-    case 'thread:trash:list':
-    case 'run:list':
-      return authorizeSession(dependencies, auth, requiredString(payload, 'sessionId'), 'read')
-    case 'thread:create':
-      return authorizeSession(dependencies, auth, requiredString(payload, 'sessionId'), 'create', 'thread')
-    case 'thread:get':
-    case 'thread:history':
-    case 'thread:context':
-    case 'thread:memory:get':
-    case 'memory:session:get':
-    case 'thread:subscribe':
-      return authorizeThread(dependencies, auth, requiredString(payload, 'threadId'), 'read')
-    case 'thread:update':
-    case 'thread:compact':
-    case 'thread:memory:update':
-    case 'thread:memory:rebuild':
-    case 'memory:session:rebuild':
-      return authorizeThread(dependencies, auth, requiredString(payload, 'threadId'), 'update')
-    case 'thread:delete':
-      return authorizeThread(dependencies, auth, requiredString(payload, 'threadId'), 'delete')
-    case 'thread:trash:restore':
-      return authorizeTrashedThread(dependencies, auth, requiredString(payload, 'threadId'), 'update')
-    case 'thread:trash:purge':
-      return authorizeTrashedThread(dependencies, auth, requiredString(payload, 'threadId'), 'delete')
-    case 'thread:fork':
-      return authorizeThread(dependencies, auth, requiredString(payload, 'threadId'), 'read')
-    case 'run:start': {
-      const threadId = optionalString(payload.threadId)
-      if (threadId) return authorizeThread(dependencies, auth, threadId, 'create', 'run')
-      return authorizeSession(dependencies, auth, requiredString(payload, 'sessionId'), 'create', 'run')
-    }
-    case 'run:get':
-    case 'run:subscribe':
-      return authorizeRun(dependencies, auth, requiredString(payload, 'runId'), 'read')
-    case 'run:cancel':
-    case 'run:resume':
-      return authorizeRun(dependencies, auth, requiredString(payload, 'runId'), 'execute')
-    case 'run:respond-decision':
-      return authorizeRun(dependencies, auth, requiredString(payload, 'runId'), 'approve')
-    case 'tool:list':
-      await security.authorization.enforce(auth, 'tool', 'read', { workspaceId: auth.defaultWorkspaceId })
-      return
-    case 'tool:run':
-      return assertDirectToolRunAllowed(auth, security.authorization, dependencies.toolRegistry, requiredString(payload, 'toolName'))
-    case 'tool-catalog:list':
-    case 'runtime-config:get':
-    case 'provider:list':
-    case 'system:get':
-      await security.authorization.enforce(auth, 'workspace', 'read', { workspaceId: auth.defaultWorkspaceId })
-      return
-    case 'tool-catalog:upsert':
-    case 'tool-catalog:delete':
-    case 'runtime-config:update':
-      await security.authorization.enforce(auth, 'admin', 'admin', { workspaceId: auth.defaultWorkspaceId })
-      return
-    case 'speech:authorization':
-      await security.authorization.enforce(auth, 'speech', 'execute', { workspaceId: auth.defaultWorkspaceId })
-      return
-    case 'memory:list':
-    case 'memory:read':
-    case 'memory:search':
-    case 'memory:instructions:list':
-      await security.authorization.enforce(auth, 'memory', 'read', { workspaceId: auth.defaultWorkspaceId, userId: auth.userId })
-      return
-    case 'memory:write':
-      await security.authorization.enforce(auth, 'memory', 'create', { workspaceId: auth.defaultWorkspaceId, userId: auth.userId })
-      return
-    case 'memory:delete':
-      await security.authorization.enforce(auth, 'memory', 'delete', { workspaceId: auth.defaultWorkspaceId, userId: auth.userId })
-      return
-    case 'memory:extract':
-    case 'memory:dream':
-      await security.authorization.enforce(auth, 'memory', 'execute', { workspaceId: auth.defaultWorkspaceId, userId: auth.userId })
-      return
-    case 'file:list':
-      if (optionalString(payload.threadId)) return authorizeThread(dependencies, auth, requiredString(payload, 'threadId'), 'read')
-      await security.authorization.enforce(auth, 'thread', 'read', { workspaceId: auth.defaultWorkspaceId })
-      return
-    case 'file:delete':
-      if (optionalString(payload.threadId)) return authorizeThread(dependencies, auth, requiredString(payload, 'threadId'), 'update')
-      await security.authorization.enforce(auth, 'thread', 'update', { workspaceId: auth.defaultWorkspaceId })
-      return
-    case 'layer:list':
-      await security.authorization.enforce(auth, 'layer', 'read', { workspaceId: auth.defaultWorkspaceId })
-      return
-    case 'layer:update':
-      return authorizeLayer(dependencies, auth, requiredString(payload, 'layerKey'), 'update')
-    case 'layer:delete':
-      return authorizeLayer(dependencies, auth, requiredString(payload, 'layerKey'), 'delete')
-    case 'run:unsubscribe':
-    case 'thread:unsubscribe':
-      return
-  }
-}
-
 async function resolveBootstrapSession(
   store: PostgresPlatformStore,
   auth: AuthContext,
@@ -308,85 +157,6 @@ async function resolveBootstrapSession(
     resourceId: session.id,
   })
   return session
-}
-
-async function authorizeSession(
-  dependencies: WsDependencies,
-  auth: AuthContext,
-  sessionId: string,
-  action: 'read' | 'create' | 'update' | 'delete',
-  object: 'session' | 'thread' | 'run' = 'session',
-): Promise<void> {
-  const session = dependencies.store.getSession(sessionId)
-  await dependencies.security.authorization.assertResourceWorkspace(auth, object, action, {
-    workspaceId: session.workspaceId,
-    createdByUserId: session.createdByUserId,
-    visibility: session.visibility,
-    resourceId: session.id,
-  })
-}
-
-async function authorizeThread(
-  dependencies: WsDependencies,
-  auth: AuthContext,
-  threadId: string,
-  action: 'read' | 'create' | 'update' | 'delete',
-  object: 'thread' | 'run' = 'thread',
-): Promise<void> {
-  const thread = dependencies.store.getThread(threadId)
-  await dependencies.security.authorization.assertResourceWorkspace(auth, object, action, {
-    workspaceId: thread.workspaceId,
-    createdByUserId: thread.createdByUserId,
-    visibility: thread.visibility,
-    resourceId: thread.id,
-  })
-}
-
-async function authorizeTrashedThread(
-  dependencies: WsDependencies,
-  auth: AuthContext,
-  threadId: string,
-  action: 'update' | 'delete',
-): Promise<void> {
-  const thread = await dependencies.store.getTrashedThread(threadId)
-  await dependencies.security.authorization.assertResourceWorkspace(auth, 'thread', action, {
-    workspaceId: thread.workspaceId,
-    createdByUserId: thread.createdByUserId,
-    visibility: thread.visibility,
-    resourceId: thread.id,
-  })
-}
-
-async function authorizeRun(
-  dependencies: WsDependencies,
-  auth: AuthContext,
-  runId: string,
-  action: 'read' | 'execute' | 'approve',
-): Promise<void> {
-  const run = dependencies.store.getRun(runId)
-  await dependencies.security.authorization.assertResourceWorkspace(auth, 'run', action, {
-    workspaceId: run.workspaceId,
-    createdByUserId: run.createdByUserId,
-    visibility: run.visibility,
-    resourceId: run.id,
-  })
-}
-
-async function authorizeLayer(
-  dependencies: WsDependencies,
-  auth: AuthContext,
-  layerKey: string,
-  action: 'update' | 'delete',
-): Promise<void> {
-  const layer = await dependencies.postgis.getLayer(layerKey)
-  if (!layer) throw new StoreNotFoundError(`图层 '${layerKey}' 不存在`)
-  if (layer.readonly) throw new Error('系统图层为只读，不能修改。')
-  await dependencies.security.authorization.assertResourceWorkspace(auth, 'layer', action, {
-    workspaceId: layer.workspaceId,
-    createdByUserId: layer.createdByUserId,
-    visibility: layer.visibility,
-    resourceId: layer.layerKey,
-  })
 }
 
 async function handleMessage(
@@ -469,116 +239,20 @@ async function handleMessage(
       )
     }
     case 'thread:memory:get':
-      return store.getThreadMemory(requiredString(payload, 'threadId'))
+      return handleMemoryCommand(msg.type, payload, dependencies)
     case 'thread:memory:update':
-      return store.updateThreadMemory(
-        requiredString(payload, 'threadId'),
-        requiredString(payload, 'content'),
-        optionalNonNegativeInteger(payload.expectedVersion, 'expectedVersion'),
-      )
-    case 'thread:memory:rebuild': {
-      const threadId = requiredString(payload, 'threadId')
-      const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
-      return rebuildSessionMemory(
-        store,
-        threadId,
-        config.context,
-        makeSummarizer(modelRegistry, config, optionalString(payload.provider), optionalString(payload.modelName)),
-        true,
-      )
-    }
-    case 'memory:list': {
-      const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
-      const runtimeMemory = createMemoryRuntime(store.runtimeRoot, config.context)
-      const scope = optionalString(payload.scope)
-      const records = await listMemories(runtimeMemory, scope ? memoryScopeSchema.parse(scope) : undefined)
-      return { records, total: records.length }
-    }
-    case 'memory:read': {
-      const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
-      return readMemory(
-        createMemoryRuntime(store.runtimeRoot, config.context),
-        memoryScopeSchema.parse(requiredString(payload, 'scope')),
-        requiredString(payload, 'relativePath'),
-      )
-    }
-    case 'memory:write': {
-      const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
-      return writeMemory(createMemoryRuntime(store.runtimeRoot, config.context), {
-        scope: memoryScopeSchema.parse(requiredString(payload, 'scope')),
-        type: memoryTypeSchema.parse(requiredString(payload, 'type')),
-        name: requiredString(payload, 'name'),
-        description: requiredString(payload, 'description'),
-        content: requiredString(payload, 'content'),
-        relativePath: optionalString(payload.relativePath),
-      })
-    }
-    case 'memory:delete': {
-      const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
-      return deleteMemory(
-        createMemoryRuntime(store.runtimeRoot, config.context),
-        memoryScopeSchema.parse(requiredString(payload, 'scope')),
-        requiredString(payload, 'relativePath'),
-      )
-    }
-    case 'memory:search': {
-      const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
-      const selector = makeOptionalStructuredSelector(
-        modelRegistry,
-        config,
-        optionalString(payload.provider),
-        optionalString(payload.modelName),
-      )
-      const matches = await searchMemories(
-        createMemoryRuntime(store.runtimeRoot, config.context),
-        requiredString(payload, 'query'),
-        selector,
-      )
-      return { matches, total: matches.length }
-    }
-    case 'memory:extract': {
-      const threadId = requiredString(payload, 'threadId')
-      const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
-      const runId = optionalString(payload.runId) ?? store.listRunsForThread(threadId)[0]?.id
-      if (!runId) throw new Error('memory:extract 需要 runId 或已有线程运行')
-      const records = await extractMemoriesFromThread(
-        createMemoryRuntime(store.runtimeRoot, config.context),
-        store,
-        threadId,
-        runId,
-        makeStructuredSelector(modelRegistry, config, optionalString(payload.provider), optionalString(payload.modelName)),
-      )
-      return { records, total: records.length }
-    }
-    case 'memory:dream': {
-      const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
-      return dreamMemories(
-        createMemoryRuntime(store.runtimeRoot, config.context),
-        makeOptionalStructuredSelector(modelRegistry, config, optionalString(payload.provider), optionalString(payload.modelName)),
-        { force: payload.force === true },
-      )
-    }
+    case 'thread:memory:rebuild':
+    case 'memory:list':
+    case 'memory:read':
+    case 'memory:write':
+    case 'memory:delete':
+    case 'memory:search':
+    case 'memory:extract':
+    case 'memory:dream':
     case 'memory:session:get':
-      return store.getThreadMemory(requiredString(payload, 'threadId'))
-    case 'memory:session:rebuild': {
-      const threadId = requiredString(payload, 'threadId')
-      const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
-      return rebuildSessionMemory(
-        store,
-        threadId,
-        config.context,
-        makeSummarizer(modelRegistry, config, optionalString(payload.provider), optionalString(payload.modelName)),
-        true,
-      )
-    }
-    case 'memory:instructions:list': {
-      const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
-      return {
-        enabled: config.context.instructionMemoryEnabled,
-        entrypointName: config.context.instructionEntrypointName,
-        records: [],
-      }
-    }
+    case 'memory:session:rebuild':
+    case 'memory:instructions:list':
+      return handleMemoryCommand(msg.type, payload, dependencies)
     case 'thread:trash:list':
       return store.listTrash(requiredString(payload, 'sessionId'))
     case 'thread:trash:restore':
@@ -636,11 +310,11 @@ async function handleMessage(
         executionMode: payload.executionMode === 'plan' ? 'plan' : 'auto',
         reasoning: payload.reasoning !== false,
         auth: currentAuth,
-      }).then(() => void sendSnapshot(ws, run.id, store))
+      }).then(() => void sendRunSnapshot(ws, run.id, store))
       return run
     }
     case 'run:get':
-      return snapshot(requiredString(payload, 'runId'), store)
+      return snapshotRun(requiredString(payload, 'runId'), store)
     case 'run:cancel':
       return runtime.cancel(requiredString(payload, 'runId'))
     case 'run:resume': {
@@ -663,7 +337,7 @@ async function handleMessage(
         runtimeConfig: run.runtimeConfigSnapshot,
         resume: true,
         auth: currentAuth,
-      }).then(() => void sendSnapshot(ws, runId, store))
+      }).then(() => void sendRunSnapshot(ws, runId, store))
       return store.getRun(runId)
     }
     case 'run:respond-decision':
@@ -671,7 +345,7 @@ async function handleMessage(
     case 'run:subscribe': {
       const runId = requiredString(payload, 'runId')
       subscribeToRun(ws, runId, store, subscriptions)
-      return snapshot(runId, store)
+      return snapshotRun(runId, store)
     }
     case 'run:unsubscribe': {
       const runId = requiredString(payload, 'runId')
@@ -746,366 +420,4 @@ async function handleMessage(
   }
 }
 
-async function executeTool(
-  payload: Record<string, unknown>,
-  store: PostgresPlatformStore,
-  registry: ToolRegistry,
-  modelRegistry: ModelAdapterRegistry,
-  runtimeConfigDefaults: AgentRuntimeConfig | undefined,
-  security: SecurityServices,
-  auth: AuthContext,
-) {
-  const toolName = requiredString(payload, 'toolName')
-  await assertDirectToolRunAllowed(auth, security.authorization, registry, toolName)
-  let runId = optionalString(payload.runId)
-  let directRun = false
-  if (!runId) {
-    const sessionId = requiredString(payload, 'sessionId')
-    let threadId = optionalString(payload.threadId)
-    if (!threadId) threadId = (await store.createThread(sessionId, `工具：${toolName}`)).id
-    const created = await store.createRun(sessionId, `执行工具 ${toolName}`, {
-      threadId,
-      modelProvider: modelRegistry.defaultProvider || null,
-      runtimeConfigSnapshot: await resolveRuntimeConfig(store, runtimeConfigDefaults),
-    })
-    runId = created.id
-    directRun = true
-    await store.updateRunStatus(runId, 'running')
-  }
-  const run = store.getRun(runId)
-  const values = new Map(run.state.toolValueRefs.map(ref => [ref.refId, ref]))
-  const pendingToolLogWrites: Promise<void>[] = []
-  const context: ToolContext = {
-    runId,
-    sessionId: run.sessionId,
-    threadId: run.threadId,
-    runtimeRoot: store.runtimeRoot,
-    runtimeConfig: run.runtimeConfigSnapshot ?? await resolveRuntimeConfig(store, runtimeConfigDefaults),
-    auth,
-    state: values,
-    resolveValueRef: refId => resolveRuntimeValueRef(values, refId),
-    resolveMeteorologicalDataset: input => store.resolveMeteorologicalDataset({
-      sessionId: run.sessionId,
-      threadId: run.threadId,
-      workspaceId: run.workspaceId,
-      datasetId: input.datasetId ?? null,
-      filename: input.filename ?? null,
-    }),
-    invokeStructuredModel: async prompt => {
-      const adapter = modelRegistry.resolveProvider(run.modelProvider)
-      const response = await adapter.chat(prompt, { model: run.modelName ?? adapter.defaultModel, reasoning: false })
-      const content = response.content
-      if (typeof content !== 'string' || !content.trim()) throw new Error('模型未返回结构化内容')
-      const parsed: unknown = JSON.parse(content.replace(/^```json\s*|\s*```$/gu, ''))
-      if (!isRecord(parsed)) throw new Error('模型结构化输出必须是 JSON object')
-      return parsed
-    },
-    log: (_level, message) => {
-      const persisted = store.appendEvent(runId, {
-        eventId: makeId('event'), runId, threadId: run.threadId, type: 'tool.completed',
-        message, timestamp: nowUtc(), payload: {},
-      })
-      pendingToolLogWrites.push(persisted)
-      persisted.catch(error => logNonBlockingError('tool:run:log', error))
-    },
-  }
-  const args = requiredRecord(payload, 'args')
-  const callId = makeId('call')
-  const itemSink = new ItemSink(item => store.appendItem(item), runId, run.threadId)
-  const callItem = itemSink.startItem('function_call', {
-    name: toolName,
-    callId,
-    arguments: JSON.stringify(args),
-  })
-  try {
-    const result = await registry.execute(toolName, args, context)
-    await persistToolExecutionResult(store, runId, toolName, args, result)
-    itemSink.completeItem(callItem.itemId, {
-      callId,
-      name: toolName,
-      output: JSON.stringify(result.payload),
-      metadata: { resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [] },
-    })
-    const outputItem = itemSink.startItem('function_call_output', {
-      callId,
-      name: toolName,
-      role: 'tool',
-      metadata: { resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [] },
-    })
-    itemSink.completeItem(outputItem.itemId, {
-      callId,
-      name: toolName,
-      output: JSON.stringify(result.payload),
-      metadata: { resultId: result.resultId, source: result.source, valueRefs: result.valueRefs ?? [], artifacts: result.artifacts ?? [] },
-    })
-    await Promise.allSettled(pendingToolLogWrites)
-    await itemSink.flush()
-    if (directRun) await store.completeRun(runId, 'completed')
-    return { result, run: store.getRun(runId) }
-  } catch (error) {
-    const message = formatError(error)
-    itemSink.completeItem(callItem.itemId, {
-      callId,
-      name: toolName,
-      body: message,
-      isError: true,
-    })
-    if (directRun) {
-      const current = store.getRun(runId)
-      await store.updateRunState(runId, { errors: [...current.state.errors, message], failedTool: toolName })
-      await store.completeRun(runId, 'failed')
-    }
-    await Promise.allSettled(pendingToolLogWrites)
-    await itemSink.flush()
-    throw error
-  }
-}
 
-function subscribeToRun(
-  ws: WebSocket,
-  runId: string,
-  store: PostgresPlatformStore,
-  subscriptions: Map<string, () => void>,
-): void {
-  store.getRun(runId)
-  if (subscriptions.has(runId)) return
-  const unsubscribeItem = store.itemBus.subscribe(runId, item => send(ws, push('run.item', item)))
-  const unsubscribeEvent = store.eventBus.subscribe(runId, event => send(ws, push('run.event', event)))
-  const unsubscribeRun = store.runBus.subscribe(runId, () => void sendSnapshot(ws, runId, store))
-  subscriptions.set(runId, () => {
-    unsubscribeItem()
-    unsubscribeEvent()
-    unsubscribeRun()
-  })
-}
-
-function subscribeToThread(
-  ws: WebSocket,
-  threadId: string,
-  store: PostgresPlatformStore,
-  subscriptions: Map<string, () => void>,
-): void {
-  store.getThread(threadId)
-  const key = `thread:${threadId}`
-  if (subscriptions.has(key)) return
-  const unsubscribeEntry = store.threadEntryBus.subscribe(threadId, entry => send(ws, push('thread.entry', entry)))
-  const unsubscribeUpdate = store.threadUpdateBus.subscribe(threadId, update => send(ws, push('thread.updated', update)))
-  const unsubscribeCompact = store.threadCompactionBus.subscribe(threadId, record => send(ws, push('thread.compacted', record)))
-  const unsubscribeMemory = store.threadMemoryBus.subscribe(threadId, memory => send(ws, push('thread.memory.updated', memory)))
-  subscriptions.set(key, () => {
-    unsubscribeEntry()
-    unsubscribeUpdate()
-    unsubscribeCompact()
-    unsubscribeMemory()
-  })
-}
-
-async function snapshot(runId: string, store: PostgresPlatformStore) {
-  const [items, events] = await Promise.all([store.listItems(runId), store.listEvents(runId)])
-  return { run: store.getRun(runId), items, events }
-}
-
-async function respondDecision(
-  payload: Record<string, unknown>,
-  dependencies: WsDependencies,
-  runtime: OpenAIAgentsRuntime,
-  ws: WebSocket,
-  subscriptions: Map<string, () => void>,
-  auth: AuthContext,
-): Promise<AnalysisRun> {
-  const { store } = dependencies
-  const runId = requiredString(payload, 'runId')
-  const decisionId = requiredString(payload, 'decisionId')
-  const run = store.getRun(runId)
-  const decision = run.state.decisions.find(item => item.decisionId === decisionId)
-  if (!decision) throw new Error(`决策 '${decisionId}' 不存在`)
-  if (decision.status !== 'pending') return run
-
-  if (decision.kind === 'approval') {
-    const approved = selectedApprovalValue(decision, optionalString(payload.optionId))
-    const approvalId = typeof decision.payload.approvalId === 'string' ? decision.payload.approvalId : decisionId
-    return runtime.resolveApproval(runId, approvalId, approved, auth)
-  }
-
-  if (decision.kind === 'clarification') {
-    if (!run.threadId) throw new Error(`运行 '${runId}' 缺少 threadId`)
-    const optionId = optionalString(payload.optionId)
-    const answer = selectedDecisionText(decision, optionId, optionalString(payload.text))
-    await store.updateRunState(runId, {
-      decisions: resolveDecision(run.state.decisions, decisionId, 'answered', { optionId, answer }),
-      clarification: run.state.clarification && run.state.clarification.clarificationId === decisionId
-        ? { ...run.state.clarification, selectedOptionId: optionId ?? 'free_text' }
-        : run.state.clarification,
-    })
-    const config = run.runtimeConfigSnapshot ?? await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
-    const provider = requiredRunProvider(run.modelProvider)
-    const nextRun = await store.createRun(run.sessionId, answer, {
-      threadId: run.threadId,
-      modelProvider: provider,
-      modelName: run.modelName,
-      runtimeConfigSnapshot: config,
-    })
-    subscribeToRun(ws, nextRun.id, store, subscriptions)
-    void runtime.run({
-      runId: nextRun.id,
-      threadId: run.threadId,
-      sessionId: run.sessionId,
-      query: answer,
-      provider,
-      modelName: nextRun.modelName,
-      runtimeConfig: config,
-      executionMode: run.state.planMode ? 'plan' : 'auto',
-      reasoning: true,
-      auth,
-    }).then(() => void sendSnapshot(ws, nextRun.id, store))
-    return nextRun
-  }
-
-  throw new Error(`决策 '${decisionId}' 不能通过 run:respond-decision 提交`)
-}
-
-async function sendSnapshot(ws: WebSocket, runId: string, store: PostgresPlatformStore): Promise<void> {
-  send(ws, push('run.snapshot', await snapshot(runId, store)))
-}
-
-function send(ws: WebSocket, message: string): void {
-  if (ws.readyState === WebSocket.OPEN) ws.send(message)
-}
-
-async function resolveRuntimeConfig(
-  store: PostgresPlatformStore,
-  fallbackConfig: AgentRuntimeConfig = defaultRuntimeConfig(),
-): Promise<AgentRuntimeConfig> {
-  const stored = await store.getRuntimeConfig('agent-runtime')
-  return stored ? stored as AgentRuntimeConfig : fallbackConfig
-}
-
-function makeSummarizer(
-  registry: ModelAdapterRegistry,
-  config: AgentRuntimeConfig,
-  requestedProvider: string | null,
-  requestedModel: string | null,
-) {
-  return async (prompt: string): Promise<string> => {
-    const adapter = registry.resolveProvider(requestedProvider ?? config.context.summaryProvider)
-    const response = await adapter.chat(prompt, {
-      model: requestedModel ?? config.context.summaryModel ?? adapter.subagentModel ?? adapter.defaultModel,
-      reasoning: false,
-    })
-    if (typeof response.content !== 'string' || !response.content.trim()) throw new Error('摘要模型未返回文本')
-    return response.content.trim()
-  }
-}
-
-function makeOptionalStructuredSelector(
-  registry: ModelAdapterRegistry,
-  config: AgentRuntimeConfig,
-  requestedProvider: string | null,
-  requestedModel: string | null,
-): ((prompt: string) => Promise<Record<string, unknown>>) | undefined {
-  if (!requestedProvider && !requestedModel && !config.context.summaryProvider && !registry.defaultProvider) return undefined
-  return makeStructuredSelector(registry, config, requestedProvider, requestedModel)
-}
-
-function makeStructuredSelector(
-  registry: ModelAdapterRegistry,
-  config: AgentRuntimeConfig,
-  requestedProvider: string | null,
-  requestedModel: string | null,
-) {
-  return async (prompt: string): Promise<Record<string, unknown>> => {
-    const provider = requestedProvider ?? config.context.summaryProvider ?? registry.defaultProvider
-    if (!provider) throw new Error('未配置记忆选择模型 provider')
-    const adapter = registry.resolveProvider(provider)
-    const model = requestedModel ?? config.context.summaryModel ?? adapter.subagentModel ?? adapter.defaultModel
-    if (!model) throw new Error('未配置记忆选择模型')
-    const response = await adapter.chat(prompt, {
-      model,
-      reasoning: false,
-    })
-    if (typeof response.content !== 'string' || !response.content.trim()) throw new Error('结构化模型未返回文本')
-    return parseStructuredJson(response.content)
-  }
-}
-
-function parseStructuredJson(value: string): Record<string, unknown> {
-  const cleaned = value.trim().replace(/^```json\s*|\s*```$/gu, '')
-  const parsed: unknown = JSON.parse(cleaned)
-  if (!isRecord(parsed)) throw new Error('结构化模型输出必须是 JSON object')
-  return parsed
-}
-
-function selectedApprovalValue(decision: DecisionRequest, optionId: string | null): boolean {
-  const option = optionId ? decision.options.find(item => item.optionId === optionId) : null
-  if (!option) throw new Error('审批决策必须选择批准或拒绝')
-  if (typeof option.payload.approved !== 'boolean') throw new Error('审批决策选项缺少 approved payload')
-  return option.payload.approved
-}
-
-function selectedDecisionText(decision: DecisionRequest, optionId: string | null, text: string | null): string {
-  if (text) return text
-  const option = optionId ? decision.options.find(item => item.optionId === optionId) : null
-  if (option?.label?.trim()) return option.label.trim()
-  throw new Error('澄清决策必须选择一个选项或输入补充文本')
-}
-
-function resolveDecision(
-  decisions: DecisionRequest[],
-  decisionId: string,
-  status: string,
-  payload: Record<string, unknown>,
-): DecisionRequest[] {
-  const resolvedAt = nowUtc()
-  return decisions.map(decision => decision.decisionId === decisionId
-    ? { ...decision, status, resolvedAt, payload: { ...decision.payload, ...payload } }
-    : decision)
-}
-
-function requiredString(payload: Record<string, unknown>, key: string): string {
-  const value = payload[key]
-  if (typeof value !== 'string' || !value.trim()) throw new Error(`${key} 不能为空`)
-  return value.trim()
-}
-
-function optionalString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null
-}
-
-function requiredRunProvider(value: string | null): string {
-  if (!value) throw new Error('运行缺少 modelProvider，不能恢复')
-  return value
-}
-
-function optionalPositiveInteger(value: unknown, key: string): number | undefined {
-  if (value === undefined || value === null) return undefined
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
-    throw new Error(`${key} 必须为正整数`)
-  }
-  return value
-}
-
-function optionalNonNegativeInteger(value: unknown, key: string): number | undefined {
-  if (value === undefined || value === null) return undefined
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
-    throw new Error(`${key} 必须为非负整数`)
-  }
-  return value
-}
-
-function requiredRecord(payload: Record<string, unknown>, key: string): Record<string, unknown> {
-  const value = payload[key]
-  if (!isRecord(value)) throw new Error(`${key} 必须为 object`)
-  return value
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function logNonBlockingError(scope: string, error: unknown): void {
-  console.warn(`[ws:${scope}] ${formatError(error)}`)
-}
-
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
