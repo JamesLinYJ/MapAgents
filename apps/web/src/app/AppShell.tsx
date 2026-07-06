@@ -20,7 +20,6 @@ import type {
   AgentExecutionMode,
   AuthMe,
   ConversationItem,
-  MemoryFileRecord,
   ToolDescriptor,
 } from '@geo-agent-platform/shared-types'
 
@@ -36,8 +35,7 @@ import { pickPreferredArtifactId } from '../features/artifacts/artifactSelection
 import { buildListItemVariants, buildListVariants, motionSpring } from '../shared/motion'
 import { pickConversationHeadline } from '../features/conversation/items'
 import { ChatPanel } from '../features/conversation/ChatPanel'
-import type { MemoryEntry } from '../features/conversation/types'
-import { getAuthMe, listMemories, logout } from '../api/client'
+import { getAuthMe, logout } from '../api/client'
 import { LoginScreen } from './auth/LoginScreen'
 import { TopBar } from './layout/TopBar'
 import { WorkspaceLayout, type WorkspaceSidebarItem } from './layout/WorkspaceLayout'
@@ -63,6 +61,7 @@ import {
 import type {
   SidebarItemId,
 } from './types'
+import { useMemoryEntries } from './useMemoryEntries'
 import {
   buildAgentTodoItems,
   buildDataReferences,
@@ -184,7 +183,6 @@ function AppShell() {
     setProvider,
   } = useConnectionController()
   const currentThreadId = run?.threadId ?? agentState?.threadId ?? activeThreadId
-  const [memoryEntries, setMemoryEntries] = useState<MemoryEntry[]>([])
   const {
     activeNav,
     activeSidebarItem,
@@ -229,6 +227,7 @@ function AppShell() {
     loadDiagnostics: location.pathname === '/debug' || panelMode === 'compute' || panelMode === 'config' || panelMode === 'tools',
     setUiError,
   })
+  const { memoryEntries, refreshMemoryEntries } = useMemoryEntries(runtimeConfig?.context.memoryEnabled !== false)
 
   const ensureUploadThread = useCallback(
     () => ensureSessionUploadThread(currentThreadId, syncUrl),
@@ -787,20 +786,6 @@ function AppShell() {
     [clearActiveRunState, currentThreadId, removeThread, session?.id, setUiError, syncUrl],
   )
 
-  const refreshMemoryEntries = useCallback(async () => {
-    const response = await listMemories()
-    setMemoryEntries(response.records.map(memoryRecordToEntry))
-    return response
-  }, [])
-
-  useEffect(() => {
-    if (runtimeConfig?.context.memoryEnabled === false) {
-      setMemoryEntries([])
-      return
-    }
-    void refreshMemoryEntries().catch((error) => reportNonBlockingError('refreshMemoryEntries', error))
-  }, [refreshMemoryEntries, runtimeConfig?.context.memoryEnabled])
-
   const handleRefreshMemories = useCallback(async () => {
     try {
       setUiError(undefined)
@@ -1265,30 +1250,6 @@ function AppShell() {
       </LazyMotion>
     </Suspense>
   )
-}
-
-function memoryRecordToEntry(record: MemoryFileRecord): MemoryEntry {
-  const updatedAt = Number.isFinite(record.mtimeMs) ? record.mtimeMs : Date.now()
-  return {
-    scope: record.scope === 'team' ? 'team' : 'private',
-    relativePath: record.relativePath,
-    name: record.name || record.relativePath,
-    description: record.description || record.relativePath,
-    type: record.type ?? 'project',
-    age: formatRelativeAge(updatedAt),
-  }
-}
-
-function formatRelativeAge(mtimeMs: number): string {
-  const delta = Math.max(0, Date.now() - mtimeMs)
-  const minutes = Math.floor(delta / 60_000)
-  if (minutes < 1) return '刚刚'
-  if (minutes < 60) return `${minutes}分钟前`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}小时前`
-  const days = Math.floor(hours / 24)
-  if (days < 30) return `${days}天前`
-  return new Date(mtimeMs).toLocaleDateString('zh-CN')
 }
 
 export default AppShell
