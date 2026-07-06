@@ -287,6 +287,118 @@ export function formatFileSize(size: number) {
 }
 
 export type ProgressTodoItem = { id: string; content: string; status: string; activeForm: string }
+export type RuntimeTokenBudget = { used: number; max: number; status: 'normal' | 'warning' | 'critical' | 'exceeded' }
+export type RuntimeRunStats = { toolAttempts: number; toolSuccesses: number; toolFailures: number; tokensUsed: number }
+
+export function extractCompactionLevel(events: ReadonlyArray<RunEvent>): string | null {
+  for (const event of events) {
+    if ((event.type as string) !== 'compaction.executed') continue
+    const payload = event.payload as Record<string, unknown> | undefined
+    const level = String(payload?.level ?? payload?.compaction_level ?? '')
+    if (level) return level
+  }
+  return null
+}
+
+export function extractTokenBudget(events: ReadonlyArray<RunEvent>): RuntimeTokenBudget | undefined {
+  // Token 预算来自后端事件事实源。
+  //
+  // UI 这里只做展示投影，不反向修改 runtime 上下文，也不在缺字段时补造状态。
+  for (const event of events) {
+    const payload = event.payload as Record<string, unknown> | undefined
+    if (!payload) continue
+    const usage = payload.usage as Record<string, unknown> | undefined
+    const tokensUsed = payload.tokens_used ?? usage?.tokens_used
+    if (typeof tokensUsed !== 'number') continue
+    const rawMax = payload.tokens_max ?? payload.budget_max ?? usage?.max_tokens ?? 100000
+    const max = typeof rawMax === 'number' ? rawMax : Number(rawMax) || 100000
+    const rawStatus = payload.budget_status
+    return {
+      used: tokensUsed,
+      max,
+      status: normalizeBudgetStatus(typeof rawStatus === 'string' ? rawStatus : undefined, tokensUsed, max),
+    }
+  }
+  return undefined
+}
+
+export function extractActiveSkills(
+  events: ReadonlyArray<RunEvent>,
+  agentState: AgentState | undefined,
+): string[] | undefined {
+  const skills = new Set<string>()
+  for (const event of events) {
+    const payload = event.payload as Record<string, unknown> | undefined
+    const eventSkills = payload?.active_skills ?? payload?.skills
+    if (Array.isArray(eventSkills)) {
+      for (const skill of eventSkills) {
+        if (typeof skill === 'string') skills.add(skill)
+      }
+    }
+  }
+  const agentSkills = (agentState as Record<string, unknown> | undefined)?.activeSkills
+  if (Array.isArray(agentSkills)) {
+    for (const skill of agentSkills) {
+      if (typeof skill === 'string') skills.add(skill)
+    }
+  }
+  return skills.size > 0 ? [...skills] : undefined
+}
+
+export function extractRunStats(events: ReadonlyArray<RunEvent>): RuntimeRunStats | undefined {
+  for (const event of events) {
+    if (event.type !== 'run.completed') continue
+    const payload = event.payload as Record<string, unknown> | undefined
+    if (!payload) continue
+    const attempts = payload.tool_attempts ?? payload.toolAttempts
+    const successes = payload.tool_successes ?? payload.toolSuccesses
+    const failures = payload.tool_failures ?? payload.toolFailures
+    const tokensUsed = payload.tokens_used ?? payload.tokensUsed ?? payload.total_tokens ?? payload.totalTokens
+    if (
+      typeof attempts === 'number' ||
+      typeof successes === 'number' ||
+      typeof failures === 'number' ||
+      typeof tokensUsed === 'number'
+    ) {
+      return {
+        toolAttempts: Number(attempts ?? 0),
+        toolSuccesses: Number(successes ?? 0),
+        toolFailures: Number(failures ?? 0),
+        tokensUsed: Number(tokensUsed ?? 0),
+      }
+    }
+    const stats = payload.runtime_stats as Record<string, unknown> | undefined
+    if (stats) {
+      return {
+        toolAttempts: Number(stats.tool_attempts ?? stats.toolAttempts ?? stats.tool_success_count ?? 0) + Number(stats.tool_failure_count ?? 0),
+        toolSuccesses: Number(stats.tool_success_count ?? stats.toolSuccesses ?? 0),
+        toolFailures: Number(stats.tool_failure_count ?? stats.toolFailures ?? 0),
+        tokensUsed: Number(stats.tokens_used ?? stats.tokensUsed ?? 0),
+      }
+    }
+  }
+  return undefined
+}
+
+export function extractDenialCounts(agentState: AgentState | undefined): Record<string, number> | undefined {
+  const value = (agentState as Record<string, unknown> | undefined)?.denialCounts
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const counts: Record<string, number> = {}
+  for (const [key, count] of Object.entries(value)) {
+    if (typeof count === 'number') counts[key] = count
+  }
+  return Object.keys(counts).length ? counts : undefined
+}
+
+function normalizeBudgetStatus(status: string | undefined, used: number, max: number): RuntimeTokenBudget['status'] {
+  if (status === 'normal' || status === 'warning' || status === 'critical' || status === 'exceeded') {
+    return status
+  }
+  if (used > max) return 'exceeded'
+  if (used > max * 0.9) return 'critical'
+  if (used > max * 0.7) return 'warning'
+  return 'normal'
+}
 
 export function buildAgentTodoItems(
   agentState: AgentState | undefined,

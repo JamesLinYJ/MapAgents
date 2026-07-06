@@ -13,68 +13,49 @@
 // 负责地图实例管理、底图切换、结果图层渲染和视角同步。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AnimatePresence, m, useReducedMotion } from 'framer-motion'
-import maplibregl, { LngLatBounds, Map, type StyleSpecification } from 'maplibre-gl/dist/maplibre-gl-csp'
+import { useReducedMotion } from 'framer-motion'
+import type maplibregl from 'maplibre-gl/dist/maplibre-gl-csp'
+import type { LngLatBounds, Map } from 'maplibre-gl/dist/maplibre-gl-csp'
 import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-csp-worker.js?url'
 import 'maplibre-gl/dist/maplibre-gl.css'
-import { Ruler } from 'lucide-react'
 
-import type { ArtifactRef, BasemapDescriptor } from '@geo-agent-platform/shared-types'
+import type { BasemapDescriptor } from '@geo-agent-platform/shared-types'
 import { DEFAULT_BASEMAP } from '../../shared/constants'
-import { buildFadeMotion, buildFadeUpMotion, buildPressMotion } from '../../shared/motion'
-import { AppIcon } from '../../shared/components/AppIcon'
+import {
+  buildBasemapStyle,
+  boundsFromLayer,
+  extractRouteLegendInfo,
+  formatMapResourceWarning,
+  getMapPointerLngLat,
+  isMapControlTarget,
+  isStaleArtifactMapError,
+  queryRenderedArtifactFeatures,
+  type MapCanvasLayer,
+} from './MapCanvasEngine'
+import { MapCanvasChrome, type MapCanvasLegendItem } from './MapCanvasChrome'
+import { pickLayerColor, syncArtifactLayers } from './MapCanvasLayerSync'
+import { buildFeaturePopupHtml, buildHoverPopupHtml } from './MapCanvasPopups'
+import {
+  buildMeasureLineCollection,
+  buildMeasurePointsCollection,
+  ensureMeasureLayers,
+  formatMeasurementDistance,
+} from './MapCanvasMeasure'
 
-// 独立 Worker 避免默认发行包把 Worker 代码并入地图主模块执行路径。
-maplibregl.setWorkerUrl(mapLibreWorkerUrl)
+type MapLibreRuntime = typeof import('maplibre-gl/dist/maplibre-gl-csp').default
 
-const LAYER_PALETTE = [
-  '#2563eb', '#dc2626', '#16a34a', '#f59e0b', '#8b5cf6',
-  '#ec4899', '#06b6d4', '#f97316', '#84cc16', '#6366f1',
-]
+let mapLibreRuntimePromise: Promise<MapLibreRuntime> | null = null
 
-function pickLayerColor(metadata: Record<string, unknown> | undefined, index: number): string {
-  const color = metadata?.color
-  if (typeof color === 'string') {
-    return color
-  }
-  return LAYER_PALETTE[index % LAYER_PALETTE.length]
+function loadMapLibreRuntime(): Promise<MapLibreRuntime> {
+  // 地图运行时是工作台里最重的独占依赖；用真实动态 import 交给 Rolldown
+  // 自动拆分，而不是维护手写 manualChunks 规则。
+  mapLibreRuntimePromise ??= import('maplibre-gl/dist/maplibre-gl-csp').then((module) => {
+    module.default.setWorkerUrl(mapLibreWorkerUrl)
+    return module.default
+  })
+  return mapLibreRuntimePromise
 }
 
-function rasterPaintFromMetadata(metadata: Record<string, unknown> | undefined, opacity: number): Record<string, number> {
-  const color = metadata?.layerColorOverride === true && typeof metadata.color === 'string'
-    ? metadata.color
-    : null
-  const hue = color ? colorToHueDegrees(color) : 0
-  return {
-    'raster-opacity': opacity,
-    'raster-fade-duration': 120,
-    'raster-hue-rotate': hue,
-    'raster-saturation': color ? 0.32 : 0,
-    'raster-contrast': color ? 0.08 : 0,
-  }
-}
-
-function colorToHueDegrees(color: string) {
-  const hex = color.replace('#', '').trim()
-  const normalized = hex.length === 3
-    ? hex.split('').map(char => char + char).join('')
-    : hex
-  if (!/^[0-9a-f]{6}$/iu.test(normalized)) return 0
-  const r = Number.parseInt(normalized.slice(0, 2), 16) / 255
-  const g = Number.parseInt(normalized.slice(2, 4), 16) / 255
-  const b = Number.parseInt(normalized.slice(4, 6), 16) / 255
-  const max = Math.max(r, g, b)
-  const min = Math.min(r, g, b)
-  const delta = max - min
-  if (delta === 0) return 0
-  let hue = 0
-  if (max === r) hue = ((g - b) / delta) % 6
-  else if (max === g) hue = (b - r) / delta + 2
-  else hue = (r - g) / delta + 4
-  return Math.round((hue * 60 + 360) % 360)
-}
-
-type GeoJsonPayload = GeoJSON.FeatureCollection
 type MapManualDragState = {
   pointerId: number
   startX: number
@@ -90,17 +71,7 @@ interface MapCanvasProps {
   selectedBasemapKey: string
   runStatus?: string
   onSelectBasemap: (basemapKey: string) => void
-  layers: Array<{
-    kind: 'geojson' | 'raster'
-    artifact: ArtifactRef
-    data?: GeoJsonPayload
-    imageUrl?: string
-    coordinates?: [[number, number], [number, number], [number, number], [number, number]]
-    visible: boolean
-    opacity: number
-    featureCount: number
-    geometrySummary: string
-  }>
+  layers: MapCanvasLayer[]
   selectedArtifactId?: string
   selectedArtifactName?: string
   focusRequest?: { artifactId?: string; nonce: number }
@@ -157,6 +128,16 @@ export function MapCanvas({
     : null
   const canFocusSelection = layers.length > 0 && !mapError
   const initialBasemapRef = useRef(activeBasemap)
+  const legendItems = useMemo<MapCanvasLegendItem[]>(() => layers.map(({ artifact, visible, featureCount, data }, index) => ({
+    artifactId: artifact.artifactId,
+    name: artifact.name,
+    color: pickLayerColor(artifact.metadata as Record<string, unknown> | undefined, index),
+    routeInfo: data ? extractRouteLegendInfo(data) : null,
+    featureCount,
+    isRaster: !data,
+    visible,
+    selected: artifact.artifactId === selectedArtifactId,
+  })), [layers, selectedArtifactId])
 
   const cycleBasemap = useCallback(() => {
     // 底图轮转
@@ -359,132 +340,145 @@ export function MapCanvas({
     let disposed = false
     let sizeObserver: ResizeObserver | null = null
     let mapResizeObserver: ResizeObserver | null = null
+    let creationPending = false
 
     const tryCreateMap = () => {
-      if (disposed || mapRef.current) return
+      if (disposed || mapRef.current || creationPending) return
       if (target.clientWidth === 0 || target.clientHeight === 0) return
 
-      sizeObserver?.disconnect()
-      sizeObserver = null
+      creationPending = true
+      void loadMapLibreRuntime().then((maplibreRuntime) => {
+        creationPending = false
+        if (disposed || mapRef.current) return
+        if (target.clientWidth === 0 || target.clientHeight === 0) return
 
-      let map: Map
-      try {
-        map = new maplibregl.Map({
-          container: target,
-          style: buildBasemapStyle(initialBasemapRef.current),
-          center: [121.4737, 31.2304],
-          zoom: 11.2,
-          interactive: true,
-          dragRotate: false,
-          attributionControl: false,
+        sizeObserver?.disconnect()
+        sizeObserver = null
+
+        let map: Map
+        try {
+          map = new maplibreRuntime.Map({
+            container: target,
+            style: buildBasemapStyle(initialBasemapRef.current),
+            center: [121.4737, 31.2304],
+            zoom: 11.2,
+            interactive: true,
+            dragRotate: false,
+            attributionControl: false,
+          })
+        } catch (error) {
+          setMapError(error instanceof Error ? error.message : '当前浏览器无法创建 WebGL 地图上下文')
+          setInteractionHint('当前浏览器无法创建地图渲染上下文')
+          return
+        }
+
+        // 捕获异步 WebGL 上下文创建失败（软件渲染/无 GPU 环境）
+        const canvas = map.getCanvas()
+        const onWebglError = (event: Event) => {
+          const webglEvent = event as WebGLContextEvent
+          setMapError(`WebGL 不可用：${webglEvent.statusMessage || '无法创建地图渲染上下文'}`)
+          setInteractionHint('当前浏览器不支持硬件加速地图，请开启 GPU 加速或切换到支持 WebGL 的浏览器')
+        }
+        canvas.addEventListener('webglcontextcreationerror', onWebglError)
+
+        map.on('error', (event) => {
+          const msg = event.error?.message ?? '地图资源加载失败'
+          // 已移除 artifact 的网络请求可能在超时后才上报，不能污染新线程的地图状态。
+          if (isStaleArtifactMapError(msg, layersRef.current)) return
+          // 仅展示非阻塞警告，不切换底图（切换会调用 setStyle 清除所有图层）
+          setTileWarning(msg)
         })
-      } catch (error) {
-        setMapError(error instanceof Error ? error.message : '当前浏览器无法创建 WebGL 地图上下文')
-        setInteractionHint('当前浏览器无法创建地图渲染上下文')
-        return
-      }
 
-      // 捕获异步 WebGL 上下文创建失败（软件渲染/无 GPU 环境）
-      const canvas = map.getCanvas()
-      const onWebglError = (event: Event) => {
-        const webglEvent = event as WebGLContextEvent
-        setMapError(`WebGL 不可用：${webglEvent.statusMessage || '无法创建地图渲染上下文'}`)
-        setInteractionHint('当前浏览器不支持硬件加速地图，请开启 GPU 加速或切换到支持 WebGL 的浏览器')
-      }
-      canvas.addEventListener('webglcontextcreationerror', onWebglError)
+        map.scrollZoom.enable()
+        map.dragPan.enable()
+        map.doubleClickZoom.enable()
+        map.boxZoom.enable()
+        map.keyboard.enable()
+        map.touchZoomRotate.enable()
+        map.addControl(new maplibreRuntime.ScaleControl({ maxWidth: 132, unit: 'metric' }), 'bottom-left')
 
-      map.on('error', (event) => {
-        const msg = event.error?.message ?? '地图资源加载失败'
-        // 已移除 artifact 的网络请求可能在超时后才上报，不能污染新线程的地图状态。
-        if (isStaleArtifactMapError(msg, layersRef.current)) return
-        // 仅展示非阻塞警告，不切换底图（切换会调用 setStyle 清除所有图层）
-        setTileWarning(msg)
-      })
+        map.on('mousemove', (event) => {
+          handlePointerMove(event.lngLat.lng, event.lngLat.lat)
+          if (measureModeRef.current) {
+            map.getCanvas().style.cursor = 'crosshair'
+            return
+          }
+          const features = queryRenderedArtifactFeatures(map, event.point)
+          map.getCanvas().style.cursor = features.length ? 'pointer' : ''
 
-      map.scrollZoom.enable()
-      map.dragPan.enable()
-      map.doubleClickZoom.enable()
-      map.boxZoom.enable()
-      map.keyboard.enable()
-      map.touchZoomRotate.enable()
-      map.addControl(new maplibregl.ScaleControl({ maxWidth: 132, unit: 'metric' }), 'bottom-left')
-
-      map.on('mousemove', (event) => {
-        handlePointerMove(event.lngLat.lng, event.lngLat.lat)
-        if (measureModeRef.current) {
-          map.getCanvas().style.cursor = 'crosshair'
-          return
-        }
-        const features = queryRenderedArtifactFeatures(map, event.point)
-        map.getCanvas().style.cursor = features.length ? 'pointer' : ''
-
-        // 悬停气泡：停留 250ms 后显示要素摘要，移动即清除
-        if (hoverTimerRef.current) { window.clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null }
-        hoverPopupRef.current?.remove()
-        hoverPopupRef.current = null
-        const hoverFeature = features[0]
-        if (hoverFeature) {
-          hoverTimerRef.current = window.setTimeout(() => {
-            if (!mapRef.current) return
-            hoverPopupRef.current = new maplibregl.Popup({
-              closeButton: false, closeOnClick: false, offset: 6,
-              className: 'dc-map-stage__hover-popup',
-            })
-              .setLngLat(event.lngLat)
-              .setHTML(buildHoverPopupHtml(hoverFeature))
-              .addTo(mapRef.current)
-          }, 250)
-        }
-      })
-      map.on('mousedown', () => setInteractionHint('正在拖拽地图'))
-      map.on('mouseup', () => setInteractionHint(measureModeRef.current ? '测距模式已开启，点击地图继续加点' : '拖拽平移 · 滚轮缩放 · 点击对象查看详情'))
-      map.on('wheel', () => setInteractionHint('滚轮缩放中'))
-      map.on('click', (event) => {
-        if (suppressNextMapClickRef.current) {
-          return
-        }
-
-        if (measureModeRef.current) {
-          popupRef.current?.remove()
-          popupRef.current = null
-          setMeasurePoints((current) => [...current, [event.lngLat.lng, event.lngLat.lat]])
-          return
-        }
-
-        const feature = queryRenderedArtifactFeatures(map, event.point)[0]
-        if (!feature) {
-          popupRef.current?.remove()
-          popupRef.current = null
-          return
-        }
-
-        const sourceId = typeof feature.layer.source === 'string' ? feature.layer.source : null
-        const artifactId = sourceId?.startsWith('artifact-') ? sourceId.replace(/^artifact-/, '') : null
-        if (artifactId) {
-          onSelectArtifactRef.current(artifactId)
-        }
-
-        popupRef.current = new maplibregl.Popup({
-          closeButton: false,
-          closeOnClick: true,
-          offset: 14,
-          className: 'dc-map-stage__popup',
+          // 悬停气泡：停留 250ms 后显示要素摘要，移动即清除
+          if (hoverTimerRef.current) { window.clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null }
+          hoverPopupRef.current?.remove()
+          hoverPopupRef.current = null
+          const hoverFeature = features[0]
+          if (hoverFeature) {
+            hoverTimerRef.current = window.setTimeout(() => {
+              if (!mapRef.current) return
+              hoverPopupRef.current = new maplibreRuntime.Popup({
+                closeButton: false, closeOnClick: false, offset: 6,
+                className: 'dc-map-stage__hover-popup',
+              })
+                .setLngLat(event.lngLat)
+                .setHTML(buildHoverPopupHtml(hoverFeature))
+                .addTo(mapRef.current)
+            }, 250)
+          }
         })
-          .setLngLat(event.lngLat)
-          .setHTML(buildFeaturePopupHtml(feature, layersRef.current.find((item) => item.artifact.artifactId === artifactId)?.artifact.name))
-          .addTo(map)
+        map.on('mousedown', () => setInteractionHint('正在拖拽地图'))
+        map.on('mouseup', () => setInteractionHint(measureModeRef.current ? '测距模式已开启，点击地图继续加点' : '拖拽平移 · 滚轮缩放 · 点击对象查看详情'))
+        map.on('wheel', () => setInteractionHint('滚轮缩放中'))
+        map.on('click', (event) => {
+          if (suppressNextMapClickRef.current) {
+            return
+          }
 
-        setInteractionHint('已选中地图对象，可继续切换图层或查看其他结果')
+          if (measureModeRef.current) {
+            popupRef.current?.remove()
+            popupRef.current = null
+            setMeasurePoints((current) => [...current, [event.lngLat.lng, event.lngLat.lat]])
+            return
+          }
+
+          const feature = queryRenderedArtifactFeatures(map, event.point)[0]
+          if (!feature) {
+            popupRef.current?.remove()
+            popupRef.current = null
+            return
+          }
+
+          const sourceId = typeof feature.layer.source === 'string' ? feature.layer.source : null
+          const artifactId = sourceId?.startsWith('artifact-') ? sourceId.replace(/^artifact-/, '') : null
+          if (artifactId) {
+            onSelectArtifactRef.current(artifactId)
+          }
+
+          popupRef.current = new maplibreRuntime.Popup({
+            closeButton: false,
+            closeOnClick: true,
+            offset: 14,
+            className: 'dc-map-stage__popup',
+          })
+            .setLngLat(event.lngLat)
+            .setHTML(buildFeaturePopupHtml(feature, layersRef.current.find((item) => item.artifact.artifactId === artifactId)?.artifact.name))
+            .addTo(map)
+
+          setInteractionHint('已选中地图对象，可继续切换图层或查看其他结果')
+        })
+        map.on('load', () => map.resize())
+
+        mapResizeObserver = new ResizeObserver(() => {
+          map.resize()
+        })
+        mapResizeObserver.observe(target)
+
+        mapRef.current = map
+        appliedBasemapKeyRef.current = initialBasemapRef.current.basemapKey
+      }).catch((error) => {
+        creationPending = false
+        if (disposed) return
+        setMapError(error instanceof Error ? error.message : '地图运行时加载失败')
+        setInteractionHint('地图运行时加载失败，请刷新页面后重试')
       })
-      map.on('load', () => map.resize())
-
-      mapResizeObserver = new ResizeObserver(() => {
-        map.resize()
-      })
-      mapResizeObserver.observe(target)
-
-      mapRef.current = map
-      appliedBasemapKeyRef.current = initialBasemapRef.current.basemapKey
     }
 
     // 先立即尝试创建（大多数情况下容器已就绪）
@@ -619,859 +613,30 @@ export function MapCanvas({
   }, [activeBasemap, measurePoints])
 
   const measurementLabel = formatMeasurementDistance(measurePoints)
-  const pressMotion = buildPressMotion(reducedMotion)
 
   return (
-    <m.section ref={stageRef} className="dc-map-stage relative h-[clamp(560px,68svh,780px)] overflow-hidden rounded-[28px] glass-strong" aria-label="地图画布" layout {...buildFadeUpMotion(reducedMotion, 0.06, 18)}>
-      <div ref={containerRef} className="dc-map-stage__canvas" />
-      <div className="dc-map-stage__wash" />
-
-      {mapError ? (
-        <m.div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 p-7 bg-[#f2f2f7]/95 backdrop-blur-xl text-center rounded-[28px]" role="status" layout {...buildFadeUpMotion(reducedMotion, 0.08, 12)}>
-          <strong className="text-[17px] font-semibold text-[#1c1c1e]">地图无法渲染</strong>
-          <p className="max-w-xs text-[14px] text-[#8e8e93]">当前浏览器不支持 WebGL。分析结果仍会保存。</p>
-          <small className="text-[11px] text-[#8e8e93] font-mono break-all">{mapError}</small>
-        </m.div>
-      ) : visibleTileWarning ? (
-        <m.div className="absolute left-3 right-3 top-3 z-20 p-3 rounded-[18px] bg-[#ff950010] border border-[#ff950020] text-[#ff9500] text-[13px] font-medium backdrop-blur-xl" role="status" layout {...buildFadeUpMotion(reducedMotion, 0.08, 12)}>
-          <span>{visibleTileWarning}</span>
-        </m.div>
-      ) : null}
-
-      <m.div className="dc-map-stage__hud" layout {...buildFadeMotion(reducedMotion, 0.08)}>
-        <div className="dc-map-stage__status-copy">
-          <span>{selectedArtifactName ?? '等待结果'}</span>
-          <small>{measureMode ? measurementLabel : interactionHint}</small>
-        </div>
-        <strong>{cursor}</strong>
-      </m.div>
-
-      <AnimatePresence initial={false}>
-      {layers.length && showLayerLegend ? (
-        <m.div className="dc-map-stage__legend" aria-label="地图图层摘要" layout {...buildFadeUpMotion(reducedMotion, 0.14, 10)}>
-          {layers.map(({ artifact, visible, featureCount, data }, idx) => {
-            const color = pickLayerColor(artifact.metadata as Record<string, unknown> | undefined, idx)
-            const routeInfo = data ? extractRouteLegendInfo(data) : null
-            return (
-              <m.button
-                key={artifact.artifactId}
-                type="button"
-                className={`dc-map-stage__legend-item${
-                  artifact.artifactId === selectedArtifactId ? ' dc-map-stage__legend-item--active' : ''
-                }`}
-                onClick={() => onSelectArtifact(artifact.artifactId)}
-                {...pressMotion}
-              >
-                <span className="dc-map-stage__legend-dot" style={{ background: color }} aria-hidden="true" />
-                <strong>{artifact.name}</strong>
-                {routeInfo ? (
-                  <span className="dc-map-stage__legend-route">{routeInfo}</span>
-                ) : !data ? (
-                  <span className="dc-map-stage__legend-count">栅格</span>
-                ) : (
-                  <span className="dc-map-stage__legend-count">{featureCount}</span>
-                )}
-                {!visible ? <em>隐藏</em> : null}
-              </m.button>
-            )
-          })}
-        </m.div>
-      ) : null}
-      </AnimatePresence>
-
-      <m.div className="dc-map-stage__controls" layout {...buildFadeUpMotion(reducedMotion, 0.16, 8)}>
-        <div className="dc-map-stage__zoom">
-          <m.button type="button" onClick={() => mapRef.current?.zoomIn()} aria-label="放大地图" disabled={Boolean(mapError)} {...pressMotion}>
-            <AppIcon name="add" size={18} />
-          </m.button>
-          <div className="dc-map-stage__zoom-divider" />
-          <m.button type="button" onClick={() => mapRef.current?.zoomOut()} aria-label="缩小地图" disabled={Boolean(mapError)} {...pressMotion}>
-            <AppIcon name="remove" size={18} />
-          </m.button>
-        </div>
-        <m.button type="button" className={`dc-map-stage__icon${measureMode ? ' dc-map-stage__icon--active' : ''}`} onClick={toggleMeasureMode} aria-label={measureMode ? '结束测距' : '开启测距'} disabled={Boolean(mapError)} {...pressMotion}>
-          <Ruler size={18} />
-        </m.button>
-        <m.button type="button" className={`dc-map-stage__icon${showLayerLegend ? ' dc-map-stage__icon--active' : ''}`} onClick={() => setShowLayerLegend((current) => !current)} aria-label={showLayerLegend ? '隐藏图层摘要' : '显示图层摘要'} disabled={!layers.length} title={showLayerLegend ? '隐藏图层' : '显示图层'} {...pressMotion}>
-          <AppIcon name="layers" size={18} />
-        </m.button>
-        <m.button type="button" className="dc-map-stage__icon" onClick={cycleBasemap} aria-label="切换底图" title={activeBasemap.name} {...pressMotion}>
-          <AppIcon name="deployed_code" size={18} />
-        </m.button>
-        <m.button
-          type="button"
-          className="dc-map-stage__icon"
-          onClick={focusSelection}
-          aria-label="定位到当前结果"
-          disabled={!canFocusSelection}
-          title={canFocusSelection ? '定位到当前结果' : '暂无可定位的结果图层'}
-          {...pressMotion}
-        >
-          <AppIcon name="my_location" size={18} />
-        </m.button>
-      </m.div>
-    </m.section>
+    <MapCanvasChrome
+      activeBasemapName={activeBasemap.name}
+      canFocusSelection={canFocusSelection}
+      containerRef={containerRef}
+      cursor={cursor}
+      interactionHint={interactionHint}
+      legendItems={legendItems}
+      mapError={mapError}
+      measureMode={measureMode}
+      measurementLabel={measurementLabel}
+      reducedMotion={reducedMotion}
+      selectedArtifactName={selectedArtifactName}
+      showLayerLegend={showLayerLegend}
+      stageRef={stageRef}
+      visibleTileWarning={visibleTileWarning}
+      onCycleBasemap={cycleBasemap}
+      onFocusSelection={focusSelection}
+      onSelectArtifact={onSelectArtifact}
+      onToggleLayerLegend={() => setShowLayerLegend((current) => !current)}
+      onToggleMeasureMode={toggleMeasureMode}
+      onZoomIn={() => mapRef.current?.zoomIn()}
+      onZoomOut={() => mapRef.current?.zoomOut()}
+    />
   )
-}
-
-function isStaleArtifactMapError(message: string, layers: MapCanvasProps['layers']) {
-  const artifactIds = message.match(/artifact_[A-Za-z0-9]+/gu) ?? []
-  if (!artifactIds.length) return false
-  const activeIds = new Set(layers.map(layer => layer.artifact.artifactId))
-  return artifactIds.every(artifactId => !activeIds.has(artifactId))
-}
-
-function formatMapResourceWarning(message: string) {
-  return /(AJAXError|Failed to fetch|ERR_CONNECTION|NetworkError)/iu.test(message)
-    ? '地图资源暂时未加载，请稍候重试。'
-    : message
-}
-
-function buildBasemapStyle(basemap?: BasemapDescriptor): StyleSpecification {
-  const sources: StyleSpecification['sources'] = {}
-  const layers: StyleSpecification['layers'] = []
-
-  if (basemap) {
-    sources.basemap = {
-      type: 'raster',
-      tiles: basemap.tileUrls,
-      tileSize: 256,
-      attribution: basemap.attribution,
-    }
-    layers.push({
-      id: 'basemap',
-      type: 'raster',
-      source: 'basemap',
-      paint: { 'raster-opacity': 0.66 },
-    })
-
-    if (basemap.labelTileUrls.length) {
-      sources.labels = {
-        type: 'raster',
-        tiles: basemap.labelTileUrls,
-        tileSize: 256,
-        attribution: basemap.attribution,
-      }
-      layers.push({
-        id: 'labels',
-        type: 'raster',
-        source: 'labels',
-        paint: { 'raster-opacity': 0.78 },
-      })
-    }
-  }
-
-  return {
-    version: 8,
-    sources,
-    layers,
-  }
-}
-
-function isMapControlTarget(target: EventTarget | null) {
-  if (!(target instanceof Element)) {
-    return false
-  }
-  return Boolean(
-    target.closest(
-      'button,a,input,textarea,select,[role="button"],.dc-map-stage__controls,.dc-map-stage__legend-item,.maplibregl-popup',
-    ),
-  )
-}
-
-function getMapPointerLngLat(map: Map, clientX: number, clientY: number) {
-  const rect = map.getCanvasContainer().getBoundingClientRect()
-  const x = clientX - rect.left
-  const y = clientY - rect.top
-  if (x < 0 || y < 0 || x > rect.width || y > rect.height) {
-    return null
-  }
-  return map.unproject([x, y])
-}
-
-function syncArtifactLayers(
-  map: Map,
-  layers: MapCanvasProps['layers'],
-  selectedArtifactId?: string,
-) {
-  const activeSourceIds = new Set(layers.map(({ artifact }) => `artifact-${artifact.artifactId}`))
-  removeStaleArtifactLayers(map, activeSourceIds)
-
-  const bounds = new LngLatBounds()
-  let hasBounds = false
-
-  layers.forEach((layer, index) => {
-    const { artifact, data, visible, opacity } = layer
-    const sourceId = `artifact-${artifact.artifactId}`
-    if (layer.kind === 'raster') {
-      syncRasterLayerSet(map, layer, sourceId, visible ? 'visible' : 'none', opacity)
-      const rasterBounds = boundsFromLayer(layer)
-      if (rasterBounds && !rasterBounds.isEmpty()) {
-        bounds.extend(rasterBounds.getSouthWest())
-        bounds.extend(rasterBounds.getNorthEast())
-        hasBounds = true
-      }
-      return
-    }
-
-    if (!data) {
-      return
-    }
-    const source = map.getSource(sourceId) as maplibregl.GeoJSONSource | undefined
-    if (source && typeof source.setData === 'function') {
-      source.setData(data)
-    } else {
-      if (source) {
-        removeArtifactSource(map, sourceId)
-      }
-      map.addSource(sourceId, {
-        type: 'geojson',
-        data,
-      })
-    }
-
-    if (data.features.length) {
-      extendBounds(bounds, data)
-      hasBounds = true
-    }
-
-    syncArtifactLayerSet({
-      map,
-      layer,
-      sourceId,
-      color: pickLayerColor(artifact.metadata as Record<string, unknown> | undefined, index),
-      selected: artifact.artifactId === selectedArtifactId,
-      visible,
-      opacity,
-    })
-  })
-
-  applyArtifactLayerOrder(map, layers)
-
-  return hasBounds ? bounds : null
-}
-
-function removeStaleArtifactLayers(map: Map, activeSourceIds: Set<string>) {
-  const style = map.getStyle()
-  style.layers
-    ?.filter((layer) => {
-      const sourceId = 'source' in layer ? String(layer.source) : ''
-      return layer.id.startsWith('artifact-') && !activeSourceIds.has(sourceId)
-    })
-    .forEach((layer) => {
-      if (map.getLayer(layer.id)) {
-        map.removeLayer(layer.id)
-      }
-    })
-
-  Object.keys(style.sources)
-    .filter((sourceId) => sourceId.startsWith('artifact-') && !activeSourceIds.has(sourceId))
-    .forEach((sourceId) => {
-      if (map.getSource(sourceId)) {
-        map.removeSource(sourceId)
-      }
-    })
-}
-
-function removeArtifactSource(map: Map, sourceId: string) {
-  map.getStyle().layers
-    ?.filter((layer) => 'source' in layer && String(layer.source) === sourceId)
-    .forEach((layer) => {
-      if (map.getLayer(layer.id)) {
-        map.removeLayer(layer.id)
-      }
-    })
-  if (map.getSource(sourceId)) {
-    map.removeSource(sourceId)
-  }
-}
-
-function applyArtifactLayerOrder(map: Map, layers: MapCanvasProps['layers']) {
-  // MapLibre 的真实绘制顺序来自 style layer 顺序；仅改变 React 数组不会移动已存在图层。
-  //
-  // 这里按面板输出的图层顺序把每个 artifact 子图层依次移到顶层，使“上移/下移”和地图叠放一致。
-  for (const layer of layers) {
-    for (const layerId of artifactRenderedLayerIds(layer.artifact.artifactId)) {
-      if (map.getLayer(layerId)) {
-        map.moveLayer(layerId)
-      }
-    }
-  }
-}
-
-function artifactRenderedLayerIds(artifactId: string) {
-  const sourceId = `artifact-${artifactId}`
-  return [
-    `${sourceId}-raster`,
-    `${sourceId}-fill`,
-    `${sourceId}-outline`,
-    `${sourceId}-path`,
-    `${sourceId}-point`,
-    `${sourceId}-label`,
-  ]
-}
-
-function syncRasterLayerSet(
-  map: Map,
-  layer: MapCanvasProps['layers'][number],
-  sourceId: string,
-  visibility: 'visible' | 'none',
-  opacity: number,
-) {
-  if (!layer.imageUrl || !layer.coordinates) {
-    removeArtifactSource(map, sourceId)
-    return
-  }
-  const source = map.getSource(sourceId) as (maplibregl.ImageSource & { updateImage?: (options: { url: string; coordinates: [[number, number], [number, number], [number, number], [number, number]] }) => void }) | undefined
-  if (source && typeof source.updateImage === 'function') {
-    source.updateImage({ url: layer.imageUrl, coordinates: layer.coordinates })
-  } else {
-    if (source) {
-      removeArtifactSource(map, sourceId)
-    }
-    map.addSource(sourceId, {
-      type: 'image',
-      url: layer.imageUrl,
-      coordinates: layer.coordinates,
-    })
-  }
-  const layerId = `${sourceId}-raster`
-  const rasterPaint = rasterPaintFromMetadata(layer.artifact.metadata as Record<string, unknown> | undefined, opacity)
-  if (!map.getLayer(layerId)) {
-    map.addLayer({
-      id: layerId,
-      type: 'raster',
-      source: sourceId,
-      paint: rasterPaint,
-      layout: { visibility },
-    })
-    return
-  }
-  map.setLayoutProperty(layerId, 'visibility', visibility)
-  Object.entries(rasterPaint).forEach(([property, value]) => {
-    map.setPaintProperty(layerId, property, value)
-  })
-}
-
-function syncArtifactLayerSet({
-  map,
-  layer,
-  sourceId,
-  color,
-  selected,
-  visible,
-  opacity,
-}: {
-  map: Map
-  layer: MapCanvasProps['layers'][number]
-  sourceId: string
-  color: string
-  selected: boolean
-  visible: boolean
-  opacity: number
-}) {
-  if (!layer.data) {
-    return
-  }
-  const geometryTypes = collectGeometryTypes(layer.data)
-  const visibility = visible ? 'visible' : 'none'
-  const isRoute = hasRouteProperties(layer.data)
-  const featureColor = featureColorExpression(layer.data, color)
-  const metadata = layer.artifact.metadata as Record<string, unknown> | undefined
-  const labelField = readLabelField(layer.data, metadata)
-
-  syncMapLayer(map, {
-    id: `${sourceId}-fill`,
-    type: 'fill',
-    sourceId,
-    enabled: geometryTypes.has('Polygon') || geometryTypes.has('MultiPolygon'),
-    visibility,
-    paint: {
-      'fill-color': featureColor,
-      'fill-opacity': (selected ? 0.24 : 0.16) * opacity,
-    },
-  })
-  syncMapLayer(map, {
-    id: `${sourceId}-outline`,
-    type: 'line',
-    sourceId,
-    enabled: geometryTypes.has('Polygon') || geometryTypes.has('MultiPolygon'),
-    visibility,
-    paint: {
-      'line-color': featureColor,
-      'line-width': selected ? 3 : 2,
-      'line-opacity': 0.85 * opacity,
-    },
-  })
-  // 路线 LineString：用不同 dash 区分主路线和备选
-  const routeDashSequence = isRoute
-    ? ['match', ['get', 'route_index'],
-        0, ['literal', [1]],
-        1, ['literal', [6, 3]],
-        2, ['literal', [3, 2, 1, 2]],
-        ['literal', [1]],
-      ] as unknown as maplibregl.Expression
-    : undefined
-  syncMapLayer(map, {
-    id: `${sourceId}-path`,
-    type: 'line',
-    sourceId,
-    enabled: geometryTypes.has('LineString') || geometryTypes.has('MultiLineString'),
-    visibility,
-    paint: {
-      'line-color': featureColor,
-      'line-width': isRoute ? (selected ? 5 : 3.2) : (selected ? 4 : 2.4),
-      'line-opacity': 0.92 * opacity,
-      ...(routeDashSequence ? { 'line-dasharray': routeDashSequence } : {}),
-    },
-  })
-  // 路线起点/终点使用特殊颜色（绿/红），其他点保持统一颜色
-  const pointColorExpr = isRoute
-    ? ['match', ['get', 'kind'],
-        'route_start', '#34c759',
-        'route_end', '#ff3b30',
-        color,
-      ] as unknown as maplibregl.Expression
-    : featureColor
-  syncMapLayer(map, {
-    id: `${sourceId}-point`,
-    type: 'circle',
-    sourceId,
-    enabled: geometryTypes.has('Point') || geometryTypes.has('MultiPoint'),
-    visibility,
-    paint: {
-      'circle-radius': isRoute ? 7 : (selected ? 8 : 6),
-      'circle-color': pointColorExpr,
-      'circle-stroke-width': isRoute ? 2.5 : 2,
-      'circle-stroke-color': '#ffffff',
-      'circle-opacity': opacity,
-    },
-  })
-  syncSymbolLayer(map, {
-    id: `${sourceId}-label`,
-    sourceId,
-    enabled: Boolean(metadata?.labelEnabled === true && labelField),
-    visibility,
-    fieldName: labelField,
-  })
-}
-
-function featureColorExpression(collection: GeoJSON.FeatureCollection, fallback: string) {
-  const hasFeatureColor = collection.features.some((feature) => {
-    const props = feature.properties as Record<string, unknown> | null | undefined
-    return typeof props?.risk_color === 'string' || typeof props?.color === 'string'
-  })
-  if (!hasFeatureColor) {
-    return fallback
-  }
-  return ['coalesce', ['get', 'risk_color'], ['get', 'color'], fallback] as unknown as maplibregl.Expression
-}
-
-function syncMapLayer(
-  map: Map,
-  {
-    id,
-    type,
-    sourceId,
-    enabled,
-    visibility,
-    paint,
-  }: {
-    id: string
-    type: 'fill' | 'line' | 'circle'
-    sourceId: string
-    enabled: boolean
-    visibility: 'visible' | 'none'
-    paint: Record<string, unknown>
-  },
-) {
-  if (!enabled) {
-    if (map.getLayer(id)) {
-      map.removeLayer(id)
-    }
-    return
-  }
-
-  if (!map.getLayer(id)) {
-    map.addLayer({
-      id,
-      type,
-      source: sourceId,
-      paint,
-      layout: { visibility },
-    } as Parameters<Map['addLayer']>[0])
-    return
-  }
-
-  map.setLayoutProperty(id, 'visibility', visibility)
-  Object.entries(paint).forEach(([property, value]) => {
-    map.setPaintProperty(id, property, value)
-  })
-}
-
-function syncSymbolLayer(
-  map: Map,
-  {
-    id,
-    sourceId,
-    enabled,
-    visibility,
-    fieldName,
-  }: {
-    id: string
-    sourceId: string
-    enabled: boolean
-    visibility: 'visible' | 'none'
-    fieldName?: string
-  },
-) {
-  if (!enabled || !fieldName) {
-    if (map.getLayer(id)) {
-      map.removeLayer(id)
-    }
-    return
-  }
-
-  const layout = {
-    visibility,
-    'text-field': ['to-string', ['get', fieldName]],
-    'text-size': 12,
-    'text-offset': [0, 1.1],
-    'text-anchor': 'top',
-    'text-variable-anchor': ['top', 'bottom', 'left', 'right'],
-  }
-  const paint = {
-    'text-color': '#111827',
-    'text-halo-color': '#ffffff',
-    'text-halo-width': 1.4,
-    'text-halo-blur': 0.2,
-  }
-
-  if (!map.getLayer(id)) {
-    map.addLayer({
-      id,
-      type: 'symbol',
-      source: sourceId,
-      layout,
-      paint,
-    } as Parameters<Map['addLayer']>[0])
-    return
-  }
-
-  map.setLayoutProperty(id, 'visibility', visibility)
-  map.setLayoutProperty(id, 'text-field', layout['text-field'])
-}
-
-function readLabelField(collection: GeoJSON.FeatureCollection, metadata?: Record<string, unknown>) {
-  const field = typeof metadata?.labelField === 'string' ? metadata.labelField : ''
-  if (!field) return undefined
-  return collection.features.some(feature => {
-    const props = feature.properties as Record<string, unknown> | null | undefined
-    const value = props?.[field]
-    return value !== null && value !== undefined && String(value).trim() !== ''
-  }) ? field : undefined
-}
-
-function hasRouteProperties(collection: GeoJSON.FeatureCollection) {
-  return collection.features.some((f) => f.properties && ('route_index' in (f.properties as Record<string, unknown>) || 'distance_km' in (f.properties as Record<string, unknown>)))
-}
-
-function extractRouteLegendInfo(collection: GeoJSON.FeatureCollection): string | null {
-  const routeFeature = collection.features.find((f) => f.properties && 'distance_km' in (f.properties as Record<string, unknown>))
-  if (!routeFeature?.properties) return null
-  const p = routeFeature.properties as Record<string, unknown>
-  const dist = Number(p.distance_km)
-  const dur = Number(p.duration_min)
-  const modeLabel = p.mode_label ?? ''
-  if (Number.isNaN(dist) || Number.isNaN(dur)) return null
-  const distStr = dist >= 1 ? `${dist.toFixed(1)} km` : `${(dist * 1000).toFixed(0)} m`
-  return `${modeLabel} · ${distStr} · ${formatDurationLabel(dur)}`
-}
-
-function collectGeometryTypes(collection: GeoJSON.FeatureCollection) {
-  const types = new Set<string>()
-  collection.features.forEach((feature) => {
-    if (feature.geometry?.type) {
-      types.add(feature.geometry.type)
-    }
-  })
-  return types
-}
-
-function extendBounds(bounds: LngLatBounds, collection: GeoJSON.FeatureCollection) {
-  collection.features.forEach((feature) => {
-    const geometry = feature.geometry
-    if (!geometry) {
-      return
-    }
-    appendGeometry(bounds, geometry)
-  })
-}
-
-function boundsFromCollection(collection?: GeoJSON.FeatureCollection) {
-  if (!collection?.features.length) {
-    return null
-  }
-  const bounds = new LngLatBounds()
-  extendBounds(bounds, collection)
-  return bounds.isEmpty() ? null : bounds
-}
-
-function boundsFromLayer(layer?: MapCanvasProps['layers'][number]) {
-  if (!layer) {
-    return null
-  }
-  if (layer.kind === 'geojson') {
-    return boundsFromCollection(layer.data)
-  }
-  if (!layer.coordinates) {
-    return null
-  }
-  const bounds = new LngLatBounds()
-  layer.coordinates.forEach((point) => bounds.extend(point))
-  return bounds.isEmpty() ? null : bounds
-}
-
-function appendGeometry(bounds: LngLatBounds, geometry: GeoJSON.Geometry) {
-  if (geometry.type === 'GeometryCollection') {
-    geometry.geometries.forEach((child) => appendGeometry(bounds, child))
-    return
-  }
-  appendCoordinates(bounds, geometry.coordinates)
-}
-
-function appendCoordinates(bounds: LngLatBounds, coordinates: unknown) {
-  if (!Array.isArray(coordinates)) {
-    return
-  }
-  if (typeof coordinates[0] === 'number' && typeof coordinates[1] === 'number') {
-    bounds.extend([coordinates[0], coordinates[1]])
-    return
-  }
-  coordinates.forEach((child) => appendCoordinates(bounds, child))
-}
-
-function queryRenderedArtifactFeatures(map: Map, point: maplibregl.PointLike) {
-  // MapLibre 在样式初始化、切换和销毁边界会短暂返回空 style；鼠标移动属于高频 UI 事件，
-  // 这里把未就绪状态视为“当前没有可悬停的结果图层”，避免非业务错误冒泡到页面级边界。
-  const layerIds = (map.getStyle()?.layers ?? [])
-    .filter((layer) => layer.id.startsWith('artifact-'))
-    .map((layer) => layer.id)
-  if (!layerIds.length) {
-    return []
-  }
-  try {
-    return map.queryRenderedFeatures(point, { layers: layerIds })
-  } catch {
-    return []
-  }
-}
-
-function buildHoverPopupHtml(feature: maplibregl.MapGeoJSONFeature) {
-  const props = (feature.properties as Record<string, unknown>) ?? {}
-  // 路线要素：显示路线名称 + 距离 + 耗时
-  if (props.distance_km != null && props.duration_min != null) {
-    const name = props.name ?? '路线'
-    const dist = Number(props.distance_km)
-    const dur = Number(props.duration_min)
-    const modeLabel = props.mode_label ?? ''
-    const distStr = dist >= 1 ? `${dist.toFixed(1)} km` : `${(dist * 1000).toFixed(0)} m`
-    const durStr = formatDurationLabel(dur)
-    return `<div class="dc-hover-popup"><strong>${escapeHtml(String(name))}</strong><span class="dc-hover-category">${escapeHtml(String(modeLabel))} · ${distStr} · ${durStr}</span></div>`
-  }
-  // 路线起终点
-  if (props.kind === 'route_start' || props.kind === 'route_end') {
-    const label = props.kind === 'route_start' ? '起点' : '终点'
-    const name = props.name ?? label
-    return `<div class="dc-hover-popup"><strong>${escapeHtml(String(name))}</strong><span class="dc-hover-category">${label}</span></div>`
-  }
-  // 默认要素
-  const name = props.name ?? props.Name ?? props.NAME ?? props.title ?? props.label ?? ''
-  const category = props.category ?? props.type ?? props.kind ?? props.amenity ?? ''
-  const parts: string[] = []
-  if (name) parts.push(`<strong>${escapeHtml(String(name))}</strong>`)
-  if (category) parts.push(`<span class="dc-hover-category">${escapeHtml(String(category))}</span>`)
-  if (!parts.length) {
-    const first = Object.entries(props).find(([, v]) => v != null && String(v).trim())
-    if (first) parts.push(`<span>${escapeHtml(String(first[1]))}</span>`)
-  }
-  return `<div class="dc-hover-popup">${parts.join('')}</div>`
-}
-
-function buildFeaturePopupHtml(feature: maplibregl.MapGeoJSONFeature, layerName?: string) {
-  const props = (feature.properties as Record<string, unknown>) ?? {}
-
-  // 路线要素专用弹窗
-  if (props.distance_km != null && props.duration_min != null) {
-    const dist = Number(props.distance_km)
-    const dur = Number(props.duration_min)
-    const distStr = dist >= 1 ? `${dist.toFixed(1)} km` : `${(dist * 1000).toFixed(0)} m`
-    const durStr = formatDurationLabel(dur)
-    const rows = [
-      `<div><span>路线</span><strong>${escapeHtml(String(props.name ?? '路线'))}</strong></div>`,
-      `<div><span>方式</span><strong>${escapeHtml(String(props.mode_label ?? props.mode ?? '-'))}</strong></div>`,
-      `<div><span>距离</span><strong>${distStr}</strong></div>`,
-      `<div><span>耗时</span><strong>${durStr}</strong></div>`,
-    ].join('')
-    return `<div class="dc-map-popup"><h4>${escapeHtml(layerName ?? '路线详情')}</h4>${rows}</div>`
-  }
-  // 起终点专用弹窗
-  if (props.kind === 'route_start' || props.kind === 'route_end') {
-    const label = props.kind === 'route_start' ? '起点' : '终点'
-    const coords = feature.geometry.type === 'Point'
-      ? ` ${(feature.geometry.coordinates as number[])[0].toFixed(4)}, ${(feature.geometry.coordinates as number[])[1].toFixed(4)}`
-      : ''
-    const rows = [
-      `<div><span>类型</span><strong>${label}</strong></div>`,
-      `<div><span>名称</span><strong>${escapeHtml(String(props.name ?? label))}</strong></div>`,
-      `<div><span>坐标</span><strong>${coords}</strong></div>`,
-    ].join('')
-    return `<div class="dc-map-popup"><h4>${escapeHtml(layerName ?? '路线节点')}</h4>${rows}</div>`
-  }
-  // 默认要素弹窗
-  const entries = Object.entries(props)
-    .filter(([, value]) => value != null && String(value).trim())
-    .slice(0, 10)
-  const priorityKeys = ['name', 'Name', 'NAME', 'title', 'category', 'type', 'amenity', 'addr:street', 'addr:city']
-  entries.sort(([a], [b]) => {
-    const ai = priorityKeys.indexOf(a); const bi = priorityKeys.indexOf(b)
-    if (ai >= 0 && bi >= 0) return ai - bi
-    if (ai >= 0) return -1
-    if (bi >= 0) return 1
-    return 0
-  })
-  const rows = entries.length
-    ? entries.map(([key, rawValue]) => {
-        const value = formatPopupValue(rawValue)
-        return `<div><span>${escapeHtml(key)}</span><strong>${value}</strong></div>`
-      }).join('')
-    : '<div><span>属性</span><strong>当前对象没有可展示字段</strong></div>'
-  return `
-    <div class="dc-map-popup">
-      <h4>${escapeHtml(layerName ?? '地图对象')}</h4>
-      ${rows}
-    </div>
-  `
-}
-
-function formatDurationLabel(minutes: number): string {
-  if (minutes < 60) return `${Math.round(minutes)} 分钟`
-  const h = Math.floor(minutes / 60)
-  const m = Math.round(minutes % 60)
-  return m > 0 ? `${h} 小时 ${m} 分钟` : `${h} 小时`
-}
-
-function formatPopupValue(value: unknown) {
-  if (value == null) return '<em class="dc-null">未设置</em>'
-  if (typeof value === 'boolean') return value ? '✓' : '✗'
-  if (typeof value === 'number') return value.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
-  const s = String(value).trim()
-  if (/^https?:\/\/\S+$/i.test(s)) return `<a href="${escapeHtml(s)}" target="_blank" rel="noopener">${escapeHtml(new URL(s).hostname)}</a>`
-  return escapeHtml(s)
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;')
-}
-
-function ensureMeasureLayers(map: Map) {
-  if (!map.getSource('measure-points')) {
-    map.addSource('measure-points', {
-      type: 'geojson',
-      data: buildMeasurePointsCollection([]),
-    })
-  }
-  if (!map.getSource('measure-line')) {
-    map.addSource('measure-line', {
-      type: 'geojson',
-      data: buildMeasureLineCollection([]),
-    })
-  }
-  if (!map.getLayer('measure-line-layer')) {
-    map.addLayer({
-      id: 'measure-line-layer',
-      type: 'line',
-      source: 'measure-line',
-      paint: {
-        'line-color': '#172554',
-        'line-width': 3,
-        'line-dasharray': [1, 1.5],
-      },
-    })
-  }
-  if (!map.getLayer('measure-point-layer')) {
-    map.addLayer({
-      id: 'measure-point-layer',
-      type: 'circle',
-      source: 'measure-points',
-      paint: {
-        'circle-radius': 5,
-        'circle-color': '#ffffff',
-        'circle-stroke-color': '#172554',
-        'circle-stroke-width': 2,
-      },
-    })
-  }
-}
-
-function buildMeasurePointsCollection(points: Array<[number, number]>): GeoJSON.FeatureCollection {
-  return {
-    type: 'FeatureCollection',
-    features: points.map((point, index) => ({
-      type: 'Feature',
-      properties: { index: index + 1 },
-      geometry: { type: 'Point', coordinates: point },
-    })),
-  }
-}
-
-function buildMeasureLineCollection(points: Array<[number, number]>): GeoJSON.FeatureCollection {
-  if (points.length < 2) {
-    return { type: 'FeatureCollection', features: [] }
-  }
-  return {
-    type: 'FeatureCollection',
-    features: [
-      {
-        type: 'Feature',
-        properties: {},
-        geometry: { type: 'LineString', coordinates: points },
-      },
-    ],
-  }
-}
-
-function formatMeasurementDistance(points: Array<[number, number]>) {
-  if (!points.length) {
-    return '未开始测距'
-  }
-  if (points.length === 1) {
-    return '已落下第 1 个点'
-  }
-  const distance = totalDistanceMeters(points)
-  return distance >= 1000 ? `当前量距 ${(distance / 1000).toFixed(2)} km` : `当前量距 ${Math.round(distance)} m`
-}
-
-function totalDistanceMeters(points: Array<[number, number]>) {
-  let total = 0
-  for (let index = 1; index < points.length; index += 1) {
-    total += haversineMeters(points[index - 1], points[index])
-  }
-  return total
-}
-
-function haversineMeters(start: [number, number], end: [number, number]) {
-  const toRad = (value: number) => (value * Math.PI) / 180
-  const earthRadius = 6371000
-  const dLat = toRad(end[1] - start[1])
-  const dLng = toRad(end[0] - start[0])
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(start[1])) * Math.cos(toRad(end[1])) * Math.sin(dLng / 2) * Math.sin(dLng / 2)
-  return 2 * earthRadius * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }

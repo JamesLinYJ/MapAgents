@@ -143,34 +143,28 @@ export function useResourceController({
 
   const refreshLayers = useCallback(async (sessionId?: string | null, threadId?: string | null) => {
     const layerList = await listLayers(sessionId, threadId)
-    startTransition(() => setLayers(layerList ?? []))
+    setLayers(layerList ?? [])
   }, [])
 
   const loadBasemaps = useCallback(async () => {
     const available = (await listBasemaps()).filter(item => item.available)
     if (!available.length) return
-    startTransition(() => {
-      setBasemaps(available)
-      const defaultBasemap = available.find(item => item.isDefault) ?? available[0]
-      setSelectedBasemapKey(current => available.some(item => item.basemapKey === current) ? current : defaultBasemap.basemapKey)
-    })
+    setBasemaps(available)
+    const defaultBasemap = available.find(item => item.isDefault) ?? available[0]
+    setSelectedBasemapKey(current => available.some(item => item.basemapKey === current) ? current : defaultBasemap.basemapKey)
   }, [])
 
   const clearArtifacts = useCallback(() => {
-    startTransition(() => {
-      setArtifactData({})
-      setArtifactMetadata({})
-      setMapLayerPreferences({})
-      setSelectedArtifactId(undefined)
-    })
+    setArtifactData({})
+    setArtifactMetadata({})
+    setMapLayerPreferences({})
+    setSelectedArtifactId(undefined)
   }, [])
 
   const clearUploads = useCallback(() => {
-    startTransition(() => {
-      setUploadedLayerName(undefined)
-      setUploadReferences([])
-      setAllFiles([])
-    })
+    setUploadedLayerName(undefined)
+    setUploadReferences([])
+    setAllFiles([])
   }, [])
 
   useEffect(() => {
@@ -181,7 +175,7 @@ export function useResourceController({
     ))
     if (!missing.length) return
     void applyArtifactPayload(missing).then(() => {
-      if (missing.length === 1) startTransition(() => setSelectedArtifactId(missing[0].artifactId))
+      if (missing.length === 1) setSelectedArtifactId(missing[0].artifactId)
     })
   }, [applyArtifactPayload, artifactData, artifactMetadata, artifacts])
 

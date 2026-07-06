@@ -80,7 +80,7 @@ export function useSessionThreadController() {
 
   const refreshSessionHistory = useCallback(async (sessionId: string) => {
     const threads = await listSessionThreads(sessionId)
-    startTransition(() => setSessionThreads(threads ?? []))
+    setSessionThreads(threads ?? [])
     return { threads }
   }, [])
 
@@ -114,19 +114,15 @@ export function useSessionThreadController() {
     if (!session) throw new Error('当前会话还没有初始化，暂时不能上传文件。')
     if (currentThreadId) return currentThreadId
     const thread = await createThread(session.id, '文件上传')
-    startTransition(() => {
-      setActiveThreadId(thread.id)
-      setSessionThreads(current => current.some(item => item.id === thread.id) ? current : [thread, ...current])
-    })
+    setActiveThreadId(thread.id)
+    setSessionThreads(current => current.some(item => item.id === thread.id) ? current : [thread, ...current])
     syncUrl(session.id, undefined, thread.id)
     return thread.id
   }, [session])
 
   const renameThread = useCallback(async (threadId: string, title: string) => {
     const updated = await updateThread(threadId, title)
-    startTransition(() => {
-      setSessionThreads(current => current.map(item => item.id === threadId ? updated : item))
-    })
+    setSessionThreads(current => current.map(item => item.id === threadId ? updated : item))
     return updated
   }, [])
 
@@ -135,10 +131,8 @@ export function useSessionThreadController() {
     await deleteThread(threadId)
     const sessionRecord = await getSession(session.id)
     await refreshSessionHistory(session.id)
-    startTransition(() => {
-      setSession(sessionRecord)
-      setSessionRuns(current => current.filter(run => run.threadId !== threadId))
-    })
+    setSession(sessionRecord)
+    setSessionRuns(current => current.filter(run => run.threadId !== threadId))
     return sessionRecord
   }, [refreshSessionHistory, session])
 
@@ -163,30 +157,28 @@ export function useSessionThreadController() {
   const saveThreadMemory = useCallback(async (threadId: string, content: string) => {
     const current = threadMemory?.threadId === threadId ? threadMemory : await getThreadMemory(threadId)
     const updated = await updateThreadMemory(threadId, content, current.version)
-    startTransition(() => setThreadMemory(updated))
+    setThreadMemory(updated)
     return updated
   }, [threadMemory])
 
   const rebuildCurrentThreadMemory = useCallback(async (threadId: string) => {
     const updated = await rebuildThreadMemory(threadId)
-    startTransition(() => setThreadMemory(updated))
+    setThreadMemory(updated)
     await loadThreadContextState(threadId)
     return updated
   }, [loadThreadContextState])
 
   const forkFromMessage = useCallback(async (threadId: string, entryId: string) => {
     const forked = await forkThread(threadId, entryId)
-    startTransition(() => {
-      setSessionThreads(current => [forked, ...current.filter(thread => thread.id !== forked.id)])
-      setActiveThreadId(forked.id)
-    })
+    setSessionThreads(current => [forked, ...current.filter(thread => thread.id !== forked.id)])
+    setActiveThreadId(forked.id)
     return forked
   }, [])
 
   const refreshTrash = useCallback(async () => {
     if (!session) return []
     const entries = await listTrashedThreads(session.id)
-    startTransition(() => setTrashedThreads(entries))
+    setTrashedThreads(entries)
     return entries
   }, [session])
 

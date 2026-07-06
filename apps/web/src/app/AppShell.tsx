@@ -12,7 +12,7 @@
 //
 // 负责装配路由、页面容器和六类控制器的 UI 投影。
 
-import { lazy, startTransition, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, startTransition, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
 import { domAnimation, LazyMotion, m, MotionConfig, useReducedMotion } from 'framer-motion'
 import { useLocation } from 'react-router-dom'
 
@@ -67,6 +67,11 @@ import {
   buildAgentTodoItems,
   buildDataReferences,
   buildProgressItems,
+  extractActiveSkills,
+  extractCompactionLevel,
+  extractDenialCounts,
+  extractRunStats,
+  extractTokenBudget,
   formatPanelMode,
   formatPrimaryNav,
   formatModelRunStatus,
@@ -90,12 +95,8 @@ const SIDEBAR_ITEMS: ReadonlyArray<WorkspaceSidebarItem & { id: SidebarItemId }>
   { id: 'export', icon: 'ios_share', label: '导出', shortLabel: '导出' },
 ] as const
 
-function useStableVoid<Args extends unknown[]>(fn: (...args: Args) => Promise<void>): (...args: Args) => void {
-  const ref = useRef(fn)
-  useEffect(() => {
-    ref.current = fn
-  }, [fn])
-  return useCallback((...args: Args) => { void ref.current(...args) }, [])
+function useVoidCallback<Args extends unknown[]>(fn: (...args: Args) => Promise<void>): (...args: Args) => void {
+  return useCallback((...args: Args) => { void fn(...args) }, [fn])
 }
 
 function DetailPanelFallback() {
@@ -294,97 +295,11 @@ function AppShell() {
     [threadConversationItems, run?.status],
   )
 
-  // 从 compaction.executed 事件中提取压缩级别
-  const compactionLevel = useMemo(() => {
-    for (const event of deferredEvents) {
-      if ((event.type as string) !== 'compaction.executed') continue
-      const p = event.payload as Record<string, unknown> | undefined
-      const level = String(p?.level ?? p?.compaction_level ?? '')
-      if (level) return level
-    }
-    return null
-  }, [deferredEvents])
-
-  // 从事件流中提取 Token 预算（任意事件的 payload 中带 tokens_used 即可）
-  const tokenBudget = useMemo(() => {
-    for (const event of events) {
-      const p = event.payload as Record<string, unknown> | undefined
-      if (!p) continue
-      const tokensUsed = p.tokens_used ?? (p.usage as Record<string, unknown> | undefined)?.tokens_used
-      if (typeof tokensUsed !== 'number') continue
-      const rawMax = p.tokens_max ?? p.budget_max ?? (p.usage as Record<string, unknown> | undefined)?.max_tokens ?? 100000
-      const max = typeof rawMax === 'number' ? rawMax : Number(rawMax) || 100000
-      const budgetStatus = (p.budget_status as string) ?? (tokensUsed > max ? 'exceeded' : tokensUsed > max * 0.9 ? 'critical' : tokensUsed > max * 0.7 ? 'warning' : 'normal')
-      return {
-        used: tokensUsed,
-        max,
-        status: budgetStatus as 'normal' | 'warning' | 'critical' | 'exceeded',
-      }
-    }
-    return undefined
-  }, [events])
-
-  // 从事件和 agentState 中提取活跃技能
-  const activeSkills = useMemo(() => {
-    const skills = new Set<string>()
-    for (const event of deferredEvents) {
-      const p = event.payload as Record<string, unknown> | undefined
-      const eventSkills = p?.active_skills ?? p?.skills
-      if (Array.isArray(eventSkills)) {
-        for (const skill of eventSkills) {
-          if (typeof skill === 'string') skills.add(skill)
-        }
-      }
-    }
-    const agentSkills = (agentState as Record<string, unknown> | undefined)?.activeSkills
-    if (Array.isArray(agentSkills)) {
-      for (const skill of agentSkills) {
-        if (typeof skill === 'string') skills.add(skill)
-      }
-    }
-    return skills.size > 0 ? [...skills] : undefined
-  }, [agentState, deferredEvents])
-
-  // 从 run.completed 事件中提取运行统计
-  const runStats = useMemo(() => {
-    for (const event of events) {
-      if (event.type !== 'run.completed') continue
-      const p = event.payload as Record<string, unknown> | undefined
-      if (!p) continue
-      const attempts = p.tool_attempts ?? p.toolAttempts
-      const successes = p.tool_successes ?? p.toolSuccesses
-      const failures = p.tool_failures ?? p.toolFailures
-      const tokensUsed = p.tokens_used ?? p.tokensUsed ?? p.total_tokens ?? p.totalTokens
-      if (
-        typeof attempts === 'number' ||
-        typeof successes === 'number' ||
-        typeof failures === 'number' ||
-        typeof tokensUsed === 'number'
-      ) {
-        return {
-          toolAttempts: Number(attempts ?? 0),
-          toolSuccesses: Number(successes ?? 0),
-          toolFailures: Number(failures ?? 0),
-          tokensUsed: Number(tokensUsed ?? 0),
-        }
-      }
-      const stats = p.runtime_stats as Record<string, unknown> | undefined
-      if (stats) {
-        return {
-          toolAttempts: Number(stats.tool_attempts ?? stats.toolAttempts ?? stats.tool_success_count ?? 0) + Number(stats.tool_failure_count ?? 0),
-          toolSuccesses: Number(stats.tool_success_count ?? stats.toolSuccesses ?? 0),
-          toolFailures: Number(stats.tool_failure_count ?? stats.toolFailures ?? 0),
-          tokensUsed: Number(stats.tokens_used ?? stats.tokensUsed ?? 0),
-        }
-      }
-    }
-    return undefined
-  }, [events])
-
-  // 从 agentState 提取拒绝计数
-  const denialCounts = useMemo(() => {
-    return (agentState as Record<string, unknown> | undefined)?.denialCounts as Record<string, number> | undefined
-  }, [agentState])
+  const compactionLevel = useMemo(() => extractCompactionLevel(deferredEvents), [deferredEvents])
+  const tokenBudget = useMemo(() => extractTokenBudget(events), [events])
+  const activeSkills = useMemo(() => extractActiveSkills(deferredEvents, agentState), [agentState, deferredEvents])
+  const runStats = useMemo(() => extractRunStats(events), [events])
+  const denialCounts = useMemo(() => extractDenialCounts(agentState), [agentState])
 
   const progressTasks = useMemo(
     () => buildAgentTodoItems(agentState, executionPlan, run?.status),
@@ -544,7 +459,7 @@ function AppShell() {
   }, [loadRunHistory, location.pathname, panelMode, session?.id, setUiError])
 
   const activateMap = useCallback(() => {
-    startTransition(() => setIsMapActivated(true))
+    setIsMapActivated(true)
   }, [])
 
   const preloadMap = useCallback(() => {
@@ -709,9 +624,7 @@ function AppShell() {
     try {
       setUiError(undefined)
       const cancelledRun = await cancelRun(run.id)
-      startTransition(() => {
-        acceptRun(cancelledRun)
-      })
+      acceptRun(cancelledRun)
       if (cancelledRun.sessionId) {
         void refreshSessionHistory(cancelledRun.sessionId).catch((error) => reportNonBlockingError('refreshSessionHistory:cancelRun', error))
       }
@@ -821,11 +734,9 @@ function AppShell() {
           return
         }
 
-        startTransition(() => {
-          clearActiveRunState()
-          setThreadRuns(runs)
-          setActiveThreadId(threadPayload.thread.id)
-        })
+        clearActiveRunState()
+        setThreadRuns(runs)
+        setActiveThreadId(threadPayload.thread.id)
         setCanonicalThreadItems(canonicalItems)
         if (session?.id) {
           syncUrl(session.id, undefined, threadPayload.thread.id)
@@ -878,9 +789,7 @@ function AppShell() {
 
   const refreshMemoryEntries = useCallback(async () => {
     const response = await listMemories()
-    startTransition(() => {
-      setMemoryEntries(response.records.map(memoryRecordToEntry))
-    })
+    setMemoryEntries(response.records.map(memoryRecordToEntry))
     return response
   }, [])
 
@@ -933,18 +842,17 @@ function AppShell() {
     }
   }, [purgeTrashedThread, setUiError])
 
-  // 稳定化 ChatPanel 回调引用，避免每次渲染重建导致子树无效重渲染
-  const onSubmitStable = useStableVoid(handleSubmit)
-  const onRespondDecisionStable = useStableVoid(handleRespondDecision)
-  const onSelectTaskStable = useStableVoid(handleSelectThread)
-  const onRenameTaskStable = useStableVoid(handleRenameThread)
-  const onDeleteTaskStable = useStableVoid(handleDeleteThread)
-  const onForkMessageStable = useStableVoid(handleForkMessage)
-  const onRefreshMemoriesStable = useStableVoid(handleRefreshMemories)
+  const onSubmitAction = useVoidCallback(handleSubmit)
+  const onRespondDecisionAction = useVoidCallback(handleRespondDecision)
+  const onSelectTaskAction = useVoidCallback(handleSelectThread)
+  const onRenameTaskAction = useVoidCallback(handleRenameThread)
+  const onDeleteTaskAction = useVoidCallback(handleDeleteThread)
+  const onForkMessageAction = useVoidCallback(handleForkMessage)
+  const onRefreshMemoriesAction = useVoidCallback(handleRefreshMemories)
   const handleRefreshTrash = useCallback(async () => { await refreshTrash() }, [refreshTrash])
-  const onRefreshTrashStable = useStableVoid(handleRefreshTrash)
-  const onRestoreThreadStable = useStableVoid(handleRestoreThread)
-  const onPurgeThreadStable = useStableVoid(handlePurgeThread)
+  const onRefreshTrashAction = useVoidCallback(handleRefreshTrash)
+  const onRestoreThreadAction = useVoidCallback(handleRestoreThread)
+  const onPurgeThreadAction = useVoidCallback(handlePurgeThread)
   const handleLoadMoreHistory = useCallback(() => {
     if (!session?.id || !hasMoreRunHistory || isRunHistoryLoading) return
     void loadRunHistory(session.id, true).catch(error => {
@@ -1068,7 +976,7 @@ function AppShell() {
                 currentThreadId={currentThreadId}
                 sessionThreads={sessionThreads}
                 onNewTask={handleNewConversation}
-                onSelectThread={onSelectTaskStable}
+                onSelectThread={onSelectTaskAction}
                 workspaceMode={workspaceMode}
                 onWorkspaceModeChange={changeWorkspaceMode}
                 toolsMode={activeNav === 'tools'}
@@ -1116,27 +1024,27 @@ function AppShell() {
                     runtimeConfig={runtimeConfig}
                     availableTools={availableTools}
                     onQueryChange={setQuery}
-                    onSubmit={onSubmitStable}
+                    onSubmit={onSubmitAction}
                     onInterrupt={handleInterruptRun}
                     onNewConversation={handleNewConversation}
                     onFillSample={handleSampleSelect}
-                    onRespondDecision={onRespondDecisionStable}
+                    onRespondDecision={onRespondDecisionAction}
                     onUseTemplate={handleUseTemplate}
                     onUploadFiles={(files) => {
                       void handleUploadFiles(files)
                     }}
                     onSelectArtifact={setSelectedArtifactId}
-                    onSelectTask={onSelectTaskStable}
-                    onRenameTask={onRenameTaskStable}
-                    onDeleteTask={onDeleteTaskStable}
-                    onForkMessage={onForkMessageStable}
+                    onSelectTask={onSelectTaskAction}
+                    onRenameTask={onRenameTaskAction}
+                    onDeleteTask={onDeleteTaskAction}
+                    onForkMessage={onForkMessageAction}
                     dataReferences={dataReferences}
                     trashedThreads={trashedThreads}
-                    onLoadTrash={onRefreshTrashStable}
-                    onRestoreThread={onRestoreThreadStable}
-                    onPurgeThread={onPurgeThreadStable}
+                    onLoadTrash={onRefreshTrashAction}
+                    onRestoreThread={onRestoreThreadAction}
+                    onPurgeThread={onPurgeThreadAction}
                     memories={memoryEntries}
-                    onRefreshMemories={onRefreshMemoriesStable}
+                    onRefreshMemories={onRefreshMemoriesAction}
                     tokenBudget={tokenBudget}
                     activeSkills={activeSkills}
                     compactionLevel={compactionLevel}

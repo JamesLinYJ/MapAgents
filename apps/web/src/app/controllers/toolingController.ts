@@ -70,7 +70,7 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
     try {
       setUiError(undefined)
       const saved = await updateRuntimeConfig(nextConfig)
-      startTransition(() => setRuntimeConfig(saved))
+      setRuntimeConfig(saved)
     } catch (error) {
       setUiError(formatUiError(error, '运行时配置保存失败。'))
     }

@@ -21,7 +21,10 @@ const API_UNAVAILABLE_MESSAGE = 'GeoForge API 未连接，请启动 Node API 服
 // https://vite.dev/config/
 // 构建配置
 //
-// 当前主要通过 manualChunks 把地图、路由和图标库从主包中拆开。
+// 当前构建器使用 Vite 8 的 Rolldown 配置面。
+//
+// 运行态页面已经通过 React.lazy / dynamic import 建立自动切块边界；
+// 生产构建交给 Rolldown 根据依赖图自动提取动态 chunk 和共享模块。
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const webPort = parseOptionalPort(env.WEB_DEV_PORT || env.VITE_WEB_PORT)
@@ -42,16 +45,9 @@ export default defineConfig(({ mode }) => {
       },
     },
     build: {
-      rollupOptions: {
+      rolldownOptions: {
         output: {
-          manualChunks(id) {
-            if (id.includes('maplibre-gl')) {
-              return 'maplibre'
-            }
-            if (id.includes('react-router-dom')) {
-              return 'router'
-            }
-          },
+          codeSplitting: true,
         },
       },
     },

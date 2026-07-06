@@ -22,4 +22,5 @@ server/runtime/*
 output/
 .playwright-cli/
 .claude/
+.codex-claude/
 debug.log
