@@ -37,7 +37,6 @@ import type {
   ThreadMemoryDocument,
   ContextAssemblyReport,
   CompactionRecord,
-  WsControlCommand,
   WorkspaceBootstrapSnapshot,
 } from '@geo-agent-platform/shared-types'
 
@@ -66,21 +65,26 @@ import {
   runEventSchema,
   runSummarySchema,
 } from '@geo-agent-platform/shared-types'
-import { wsClient } from '../ws/client'
 import { signOutWithBetterAuth } from './authClient'
-import { API_UNAVAILABLE_MESSAGE, formatApiError, isApiUnavailableMessage } from './errors'
+import {
+  csrfHeaders,
+  requestControl,
+  requestFormJson,
+  requestJson,
+  setAuthContext,
+} from './transport'
+import type { ResponseSchema, SchemaParseError } from './transport'
+
+export type { ResponseSchema, SchemaParseError } from './transport'
+export {
+  apiBaseUrl,
+  deriveApiBaseUrl,
+  formatApiErrorMessage,
+  formatSchemaValidationError,
+  setAuthContext,
+} from './transport'
 
 // -- 响应 Schema 校验工具 --------------------------------------------------
-
-/** Zod schema 必需满足的最小 safeParse 接口 */
-export interface SchemaParseError {
-  issues: Array<{ path: PropertyKey[]; message: string }>
-}
-
-/** 兼容 Zod v3/v4 schema 对象的鸭子类型 */
-export type ResponseSchema<T> = {
-  safeParse(data: unknown): { success: true; data: T } | { success: false; error: SchemaParseError }
-}
 
 /** 将单项 schema 组合为数组 schema */
 export function arraySchema<T>(itemSchema: ResponseSchema<T>): ResponseSchema<T[]> {
@@ -176,185 +180,6 @@ const subscribeRunResponseSchema: ResponseSchema<{ run: AnalysisRun; items: Conv
     if (!eventsResult.success) return eventsResult
     return { success: true, data: { run: runResult.data, items: itemsResult.data, events: eventsResult.data } }
   },
-}
-
-/** 将 Zod 校验失败信息序列化为稳定中文协议错误 */
-export function formatSchemaValidationError(context: string, issues: SchemaParseError['issues']): string {
-  const detail = issues
-    .slice(0, 5)
-    .map((issue) => {
-      const path = issue.path.length ? issue.path.map(part => String(part)).join('.') : '(根)'
-      return `${path}: ${issue.message}`
-    })
-    .join('；')
-  return `服务响应格式不符合 GeoForge 协议（${context}）：${detail}`
-}
-
-// API 地址解析
-//
-// 前端不推断 API 端口：显式 VITE_API_BASE_URL 代表跨端口/跨域 API；
-// 未配置时使用同源相对路径，由部署入口或 Vite proxy 决定实际后端。
-export function deriveApiBaseUrl(envBaseUrl?: string) {
-  const explicit = envBaseUrl?.trim()
-  if (!explicit || explicit === '/') {
-    return ''
-  }
-  return explicit.replace(/\/+$/u, '')
-}
-
-const API_BASE_URL = deriveApiBaseUrl(import.meta.env.VITE_API_BASE_URL)
-const API_BASE_LABEL = API_BASE_URL || '同源相对地址'
-
-export const apiBaseUrl = API_BASE_URL
-let currentAuth: AuthMe | null = null
-
-export function setAuthContext(auth: AuthMe | null) {
-  currentAuth = auth
-  wsClient.setCsrfToken(auth?.csrfToken ?? null)
-}
-
-// 错误消息格式化
-//
-// 把网络层异常和后端 detail 统一整理成前端可直接展示的中文提示。
-export function formatApiErrorMessage(prefix: string, detail?: string) {
-  return formatApiError(prefix, detail)
-}
-
-async function extractErrorDetail(response: Response): Promise<string> {
-  const contentType = response.headers.get('content-type') ?? ''
-  if (contentType.includes('application/json')) {
-    try {
-      const payload = (await response.json()) as { detail?: unknown; error?: unknown; message?: unknown }
-      const detail = payload.detail ?? payload.error ?? payload.message
-      if (typeof detail === 'string' && detail.trim()) {
-        return detail
-      }
-      if (Array.isArray(detail)) {
-        return detail.map((item) => String(item)).join('；')
-      }
-      return JSON.stringify(payload)
-    } catch {
-      return response.statusText || `HTTP ${response.status}`
-    }
-  }
-
-  const text = await response.text()
-  return text.trim() || response.statusText || `HTTP ${response.status}`
-}
-
-async function requestJson<T>(path: string, init?: RequestInit, timeoutMs = 30_000, schema?: ResponseSchema<T>): Promise<T> {
-  // 通用 JSON 请求入口 — 支持可选的 Zod schema 校验，
-  // 防止后端协议变更时裸 as T 掩藏字段缺失或类型错误。
-  let response: Response
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    const headers = new Headers(init?.headers ?? {})
-    if (init?.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
-      headers.set('Content-Type', 'application/json')
-    }
-    response = await fetch(`${API_BASE_URL}${path}`, {
-      ...init,
-      credentials: 'include',
-      headers,
-      signal: controller.signal,
-    })
-  } catch (error) {
-    const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error(formatApiErrorMessage(`请求超时（${path}），请检查 API 服务是否响应正常。`, detail))
-    }
-    throw new Error(formatApiErrorMessage(`暂时无法连接分析服务，请确认本地 API 或部署代理已经启动（接口：${path}，当前地址：${API_BASE_LABEL}）`, detail))
-  } finally {
-    clearTimeout(timer)
-  }
-
-  if (!response.ok) {
-    throw new Error(formatHttpError(response, await extractErrorDetail(response)))
-  }
-
-  const data = await response.json()
-
-  if (schema) {
-    const parsed = schema.safeParse(data)
-    if (!parsed.success) {
-      throw new Error(formatSchemaValidationError(`HTTP ${path}`, parsed.error.issues))
-    }
-    return parsed.data
-  }
-
-  return data as T
-}
-
-async function requestFormJson<T>(path: string, body: FormData, failurePrefix: string, timeoutMs = 120_000): Promise<T> {
-  // FormData 请求同样走统一超时和错误提取。
-  //
-  // 图层上传、后台导入和数据替换都可能传较大文件；这里不给它们另起一套
-  // 网络语义，避免图层管理在端口/代理异常时只抛出浏览器原始 TypeError。
-  let response: Response
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
-      method: 'POST',
-      body,
-      credentials: 'include',
-      headers: csrfHeaders(),
-      signal: controller.signal,
-    })
-  } catch (error) {
-    const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error(formatApiErrorMessage(`${failurePrefix}超时（接口：${path}）。`, detail))
-    }
-    throw new Error(formatApiErrorMessage(`${failurePrefix}，请确认本地 API 或部署代理已经启动（接口：${path}，当前地址：${API_BASE_LABEL}）`, detail))
-  } finally {
-    clearTimeout(timer)
-  }
-
-  if (!response.ok) {
-    throw new Error(formatHttpError(response, await extractErrorDetail(response)))
-  }
-
-  return (await response.json()) as T
-}
-
-function csrfHeaders(): Headers {
-  const headers = new Headers()
-  if (currentAuth?.csrfToken) headers.set('x-geoforge-csrf', currentAuth.csrfToken)
-  return headers
-}
-
-function formatHttpError(response: Response, detail: string): string {
-  if (response.status === 502 || response.status === 503 || isApiUnavailableMessage(detail)) {
-    return API_UNAVAILABLE_MESSAGE
-  }
-  return detail
-}
-
-// 业务控制命令统一走 /ws；响应必须是具有关联请求 ID 的成功/错误 envelope。
-//
-// 可选 schema 参数来自 @geo-agent-platform/shared-types 中的 Zod schema，
-// 校验通过后才返回，失败时抛出稳定中文协议错误。
-async function requestControl<T>(type: WsControlCommand, payload: Record<string, unknown> = {}, schema?: ResponseSchema<T>): Promise<T> {
-  const message = await wsClient.send(type, payload)
-  if (message.payload.ok !== true) {
-    const error = message.payload.error
-    const detail = typeof error === 'object' && error && 'message' in error ? String(error.message) : 'WebSocket 命令失败'
-    throw new Error(detail)
-  }
-
-  const data = message.payload.data
-
-  if (schema) {
-    const parsed = schema.safeParse(data)
-    if (!parsed.success) {
-      throw new Error(formatSchemaValidationError(`WS ${type}`, parsed.error.issues))
-    }
-    return parsed.data
-  }
-
-  return data as T
 }
 
 export async function logout() {
