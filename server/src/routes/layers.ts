@@ -16,6 +16,7 @@ import type { SecurityServices } from '../security/routes.js'
 import { requireAuth } from '../security/routes.js'
 import type { GeoJsonFeatureCollection } from '../gis/geojson.js'
 import { parseGeoJsonEntity, toFeatureCollection } from '../gis/geojson.js'
+import { HttpClientError, routeErrorResponse } from './errors.js'
 
 interface ImportOptions {
   sourceType: string
@@ -122,7 +123,7 @@ async function importLayerFromForm(
     if (opts.requireSession && !sessionId) return { error: 'sessionId 不能为空。', status: 400 }
     const owner = sessionId && resolveOwner ? await resolveOwner(sessionId) : null
     const threadId = formString(form, 'threadId') ?? formString(form, 'thread_id') ?? opts.threadId ?? null
-    const collection = parseGeoJsonPayload(JSON.parse(await file.text()), env)
+    const collection = parseGeoJsonPayload(await parseJsonFile(file), env)
     const layer = await postgis.importGeoJsonLayer({
       layerKey: opts.layerKey,
       name: formString(form, 'name') ?? opts.defaultName ?? stripExtension(file.name),
@@ -141,21 +142,35 @@ async function importLayerFromForm(
     })
     return { layer }
   } catch (error) {
-    return { error: formatError(error, 'GeoJSON 导入失败'), status: 400 }
+    const response = routeErrorResponse(error, 'GeoJSON 导入失败。')
+    return { error: response.detail, status: response.status }
   }
 }
 
 function parseGeoJsonPayload(value: unknown, env?: Env): GeoJsonFeatureCollection {
-  const collection = toFeatureCollection(parseGeoJsonEntity(value, 'GeoJSON'))
+  let collection: GeoJsonFeatureCollection
+  try {
+    collection = toFeatureCollection(parseGeoJsonEntity(value, 'GeoJSON'))
+  } catch {
+    throw new HttpClientError('GeoJSON 内容格式无效。', 422)
+  }
   const features = collection.features
   if (env?.MAX_GEOJSON_FEATURES && features.length > env.MAX_GEOJSON_FEATURES) {
-    throw new Error(`GeoJSON feature 数量超过限制：${features.length}/${env.MAX_GEOJSON_FEATURES}`)
+    throw new HttpClientError(`GeoJSON feature 数量超过限制：${features.length}/${env.MAX_GEOJSON_FEATURES}`, 413)
   }
   const coordinateCount = features.reduce((sum, feature) => sum + countCoordinates(feature.geometry), 0)
   if (env?.MAX_GEOJSON_COORDINATES && coordinateCount > env.MAX_GEOJSON_COORDINATES) {
-    throw new Error(`GeoJSON 坐标数量超过限制：${coordinateCount}/${env.MAX_GEOJSON_COORDINATES}`)
+    throw new HttpClientError(`GeoJSON 坐标数量超过限制：${coordinateCount}/${env.MAX_GEOJSON_COORDINATES}`, 413)
   }
   return collection
+}
+
+async function parseJsonFile(file: { text(): Promise<string> }): Promise<unknown> {
+  try {
+    return JSON.parse(await file.text())
+  } catch {
+    throw new HttpClientError('GeoJSON 文件不是有效 JSON。', 422)
+  }
 }
 
 function checkContentLength(value: string | undefined, limit?: number): string | null {
@@ -209,10 +224,6 @@ function isFileLike(value: unknown): value is { name: string; text(): Promise<st
     && typeof (value as { name?: unknown }).name === 'string'
     && 'text' in value
     && typeof (value as { text?: unknown }).text === 'function'
-}
-
-function formatError(error: unknown, prefix: string): string {
-  return error instanceof Error && error.message ? `${prefix}: ${error.message}` : prefix
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

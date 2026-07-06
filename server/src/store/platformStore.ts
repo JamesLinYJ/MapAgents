@@ -23,6 +23,19 @@ import { RuntimeFileStore } from './fileStore.js'
 import { summarizeAssistantText } from '../conversation/items.js'
 import { sql } from 'drizzle-orm'
 import path from 'node:path'
+import {
+  belongsToWorkspace,
+  compareRuns,
+  decodeRunCursor,
+  dedupeById,
+  encodeRunCursor,
+  isRecord,
+  isRunAfterCursor,
+  mapMeteorologicalDatasetRow,
+  mapToolCatalogRow,
+  splitMemoryContent,
+  toRunSummary,
+} from './platformStoreUtils.js'
 
 export class StoreNotFoundError extends Error {
   constructor(message: string) { super(message); this.name = 'StoreNotFoundError' }
@@ -808,115 +821,3 @@ export class PostgresPlatformStore {
   }
 }
 
-function mapToolCatalogRow(row: Record<string, unknown>): ToolCatalogEntry {
-  return {
-    toolKind: String(row.tool_kind ?? ''),
-    toolName: String(row.tool_name ?? ''),
-    payload: isRecord(row.payload_json) ? row.payload_json : {},
-    sortOrder: Number(row.sort_order ?? 0),
-  }
-}
-
-function mapMeteorologicalDatasetRow(row: Record<string, unknown>): MeteorologicalDatasetRecord {
-  return {
-    datasetId: String(row.dataset_id ?? ''),
-    workspaceId: typeof row.workspace_id === 'string' ? row.workspace_id : null,
-    createdByUserId: typeof row.created_by_user_id === 'string' ? row.created_by_user_id : null,
-    visibility: row.visibility === 'private' || row.visibility === 'public' ? row.visibility : 'workspace',
-    sessionId: String(row.session_id ?? ''),
-    threadId: typeof row.thread_id === 'string' ? row.thread_id : null,
-    filename: String(row.filename ?? ''),
-    originalFilename: String(row.original_filename ?? row.filename ?? ''),
-    fileId: typeof row.file_id === 'string' ? row.file_id : null,
-    fileRelativePath: String(row.file_relative_path ?? ''),
-    sizeBytes: Number(row.size_bytes ?? 0),
-    contentHash: typeof row.content_hash === 'string' ? row.content_hash : null,
-    mediaType: String(row.media_type ?? 'application/octet-stream'),
-    status: String(row.status ?? 'ready'),
-    metadata: isRecord(row.metadata_json) ? row.metadata_json : {},
-    createdAt: toIsoString(row.created_at),
-    updatedAt: toIsoString(row.updated_at),
-  }
-}
-
-interface RunCursor {
-  updatedAt: string
-  id: string
-}
-
-function compareRuns(left: AnalysisRun, right: AnalysisRun): number {
-  return right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id)
-}
-
-function isRunAfterCursor(run: AnalysisRun, cursor: RunCursor): boolean {
-  return run.updatedAt < cursor.updatedAt || (run.updatedAt === cursor.updatedAt && run.id < cursor.id)
-}
-
-function encodeRunCursor(run: Pick<AnalysisRun, 'updatedAt' | 'id'>): string {
-  return Buffer.from(JSON.stringify({ updatedAt: run.updatedAt, id: run.id }), 'utf8').toString('base64url')
-}
-
-function decodeRunCursor(cursor: string): RunCursor {
-  try {
-    const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))
-    if (!isRecord(parsed) || typeof parsed.updatedAt !== 'string' || typeof parsed.id !== 'string') {
-      throw new Error('游标结构无效')
-    }
-    return { updatedAt: parsed.updatedAt, id: parsed.id }
-  } catch {
-    throw new Error('cursor 无效')
-  }
-}
-
-function toIsoString(value: unknown): string {
-  if (value instanceof Date) return value.toISOString()
-  const parsed = new Date(String(value ?? ''))
-  return Number.isNaN(parsed.getTime()) ? nowUtc() : parsed.toISOString()
-}
-
-function toRunSummary(run: AnalysisRun): RunSummary {
-  const latestArtifact = run.state.artifacts.at(-1) ?? null
-  return {
-    id: run.id,
-    threadId: run.threadId,
-    sessionId: run.sessionId,
-    workspaceId: run.workspaceId,
-    createdByUserId: run.createdByUserId,
-    visibility: run.visibility,
-    userQuery: run.userQuery,
-    modelProvider: run.modelProvider,
-    modelName: run.modelName,
-    status: run.status,
-    createdAt: run.createdAt,
-    updatedAt: run.updatedAt,
-    artifactCount: run.state.artifacts.length,
-    latestArtifactId: latestArtifact?.artifactId ?? null,
-    latestArtifactName: latestArtifact?.name ?? null,
-  }
-}
-
-function belongsToWorkspace(record: MeteorologicalDatasetRecord | null, workspaceId?: string | null): record is MeteorologicalDatasetRecord {
-  if (!record) return false
-  if (!workspaceId) return true
-  return record.workspaceId === workspaceId
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function dedupeById<T>(values: T[], key: (value: T) => string): T[] {
-  return [...new Map(values.map(value => [key(value), value])).values()]
-}
-
-function splitMemoryContent(content: string): { generatedContent: string; pinnedContent: string } {
-  const start = '<!-- user-notes:start -->'
-  const end = '<!-- user-notes:end -->'
-  const startIndex = content.indexOf(start)
-  const endIndex = content.indexOf(end)
-  if (startIndex < 0 || endIndex < startIndex) return { generatedContent: content, pinnedContent: '' }
-  return {
-    generatedContent: `${content.slice(0, startIndex)}${content.slice(endIndex + end.length)}`.trim(),
-    pinnedContent: content.slice(startIndex + start.length, endIndex).trim(),
-  }
-}

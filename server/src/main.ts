@@ -148,18 +148,25 @@ async function checkReadiness(): Promise<{ status: 'ok' | 'degraded'; checks: Re
     await db.execute(sql`SELECT 1`)
     checks.database = { ok: true }
   } catch (error) {
-    checks.database = { ok: false, detail: error instanceof Error ? error.message : String(error) }
+    console.error('[health] database check failed:', error)
+    checks.database = { ok: false, detail: '数据库不可用' }
   }
 
   const postgisStatus = await postgis.status()
-  checks.postgis = postgisStatus.available ? { ok: true } : { ok: false, detail: postgisStatus.error ?? 'PostGIS 不可用' }
+  if (postgisStatus.available) {
+    checks.postgis = { ok: true }
+  } else {
+    if (postgisStatus.error) console.error('[health] postgis check failed:', postgisStatus.error)
+    checks.postgis = { ok: false, detail: 'PostGIS 不可用' }
+  }
 
   if (env.WORKER_URL) {
     try {
       const response = await fetch(new URL('/health', env.WORKER_URL).toString(), { signal: AbortSignal.timeout(2_000) })
       checks.worker = response.ok ? { ok: true } : { ok: false, detail: `Worker HTTP ${response.status}` }
     } catch (error) {
-      checks.worker = { ok: false, detail: error instanceof Error ? error.message : String(error) }
+      console.error('[health] worker check failed:', error)
+      checks.worker = { ok: false, detail: 'Worker 不可用' }
     }
   }
 

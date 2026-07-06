@@ -14,6 +14,7 @@ import type { PostgresPlatformStore } from '../store/platformStore.js'
 import type { SecurityServices } from '../security/routes.js'
 import { requireAuth } from '../security/routes.js'
 import type { Env } from '../framework/env.js'
+import { HttpClientError, routeErrorResponse } from './errors.js'
 
 export function fileRoutes(runtimeRoot: string, store: PostgresPlatformStore, security: SecurityServices, env?: Env) {
   const files = new RuntimeFileStore(runtimeRoot)
@@ -41,7 +42,8 @@ export function fileRoutes(runtimeRoot: string, store: PostgresPlatformStore, se
         if (threadId) await store.recordAttachment(threadId, entry)
         return c.json(entry)
       } catch (error) {
-        return c.json({ detail: formatError(error, '文件上传失败') }, 400)
+        const response = routeErrorResponse(error, '文件上传失败。')
+        return c.json({ detail: response.detail }, response.status as never)
       }
     })
 }
@@ -50,17 +52,13 @@ function enforceContentLength(value: string | undefined, limit?: number): void {
   if (!limit || !value) return
   const parsed = Number(value)
   if (Number.isFinite(parsed) && parsed > limit) {
-    throw new Error(`上传文件过大，限制为 ${Math.round(limit / 1024 / 1024)}MB。`)
+    throw new HttpClientError(`上传文件过大，限制为 ${Math.round(limit / 1024 / 1024)}MB。`, 413)
   }
-}
-
-function formatError(error: unknown, prefix: string): string {
-  return error instanceof Error && error.message ? `${prefix}: ${error.message}` : prefix
 }
 
 function requireFile(value: unknown): FileLike {
   if (!isFileLike(value)) {
-    throw new Error('缺少上传文件。')
+    throw new HttpClientError('缺少上传文件。')
   }
   return value
 }

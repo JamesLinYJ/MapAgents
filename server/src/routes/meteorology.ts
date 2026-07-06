@@ -27,6 +27,7 @@ import type { SecurityServices } from '../security/routes.js'
 import { requireAuth } from '../security/routes.js'
 import type { Env } from '../framework/env.js'
 import { verifySchema } from '../security/database.js'
+import { HttpClientError, routeErrorResponse } from './errors.js'
 
 const METEOROLOGICAL_SUFFIXES = [
   '.nc',
@@ -126,7 +127,8 @@ export function meteorologyRoutes(db: Database, runtimeRoot: string, store: Post
       await store.updateSession(sessionId, { latestMeteorologicalDatasetId: dataset.datasetId })
       return c.json({ dataset, job: null })
     } catch (error) {
-      return c.json({ detail: formatError(error, '气象数据上传失败') }, 400)
+      const response = routeErrorResponse(error, '气象数据上传失败。')
+      return c.json({ detail: response.detail }, response.status as never)
     }
   })
 
@@ -179,7 +181,7 @@ function enforceContentLength(value: string | undefined, limit?: number): void {
   if (!limit || !value) return
   const parsed = Number(value)
   if (Number.isFinite(parsed) && parsed > limit) {
-    throw new Error(`气象数据文件过大，限制为 ${Math.round(limit / 1024 / 1024)}MB。`)
+    throw new HttpClientError(`气象数据文件过大，限制为 ${Math.round(limit / 1024 / 1024)}MB。`, 413)
   }
 }
 
@@ -326,7 +328,7 @@ function inputKind(name: string): string {
 }
 
 function requireFile(value: unknown): FileLike {
-  if (!isFileLike(value)) throw new Error('缺少上传文件。')
+  if (!isFileLike(value)) throw new HttpClientError('缺少上传文件。')
   return value
 }
 
@@ -361,10 +363,6 @@ async function safeJson(request: Request): Promise<Record<string, unknown>> {
   } catch {
     return {}
   }
-}
-
-function formatError(error: unknown, prefix: string): string {
-  return error instanceof Error && error.message ? `${prefix}: ${error.message}` : prefix
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
