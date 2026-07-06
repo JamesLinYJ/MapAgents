@@ -18,7 +18,6 @@ import { useLocation } from 'react-router-dom'
 
 import type {
   AgentExecutionMode,
-  AuthMe,
   ConversationItem,
   ToolDescriptor,
 } from '@geo-agent-platform/shared-types'
@@ -35,7 +34,7 @@ import { pickPreferredArtifactId } from '../features/artifacts/artifactSelection
 import { buildListItemVariants, buildListVariants, motionSpring } from '../shared/motion'
 import { pickConversationHeadline } from '../features/conversation/items'
 import { ChatPanel } from '../features/conversation/ChatPanel'
-import { getAuthMe, logout } from '../api/client'
+import { logout } from '../api/client'
 import { LoginScreen } from './auth/LoginScreen'
 import { TopBar } from './layout/TopBar'
 import { WorkspaceLayout, type WorkspaceSidebarItem } from './layout/WorkspaceLayout'
@@ -46,7 +45,6 @@ import { MapErrorBoundary } from '../features/map/MapErrorBoundary'
 import {
   formatUiError,
   reportNonBlockingError,
-  retryAsync,
   transcriptEntriesToConversationItems,
 } from './bootstrap'
 import { projectTimeline } from '../features/conversation/timelineProjector'
@@ -62,6 +60,7 @@ import type {
   SidebarItemId,
 } from './types'
 import { useMemoryEntries } from './useMemoryEntries'
+import { useWorkspaceBootstrap } from './useWorkspaceBootstrap'
 import {
   buildAgentTodoItems,
   buildDataReferences,
@@ -117,9 +116,6 @@ function AppShell() {
   // 装配会话、运行、资源、工具和导航控制器的页面投影。
   // 网络语义和实时订阅分别由控制器与 useRunState 所有。
   const location = useLocation()
-  const [authStatus, setAuthStatus] = useState<'checking' | 'authenticated' | 'unauthenticated' | 'error'>('checking')
-  const [authMe, setAuthMe] = useState<AuthMe | null>(null)
-  const [authRefreshNonce, setAuthRefreshNonce] = useState(0)
   const [isMapActivated, setIsMapActivated] = useState(false)
   const [mapFocusRequest, setMapFocusRequest] = useState<{ artifactId?: string; nonce: number }>()
   const [canonicalThreadItems, setCanonicalThreadItems] = useState<ConversationItem[]>([])
@@ -358,96 +354,18 @@ function AppShell() {
     ],
   )
 
-  useEffect(() => {
-    // 首屏只吸收一次 workspace bootstrap；thread 摘要足以校验本地指针。
-    // 完整运行通过 run:subscribe 一次恢复，不能再展开 thread/run 请求瀑布。
-    let disposed = false
-    const searchParams = new URLSearchParams(window.location.search)
-    const workspacePointer = readWorkspacePointer()
-    const sharedSessionId = searchParams.get('session') ?? undefined
-    const sharedThreadId = searchParams.get('thread') ?? undefined
-    const sharedRunId = searchParams.get('run') ?? undefined
-    // localStorage 仅作为 UI 选中提示，不决定会话归属。
-    const hintedThreadId = sharedThreadId ?? workspacePointer.activeThreadId
-    const hintedRunId = sharedRunId ?? workspacePointer.activeRunId
-
-    void (async () => {
-      try {
-        const auth = await getAuthMe().catch(error => {
-          const message = error instanceof Error ? error.message : String(error)
-          if (message.includes('未登录') || message.includes('401')) return null
-          throw error
-        })
-        if (!auth) {
-          if (!disposed) setAuthStatus('unauthenticated')
-          return
-        }
-        if (disposed) return
-        setAuthMe(auth)
-        setAuthStatus('authenticated')
-        const snapshot = await retryAsync(() => loadWorkspaceBootstrap(sharedSessionId), 2, 300)
-        if (disposed) return
-        applyProviders(snapshot.providers)
-        setUiError(undefined)
-
-        const sessionRecord = snapshot.session
-        const threadToRestore = hintedThreadId || undefined
-        const runToRestore = hintedRunId || undefined
-        const thread = threadToRestore
-          ? snapshot.threads.find(item => item.id === threadToRestore)
-          : undefined
-
-        if (threadToRestore && !thread) {
-          if (sharedThreadId) throw new Error('分享链接中的对话不属于当前会话。')
-          clearActiveRunState()
-          syncUrl(sessionRecord.id)
-          return
-        }
-
-        if (thread) setActiveThreadId(thread.id)
-        const preferredRunId = runToRestore ?? thread?.latestRunId ?? undefined
-        if (!preferredRunId) {
-          syncUrl(sessionRecord.id, undefined, thread?.id)
-          return
-        }
-
-        try {
-          const restoredRun = await hydrateRunState(preferredRunId)
-          if (disposed) return
-          const wrongSession = restoredRun.sessionId !== sessionRecord.id
-          const wrongThread = Boolean(thread && restoredRun.threadId !== thread.id)
-          if (wrongSession || wrongThread) throw new Error('运行记录不属于当前会话或对话。')
-          if (restoredRun.threadId) {
-            const history = await getThreadHistory(restoredRun.threadId, null, 200)
-            if (disposed) return
-            setCanonicalThreadItems(transcriptEntriesToConversationItems(history.entries))
-          }
-        } catch (error) {
-          if (sharedRunId || sharedThreadId) throw error
-          clearActiveRunState()
-          syncUrl(sessionRecord.id)
-        }
-      } catch (error) {
-        if (!disposed) {
-          setAuthStatus('error')
-          setUiError(formatUiError(error, '页面加载遇到问题，请刷新重试。'))
-        }
-      }
-    })()
-
-    return () => { disposed = true }
-  }, [
+  const { authMe, authStatus, clearAuth, retryAuth } = useWorkspaceBootstrap({
     applyProviders,
-    authRefreshNonce,
     clearActiveRunState,
-    hydrateRunState,
     getThreadHistory,
+    hydrateRunState,
     loadWorkspaceBootstrap,
     readWorkspacePointer,
     setActiveThreadId,
+    setCanonicalThreadItems,
     setUiError,
     syncUrl,
-  ])
+  })
 
   useEffect(() => {
     if (!session?.id) return
@@ -890,10 +808,7 @@ function AppShell() {
     return (
       <LoginScreen
         errorMessage={authStatus === 'error' ? uiError : undefined}
-        onAuthenticated={() => {
-          setAuthStatus('checking')
-          setAuthRefreshNonce(value => value + 1)
-        }}
+        onAuthenticated={retryAuth}
       />
     )
   }
@@ -902,8 +817,7 @@ function AppShell() {
     try {
       await logout()
     } finally {
-      setAuthMe(null)
-      setAuthStatus('unauthenticated')
+      clearAuth()
       setUiError(undefined)
     }
   }
