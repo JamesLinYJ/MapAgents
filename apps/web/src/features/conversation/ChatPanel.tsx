@@ -33,6 +33,7 @@ import {
   useConversationEntries,
 } from './useConversation'
 import { useSpeechRecognition } from './useSpeechRecognition'
+import { useDialogState } from './useDialogState'
 import { deriveThreadTitleFromText, formatThreadDisplayTitle } from './threadTitles'
 import { rectToMotion, surfaceStyleToMotion, usePanelExpansionMotion } from '../../shared/usePanelExpansionMotion'
 
@@ -94,15 +95,13 @@ export function ChatPanel(props: ChatPanelProps) {
     bound: currentRunId,
   })
   const [search, setSearch] = useState('')
-  const [dialog, setDialog] = useState<TaskDialog>(null)
-  const [titleDraft, setTitleDraft] = useState('')
+  const { dialog, titleDraft, setTitleDraft, openRename, openDelete, closeDialog, submitRename, submitDelete } = useDialogState()
   const [composing, setComposing] = useState(false)
   const [composerMode, setComposerMode] = useState<ComposerMode>('auto')
   const [modeDecisionOpen, setModeDecisionOpen] = useState(false)
   const [dismissedDecisionId, setDismissedDecisionId] = useState<string | null>(null)
   const [showTrash, setShowTrash] = useState(false)
   const [dismissedUploadIds, setDismissedUploadIds] = useState<Set<string>>(() => new Set())
-  const triggerRef = useRef<HTMLElement | null>(null)
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null)
   const submittingRef = useRef(false)
   const previousThreadRef = useRef<string | undefined>(currentThreadId)
@@ -180,35 +179,6 @@ export function ChatPanel(props: ChatPanelProps) {
     )
   }, [search, sessionThreads])
 
-  const openRename = (task: AgentThreadRecord) => {
-    triggerRef.current = document.activeElement as HTMLElement | null
-    setTitleDraft(formatThreadDisplayTitle(task))
-    setDialog({ mode: 'rename', task })
-  }
-  const openDelete = (task: AgentThreadRecord) => {
-    triggerRef.current = document.activeElement as HTMLElement | null
-    setDialog({ mode: 'delete', task })
-  }
-  const closeDialog = () => {
-    setDialog(null)
-    setTitleDraft('')
-    requestAnimationFrame(() => {
-      triggerRef.current?.focus()
-      triggerRef.current = null
-    })
-  }
-  const submitRename = () => {
-    if (dialog?.mode === 'rename' && titleDraft.trim() && titleDraft.trim() !== dialog.task.title) {
-      onRenameTask(dialog.task.id, titleDraft.trim())
-    }
-    closeDialog()
-  }
-  const submitDelete = () => {
-    if (dialog?.mode === 'delete') {
-      onDeleteTask(dialog.task.id)
-    }
-    closeDialog()
-  }
   const handleSubmit = (event?: FormEvent) => {
     event?.preventDefault()
     if (submittingRef.current || isSubmitting || composing || !query.trim()) {
@@ -509,7 +479,7 @@ export function ChatPanel(props: ChatPanelProps) {
                     <button className="alert-btn" onClick={closeDialog}>
                       取消
                     </button>
-                    <button className="alert-btn" onClick={submitRename} disabled={!titleDraft.trim()}>
+                    <button className="alert-btn" onClick={() => submitRename(onRenameTask)} disabled={!titleDraft.trim()}>
                       保存
                     </button>
                   </div>
@@ -524,7 +494,7 @@ export function ChatPanel(props: ChatPanelProps) {
                     <button className="alert-btn" onClick={closeDialog}>
                       取消
                     </button>
-                    <button className="alert-btn alert-btn-destructive" onClick={submitDelete}>
+                    <button className="alert-btn alert-btn-destructive" onClick={() => submitDelete(onDeleteTask)}>
                       删除
                     </button>
                   </div>
