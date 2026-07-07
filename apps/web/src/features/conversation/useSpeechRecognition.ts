@@ -14,6 +14,11 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import type { SpeechLanguageOption } from '@geo-agent-platform/shared-types'
 import { getSpeechAuthorization } from '../../api/client'
+import type {
+  SpeechRecognitionCanceledEventArgs,
+  SpeechRecognitionEventArgs,
+  SpeechRecognizer,
+} from 'microsoft-cognitiveservices-speech-sdk'
 
 const MAX_RECOGNITION_MS = 8 * 60 * 1000
 
@@ -37,7 +42,7 @@ export function useSpeechRecognition({
   const [languages, setLanguages] = useState<SpeechLanguageOption[]>([
     { locale: 'zh-CN', label: '中文（普通话）' },
   ])
-  const recognizerRef = useRef<any | null>(null)
+  const recognizerRef = useRef<SpeechRecognizer | null>(null)
   const timeoutRef = useRef<number | null>(null)
   const queryRef = useRef(query)
   const languageRef = useRef(language)
@@ -59,7 +64,7 @@ export function useSpeechRecognition({
     }
   }, [])
 
-  const closeRecognizer = useCallback((recognizer: any | null) => {
+  const closeRecognizer = useCallback((recognizer: SpeechRecognizer | null) => {
     clearTimer()
     if (recognizerRef.current === recognizer) {
       recognizerRef.current = null
@@ -158,17 +163,17 @@ export function useSpeechRecognition({
       const recognizer = new speechsdk.SpeechRecognizer(speechConfig, audioConfig)
       recognizerRef.current = recognizer
 
-      recognizer.recognizing = (_sender: unknown, event: any) => {
+      recognizer.recognizing = (_sender: unknown, event: SpeechRecognitionEventArgs) => {
         const text = event.result?.text?.trim()
         if (mountedRef.current) setInterimText(text ?? '')
       }
-      recognizer.recognized = (_sender: unknown, event: any) => {
+      recognizer.recognized = (_sender: unknown, event: SpeechRecognitionEventArgs) => {
         if (event.result?.reason === speechsdk.ResultReason.RecognizedSpeech) {
           insertTranscript(event.result.text ?? '')
         }
         if (mountedRef.current) setInterimText('')
       }
-      recognizer.canceled = (_sender: unknown, event: any) => {
+      recognizer.canceled = (_sender: unknown, event: SpeechRecognitionCanceledEventArgs) => {
         closeRecognizer(recognizer)
         if (mountedRef.current) {
           setInterimText('')

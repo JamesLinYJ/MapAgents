@@ -17,6 +17,7 @@ import type {
   ToolDescriptor,
 } from '@geo-agent-platform/shared-types'
 import { deriveEntriesFromItems } from './items'
+import { formatRunStatus } from '../../shared/utils/statusLabels'
 
 // 聊天 UI 的事实入口是 ConversationItem[]。
 //
@@ -76,4 +77,3 @@ export function formatSessionDate(value?: string | null) {
   return format(date, 'yyyy-MM-dd')
 }
 
-import { formatRunStatus } from '../../shared/utils/statusLabels'

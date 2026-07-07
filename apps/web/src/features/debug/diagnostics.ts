@@ -34,7 +34,8 @@ export function compactPath(path?: string | null) {
   return parts.length <= 3 ? normalized : `.../${parts.slice(-3).join('/')}`
 }
 
-export { formatRunStatus } from '../../shared/utils/statusLabels'
+import { formatRunStatus } from '../../shared/utils/statusLabels'
+export { formatRunStatus }
 
 export function deriveTone(status?: string): ExecutionTone {
   if (status === 'completed') return 'success'
