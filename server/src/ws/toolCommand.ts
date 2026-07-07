@@ -25,6 +25,7 @@ import { makeId, nowUtc } from '../utils/ids.js'
 import type { PostgresPlatformStore } from '../store/platformStore.js'
 import { persistToolExecutionResult, resolveRuntimeValueRef } from '../tools/resultPersistence.js'
 import { formatError, isRecord, optionalString, requiredRecord, requiredString } from './payload.js'
+import { errorLogPayload, logger } from '../observability/logger.js'
 import { resolveRuntimeConfig } from './runtimeConfig.js'
 
 export async function executeTool(
@@ -143,5 +144,5 @@ export async function executeTool(
 }
 
 function logNonBlockingError(scope: string, error: unknown): void {
-  console.warn(`[ws:${scope}] ${formatError(error)}`)
+  logger.warn({ error: errorLogPayload(error), scope }, 'ws tool error')
 }

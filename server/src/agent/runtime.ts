@@ -8,6 +8,7 @@
 //   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
+import { errorLogPayload, logger } from '../observability/logger.js'
 import {
   Agent,
   RunContext,
@@ -217,7 +218,7 @@ export class OpenAIAgentsRuntime {
       return this.store.getRun(options.runId)
     } catch (error) {
       const message = errorMessage(error)
-      console.error('[agents-runtime] run failed:', message)
+      logger.error({ message }, 'run failed')
       if (abort.signal.aborted) {
         await finalizer.cancel()
       } else {
@@ -698,7 +699,7 @@ export class OpenAIAgentsRuntime {
     } finally {
       if (outcome !== 'waiting_approval') {
         await assembly.sandboxSession.close?.().catch(error => {
-          console.warn('[agents-runtime] sandbox close failed:', errorMessage(error))
+          logger.warn({ error: errorLogPayload(error) }, 'sandbox close failed')
         })
       }
     }

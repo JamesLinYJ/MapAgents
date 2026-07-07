@@ -20,9 +20,11 @@ import {
   type ModelResponse,
   type ResponseStreamEvent,
 } from '@openai/agents'
+import { drizzle } from 'drizzle-orm/node-postgres'
 import { WebSocket, type RawData } from 'ws'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Database } from '../db/connection.js'
+import * as schema from '../db/schema.js'
 import { ToolRegistry } from '../framework/registry.js'
 import type { Env } from '../framework/env.js'
 import type { PostGisRepository } from '../gis/postgis.js'
@@ -900,7 +902,33 @@ function previewToolProvider(): ToolProvider {
 }
 
 function noOpDb(): Database {
-  return { execute: async () => ({ rows: [] }) } as unknown as Database
+  const runtimeConfig = new Map<string, Record<string, unknown>>()
+  const client = {
+    query: async (query: { text: string } | string, values: unknown[] = []) => {
+      const text = typeof query === 'string' ? query : query.text
+      if (text.startsWith('insert into "platform_runtime_config"')) {
+        const key = String(values[0] ?? '')
+        runtimeConfig.set(key, parseJsonRecord(values.at(-1)))
+        return { rows: [] }
+      }
+      if (text.includes('from "platform_runtime_config"')) {
+        const key = String(values[0] ?? '')
+        const payload = runtimeConfig.get(key)
+        return { rows: payload ? [[payload]] : [] }
+      }
+      return { rows: [] }
+    },
+  }
+  const db = drizzle(client as never, { schema }) as unknown as Database
+  return Object.assign(db, { pool: {}, close: async () => {} }) as Database
+}
+
+function parseJsonRecord(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') {
+    const parsed: unknown = JSON.parse(value)
+    return isRecord(parsed) ? parsed : {}
+  }
+  return isRecord(value) ? value : {}
 }
 
 function testSecurity(): SecurityServices {

@@ -12,6 +12,7 @@ import { drizzle } from 'drizzle-orm/node-postgres'
 import { Pool } from 'pg'
 import * as schema from './schema.js'
 import { getEnv } from '../framework/env.js'
+import { errorLogPayload, logger } from '../observability/logger.js'
 
 type DrizzleDatabase = ReturnType<typeof drizzle<typeof schema>>
 
@@ -31,7 +32,7 @@ export function createDb(databaseUrl?: string) {
     query_timeout: 120_000,
   })
   pool.on('error', error => {
-    console.error('[db] idle client error:', error.message)
+    logger.warn({ error: errorLogPayload(error) }, 'db idle client error')
   })
   const db = drizzle(pool, { schema }) as DrizzleDatabase
   return Object.assign(db, {

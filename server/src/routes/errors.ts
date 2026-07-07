@@ -8,6 +8,8 @@
 //   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
+import { errorLogPayload, logger } from '../observability/logger.js'
+
 export class HttpClientError extends Error {
   constructor(message: string, readonly status = 400) {
     super(message)
@@ -19,6 +21,6 @@ export function routeErrorResponse(error: unknown, publicMessage: string, status
   if (error instanceof HttpClientError) {
     return { detail: error.message, status: error.status }
   }
-  console.error(`[api] ${publicMessage}:`, error)
+  logger.error({ error: errorLogPayload(error), publicMessage }, 'api request failed')
   return { detail: publicMessage, status }
 }

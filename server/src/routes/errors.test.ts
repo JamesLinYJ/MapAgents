@@ -10,6 +10,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { HttpClientError, routeErrorResponse } from './errors.js'
+import { logger } from '../observability/logger.js'
 
 describe('routeErrorResponse', () => {
   it('returns explicit client errors without rewriting the message', () => {
@@ -19,7 +20,7 @@ describe('routeErrorResponse', () => {
   })
 
   it('does not expose unexpected internal error messages to HTTP clients', () => {
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const spy = vi.spyOn(logger, 'error').mockImplementation(() => undefined as unknown as void)
     try {
       const response = routeErrorResponse(
         new Error('duplicate key value violates unique constraint "platform_secret_idx"'),

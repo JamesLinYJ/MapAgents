@@ -17,36 +17,28 @@ import type {
   ToolValueRef,
 } from '../schemas/types.js'
 import { makeId, nowUtc, makeShareToken } from '../utils/ids.js'
+import { ConversationIndexStore, StoreNotFoundError } from './conversationIndexStore.js'
 import { InMemoryEventBus } from './eventBus.js'
 import { FileConversationStore, type TrashEntry } from './fileConversationStore.js'
 import { RuntimeFileStore } from './fileStore.js'
 import { summarizeAssistantText } from '../conversation/items.js'
-import { sql } from 'drizzle-orm'
 import path from 'node:path'
 import {
-  belongsToWorkspace,
-  compareRuns,
   decodeRunCursor,
   dedupeById,
   encodeRunCursor,
-  isRecord,
   isRunAfterCursor,
-  mapMeteorologicalDatasetRow,
-  mapToolCatalogRow,
   splitMemoryContent,
   toRunSummary,
 } from './platformStoreUtils.js'
+import { ArtifactIndexStore } from './postgres/artifactIndexStore.js'
+import { MeteorologicalDatasetStore } from './postgres/meteorologicalDatasetStore.js'
+import { RuntimeConfigStore } from './postgres/runtimeConfigStore.js'
+import { ToolCatalogStore, type ToolCatalogEntry } from './postgres/toolCatalogStore.js'
 
-export class StoreNotFoundError extends Error {
-  constructor(message: string) { super(message); this.name = 'StoreNotFoundError' }
-}
+export { StoreNotFoundError } from './conversationIndexStore.js'
 
-export interface ToolCatalogEntry {
-  toolKind: string
-  toolName: string
-  payload: Record<string, unknown>
-  sortOrder: number
-}
+export type { ToolCatalogEntry } from './postgres/toolCatalogStore.js'
 
 export interface ResourceOwner {
   workspaceId: string
@@ -67,20 +59,22 @@ export class PostgresPlatformStore {
   readonly conversationStoreRoot: string
   readonly runtimeRoot: string
 
-  // In-memory indexes (populated from JSONL on startup)
-  private sessions = new Map<string, SessionRecord>()
-  private threads = new Map<string, AgentThreadRecord>()
-  private runs = new Map<string, AnalysisRun>()
-  private threadIdsBySessionId = new Map<string, Set<string>>()
-  private runIdsBySessionId = new Map<string, Set<string>>()
-  private runIdsByThreadId = new Map<string, Set<string>>()
+  private readonly index = new ConversationIndexStore()
+  private readonly artifactIndexStore: ArtifactIndexStore
+  private readonly meteorologicalDatasetStore: MeteorologicalDatasetStore
+  private readonly runtimeConfigStore: RuntimeConfigStore
+  private readonly toolCatalogStore: ToolCatalogStore
 
-  constructor(private db: Database, storageRoot: string) {
+  constructor(db: Database, storageRoot: string) {
     this.conversationStoreRoot = storageRoot
     this.runtimeRoot = ['sessions', 'conversations'].includes(path.basename(storageRoot))
       ? path.dirname(storageRoot)
       : storageRoot
     this.conversationStore = new FileConversationStore(storageRoot)
+    this.artifactIndexStore = new ArtifactIndexStore(db)
+    this.meteorologicalDatasetStore = new MeteorologicalDatasetStore(db)
+    this.runtimeConfigStore = new RuntimeConfigStore(db)
+    this.toolCatalogStore = new ToolCatalogStore(db)
   }
 
   // --- Sessions ---
@@ -88,21 +82,14 @@ export class PostgresPlatformStore {
   async initialize(): Promise<void> {
     // manifest 是轻量索引；消息、事件和工具结果按 thread/run 文件延迟读取。
     const snapshot = await this.conversationStore.initialize()
-    for (const s of snapshot.sessions) {
-      this.sessions.set(s.id, s)
-    }
-    for (const t of snapshot.threads) {
-      this.threads.set(t.id, t)
-    }
+    this.index.load(snapshot)
     for (const r of snapshot.runs) {
-      this.runs.set(r.id, r)
       for (const artifact of await this.conversationStore.listArtifacts(r.id)) {
         await this.indexArtifact(artifact)
       }
     }
-    this.rebuildDerivedIndexes()
-    for (const session of this.sessions.values()) {
-      if (session.latestThreadId && !this.threads.has(session.latestThreadId)) {
+    for (const session of this.index.sessionValues()) {
+      if (session.latestThreadId && !this.index.hasThread(session.latestThreadId)) {
         session.latestThreadId = this.listThreadsForSession(session.id)[0]?.id ?? null
         await this.conversationStore.saveSession(session)
       }
@@ -118,7 +105,7 @@ export class PostgresPlatformStore {
       latestThreadId: null, latestRunId: null, latestUploadedLayerKey: null, latestMeteorologicalDatasetId: null,
     }
     await this.conversationStore.saveSession(session)
-    this.sessions.set(session.id, session)
+    this.index.setSession(session)
     return session
   }
 
@@ -134,7 +121,7 @@ export class PostgresPlatformStore {
         latestThreadId: null, latestRunId: null, latestUploadedLayerKey: null, latestMeteorologicalDatasetId: null,
       }
       await this.conversationStore.saveSession(session)
-      this.sessions.set(session.id, session)
+      this.index.setSession(session)
       return session
     }
   }
@@ -150,70 +137,41 @@ export class PostgresPlatformStore {
         latestThreadId: null, latestRunId: null, latestUploadedLayerKey: null, latestMeteorologicalDatasetId: null,
       }
       await this.conversationStore.saveSession(session)
-      this.sessions.set(session.id, session)
+      this.index.setSession(session)
       return session
     }
   }
 
   getSession(sessionId: string): SessionRecord {
-    const s = this.sessions.get(sessionId)
-    if (!s) throw new StoreNotFoundError(`会话 '${sessionId}' 不存在`)
-    return s
+    return this.index.getSession(sessionId)
   }
 
   async updateSession(sessionId: string, fields: Partial<SessionRecord>): Promise<SessionRecord> {
     const s = this.getSession(sessionId)
     const next = { ...s, ...fields }
     await this.conversationStore.saveSession(next)
-    this.sessions.set(sessionId, next)
+    this.index.setSession(next)
     return next
   }
 
   async getRuntimeConfig(configKey: string): Promise<Record<string, unknown> | null> {
-    const result = await this.db.execute(sql`
-      SELECT payload_json
-      FROM platform_runtime_config
-      WHERE config_key = ${configKey}
-    `)
-    const row = result.rows[0] as Record<string, unknown> | undefined
-    return isRecord(row?.payload_json) ? row.payload_json : null
+    return this.runtimeConfigStore.get(configKey)
   }
 
   async upsertRuntimeConfig(configKey: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const updatedAt = new Date()
-    await this.db.execute(sql`
-      INSERT INTO platform_runtime_config (config_key, updated_at, payload_json)
-      VALUES (${configKey}, ${updatedAt}, ${JSON.stringify(payload)}::jsonb)
-      ON CONFLICT (config_key)
-      DO UPDATE SET updated_at = EXCLUDED.updated_at, payload_json = EXCLUDED.payload_json
-    `)
-    return payload
+    return this.runtimeConfigStore.upsert(configKey, payload)
   }
 
   async listToolCatalogEntries(): Promise<ToolCatalogEntry[]> {
-    const result = await this.db.execute(sql`
-      SELECT tool_kind, tool_name, payload_json, sort_order
-      FROM tool_catalog_entries
-      ORDER BY sort_order ASC, tool_kind ASC, tool_name ASC
-    `)
-    return result.rows.map(row => mapToolCatalogRow(row as Record<string, unknown>))
+    return this.toolCatalogStore.list()
   }
 
   async upsertToolCatalogEntry(entry: ToolCatalogEntry): Promise<ToolCatalogEntry> {
-    await this.db.execute(sql`
-      INSERT INTO tool_catalog_entries (tool_kind, tool_name, payload_json, sort_order)
-      VALUES (${entry.toolKind}, ${entry.toolName}, ${JSON.stringify(entry.payload)}::jsonb, ${entry.sortOrder})
-      ON CONFLICT (tool_name, tool_kind)
-      DO UPDATE SET payload_json = EXCLUDED.payload_json, sort_order = EXCLUDED.sort_order
-    `)
-    return entry
+    return this.toolCatalogStore.upsert(entry)
   }
 
   async deleteToolCatalogEntry(toolKind: string, toolName: string): Promise<void> {
-    await this.db.execute(sql`
-      DELETE FROM tool_catalog_entries
-      WHERE tool_kind = ${toolKind} AND tool_name = ${toolName}
-    `)
+    await this.toolCatalogStore.delete(toolKind, toolName)
   }
 
   async listMeteorologicalDatasets(filters: {
@@ -223,22 +181,7 @@ export class PostgresPlatformStore {
     workspaceId?: string | null
     limit?: number
   } = {}): Promise<MeteorologicalDatasetRecord[]> {
-    const limit = Math.max(1, Math.min(filters.limit ?? 100, 500))
-    const conditions = [
-      filters.workspaceId ? sql`workspace_id = ${filters.workspaceId}` : null,
-      filters.sessionId ? sql`session_id = ${filters.sessionId}` : null,
-      filters.threadId ? sql`thread_id = ${filters.threadId}` : null,
-      filters.filename ? sql`lower(filename) = lower(${filters.filename})` : null,
-    ].filter((condition): condition is ReturnType<typeof sql> => condition !== null)
-    const whereClause = conditions.length > 0 ? sql`WHERE ${sql.join(conditions, sql` AND `)}` : sql``
-    const result = await this.db.execute(sql`
-      SELECT *
-      FROM platform_meteorological_datasets
-      ${whereClause}
-      ORDER BY updated_at DESC
-      LIMIT ${limit}
-    `)
-    return result.rows.map(row => mapMeteorologicalDatasetRow(row as Record<string, unknown>))
+    return this.meteorologicalDatasetStore.list(filters)
   }
 
   async resolveMeteorologicalDataset(filters: {
@@ -248,27 +191,7 @@ export class PostgresPlatformStore {
     filename?: string | null
     workspaceId?: string | null
   }): Promise<MeteorologicalDatasetRecord | null> {
-    const explicitDatasetId = filters.datasetId?.trim()
-    if (explicitDatasetId && explicitDatasetId !== 'latest_upload') {
-      const workspaceClause = filters.workspaceId ? sql`AND workspace_id = ${filters.workspaceId}` : sql``
-      const result = await this.db.execute(sql`
-        SELECT *
-        FROM platform_meteorological_datasets
-        WHERE dataset_id = ${explicitDatasetId}
-        ${workspaceClause}
-        LIMIT 1
-      `)
-      const record = result.rows[0] ? mapMeteorologicalDatasetRow(result.rows[0] as Record<string, unknown>) : null
-      return belongsToWorkspace(record, filters.workspaceId) ? record : null
-    }
-    const matches = await this.listMeteorologicalDatasets({
-      sessionId: filters.sessionId,
-      threadId: filters.threadId ?? null,
-      filename: filters.filename ?? null,
-      workspaceId: filters.workspaceId ?? null,
-      limit: 1,
-    })
-    return matches[0] ?? null
+    return this.meteorologicalDatasetStore.resolve(filters)
   }
 
   async persistArtifact(artifact: ArtifactRef): Promise<void> {
@@ -282,32 +205,18 @@ export class PostgresPlatformStore {
   private async indexArtifact(artifact: ArtifactRef): Promise<void> {
     const relativePath = typeof artifact.metadata.relativePath === 'string' ? artifact.metadata.relativePath : ''
     if (!relativePath) throw new Error(`Artifact "${artifact.artifactId}" 缺少 relativePath`)
-    await this.db.execute(sql`
-      INSERT INTO platform_artifacts (
-        artifact_id, run_id, workspace_id, created_by_user_id, visibility,
-        artifact_type, name, uri, metadata_json, geojson_relative_path, created_at
-      )
-      VALUES (
-        ${artifact.artifactId}, ${artifact.runId}, ${this.runs.get(artifact.runId)?.workspaceId ?? null},
-        ${this.runs.get(artifact.runId)?.createdByUserId ?? null}, ${this.runs.get(artifact.runId)?.visibility ?? 'workspace'},
-        ${artifact.artifactType}, ${artifact.name},
-        ${artifact.uri}, ${JSON.stringify(artifact.metadata)}::jsonb, ${relativePath}, ${new Date()}
-      )
-      ON CONFLICT (artifact_id)
-      DO UPDATE SET name = EXCLUDED.name, uri = EXCLUDED.uri, metadata_json = EXCLUDED.metadata_json,
-                    geojson_relative_path = EXCLUDED.geojson_relative_path,
-                    workspace_id = EXCLUDED.workspace_id,
-                    created_by_user_id = EXCLUDED.created_by_user_id,
-                    visibility = EXCLUDED.visibility
-    `)
+    const owner = this.index.getRunOrNull(artifact.runId)
+    await this.artifactIndexStore.indexArtifact(artifact, {
+      workspaceId: owner?.workspaceId ?? null,
+      createdByUserId: owner?.createdByUserId ?? null,
+      visibility: owner?.visibility ?? 'workspace',
+    })
   }
 
   // --- Threads ---
 
   listThreadsForSession(sessionId: string): AgentThreadRecord[] {
-    return this.readIndex(this.threadIdsBySessionId, sessionId, this.threads)
-      .filter(thread => thread.status !== 'deleted')
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    return this.index.listThreadsForSession(sessionId)
   }
 
   async createThread(sessionId: string, title?: string | null): Promise<AgentThreadRecord> {
@@ -324,29 +233,22 @@ export class PostgresPlatformStore {
       historyPreview: null, conversationPath: null,
     }
     const manifest = await this.conversationStore.createThread(thread)
-    this.threads.set(thread.id, thread)
-    this.addToIndex(this.threadIdsBySessionId, sessionId, thread.id)
+    this.index.setThread(thread)
     this.threadUpdateBus.publish(thread.id, { thread: structuredClone(thread), manifest })
     await this.updateSession(sessionId, { latestThreadId: thread.id })
     return thread
   }
 
   getThread(threadId: string): AgentThreadRecord {
-    const t = this.threads.get(threadId)
-    if (!t) throw new StoreNotFoundError(`线程 '${threadId}' 不存在`)
-    return t
+    return this.index.getThread(threadId)
   }
 
   async updateThread(threadId: string, fields: Partial<AgentThreadRecord>): Promise<AgentThreadRecord> {
     const t = this.getThread(threadId)
-    const previousSessionId = t.sessionId
     const next = { ...t, ...fields, updatedAt: nowUtc() }
     const manifest = await this.conversationStore.saveThread(next)
-    this.threads.set(threadId, next)
-    if (previousSessionId !== next.sessionId || next.status === 'deleted') {
-      this.removeFromIndex(this.threadIdsBySessionId, previousSessionId, threadId)
-      if (next.status !== 'deleted') this.addToIndex(this.threadIdsBySessionId, next.sessionId, threadId)
-    }
+    if (next.status === 'deleted') this.index.deleteThread(threadId)
+    else this.index.setThread(next)
     this.threadUpdateBus.publish(threadId, { thread: structuredClone(next), manifest })
     return next
   }
@@ -356,13 +258,7 @@ export class PostgresPlatformStore {
     const next = { ...t, status: 'deleted' as const, updatedAt: nowUtc() }
     await this.conversationStore.saveThread(next)
     await this.conversationStore.moveThreadToTrash(threadId)
-    this.threads.delete(threadId)
-    this.removeFromIndex(this.threadIdsBySessionId, next.sessionId, threadId)
-    const threadRunIds = this.runIdsByThreadId.get(threadId)
-    if (threadRunIds) {
-      for (const runId of threadRunIds) this.removeFromIndex(this.runIdsBySessionId, next.sessionId, runId)
-      this.runIdsByThreadId.delete(threadId)
-    }
+    this.index.deleteThread(threadId)
     const session = this.getSession(next.sessionId)
     if (session.latestThreadId === threadId) {
       const replacement = this.listThreadsForSession(next.sessionId)[0] ?? null
@@ -373,11 +269,11 @@ export class PostgresPlatformStore {
   // --- Runs ---
 
   listRunsForSession(sessionId: string): AnalysisRun[] {
-    return this.readIndex(this.runIdsBySessionId, sessionId, this.runs).sort(compareRuns)
+    return this.index.listRunsForSession(sessionId)
   }
 
   listRunsForThread(threadId: string): AnalysisRun[] {
-    return this.readIndex(this.runIdsByThreadId, threadId, this.runs).sort(compareRuns)
+    return this.index.listRunsForThread(threadId)
   }
 
   listRunSummaries(options: {
@@ -411,9 +307,7 @@ export class PostgresPlatformStore {
   }
 
   getRun(runId: string): AnalysisRun {
-    const r = this.runs.get(runId)
-    if (!r) throw new StoreNotFoundError(`运行 '${runId}' 不存在`)
-    return r
+    return this.index.getRun(runId)
   }
 
   async createRun(sessionId: string, query: string, opts?: {
@@ -471,10 +365,9 @@ export class PostgresPlatformStore {
       await this.conversationStore.saveThread(nextThread)
     }
     await this.conversationStore.saveSession(nextSession)
-    this.runs.set(run.id, run)
-    this.indexRun(run)
-    this.sessions.set(session.id, nextSession)
-    if (nextThread) this.threads.set(nextThread.id, nextThread)
+    this.index.setRun(run)
+    this.index.setSession(nextSession)
+    if (nextThread) this.index.setThread(nextThread)
     this.runBus.publish(run.id, structuredClone(run))
     return run
   }
@@ -483,7 +376,7 @@ export class PostgresPlatformStore {
     const r = this.getRun(runId)
     const next = { ...r, state: { ...r.state, ...updates }, updatedAt: nowUtc() }
     await this.conversationStore.saveRun(next)
-    this.runs.set(runId, next)
+    this.index.setRun(next)
     this.runBus.publish(runId, structuredClone(next))
     return next
   }
@@ -493,7 +386,7 @@ export class PostgresPlatformStore {
     const next = { ...run, status, updatedAt: nowUtc() }
     let nextThread: AgentThreadRecord | null = null
     if (run.threadId) {
-      const thread = this.threads.get(run.threadId)
+      const thread = this.index.getThreadOrNull(run.threadId)
       if (thread) {
         nextThread = { ...thread, latestRunStatus: status, updatedAt: next.updatedAt }
         await this.conversationStore.saveThread(nextThread)
@@ -502,51 +395,10 @@ export class PostgresPlatformStore {
     await this.conversationStore.saveRun(next, {
       recoveryStatus: status === 'interrupted' ? 'interrupted' : status === 'requires_action' ? 'requires_action' : 'clean',
     })
-    this.runs.set(runId, next)
-    if (nextThread) this.threads.set(nextThread.id, nextThread)
+    this.index.setRun(next)
+    if (nextThread) this.index.setThread(nextThread)
     this.runBus.publish(runId, structuredClone(next))
     return next
-  }
-
-  // 派生索引只加速 JSONL 投影读取；清空后可由当前内存快照完整重建。
-  private rebuildDerivedIndexes(): void {
-    this.threadIdsBySessionId.clear()
-    this.runIdsBySessionId.clear()
-    this.runIdsByThreadId.clear()
-    for (const thread of this.threads.values()) {
-      if (thread.status !== 'deleted') this.addToIndex(this.threadIdsBySessionId, thread.sessionId, thread.id)
-    }
-    for (const run of this.runs.values()) this.indexRun(run)
-  }
-
-  private indexRun(run: AnalysisRun): void {
-    if (run.threadId && !this.threads.has(run.threadId)) return
-    this.addToIndex(this.runIdsBySessionId, run.sessionId, run.id)
-    if (run.threadId) this.addToIndex(this.runIdsByThreadId, run.threadId, run.id)
-  }
-
-  private addToIndex(index: Map<string, Set<string>>, key: string, id: string): void {
-    const ids = index.get(key) ?? new Set<string>()
-    ids.add(id)
-    index.set(key, ids)
-  }
-
-  private removeFromIndex(index: Map<string, Set<string>>, key: string, id: string): void {
-    const ids = index.get(key)
-    if (!ids) return
-    ids.delete(id)
-    if (!ids.size) index.delete(key)
-  }
-
-  private readIndex<T>(index: Map<string, Set<string>>, key: string, records: Map<string, T>): T[] {
-    const ids = index.get(key)
-    if (!ids) return []
-    const values: T[] = []
-    for (const id of ids) {
-      const value = records.get(id)
-      if (value) values.push(value)
-    }
-    return values
   }
 
   async completeRun(runId: string, status: string): Promise<AnalysisRun> {
@@ -554,7 +406,7 @@ export class PostgresPlatformStore {
     const next = { ...r, status: status as AnalysisRun['status'], updatedAt: nowUtc() }
     let nextThread: AgentThreadRecord | null = null
     if (r.threadId) {
-      const thread = this.threads.get(r.threadId)
+      const thread = this.index.getThreadOrNull(r.threadId)
       if (thread) {
         nextThread = { ...thread, latestRunStatus: next.status, updatedAt: next.updatedAt }
         await this.conversationStore.saveThread(nextThread)
@@ -566,8 +418,8 @@ export class PostgresPlatformStore {
         : 'clean',
     })
     await this.conversationStore.flush()
-    this.runs.set(runId, next)
-    if (nextThread) this.threads.set(nextThread.id, nextThread)
+    this.index.setRun(next)
+    if (nextThread) this.index.setThread(nextThread)
     this.runBus.publish(runId, structuredClone(next))
     return next
   }
@@ -663,7 +515,7 @@ export class PostgresPlatformStore {
 
   private async updateThreadProjectionFromItem(item: ConversationItem): Promise<void> {
     if (!item.threadId) return
-    const thread = this.threads.get(item.threadId)
+    const thread = this.index.getThreadOrNull(item.threadId)
     if (!thread) return
 
     let next = thread
@@ -674,7 +526,7 @@ export class PostgresPlatformStore {
       }
     }
     if (item.itemType === 'result') {
-      const run = this.runs.get(item.runId)
+      const run = this.index.getRunOrNull(item.runId)
       if (run && thread.latestRunStatus !== run.status) {
         next = { ...next, latestRunStatus: run.status }
       }
@@ -683,7 +535,7 @@ export class PostgresPlatformStore {
     if (next === thread) return
     next = { ...next, updatedAt: nowUtc() }
     await this.conversationStore.saveThread(next)
-    this.threads.set(next.id, next)
+    this.index.setThread(next)
   }
 
   async getThreadManifest(threadId: string): Promise<ThreadManifest> {
@@ -778,19 +630,14 @@ export class PostgresPlatformStore {
     const restored = await this.conversationStore.restoreThread(threadId)
     const nextThread = { ...restored.thread, status: 'active' as const, updatedAt: nowUtc() }
     await this.conversationStore.saveThread(nextThread, restored.manifest)
-    this.threads.set(threadId, nextThread)
-    this.addToIndex(this.threadIdsBySessionId, nextThread.sessionId, threadId)
-    for (const run of this.runs.values()) {
-      if (run.threadId === threadId) this.indexRun(run)
-    }
+    this.index.setThread(nextThread)
+    this.index.rebuildDerivedIndexes()
     this.threadUpdateBus.publish(threadId, { thread: structuredClone(nextThread), manifest: restored.manifest })
     return nextThread
   }
 
   async purgeThread(threadId: string): Promise<void> {
-    for (const [runId, run] of this.runs) {
-      if (run.threadId === threadId) this.runs.delete(runId)
-    }
+    this.index.deleteRunsForThread(threadId)
     await this.conversationStore.purgeThread(threadId)
     await this.conversationStore.garbageCollectObjects()
   }

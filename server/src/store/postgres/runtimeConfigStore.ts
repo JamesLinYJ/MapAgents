@@ -1,0 +1,48 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - 运行时配置存储
+//
+//   文件:       runtimeConfigStore.ts
+//
+//   日期:       2026年07月07日
+//   作者:       OpenAI Codex
+// --------------------------------------------------------------------------
+
+import { eq } from 'drizzle-orm'
+import type { Database } from '../../db/connection.js'
+import { platformRuntimeConfig } from '../../db/schema.js'
+import { isRecord } from '../platformStoreUtils.js'
+
+// 运行时配置是平台控制面资源。这里仅负责持久化，不决定权限；
+// 权限在 HTTP/WS 控制面通过 AuthorizationService 统一判断。
+export class RuntimeConfigStore {
+  constructor(private readonly db: Database) {}
+
+  async get(configKey: string): Promise<Record<string, unknown> | null> {
+    const rows = await this.db
+      .select({ payloadJson: platformRuntimeConfig.payloadJson })
+      .from(platformRuntimeConfig)
+      .where(eq(platformRuntimeConfig.configKey, configKey))
+      .limit(1)
+    const payload = rows[0]?.payloadJson
+    return isRecord(payload) ? payload : null
+  }
+
+  async upsert(configKey: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    await this.db
+      .insert(platformRuntimeConfig)
+      .values({
+        configKey,
+        updatedAt: new Date(),
+        payloadJson: payload,
+      })
+      .onConflictDoUpdate({
+        target: platformRuntimeConfig.configKey,
+        set: {
+          updatedAt: new Date(),
+          payloadJson: payload,
+        },
+      })
+    return payload
+  }
+}

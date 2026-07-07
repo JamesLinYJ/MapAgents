@@ -11,8 +11,10 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { drizzle } from 'drizzle-orm/node-postgres'
 import { describe, expect, it } from 'vitest'
 import type { Database } from '../db/connection.js'
+import * as schema from '../db/schema.js'
 import { PostgresPlatformStore } from '../store/platformStore.js'
 import { persistToolExecutionResult } from './resultPersistence.js'
 
@@ -133,5 +135,7 @@ function line() {
 }
 
 function noOpDb(): Database {
-  return { execute: async () => ({ rows: [] }) } as unknown as Database
+  const client = { query: async () => ({ rows: [] }) }
+  const db = drizzle(client as never, { schema }) as unknown as Database
+  return Object.assign(db, { pool: {}, close: async () => {} }) as Database
 }

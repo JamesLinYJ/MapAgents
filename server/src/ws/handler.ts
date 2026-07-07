@@ -17,11 +17,7 @@ import { RuntimeFileStore } from '../store/fileStore.js'
 import { PostgresPlatformStore, StoreNotFoundError } from '../store/platformStore.js'
 import { makeId } from '../utils/ids.js'
 import { failure, parseMessage, push, success, type ClientMsg } from './protocol.js'
-import { sendRunSnapshot, sendWs, snapshotRun, subscribeToRun, subscribeToThread } from './subscriptions.js'
-import { assembleThreadContext, compactThreadIfNeeded } from '../agent/contextManager.js'
-import { buildSystemPrompt } from '../agent/prompts.js'
-import { getEnv } from '../framework/env.js'
-import { AzureSpeechService } from '../speech/azureSpeechService.js'
+import { sendRunSnapshot, sendWs, subscribeToRun } from './subscriptions.js'
 import type { SecurityServices } from '../security/routes.js'
 import { WsMessageRateLimiter } from '../security/rateLimiter.js'
 import type { AuthContext } from '../security/types.js'
@@ -30,8 +26,14 @@ import { assertWsCsrf, authorizeWsMessage, requireWsAuth } from './security.js'
 import { executeTool } from './toolCommand.js'
 import { resolveRuntimeConfig } from './runtimeConfig.js'
 import { respondDecision } from './decisionCommand.js'
-import { handleMemoryCommand } from './memoryCommand.js'
-import { makeSummarizer } from './modelSelectors.js'
+import { registerMemoryCommands } from './memoryCommand.js'
+import { WsCommandRegistry, type WsCommandDefinition } from './commandRegistry.js'
+import { registerCoreCommands } from './coreCommands.js'
+import { registerThreadCommands } from './threadCommands.js'
+import { registerControlCommands } from './controlCommands.js'
+import { registerRunCommands } from './runCommands.js'
+import { registerWorkspaceCommands } from './workspaceCommands.js'
+import { registerThreadContextCommands } from './threadContextCommands.js'
 import {
   formatError,
   optionalPositiveInteger,
@@ -47,6 +49,14 @@ export function createWsHandler(server: Server, dependencies: WsDependencies) {
     createSandboxSession: dependencies.createSandboxSession,
   })
   const files = new RuntimeFileStore(dependencies.runtimeRoot)
+  const commandRegistry = new WsCommandRegistry()
+  registerCoreCommands(commandRegistry)
+  registerWorkspaceCommands(commandRegistry)
+  registerThreadCommands(commandRegistry)
+  registerThreadContextCommands(commandRegistry)
+  registerControlCommands(commandRegistry)
+  registerRunCommands(commandRegistry)
+  registerMemoryCommands(commandRegistry)
   const wss = new WebSocketServer({ noServer: true })
   const wsRateLimiter = new WsMessageRateLimiter()
 
@@ -76,9 +86,13 @@ export function createWsHandler(server: Server, dependencies: WsDependencies) {
           continue
         }
         try {
-          assertWsCsrf(msg, authContext)
+          const registeredCommand = commandRegistry.get(msg.type)
+          if (registeredCommand) assertRegisteredCommandCsrf(msg, authContext, registeredCommand)
+          else assertWsCsrf(msg, authContext)
           await authorizeWsMessage(msg, dependencies, authContext ?? null)
-          const result = await handleMessage(msg, dependencies, runtime, files, ws, subscriptions, authContext ?? null)
+          const result = registeredCommand
+            ? await commandRegistry.execute(msg, { dependencies, runtime, files, ws, subscriptions, auth: authContext ?? null })
+            : await handleMessage(msg, dependencies, runtime, files, ws, subscriptions, authContext ?? null)
           sendWs(ws, success(msg.id, result))
         } catch (error) {
           const code = error instanceof StoreNotFoundError ? 'not_found' : 'command_failed'
@@ -95,6 +109,15 @@ export function createWsHandler(server: Server, dependencies: WsDependencies) {
   })
 
   return wss
+}
+
+function assertRegisteredCommandCsrf(
+  msg: ClientMsg,
+  auth: AuthContext | undefined,
+  command: WsCommandDefinition,
+): void {
+  if (!command.csrf || !auth) return
+  if (msg.payload.csrfToken !== auth.csrfToken) throw new Error('CSRF 校验失败。')
 }
 
 function isWsPath(request: IncomingMessage): boolean {
@@ -183,43 +206,6 @@ async function handleMessage(
         auth: dependencies.security.auth.toAuthMe(currentAuth),
       }
     }
-    case 'session:get-default':
-      return store.getOrCreateUserDefaultSession({ workspaceId: currentAuth.defaultWorkspaceId, userId: currentAuth.userId })
-    case 'session:get':
-      return store.getSession(requiredString(payload, 'sessionId'))
-    case 'thread:list':
-      return store.listThreadsForSession(requiredString(payload, 'sessionId'))
-    case 'thread:get': {
-      const threadId = requiredString(payload, 'threadId')
-      const runs = store.listRunsForThread(threadId)
-      return {
-        thread: store.getThread(threadId),
-        manifest: await store.getThreadManifest(threadId),
-        runs,
-        latestRun: runs[0] ?? null,
-      }
-    }
-    case 'thread:create':
-      return store.createThread(requiredString(payload, 'sessionId'), optionalString(payload.title))
-    case 'thread:update':
-      return store.updateThread(requiredString(payload, 'threadId'), { title: requiredString(payload, 'title') })
-    case 'thread:delete': {
-      const threadId = requiredString(payload, 'threadId')
-      await store.deleteThread(threadId)
-      return { deleted: true, threadId }
-    }
-    case 'thread:history':
-      return store.listThreadHistory(
-        requiredString(payload, 'threadId'),
-        optionalString(payload.cursor),
-        optionalPositiveInteger(payload.limit, 'limit'),
-      )
-    case 'thread:fork':
-      return store.forkThread(
-        requiredString(payload, 'threadId'),
-        requiredString(payload, 'entryId'),
-        optionalString(payload.title),
-      )
     case 'thread:context': {
       const threadId = requiredString(payload, 'threadId')
       const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
@@ -253,34 +239,6 @@ async function handleMessage(
     case 'memory:session:rebuild':
     case 'memory:instructions:list':
       return handleMemoryCommand(msg.type, payload, dependencies)
-    case 'thread:trash:list':
-      return store.listTrash(requiredString(payload, 'sessionId'))
-    case 'thread:trash:restore':
-      return store.restoreThread(requiredString(payload, 'threadId'))
-    case 'thread:trash:purge': {
-      const threadId = requiredString(payload, 'threadId')
-      await store.purgeThread(threadId)
-      return { purged: true, threadId }
-    }
-    case 'thread:subscribe': {
-      const threadId = requiredString(payload, 'threadId')
-      subscribeToThread(ws, threadId, store, subscriptions)
-      return { thread: store.getThread(threadId), manifest: await store.getThreadManifest(threadId) }
-    }
-    case 'thread:unsubscribe': {
-      const threadId = requiredString(payload, 'threadId')
-      const key = `thread:${threadId}`
-      subscriptions.get(key)?.()
-      subscriptions.delete(key)
-      return { unsubscribed: true, threadId }
-    }
-    case 'run:list':
-      return store.listRunSummaries({
-        sessionId: requiredString(payload, 'sessionId'),
-        threadId: optionalString(payload.threadId),
-        cursor: optionalString(payload.cursor),
-        limit: optionalPositiveInteger(payload.limit, 'limit'),
-      })
     case 'run:start': {
       const query = requiredString(payload, 'query')
       let threadId = optionalString(payload.threadId)
@@ -313,10 +271,6 @@ async function handleMessage(
       }).then(() => void sendRunSnapshot(ws, run.id, store))
       return run
     }
-    case 'run:get':
-      return snapshotRun(requiredString(payload, 'runId'), store)
-    case 'run:cancel':
-      return runtime.cancel(requiredString(payload, 'runId'))
     case 'run:resume': {
       const runId = requiredString(payload, 'runId')
       const run = store.getRun(runId)
@@ -342,81 +296,8 @@ async function handleMessage(
     }
     case 'run:respond-decision':
       return respondDecision(payload, dependencies, runtime, ws, subscriptions, currentAuth)
-    case 'run:subscribe': {
-      const runId = requiredString(payload, 'runId')
-      subscribeToRun(ws, runId, store, subscriptions)
-      return snapshotRun(runId, store)
-    }
-    case 'run:unsubscribe': {
-      const runId = requiredString(payload, 'runId')
-      subscriptions.get(runId)?.()
-      subscriptions.delete(runId)
-      return { unsubscribed: true, runId }
-    }
-    case 'tool:list':
-      return toolRegistry.descriptors()
     case 'tool:run':
       return executeTool(payload, store, toolRegistry, modelRegistry, dependencies.defaultRuntimeConfig, dependencies.security, currentAuth)
-    case 'tool-catalog:list':
-      return store.listToolCatalogEntries()
-    case 'tool-catalog:upsert':
-      return store.upsertToolCatalogEntry({
-        toolKind: requiredString(payload, 'toolKind'),
-        toolName: requiredString(payload, 'toolName'),
-        payload: requiredRecord(payload, 'payload'),
-        sortOrder: typeof payload.sortOrder === 'number' ? payload.sortOrder : 0,
-      })
-    case 'tool-catalog:delete':
-      await store.deleteToolCatalogEntry(requiredString(payload, 'toolKind'), requiredString(payload, 'toolName'))
-      return { deleted: true }
-    case 'runtime-config:get':
-      return resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
-    case 'runtime-config:update': {
-      const config = requiredRecord(payload, 'config')
-      await store.upsertRuntimeConfig('agent-runtime', config)
-      return config
-    }
-    case 'provider:list':
-      return modelRegistry.descriptors()
-    case 'system:get': {
-      const postgisStatus = await postgis.status()
-      return {
-        catalogBackend: 'typescript',
-        postgisEnabled: postgisStatus.available,
-        postgisError: postgisStatus.error,
-        conversationStoreRoot: store.getConversationStoreRoot(),
-        providers: modelRegistry.descriptors(),
-        toolProviders: toolRegistry.providerStatuses(),
-      }
-    }
-    case 'speech:authorization':
-      return new AzureSpeechService(getEnv()).issueAuthorization()
-    case 'file:list': {
-      const entries = await files.list(optionalString(payload.threadId))
-      return { files: entries, total: entries.length }
-    }
-    case 'file:delete': {
-      const fileId = requiredString(payload, 'fileId')
-      const threadId = optionalString(payload.threadId)
-      const existing = (await files.list(threadId)).find(file => file.id === fileId)
-      const deleted = await files.delete(fileId, threadId)
-      if (!deleted) throw new StoreNotFoundError(`文件 '${fileId}' 不存在`)
-      if (threadId && existing) await store.recordAttachment(threadId, existing, 'deleted')
-      return { deleted: true, id: fileId }
-    }
-    case 'layer:list':
-      return postgis.listVisibleLayers(currentAuth.defaultWorkspaceId, optionalString(payload.sessionId), optionalString(payload.threadId))
-    case 'layer:update':
-      return postgis.updateLayerMetadata(
-        requiredString(payload, 'layerKey'),
-        requiredRecord(payload, 'update'),
-      )
-    case 'layer:delete': {
-      const layerKey = requiredString(payload, 'layerKey')
-      const deleted = await postgis.deleteLayer(layerKey)
-      if (!deleted) throw new StoreNotFoundError(`图层 '${layerKey}' 不存在`)
-      return { deleted: true, layerKey }
-    }
   }
 }
 

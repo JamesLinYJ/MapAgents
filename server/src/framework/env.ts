@@ -9,6 +9,7 @@
 // --------------------------------------------------------------------------
 
 import { z } from 'zod'
+import { errorLogPayload, logger } from '../observability/logger.js'
 
 const booleanEnvSchema = z.preprocess((value) => {
   if (typeof value !== 'string') return value
@@ -90,7 +91,7 @@ export function getEnv(): Env {
   try {
     _env = parseEnv(process.env)
   } catch (error) {
-    console.error('[env] 环境变量校验失败:', error instanceof Error ? error.message : String(error))
+    logger.fatal({ error: errorLogPayload(error) }, '环境变量校验失败——服务启动中止')
     process.exit(1)
   }
   return _env

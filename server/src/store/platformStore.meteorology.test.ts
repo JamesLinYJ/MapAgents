@@ -10,8 +10,10 @@
 
 import os from 'node:os'
 import path from 'node:path'
+import { drizzle } from 'drizzle-orm/node-postgres'
 import { describe, expect, it } from 'vitest'
 import type { Database } from '../db/connection.js'
+import * as schema from '../db/schema.js'
 import { PostgresPlatformStore } from './platformStore.js'
 
 describe('PostgresPlatformStore meteorological datasets', () => {
@@ -25,7 +27,7 @@ describe('PostgresPlatformStore meteorological datasets', () => {
     const rows = await store.listMeteorologicalDatasets({ threadId: 'thread-b' })
 
     expect(rows.map(row => row.datasetId)).toEqual(['dataset-b'])
-    expect(fixture.queries[0]?.text).toContain('WHERE thread_id =')
+    expect(fixture.queries[0]?.text).toContain('"thread_id" =')
   })
 
   it('applies filename filtering inside the thread scope without requiring sessionId', async () => {
@@ -39,8 +41,8 @@ describe('PostgresPlatformStore meteorological datasets', () => {
     const rows = await store.listMeteorologicalDatasets({ threadId: 'thread-b', filename: 'target.nc' })
 
     expect(rows.map(row => row.datasetId)).toEqual(['dataset-b'])
-    expect(fixture.queries[0]?.text).toContain('thread_id =')
-    expect(fixture.queries[0]?.text).toContain('lower(filename)')
+    expect(fixture.queries[0]?.text).toContain('"thread_id" =')
+    expect(fixture.queries[0]?.text).toContain('."filename") = lower')
   })
 
   it('pushes workspace scope into the dataset list SQL query', async () => {
@@ -57,9 +59,9 @@ describe('PostgresPlatformStore meteorological datasets', () => {
     })
 
     expect(rows.map(row => row.datasetId)).toEqual(['dataset-b'])
-    expect(fixture.queries[0]?.text).toContain('workspace_id =')
-    expect(fixture.queries[0]?.text).toContain('thread_id =')
-    expect(fixture.queries[0]?.text).toContain('lower(filename)')
+    expect(fixture.queries[0]?.text).toContain('"workspace_id" =')
+    expect(fixture.queries[0]?.text).toContain('"thread_id" =')
+    expect(fixture.queries[0]?.text).toContain('."filename") = lower')
   })
 })
 
@@ -69,27 +71,31 @@ interface CapturedQuery {
 }
 
 type DatasetRow = Record<string, unknown>
+interface PgQueryConfig {
+  text: string
+}
 
 function createMeteorologicalDb(rows: DatasetRow[]): { db: Database; queries: CapturedQuery[] } {
   const queries: CapturedQuery[] = []
-  const db = {
-    execute: async (query: unknown) => {
-      const captured = captureQuery(query)
+  const client = {
+    query: async (query: PgQueryConfig | string, values: unknown[] = []) => {
+      const captured = { text: typeof query === 'string' ? query : query.text, values }
       queries.push(captured)
-      return { rows: filterRows(rows, captured) }
+      return { rows: filterRows(rows, captured).map(datasetRowToArray) }
     },
-  } as unknown as Database
-  return { db, queries }
+  }
+  const db = drizzle(client as never, { schema }) as unknown as Database
+  return { db: Object.assign(db, { pool: {}, close: async () => {} }) as Database, queries }
 }
 
 // 这里不模拟数据库能力，只解释本模块生成的 SQL 参数顺序；
 // 测试目标是确认作用域谓词进入查询，而不是做端到端 SQL 引擎替身。
 function filterRows(rows: DatasetRow[], query: CapturedQuery): DatasetRow[] {
   let valueIndex = 0
-  const workspaceId = query.text.includes('workspace_id =') ? String(query.values[valueIndex++]) : null
-  const sessionId = query.text.includes('session_id =') ? String(query.values[valueIndex++]) : null
-  const threadId = query.text.includes('thread_id =') ? String(query.values[valueIndex++]) : null
-  const filename = query.text.includes('lower(filename)') ? String(query.values[valueIndex++]).toLowerCase() : null
+  const workspaceId = query.text.includes('"workspace_id" =') ? String(query.values[valueIndex++]) : null
+  const sessionId = query.text.includes('"session_id" =') ? String(query.values[valueIndex++]) : null
+  const threadId = query.text.includes('"thread_id" =') ? String(query.values[valueIndex++]) : null
+  const filename = query.text.includes('."filename") = lower') ? String(query.values[valueIndex++]).toLowerCase() : null
   const limit = Number(query.values.at(-1) ?? rows.length)
 
   return rows
@@ -101,37 +107,26 @@ function filterRows(rows: DatasetRow[], query: CapturedQuery): DatasetRow[] {
     .slice(0, Number.isFinite(limit) ? limit : rows.length)
 }
 
-function captureQuery(query: unknown): CapturedQuery {
-  const chunks = Array.isArray((query as { queryChunks?: unknown }).queryChunks)
-    ? (query as { queryChunks: unknown[] }).queryChunks
-    : []
-  const text: string[] = []
-  const values: unknown[] = []
-  for (const chunk of chunks) appendQueryChunk(chunk, text, values)
-  return { text: text.join(''), values }
-}
-
-function appendQueryChunk(chunk: unknown, text: string[], values: unknown[]): void {
-    if (isStringChunk(chunk)) {
-      text.push(chunk.value.join(''))
-    } else if (hasQueryChunks(chunk)) {
-      for (const nested of chunk.queryChunks) appendQueryChunk(nested, text, values)
-    } else {
-      text.push('?')
-      values.push(chunk)
-    }
-}
-
-function isStringChunk(value: unknown): value is { value: string[] } {
-  return typeof value === 'object'
-    && value !== null
-    && Array.isArray((value as { value?: unknown }).value)
-}
-
-function hasQueryChunks(value: unknown): value is { queryChunks: unknown[] } {
-  return typeof value === 'object'
-    && value !== null
-    && Array.isArray((value as { queryChunks?: unknown }).queryChunks)
+function datasetRowToArray(row: DatasetRow): unknown[] {
+  return [
+    row.dataset_id,
+    row.workspace_id,
+    row.created_by_user_id,
+    row.visibility,
+    row.session_id,
+    row.thread_id,
+    row.filename,
+    row.original_filename,
+    row.file_id,
+    row.file_relative_path,
+    row.size_bytes,
+    row.content_hash,
+    row.media_type,
+    row.status,
+    row.metadata_json,
+    row.created_at,
+    row.updated_at,
+  ]
 }
 
 function datasetRow(

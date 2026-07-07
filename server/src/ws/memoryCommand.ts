@@ -27,9 +27,83 @@ import {
 import { memoryScopeSchema, memoryTypeSchema } from '../memory/schemas.js'
 import type { ClientMsg } from './protocol.js'
 import type { WsDependencies } from './dependencies.js'
+import type { WsCommandRegistry } from './commandRegistry.js'
 import { optionalNonNegativeInteger, optionalString, requiredString } from './payload.js'
 import { resolveRuntimeConfig } from './runtimeConfig.js'
 import { makeOptionalStructuredSelector, makeStructuredSelector, makeSummarizer } from './modelSelectors.js'
+import { z } from 'zod'
+
+const threadMemoryGetSchema = z.object({ threadId: z.string().min(1) }).passthrough()
+const threadMemoryUpdateSchema = z.object({
+  threadId: z.string().min(1),
+  content: z.string(),
+  expectedVersion: z.number().int().nonnegative().nullable().optional(),
+}).passthrough()
+const threadMemoryRebuildSchema = z.object({
+  threadId: z.string().min(1),
+  provider: z.string().min(1).nullable().optional(),
+  modelName: z.string().min(1).nullable().optional(),
+}).passthrough()
+const memoryListSchema = z.object({ scope: z.string().min(1).nullable().optional() }).passthrough()
+const memoryReadDeleteSchema = z.object({
+  scope: z.string().min(1),
+  relativePath: z.string().min(1),
+}).passthrough()
+const memoryWriteSchema = z.object({
+  scope: z.string().min(1),
+  type: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string(),
+  content: z.string(),
+  relativePath: z.string().min(1).nullable().optional(),
+}).passthrough()
+const memorySearchSchema = z.object({
+  query: z.string().min(1),
+  provider: z.string().min(1).nullable().optional(),
+  modelName: z.string().min(1).nullable().optional(),
+}).passthrough()
+const memoryExtractSchema = z.object({
+  threadId: z.string().min(1),
+  runId: z.string().min(1).nullable().optional(),
+  provider: z.string().min(1).nullable().optional(),
+  modelName: z.string().min(1).nullable().optional(),
+}).passthrough()
+const memoryDreamSchema = z.object({
+  force: z.boolean().optional(),
+  provider: z.string().min(1).nullable().optional(),
+  modelName: z.string().min(1).nullable().optional(),
+}).passthrough()
+const emptyMemorySchema = z.object({}).passthrough()
+
+export function registerMemoryCommands(registry: WsCommandRegistry): void {
+  const register = <T extends z.ZodTypeAny>(
+    type: ClientMsg['type'],
+    payloadSchema: T,
+    csrf: boolean,
+  ) => {
+    registry.register({
+      type,
+      payloadSchema,
+      auth: 'required',
+      csrf,
+      handler: (payload, context) => handleMemoryCommand(type, payload, context.dependencies),
+    })
+  }
+
+  register('thread:memory:get', threadMemoryGetSchema, false)
+  register('thread:memory:update', threadMemoryUpdateSchema, true)
+  register('thread:memory:rebuild', threadMemoryRebuildSchema, true)
+  register('memory:list', memoryListSchema, false)
+  register('memory:read', memoryReadDeleteSchema, false)
+  register('memory:write', memoryWriteSchema, true)
+  register('memory:delete', memoryReadDeleteSchema, true)
+  register('memory:search', memorySearchSchema, false)
+  register('memory:extract', memoryExtractSchema, true)
+  register('memory:dream', memoryDreamSchema, true)
+  register('memory:session:get', threadMemoryGetSchema, false)
+  register('memory:session:rebuild', threadMemoryRebuildSchema, true)
+  register('memory:instructions:list', emptyMemorySchema, false)
+}
 
 export async function handleMemoryCommand(
   command: ClientMsg['type'],

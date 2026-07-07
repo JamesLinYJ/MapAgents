@@ -8,6 +8,8 @@
 //   作者:       JamesLinYJ
 // --------------------------------------------------------------------------
 
+import { errorLogPayload, logger } from '../observability/logger.js'
+
 type Listener<T> = (item: T) => void
 const DEFAULT_HISTORY_LIMIT = 500
 
@@ -36,7 +38,7 @@ export class InMemoryEventBus<T> {
       try {
         callback(item)
       } catch (error) {
-        console.error('[event-bus] subscriber failed:', error instanceof Error ? error.message : String(error))
+        logger.error({ error: errorLogPayload(error) }, 'event-bus subscriber failed')
       }
     })
   }

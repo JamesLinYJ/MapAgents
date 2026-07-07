@@ -12,6 +12,7 @@
 // 所有指标带 service=geoforge-api label，避免多服务指标冲突。
 
 import { collectDefaultMetrics, Counter, Gauge, Histogram, register } from 'prom-client'
+import type { Context, Next } from 'hono'
 
 collectDefaultMetrics({ prefix: 'geoforge_', labels: { service: 'geoforge-api' } })
 
@@ -101,4 +102,17 @@ export async function metricsResponse(): Promise<Response> {
   return new Response(await register.metrics(), {
     headers: { 'Content-Type': register.contentType },
   })
+}
+
+export async function observeHttpMetrics(c: Context, next: Next): Promise<void> {
+  const started = performance.now()
+  try {
+    await next()
+  } finally {
+    const pathname = new URL(c.req.url).pathname
+    const status = String(c.res.status || 200)
+    const method = c.req.method
+    httpRequestsTotal.inc({ method, path: pathname, status })
+    httpRequestDurationMs.observe({ method, path: pathname }, performance.now() - started)
+  }
 }

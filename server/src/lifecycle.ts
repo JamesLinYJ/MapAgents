@@ -12,6 +12,7 @@ import type { Server } from 'node:http'
 import type { WebSocketServer } from 'ws'
 import type { Database } from './db/connection.js'
 import type { PostgresPlatformStore } from './store/platformStore.js'
+import { errorLogPayload, logger } from './observability/logger.js'
 
 interface LifecycleOptions {
   server: Server
@@ -41,7 +42,7 @@ export function installLifecycleManager(options: LifecycleOptions): void {
       await Promise.race([drain(options), timeout])
       process.exit(0)
     } catch (error) {
-      console.error(`[lifecycle] ${signal} shutdown failed:`, error instanceof Error ? error.message : String(error))
+      logger.error({ error: errorLogPayload(error), signal }, 'shutdown failed')
       process.exit(1)
     }
   }
