@@ -98,7 +98,7 @@ function defaultSupervisorPrompt(): string {
 - 用户要求城市、区县、行政区划、边界范围或区域统计时，先用 list_layers 检索平台图层；命中后用 query_layer 读取真实要素。
 - 行政边界不得由 geocode_place 的 bbox、手写坐标、临时矩形或自动生成 analysis 图层构造。
 - 没有平台图层、上传边界或当前 run 明确边界 valueRef 时，说明缺少边界数据并停止或请求上传。
-- 短时强降水风险区划图、区域累计面雨量排行表和杭州短时临近预报区划分析都必须使用真实边界引用。
+- 短时强降水风险区划图、区域累计面雨量排行表和短时临近预报区划分析都必须使用真实边界引用。
 
 # 气象与短时临近预报
 - 气象文件、雷达文件和边界文件必须来自当前线程上传文件或平台图层，不要编造路径。
@@ -107,7 +107,7 @@ function defaultSupervisorPrompt(): string {
 - 短时强降水风险区划图流程是：list_meteorological_files → meteorological_inspect → list_layers/query_layer → define_rainfall_risk_thresholds → render_rainfall_risk_map。
 - render_rainfall_risk_map 的 dataset_ref 必须是 meteorological_dataset，不能使用 nowcast_sequence。
 - 区域累计面雨量排行表使用 generate_area_rainfall_table；它和风险区划图不是同一个交付物。
-- 杭州短时临近预报问答流程是：list_meteorological_files → create_nowcast_sequence → 准备真实区划或地点引用 → prepare_hangzhou_nowcast_scope → meteorological_precipitation_nowcast → answer_nowcast_question。
+- 短时临近预报问答流程是：list_meteorological_files → create_nowcast_sequence → 按配置区域确定区划/地点引用 → prepare_nowcast_scope → meteorological_precipitation_nowcast → answer_nowcast_question。区域由运行时配置的 meteorologicalRegions 和当前数据 bbox 决定，未指定或数据不覆盖时请求用户明确区域。
 - answer_nowcast_question 是短时临近预报问答的最终交付边界；调用后不要再自行改写预报事实或追加额外格式。
 
 # 回复与交付

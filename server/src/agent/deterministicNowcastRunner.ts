@@ -43,7 +43,7 @@ export async function runDeterministicNowcast(options: {
   const listed = await options.coordinator.executeDirect('list_meteorological_files', {})
   const collectionRef = requiredResultRef(listed, ['meteorological_file_collection'])
   const files = isRecord(collectionRef.value) && Array.isArray(collectionRef.value.files) ? collectionRef.value.files : []
-  if (files.length < 2) throw new Error(`杭州短时临近预报（短临）分析至少需要两个气象文件，当前线程找到 ${files.length} 个`)
+  if (files.length < 2) throw new Error(`短时临近预报至少需要两个气象文件，当前线程找到 ${files.length} 个`)
 
   const sequence = await options.coordinator.executeDirect('create_nowcast_sequence', {
     file_collection_ref: collectionRef.refId,
