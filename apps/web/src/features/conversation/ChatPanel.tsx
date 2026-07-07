@@ -18,7 +18,6 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent, t
 import { createPortal } from 'react-dom'
 import { AnimatePresence, LayoutGroup, m, useReducedMotion } from 'framer-motion'
 import { Maximize2, Minimize2, Pencil, RefreshCw, Trash2 } from 'lucide-react'
-import type { AgentThreadRecord } from '@geo-agent-platform/shared-types'
 import { SAMPLES } from '../../shared/constants'
 import { buildFadeMotion, buildFadeUpMotion, buildListItemVariants, buildListVariants, motionSpring } from '../../shared/motion'
 import { AppIcon } from '../../shared/components/AppIcon'
@@ -36,8 +35,6 @@ import { useSpeechRecognition } from './useSpeechRecognition'
 import { useDialogState } from './useDialogState'
 import { deriveThreadTitleFromText, formatThreadDisplayTitle } from './threadTitles'
 import { rectToMotion, surfaceStyleToMotion, usePanelExpansionMotion } from '../../shared/usePanelExpansionMotion'
-
-type TaskDialog = { mode: 'rename' | 'delete'; task: AgentThreadRecord } | null
 
 const ConversationTimeline = lazy(() => import('./ConversationTimeline').then(module => ({
   default: module.ConversationTimeline,
