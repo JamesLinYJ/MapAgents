@@ -723,7 +723,6 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       expect(calls).toEqual([
         'list_meteorological_files',
         'create_nowcast_sequence',
-        'prepare_hangzhou_nowcast_scope',
         'meteorological_precipitation_nowcast',
         'answer_nowcast_question',
       ])
@@ -904,8 +903,7 @@ function deterministicNowcastProvider(calls: string[]): ToolProvider {
       ref('ref_collection', 'meteorological_file_collection', { files: [{ name: 'a.nc' }, { name: 'b.nc' }] }),
     ])),
     tool('create_nowcast_sequence', ['file_collection_ref'], async () => result('sequence', [ref('ref_sequence', 'nowcast_sequence', {})])),
-    tool('prepare_hangzhou_nowcast_scope', ['question'], async () => result('scope', [ref('ref_scope', 'nowcast_area', {})])),
-    tool('meteorological_precipitation_nowcast', ['sequence_ref', 'scope_ref'], async () => result('analysis', [ref('ref_analysis', 'nowcast_analysis', {})])),
+    tool('meteorological_precipitation_nowcast', ['sequence_ref'], async () => result('analysis', [ref('ref_analysis', 'nowcast_analysis', {})])),
     tool('answer_nowcast_question', ['nowcast_analysis_ref', 'question'], async () => result('answer', [
       ref('ref_answer', 'nowcast_answer', { answer: '未来三小时不会下雨。' }),
     ], { answer: '未来三小时不会下雨。' })),

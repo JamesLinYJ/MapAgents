@@ -147,9 +147,10 @@ function buildToolEntry(
   const args = safeJsonParse(call?.arguments ?? '')
   const outputText = output?.output ?? output?.body ?? ''
   const status = output ? itemStatus(output) : itemStatus(call)
-  const parsedOutput = safeJsonParse(outputText)
+  const outputParse = parseJsonOutput(outputText)
+  const parsedOutput = outputParse.ok ? outputParse.value : {}
   const body = output
-    ? nowcastAnswerText(toolName, parsedOutput) || outputText || (output.isError ? '工具执行失败。' : '工具执行完成。')
+    ? readableToolOutput(toolName, outputParse, outputText, Boolean(output.isError))
     : '执行中，等待工具返回...'
   const metadata = output?.metadata ?? call?.metadata ?? {}
   const artifacts = Array.isArray(metadata.artifacts) ? metadata.artifacts.filter(isRecord) : []
@@ -232,7 +233,62 @@ function buildApprovalEntry(item: ConversationItem): ConversationEntry {
 
 function nowcastAnswerText(toolName: string, output: unknown): string {
   if (toolName !== 'answer_nowcast_question' || !isRecord(output)) return ''
-  return typeof output.answer === 'string' ? output.answer.trim() : ''
+  const directAnswer = firstString(output.answer)
+  if (directAnswer) return directAnswer
+  const payload = isRecord(output.payload) ? output.payload : null
+  return payload ? firstString(payload.answer) : ''
+}
+
+interface JsonParseResult {
+  ok: boolean
+  value: unknown
+}
+
+function readableToolOutput(toolName: string, outputParse: JsonParseResult, rawOutput: string, isError: boolean): string {
+  const textOutput = rawOutput.trim()
+  if (!outputParse.ok) {
+    return textOutput || (isError ? '工具执行失败。' : '工具执行完成。')
+  }
+
+  const parsedOutput = outputParse.value
+  const nowcastAnswer = nowcastAnswerText(toolName, parsedOutput)
+  if (nowcastAnswer) return nowcastAnswer
+  if (typeof parsedOutput === 'string' && parsedOutput.trim()) {
+    return parsedOutput.trim()
+  }
+  if (!isRecord(parsedOutput)) {
+    return isError ? '工具执行失败。' : '工具执行完成。'
+  }
+
+  const payload = isRecord(parsedOutput.payload) ? parsedOutput.payload : null
+  const payloadText = payload
+    ? firstString(payload.answer, payload.summary, payload.text, payload.forecastText)
+    : ''
+  if (payloadText) return payloadText
+
+  const directText = firstString(
+    parsedOutput.answer,
+    parsedOutput.summary,
+    parsedOutput.text,
+  )
+  if (directText) return directText
+
+  if (isError) {
+    return firstString(parsedOutput.error, parsedOutput.detail) || '工具执行失败。'
+  }
+
+  const artifacts = Array.isArray(parsedOutput.artifacts) ? parsedOutput.artifacts : []
+  if (artifacts.length > 0) {
+    return `工具执行完成，生成了 ${artifacts.length} 个结果。`
+  }
+  return isError ? '工具执行失败。' : '工具执行完成。'
+}
+
+function firstString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
 }
 
 function terminalFailureMessage(metadata: Record<string, unknown> | null | undefined): string {
@@ -283,6 +339,15 @@ function safeJsonParse(s: string): unknown {
     return JSON.parse(s)
   } catch {
     return {}
+  }
+}
+
+function parseJsonOutput(s: string): JsonParseResult {
+  if (!s.trim()) return { ok: false, value: {} }
+  try {
+    return { ok: true, value: JSON.parse(s) }
+  } catch {
+    return { ok: false, value: {} }
   }
 }
 

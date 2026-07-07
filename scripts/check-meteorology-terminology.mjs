@@ -50,6 +50,10 @@ const ignoredExtensions = new Set([
   '.nc',
   '.nc4',
 ])
+const ignoredFilePatterns = [
+  /^code_review_report(?:_\d{4}-\d{2}-\d{2})?\.md$/,
+  /^comprehensive_review_report\.md$/,
+]
 const allowedSnapshot = [
   'packages',
   'gis-meteorology',
@@ -100,6 +104,7 @@ async function walk(directory) {
 function shouldIgnore(relativePath, name) {
   const parts = relativePath.split(path.sep)
   if (parts.some(part => ignoredPathParts.has(part))) return true
+  if (ignoredFilePatterns.some(pattern => pattern.test(name))) return true
   if (parts.some(part => part.endsWith('.egg-info'))) return true
   if (isAllowedOriginalSnapshot(parts)) return true
   return name === ''

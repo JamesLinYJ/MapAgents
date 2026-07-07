@@ -1181,15 +1181,15 @@
   }
 
   .cc-tool-stack {
-    @apply flex max-w-none flex-col gap-4;
+    @apply flex min-w-0 max-w-full flex-col gap-4;
   }
 
   .cc-tool-row {
-    @apply max-w-none rounded-[7px] transition-colors duration-150;
+    @apply min-w-0 max-w-full rounded-[7px] transition-colors duration-150;
   }
 
   .cc-tool-row-head {
-    @apply inline-flex w-full cursor-pointer items-center gap-2 rounded-[7px] border-0 bg-transparent px-1.5 py-1 text-left text-[15px] leading-6 transition-colors hover:bg-black/[0.035];
+    @apply inline-flex min-w-0 w-full cursor-pointer items-center gap-2 rounded-[7px] border-0 bg-transparent px-1.5 py-1 text-left text-[15px] leading-6 transition-colors hover:bg-black/[0.035];
   }
 
   .cc-tool-row-head:disabled {
@@ -1217,7 +1217,7 @@
   }
 
   .cc-tool-row-title {
-    @apply shrink-0 text-[15px] font-semibold leading-6 text-[#24292f];
+    @apply min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[15px] font-semibold leading-6 text-[#24292f];
   }
 
   .cc-tool-row-subtitle {
@@ -1241,11 +1241,11 @@
   }
 
   .cc-tool-io-card {
-    @apply max-w-none overflow-hidden rounded-[7px] border border-white/46 bg-white/54 text-[13px] shadow-[0_1px_2px_rgb(27_31_36/0.03)];
+    @apply min-w-0 max-w-full overflow-hidden rounded-[7px] border border-white/46 bg-white/54 text-[13px] shadow-[0_1px_2px_rgb(27_31_36/0.03)];
   }
 
   .cc-tool-io-section {
-    @apply grid grid-cols-[38px_minmax(0,1fr)] gap-2 px-3 py-2.5;
+    @apply grid min-w-0 grid-cols-[38px_minmax(0,1fr)] gap-2 px-3 py-2.5;
   }
 
   .cc-tool-io-section + .cc-tool-io-section {
@@ -1257,7 +1257,9 @@
   }
 
   .cc-tool-io-card pre {
-    @apply m-0 max-h-[168px] overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-[#3f3f46];
+    @apply m-0 min-w-0 max-w-full max-h-[168px] overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-[#3f3f46];
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .cc-tool-io-section--output pre {

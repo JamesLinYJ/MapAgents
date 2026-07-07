@@ -684,6 +684,7 @@ button.workbench-chrome__icon:hover,
   width: 100%;
   padding: 12px 0 18px;
   --cc-rail-col: 18px;
+  --cc-user-prompt-max: min(calc(100% - var(--cc-rail-col) - 44px), 30rem);
 }
 
 .workbench-side-swap--chat .cc-timeline-body {

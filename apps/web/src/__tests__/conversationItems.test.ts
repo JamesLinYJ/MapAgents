@@ -90,6 +90,24 @@ describe('deriveEntriesFromItems', () => {
     expect(entries[0].commands?.[0].body).toBe('未来3小时不会下雨，您可以放心出门。')
   })
 
+  it('不会把工具 envelope 的执行消息当成短临回答正文', () => {
+    const entries = deriveEntriesFromItems([
+      item({ itemId: 'call', itemType: 'function_call', callId: 'call1', name: 'answer_nowcast_question', arguments: '{}' }),
+      item({
+        itemId: 'output',
+        itemType: 'function_call_output',
+        callId: 'call1',
+        name: 'answer_nowcast_question',
+        output: '{"message":"answer_nowcast_question 执行完成","payload":{"answer":"5分钟后将下中雨，未来3小时持续下雨。"}}',
+      }),
+    ])
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0].body).toBe('5分钟后将下中雨，未来3小时持续下雨。')
+    expect(entries[0].body).not.toContain('answer_nowcast_question')
+    expect(entries[0].commands?.[0].body).toBe('5分钟后将下中雨，未来3小时持续下雨。')
+  })
+
   it('把工具调用前的普通 assistant 文本显示为过程说明而不是思考过程', () => {
     const entries = deriveEntriesFromItems([
       item({

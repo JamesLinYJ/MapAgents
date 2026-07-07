@@ -157,6 +157,7 @@
   --cc-timeline-gap: 22px;
   --cc-rail-col: 28px;
   --cc-rail-center: calc(var(--cc-rail-col) / 2);
+  --cc-user-prompt-max: min(calc(100% - var(--cc-rail-col) - 64px), 32rem);
   --cc-dot-size: 10px;
   --cc-dot-y: 0.9em;
   scroll-padding-bottom: 190px;
@@ -165,6 +166,7 @@
 .cc-timeline-item {
   position: relative;
   display: grid;
+  flex: 0 0 auto;
   grid-template-columns: var(--cc-rail-col) minmax(0, 1fr);
   column-gap: 12px;
   align-items: start;
@@ -229,26 +231,36 @@
 }
 
 .cc-timeline-body {
+  min-width: 0;
   max-width: min(100%, 980px);
+  overflow-wrap: anywhere;
+}
+
+.cc-timeline-body > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .cc-user-prompt {
   position: relative;
+  flex: 0 0 auto;
   align-self: flex-end;
   box-sizing: border-box;
   width: fit-content;
-  max-width: min(92%, 42rem);
+  max-width: var(--cc-user-prompt-max);
   height: auto;
   min-height: 0;
   overflow: visible;
-  margin: 0 0 8px auto;
+  margin: 0 10px 10px auto;
   border: 1px solid rgb(15 23 42 / 0.10);
   border-radius: 12px 12px 4px 12px;
-  padding: 10px 14px;
+  padding: 8px 12px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
   color: #1f2937;
+  font-size: 15px;
+  line-height: 1.55;
   background:
     linear-gradient(145deg, rgb(255 255 255 / 0.88), rgb(221 244 255 / 0.76)),
     rgb(255 255 255 / 0.80);
@@ -263,6 +275,8 @@
   display: block;
   min-width: 0;
   max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .cc-user-prompt > .cc-message-branch {
@@ -280,6 +294,7 @@
 
 .cc-timeline-item--answer .cc-assistant-copy:not(.cc-assistant-copy--thought) {
   display: block;
+  min-width: 0;
   max-width: min(100%, 760px);
   border: 0;
   border-radius: 0;
@@ -291,6 +306,8 @@
   color: #24292f;
   font-size: 17px;
   line-height: 1.78;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .cc-empty--chat {
@@ -376,10 +393,14 @@
 }
 
 .cc-tool-row {
+  min-width: 0;
+  max-width: 100%;
   border-radius: 8px;
 }
 
 .cc-tool-row-head {
+  min-width: 0;
+  max-width: 100%;
   min-height: 32px;
   border-radius: 8px;
   padding: 2px 0;
@@ -391,12 +412,20 @@
 }
 
 .cc-tool-row-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: #24292f;
   font-size: 15px;
   font-weight: 760;
 }
 
 .cc-tool-row-subtitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: #57606a;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
@@ -1434,11 +1463,12 @@
   }
 
   .cc-user-prompt {
-    max-width: calc(100% - 24px);
-    margin-right: 0;
-    padding: 10px 13px;
+    --cc-user-prompt-max: calc(100% - var(--cc-rail-col) - 42px);
+    max-width: var(--cc-user-prompt-max);
+    margin-right: 6px;
+    padding: 7px 11px;
     font-size: 14px;
-    line-height: 1.6;
+    line-height: 1.55;
   }
 
   .cc-timeline-item--answer .cc-assistant-copy:not(.cc-assistant-copy--thought) {

@@ -49,11 +49,8 @@ export async function runDeterministicNowcast(options: {
     file_collection_ref: collectionRef.refId,
   })
   const sequenceRef = requiredResultRef(sequence, ['nowcast_sequence'])
-  const prepared = await options.coordinator.executeDirect('prepare_hangzhou_nowcast_scope', { question: options.query })
-  const scopeRef = requiredResultRef(prepared, ['nowcast_area', 'nowcast_coordinate', 'bbox'])
   const analyzed = await options.coordinator.executeDirect('meteorological_precipitation_nowcast', {
     sequence_ref: sequenceRef.refId,
-    scope_ref: scopeRef.refId,
   })
   const analysisRef = requiredResultRef(analyzed, ['nowcast_analysis'])
   const answered = await options.coordinator.executeDirect('answer_nowcast_question', {

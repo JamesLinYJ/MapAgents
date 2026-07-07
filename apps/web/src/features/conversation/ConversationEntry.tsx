@@ -506,6 +506,9 @@ function extractNowcastAnswer(command: ConversationCommand) {
   if (isRecord(result)) {
     const answer = stringOrNull(result.answer)
     if (answer) return answer
+    const payload = isRecord(result.payload) ? result.payload : null
+    const payloadAnswer = payload ? stringOrNull(payload.answer) : null
+    if (payloadAnswer) return payloadAnswer
   }
   return command.body.trim()
 }
