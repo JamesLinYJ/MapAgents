@@ -63,7 +63,7 @@ import {
   stringField,
 } from './fileConversationIo.js'
 
-const STORE_SCHEMA_VERSION = 2
+const STORE_SCHEMA_VERSION = 3
 const DEFAULT_TRASH_RETENTION_DAYS = 30
 
 interface ThreadFile {
