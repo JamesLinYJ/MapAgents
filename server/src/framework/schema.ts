@@ -34,16 +34,38 @@ export function ensureToolSchemas(tool: {
   return { parameters: tool.parameters, jsonSchema: tool.jsonSchema }
 }
 
+// Zod v4 内置 JSON Schema → Zod 转换。
+// runtime 模式下 optional 字段仅允许省略；agents 模式下额外接受 null。
+// JSON Schema 规范：未设置 additionalProperties 时默认允许额外字段。
+// GeoForge 约定相反：未设置时默认拒绝未识别参数。
 export function parametersFromJsonSchema(schema: Record<string, unknown>): ToolParameterSchema {
-  return jsonSchemaToZod(schema, 'runtime').strict()
+  const result = z.fromJSONSchema(schema)
+  if (!(result instanceof z.ZodObject)) throw new Error('工具 parameters 顶层必须是 object')
+  return schema.additionalProperties === true ? result.passthrough() : result.strict()
 }
 
-// OpenAI strict tool schemas require every object property to be present.
-// GeoForge keeps canonical runtime schemas optional where the handler contract allows omission;
-// this adapter marks optional fields nullable for strict schema generation while still accepting
-// omitted fields from compatible providers, then the bridge removes nulls before registry execution.
 export function parametersForAgentsSdk(schema: Record<string, unknown>): ToolParameterSchema {
-  return jsonSchemaToZod(schema, 'agents').strict()
+  return parametersFromJsonSchema(addNullableToOptional(schema))
+}
+
+// 深度遍历 JSON Schema，为不在 required 中的字段添加 null 类型。
+// 在 JSON Schema 层面做变换，避免直接操作 Zod v4 内部结构。
+function addNullableToOptional(schema: Record<string, unknown>): Record<string, unknown> {
+  const cloned = structuredClone(schema)
+  const properties = cloned.properties as Record<string, unknown> | undefined
+  if (!properties) return cloned
+  const required = new Set(Array.isArray(cloned.required) ? cloned.required.map(String) : [])
+  for (const [key, prop] of Object.entries(properties)) {
+    if (!isRecord(prop)) continue
+    if (!required.has(key)) {
+      ;(prop as Record<string, unknown>).type = ['null', (prop as Record<string, unknown>).type ?? 'string']
+    }
+    // 递归处理嵌套 object
+    if ((prop as Record<string, unknown>).properties) {
+      ;(properties as Record<string, unknown>)[key] = addNullableToOptional(prop as Record<string, unknown>)
+    }
+  }
+  return cloned
 }
 
 export function stripNullObjectValues<T>(value: T): T {
@@ -106,77 +128,6 @@ export function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
   if (!isRecord(value)) return JSON.stringify(value)
   return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`
-}
-
-function jsonSchemaToZod(schema: Record<string, unknown>, mode: 'runtime' | 'agents'): ToolParameterSchema {
-  if (schema.type !== 'object') throw new Error('工具 parameters 顶层必须是 object')
-  return objectSchemaToZod(schema, mode)
-}
-
-function schemaToZod(schema: Record<string, unknown>, mode: 'runtime' | 'agents'): z.ZodType {
-  if (Array.isArray(schema.enum) && schema.enum.length > 0) {
-    const values = schema.enum.map(value => String(value))
-    const first = values[0]
-    if (!first) throw new Error('enum 至少需要一个值')
-    const rest = values.slice(1)
-    return describeZod(z.enum([first, ...rest]), schema)
-  }
-  switch (schema.type) {
-    case 'object':
-      return objectSchemaToZod(schema, mode)
-    case 'array': {
-      const itemSchema = isRecord(schema.items) ? schemaToZod(schema.items, mode) : z.unknown()
-      let arraySchema = z.array(itemSchema)
-      if (typeof schema.minItems === 'number') arraySchema = arraySchema.min(schema.minItems)
-      if (typeof schema.maxItems === 'number') arraySchema = arraySchema.max(schema.maxItems)
-      return describeZod(arraySchema, schema)
-    }
-    case 'string': {
-      let stringSchema = z.string()
-      if (typeof schema.minLength === 'number') stringSchema = stringSchema.min(schema.minLength)
-      return describeZod(stringSchema, schema)
-    }
-    case 'number': {
-      let numberSchema = z.number()
-      if (typeof schema.minimum === 'number') numberSchema = numberSchema.min(schema.minimum)
-      if (typeof schema.maximum === 'number') numberSchema = numberSchema.max(schema.maximum)
-      return describeZod(numberSchema, schema)
-    }
-    case 'integer': {
-      let integerSchema = z.number().int()
-      if (typeof schema.minimum === 'number') integerSchema = integerSchema.min(schema.minimum)
-      if (typeof schema.maximum === 'number') integerSchema = integerSchema.max(schema.maximum)
-      return describeZod(integerSchema, schema)
-    }
-    case 'boolean':
-      return describeZod(z.boolean(), schema)
-    default:
-      throw new Error(`不支持的 JSON Schema type: ${String(schema.type)}`)
-  }
-}
-
-function objectSchemaToZod(schema: Record<string, unknown>, mode: 'runtime' | 'agents'): ToolParameterSchema {
-  const properties = isRecord(schema.properties) ? schema.properties : {}
-  const required = new Set(Array.isArray(schema.required) ? schema.required.map(String) : [])
-  const shape: Record<string, z.ZodType> = {}
-  for (const [key, raw] of Object.entries(properties)) {
-    if (!isRecord(raw)) throw new Error(`参数 "${key}" schema 必须是对象`)
-    const valueSchema = schemaToZod(raw, mode)
-    shape[key] = required.has(key)
-      ? valueSchema
-      : mode === 'agents' ? valueSchema.nullable().optional() : valueSchema.optional()
-  }
-  const objectSchema = z.object(shape)
-  return schema.additionalProperties === true ? objectSchema.passthrough() : objectSchema.strict()
-}
-
-function description(schema: Record<string, unknown>): string | undefined {
-  return typeof schema.description === 'string' && schema.description.trim() ? schema.description.trim() : undefined
-}
-
-function describeZod<T extends z.ZodType>(zodSchema: T, schema: Record<string, unknown>): T {
-  const text = description(schema)
-  return text ? zodSchema.describe(text) as T : zodSchema
 }
 
 function enrichSchema(value: unknown): unknown {
