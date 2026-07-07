@@ -50,7 +50,7 @@ describe('detail summary model', () => {
 
   it('formats run status in Chinese', () => {
     expect(formatCurrentRunStatus()).toBe('等待输入')
-    expect(formatCurrentRunStatus('running')).toBe('执行中')
+    expect(formatCurrentRunStatus('running')).toBe('运行中')
     expect(formatCurrentRunStatus('waiting_approval')).toBe('待审批')
     expect(formatCurrentRunStatus('clarification_needed')).toBe('待澄清')
     expect(formatCurrentRunStatus('failed')).toBe('失败')
