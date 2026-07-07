@@ -23,6 +23,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { sql } from 'drizzle-orm'
 import { createDb } from './db/connection.js'
+import { metricsResponse } from './observability/metrics.js'
 import { defaultRuntimeConfig } from './agent/defaultRuntimeConfig.js'
 import { getEnv } from './framework/env.js'
 import { discoverAndLoad } from './framework/loader.js'
@@ -96,12 +97,15 @@ app.use('*', cors({
   allowMethods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
 }))
 app.use('*', async (c, next) => {
-  if (isShuttingDown && c.req.path !== '/health') return c.json({ detail: '服务正在关闭，请稍后重试。' }, 503)
+  if (isShuttingDown && c.req.path !== '/health' && c.req.path !== '/metrics') return c.json({ detail: '服务正在关闭，请稍后重试。' }, 503)
   await next()
 })
 app.get('/health', async c => {
   const health = await checkReadiness()
   return c.json(health, health.status === 'ok' ? 200 : 503)
+})
+app.get('/metrics', async c => {
+  return metricsResponse()
 })
 app.on(['GET', 'POST'], '/api/auth/*', authRateLimitMiddleware, c => security.auth.handler(c.req.raw))
 app.use('/api/v1/*', apiRateLimitMiddleware(security), (c, next) => requireHttpAuth(security, c, next))
