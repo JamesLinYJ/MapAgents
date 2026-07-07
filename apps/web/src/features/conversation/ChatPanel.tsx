@@ -34,6 +34,7 @@ import {
 import { useSpeechRecognition } from './useSpeechRecognition'
 import { useDialogState } from './useDialogState'
 import { deriveThreadTitleFromText, formatThreadDisplayTitle } from './threadTitles'
+import { HistoryPanel } from './HistoryPanel'
 import { rectToMotion, surfaceStyleToMotion, usePanelExpansionMotion } from '../../shared/usePanelExpansionMotion'
 
 const ConversationTimeline = lazy(() => import('./ConversationTimeline').then(module => ({
@@ -280,74 +281,25 @@ export function ChatPanel(props: ChatPanelProps) {
               再挂载下一视图，避免历史列表和当前对话在同一时间线里重叠。 */}
           <AnimatePresence mode="wait" initial={false}>
             {isTaskMode ? (
-              <m.section key="history" className="cc-task-view" aria-label="历史对话" layout {...viewMotion}>
-                <div className="cc-task-top">
-                  <button className="cc-back-button" onClick={() => setTaskView('chat')}>
-                    <AppIcon name="arrow_back" size={15} />
-                    返回
-                  </button>
-                  <strong>历史对话</strong>
-                  <button
-                    className="cc-trash-toggle"
-                    type="button"
-                    onClick={() => {
-                      const next = !showTrash
-                      setShowTrash(next)
-                      if (next) onLoadTrash?.()
-                    }}
-                  >
-                    {showTrash ? '返回会话' : `回收站 ${trashedThreads.length || ''}`}
-                  </button>
-                </div>
-                {!showTrash && <input className="cc-task-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索会话..." />}
-                <m.div className="cc-task-list" variants={feedVariants} initial="hidden" animate="visible" layout>
-                  {showTrash ? (
-                    trashedThreads.length ? trashedThreads.map(({ thread, deletedAt, purgeAfter }) => (
-                      <div key={thread.id} className="cc-task-row-wrap cc-task-row-wrap--trash">
-                        <div className="cc-task-row cc-task-row--trash">
-                          <span className="cc-task-row__main"><strong>{formatThreadDisplayTitle(thread)}</strong><small>删除于 {formatSessionDate(deletedAt)} · 保留至 {formatSessionDate(purgeAfter)}</small></span>
-                        </div>
-                        <div className="cc-task-actions">
-                          <button aria-label="恢复" onClick={() => onRestoreThread?.(thread.id)}><RefreshCw size={13} /></button>
-                          <button aria-label="永久删除" onClick={() => onPurgeThread?.(thread.id)}><Trash2 size={13} /></button>
-                        </div>
-                      </div>
-                    )) : <div className="cc-empty">回收站为空</div>
-                  ) : filteredTasks.length ? (
-                    filteredTasks.map((task) => (
-                      <div key={task.id} className="cc-task-row-wrap">
-                        <button
-                          className={`cc-task-row ${task.id === currentThreadId ? 'cc-task-row--active' : ''}`}
-                          onClick={() => {
-                            onSelectTask(task.id)
-                            setTaskView('chat')
-                            setSearch('')
-                          }}
-                        >
-                          <span className="cc-task-row__main">
-                            <strong>{formatThreadDisplayTitle(task)}</strong>
-                            <small>{task.historyPreview || task.latestUserQuery || '暂无摘要'}</small>
-                          </span>
-                          <span className="cc-task-row__meta">
-                            {formatSessionDate(task.updatedAt)}
-                            <small>{task.runCount} 次运行</small>
-                          </span>
-                        </button>
-                        <div className="cc-task-actions">
-                          <button aria-label="重命名" onClick={() => openRename(task)}>
-                            <Pencil size={13} />
-                          </button>
-                          <button aria-label="删除" onClick={() => openDelete(task)}>
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="cc-empty">没有匹配的会话</div>
-                  )}
-                </m.div>
-              </m.section>
+              <HistoryPanel
+                filteredTasks={filteredTasks}
+                currentThreadId={currentThreadId}
+                trashedThreads={trashedThreads}
+                search={search}
+                showTrash={showTrash}
+                viewMotion={viewMotion}
+                feedVariants={feedVariants}
+                onBack={() => setTaskView('chat')}
+                onSelectTask={(id) => { onSelectTask(id); setTaskView('chat'); setSearch('') }}
+                onRename={openRename}
+                onDelete={openDelete}
+                onRestore={(id) => onRestoreThread?.(id)}
+                onPurge={(id) => onPurgeThread?.(id)}
+                onSearchChange={setSearch}
+                onToggleTrash={(next) => { setShowTrash(next); if (next) onLoadTrash?.() }}
+                onLoadTrash={onLoadTrash}
+                formatDate={formatSessionDate}
+              />
             ) : (
               <m.div key="chat" className="cc-chat-view" layout {...viewMotion}>
                 <Suspense fallback={<div className="cc-feed cc-feed--loading" aria-hidden="true" />}>
