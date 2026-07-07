@@ -41,24 +41,9 @@ export function buildDetailSummaryFacts({
   ]
 }
 
-export function formatCurrentRunStatus(status?: string) {
-  if (!status) {
-    return '等待输入'
-  }
-  if (status === 'completed') {
-    return '已完成'
-  }
-  if (status === 'waiting_approval') {
-    return '待审批'
-  }
-  if (status === 'failed') {
-    return '失败'
-  }
-  if (status === 'clarification_needed') {
-    return '待澄清'
-  }
-  if (status === 'running') {
-    return '执行中'
-  }
-  return '排队中'
+import { formatRunStatus } from '../../shared/utils/statusLabels'
+
+export function formatCurrentRunStatus(status?: string): string {
+  if (!status) return '等待输入'
+  return formatRunStatus(status)
 }

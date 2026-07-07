@@ -34,18 +34,7 @@ export function compactPath(path?: string | null) {
   return parts.length <= 3 ? normalized : `.../${parts.slice(-3).join('/')}`
 }
 
-export function formatRunStatus(status?: string) {
-  if (status === 'queued') return '排队中'
-  if (status === 'running') return '运行中'
-  if (status === 'waiting_approval') return '待审批'
-  if (status === 'clarification_needed') return '待澄清'
-  if (status === 'requires_action') return '需处理'
-  if (status === 'completed') return '已完成'
-  if (status === 'failed') return '失败'
-  if (status === 'cancelled') return '已取消'
-  if (status === 'interrupted') return '已中断'
-  return '准备就绪'
-}
+export { formatRunStatus } from '../../shared/utils/statusLabels'
 
 export function deriveTone(status?: string): ExecutionTone {
   if (status === 'completed') return 'success'

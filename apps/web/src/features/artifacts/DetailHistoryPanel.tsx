@@ -169,24 +169,7 @@ function formatEventTime(timestamp: string) {
   return format(parsed, 'M月d日 HH:mm', { locale: zhCN })
 }
 
-function formatRunStatus(status: string) {
-  if (status === 'completed') {
-    return '已完成'
-  }
-  if (status === 'waiting_approval') {
-    return '待审批'
-  }
-  if (status === 'failed') {
-    return '失败'
-  }
-  if (status === 'clarification_needed') {
-    return '待澄清'
-  }
-  if (status === 'running') {
-    return '执行中'
-  }
-  return '排队中'
-}
+import { formatRunStatus } from '../../shared/utils/statusLabels'
 
 function formatRunMeta(run: RunSummary) {
   const parsed = new Date(run.updatedAt)

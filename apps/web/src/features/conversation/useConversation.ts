@@ -76,13 +76,4 @@ export function formatSessionDate(value?: string | null) {
   return format(date, 'yyyy-MM-dd')
 }
 
-function formatRunStatus(status?: string) {
-  if (status === 'running' || status === 'queued') return '运行中'
-  if (status === 'waiting_approval') return '待审批'
-  if (status === 'clarification_needed') return '待澄清'
-  if (status === 'completed') return '已完成'
-  if (status === 'failed') return '失败'
-  if (status === 'cancelled') return '已取消'
-  if (status === 'requires_action') return '待处理'
-  return '就绪'
-}
+import { formatRunStatus } from '../../shared/utils/statusLabels'
