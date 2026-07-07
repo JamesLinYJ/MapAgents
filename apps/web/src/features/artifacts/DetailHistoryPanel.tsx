@@ -14,6 +14,8 @@
 // 历史分页触发器的 DOM 观察逻辑封装在本文件，避免 DetailPanel 持有滚动实现细节。
 
 import { useEffect, useRef } from 'react'
+import { format } from 'date-fns'
+import { zhCN } from 'date-fns/locale/zh-CN'
 
 import type { AgentState, RunEvent, RunSummary } from '@geo-agent-platform/shared-types'
 
@@ -163,15 +165,8 @@ export function DetailHistoryPanel({
 
 function formatEventTime(timestamp: string) {
   const parsed = new Date(timestamp)
-  if (Number.isNaN(parsed.getTime())) {
-    return timestamp
-  }
-  return parsed.toLocaleString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    month: 'numeric',
-    day: 'numeric',
-  })
+  if (Number.isNaN(parsed.getTime())) return timestamp
+  return format(parsed, 'M月d日 HH:mm', { locale: zhCN })
 }
 
 function formatRunStatus(status: string) {
@@ -197,12 +192,7 @@ function formatRunMeta(run: RunSummary) {
   const parsed = new Date(run.updatedAt)
   const stamp = Number.isNaN(parsed.getTime())
     ? run.updatedAt
-    : parsed.toLocaleString('zh-CN', {
-        month: 'numeric',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      })
+    : format(parsed, 'M月d日 HH:mm', { locale: zhCN })
   return `${stamp} · ${run.artifactCount} 个结果`
 }
 
