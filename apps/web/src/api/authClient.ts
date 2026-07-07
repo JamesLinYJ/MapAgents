@@ -10,6 +10,7 @@
 
 import { createAuthClient } from 'better-auth/react'
 import { normalizeApiErrorMessage } from './errors'
+import { isRecord } from '../shared/utils/guards'
 
 function deriveApiBaseUrl(envBaseUrl?: string) {
   const explicit = envBaseUrl?.trim()
@@ -54,6 +55,3 @@ function assertBetterAuthSuccess(result: unknown, fallback: string): void {
   throw new Error(normalizeApiErrorMessage(error, fallback))
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}

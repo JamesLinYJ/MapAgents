@@ -14,6 +14,7 @@
 // 条目，不读取 RunEvent，也不从诊断事件里补造用户可见回答。
 
 import type { ConversationItem, ToolDescriptor } from '@geo-agent-platform/shared-types'
+import { isRecord } from '../../shared/utils/guards'
 
 export type LedgerEntryStatus = 'idle' | 'running' | 'completed' | 'failed' | 'blocked'
 export type ConversationEntryKind = 'message' | 'command_batch' | 'approval' | 'artifact' | 'error' | 'system'
@@ -351,6 +352,3 @@ function parseJsonOutput(s: string): JsonParseResult {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}

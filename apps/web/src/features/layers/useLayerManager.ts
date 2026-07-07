@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { MapRenderLayer } from '../../app/types'
+import { isRecord } from '../../shared/utils/guards'
 
 export type LayerPanelView = 'drawOrder' | 'sources' | 'selection' | 'style' | 'add' | 'labels' | 'table'
 export type LayerVisibilityFilter = 'all' | 'visible' | 'hidden'
@@ -536,6 +537,3 @@ function isVisibilityFilter(value: unknown): value is LayerVisibilityFilter {
   return value === 'all' || value === 'visible' || value === 'hidden'
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}

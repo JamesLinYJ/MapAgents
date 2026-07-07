@@ -24,6 +24,7 @@ import {
 } from '../../api/client'
 import { wsClient } from '../../ws/client'
 import { projectTimeline } from '../conversation/timelineProjector'
+import { isRecord } from '../../shared/utils/guards'
 
 // 运行状态所有权
 //
@@ -312,9 +313,6 @@ export function useRunState() {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
 
 function isRunSnapshot(value: unknown): value is { run: AnalysisRun; items: ConversationItem[]; events: RunEvent[] } {
   return isRecord(value) && isRecord(value.run) && Array.isArray(value.items) && Array.isArray(value.events)

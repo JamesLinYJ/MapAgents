@@ -48,6 +48,7 @@ import {
   resolveToolDefaults,
 } from './toolFormState'
 import { ToolMiniAppPanel } from './ToolMiniApp'
+import { isRecord } from '../../shared/utils/guards'
 import {
   filterTools,
   findToolCatalogEntry,
@@ -455,6 +456,3 @@ function buildSchemaPreview(tool: ToolDescriptor) {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}

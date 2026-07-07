@@ -19,6 +19,7 @@ import type { ToolDescriptor, ToolValueRef } from '@geo-agent-platform/shared-ty
 import { artifactHasDisplaySurface } from '../artifacts/artifactDisplay'
 import type { ToolFormState } from './toolFormState'
 import { miniAppKindForTool, type MiniAppKind } from './toolMiniAppModel'
+import { isRecord } from '../../shared/utils/guards'
 
 interface ToolMiniAppPanelProps {
   tool: ToolDescriptor
@@ -613,6 +614,3 @@ function miniAppIcon(kind: MiniAppKind) {
   return <SlidersHorizontal size={17} aria-hidden="true" />
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}

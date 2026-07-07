@@ -1,3 +1,4 @@
+import { isRecord } from '../shared/utils/guards'
 // +-------------------------------------------------------------------------
 //
 //   地理智能平台 - Web API 错误归一化
@@ -51,6 +52,3 @@ function extractErrorMessage(error: unknown, fallback: string): string {
   return fallback
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
