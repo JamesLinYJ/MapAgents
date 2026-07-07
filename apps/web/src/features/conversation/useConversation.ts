@@ -9,6 +9,8 @@
 // --------------------------------------------------------------------------
 
 import { useMemo } from 'react'
+import { format, formatDuration, intervalToDuration } from 'date-fns'
+import { zhCN } from 'date-fns/locale/zh-CN'
 import type {
   ConversationItem,
   DecisionRequest,
@@ -62,18 +64,16 @@ export function formatStatusLine(
 
 export function fmtElapsed(startedAt: string) {
   const started = new Date(startedAt).getTime()
-  if (Number.isNaN(started)) return '0秒'
-  const seconds = Math.max(0, Math.floor((Date.now() - started) / 1000))
-  if (seconds < 60) return `${seconds}秒`
-  const minutes = Math.floor(seconds / 60)
-  return `${minutes}分${seconds % 60}秒`
+  if (Number.isNaN(started)) return '0 秒'
+  const elapsed = Math.max(0, Date.now() - started)
+  return formatDuration(intervalToDuration({ start: 0, end: elapsed }), { locale: zhCN })
 }
 
 export function formatSessionDate(value?: string | null) {
   if (!value) return '--'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  return format(date, 'yyyy-MM-dd')
 }
 
 function formatRunStatus(status?: string) {
