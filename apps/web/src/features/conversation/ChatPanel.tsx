@@ -17,10 +17,8 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { AnimatePresence, LayoutGroup, m, useReducedMotion } from 'framer-motion'
-import { Maximize2, Minimize2, Pencil } from 'lucide-react'
 import { SAMPLES } from '../../shared/constants'
 import { buildFadeMotion, buildFadeUpMotion, buildListItemVariants, buildListVariants, motionSpring } from '../../shared/motion'
-import { AppIcon } from '../../shared/components/AppIcon'
 import { Composer } from './Composer'
 import { DecisionSheet } from './DecisionSheet'
 import type { ChatPanelProps, ComposerMode, TaskView } from './types'
@@ -35,6 +33,7 @@ import { useSpeechRecognition } from './useSpeechRecognition'
 import { useDialogState } from './useDialogState'
 import { deriveThreadTitleFromText, formatThreadDisplayTitle } from './threadTitles'
 import { HistoryPanel } from './HistoryPanel'
+import { ChatPanelHeader } from './ChatPanelHeader'
 import { rectToMotion, surfaceStyleToMotion, usePanelExpansionMotion } from '../../shared/usePanelExpansionMotion'
 
 const ConversationTimeline = lazy(() => import('./ConversationTimeline').then(module => ({
@@ -244,38 +243,16 @@ export function ChatPanel(props: ChatPanelProps) {
           layout={!expandedSurface}
           {...(expandedSurface ? expandedPanelMotion : buildFadeUpMotion(reducedMotion, 0, 10))}
         >
-          <header className="cc-panel-header">
-            <div className="cc-title-block">
-              <span>{displayCurrentThreadTitle}</span>
-              <small>{formatStatusLine(runStatus, providerLabel, artifactCount, uploadedLayerName)}</small>
-            </div>
-            <div className="cc-header-actions">
-              {sessionThreads.length > 0 && (
-                <button
-                  className="cc-icon-button"
-                  aria-label="历史对话"
-                  onClick={() => {
-                    setTaskView(taskView === 'chat' ? 'history' : 'chat')
-                  }}
-                >
-                  <AppIcon name="history" size={15} />
-                  <span>{taskView === 'chat' ? sessionThreads.length : '返回'}</span>
-                </button>
-              )}
-              <button className="cc-icon-button" aria-label="新建对话" onClick={onNewConversation}>
-                <Pencil size={14} />
-                <span>新建</span>
-              </button>
-              <button
-                className="cc-icon-button"
-                aria-label={isPanelExpanded ? '收起对话框' : '放大对话框'}
-                disabled={panelExpansion.isMorphing}
-                onClick={isPanelExpanded ? panelExpansion.collapse : panelExpansion.expand}
-              >
-                {isPanelExpanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
-              </button>
-            </div>
-          </header>
+          <ChatPanelHeader
+            title={displayCurrentThreadTitle}
+            statusLine={formatStatusLine(runStatus, providerLabel, artifactCount, uploadedLayerName)}
+            isHistoryView={taskView === 'history'}
+            sessionCount={sessionThreads.length}
+            isPanelExpanded={isPanelExpanded}
+            panelExpansion={panelExpansion}
+            onToggleHistory={() => setTaskView(taskView === 'chat' ? 'history' : 'chat')}
+            onNewConversation={onNewConversation}
+          />
 
           {/* 历史视图和聊天视图是互斥事实视图，使用 wait 模式保证退出动画结束后
               再挂载下一视图，避免历史列表和当前对话在同一时间线里重叠。 */}
