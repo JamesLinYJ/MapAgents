@@ -17,7 +17,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { AnimatePresence, LayoutGroup, m, useReducedMotion } from 'framer-motion'
-import { Maximize2, Minimize2, Pencil, RefreshCw, Trash2 } from 'lucide-react'
+import { Maximize2, Minimize2, Pencil } from 'lucide-react'
 import { SAMPLES } from '../../shared/constants'
 import { buildFadeMotion, buildFadeUpMotion, buildListItemVariants, buildListVariants, motionSpring } from '../../shared/motion'
 import { AppIcon } from '../../shared/components/AppIcon'

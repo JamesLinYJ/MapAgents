@@ -16,12 +16,15 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import './index.css'
 import { AppLoader } from './app/AppLoader'
+import { AppQueryProvider } from './app/QueryProvider'
 import { ErrorBoundary } from './shared/components/ErrorBoundary'
 
 createRoot(document.getElementById('root')!).render(
   <ErrorBoundary>
-    <BrowserRouter>
-      <AppLoader />
-    </BrowserRouter>
+    <AppQueryProvider>
+      <BrowserRouter>
+        <AppLoader />
+      </BrowserRouter>
+    </AppQueryProvider>
   </ErrorBoundary>,
 )
