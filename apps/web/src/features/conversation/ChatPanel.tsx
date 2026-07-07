@@ -18,7 +18,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent, t
 import { createPortal } from 'react-dom'
 import { AnimatePresence, LayoutGroup, m, useReducedMotion } from 'framer-motion'
 import { SAMPLES } from '../../shared/constants'
-import { buildFadeMotion, buildFadeUpMotion, buildListItemVariants, buildListVariants, motionSpring } from '../../shared/motion'
+import { buildFadeUpMotion, buildListItemVariants, buildListVariants, motionSpring } from '../../shared/motion'
 import { Composer } from './Composer'
 import { DecisionSheet } from './DecisionSheet'
 import type { ChatPanelProps, ComposerMode, TaskView } from './types'
@@ -34,6 +34,7 @@ import { useDialogState } from './useDialogState'
 import { deriveThreadTitleFromText, formatThreadDisplayTitle } from './threadTitles'
 import { HistoryPanel } from './HistoryPanel'
 import { ChatPanelHeader } from './ChatPanelHeader'
+import { GlassDialog, GlassDialogActions } from '../../shared/components/GlassDialog'
 import { rectToMotion, surfaceStyleToMotion, usePanelExpansionMotion } from '../../shared/usePanelExpansionMotion'
 
 const ConversationTimeline = lazy(() => import('./ConversationTimeline').then(module => ({
@@ -381,57 +382,6 @@ export function ChatPanel(props: ChatPanelProps) {
     )
   }
 
-  const dialogNode = (
-      <AnimatePresence>
-        {dialog && (
-          <m.div className="alert-overlay" onClick={closeDialog} {...buildFadeMotion(reducedMotion)}>
-            <m.div
-              className="alert"
-              onClick={(event) => event.stopPropagation()}
-              onKeyDown={(event) => event.key === 'Escape' && closeDialog()}
-              tabIndex={-1}
-              role="dialog"
-              aria-modal="true"
-              {...buildFadeUpMotion(reducedMotion, 0, 12)}
-            >
-              {dialog.mode === 'rename' ? (
-                <>
-                  <div>
-                    <h2>重命名任务</h2>
-                    <p>给这个任务起个好记的名字。</p>
-                  </div>
-                  <input className="input" value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} autoFocus placeholder="输入新标题" />
-                  <div className="alert-actions">
-                    <button className="alert-btn" onClick={closeDialog}>
-                      取消
-                    </button>
-                    <button className="alert-btn" onClick={() => submitRename(onRenameTask)} disabled={!titleDraft.trim()}>
-                      保存
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div>
-                    <h2>删除任务</h2>
-                    <p>「{dialog.task.title}」及其运行记录将被移除。</p>
-                  </div>
-                  <div className="alert-actions">
-                    <button className="alert-btn" onClick={closeDialog}>
-                      取消
-                    </button>
-                    <button className="alert-btn alert-btn-destructive" onClick={() => submitDelete(onDeleteTask)}>
-                      删除
-                    </button>
-                  </div>
-                </>
-              )}
-            </m.div>
-          </m.div>
-        )}
-      </AnimatePresence>
-  )
-
   const inlinePanelNode = renderPanelNode('inline')
   const expandedPanelNode = renderPanelNode('expanded')
 
@@ -440,7 +390,6 @@ export function ChatPanel(props: ChatPanelProps) {
       {!isPanelExpanded && !panelExpansion.isMorphing ? (
         <div className="cc-wrap">
           {inlinePanelNode}
-          {dialogNode}
         </div>
       ) : null}
       {panelExpansion.canUsePortal ? createPortal(
@@ -464,13 +413,38 @@ export function ChatPanel(props: ChatPanelProps) {
                 aria-label="对话框全屏视图"
               >
                 {expandedPanelNode}
-                {dialogNode}
               </div>
             </>
           ) : null}
         </AnimatePresence>,
         document.body,
       ) : null}
+      <GlassDialog open={!!dialog} onOpenChange={(open) => { if (!open) closeDialog() }}>
+        {dialog?.mode === 'rename' ? (
+          <>
+            <div>
+              <h2>重命名任务</h2>
+              <p>给这个任务起个好记的名字。</p>
+            </div>
+            <input className="input" value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} autoFocus placeholder="输入新标题" />
+            <GlassDialogActions>
+              <button className="alert-btn" onClick={closeDialog}>取消</button>
+              <button className="alert-btn" onClick={() => submitRename(onRenameTask)} disabled={!titleDraft.trim()}>保存</button>
+            </GlassDialogActions>
+          </>
+        ) : dialog?.mode === 'delete' ? (
+          <>
+            <div>
+              <h2>删除任务</h2>
+              <p>「{dialog.task.title}」及其运行记录将被移除。</p>
+            </div>
+            <GlassDialogActions>
+              <button className="alert-btn" onClick={closeDialog}>取消</button>
+              <button className="alert-btn alert-btn-destructive" onClick={() => submitDelete(onDeleteTask)}>删除</button>
+            </GlassDialogActions>
+          </>
+        ) : null}
+      </GlassDialog>
     </>
   )
 }
