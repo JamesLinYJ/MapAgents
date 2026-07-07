@@ -1102,3 +1102,31 @@ export type WsRunPush =
   | { type: 'thread.compacted'; id: null; payload: { data: CompactionRecord } }
   | { type: 'thread.memory.updated'; id: null; payload: { data: ThreadMemoryDocument } }
 
+// --- 跨语言工具契约（TS + Python 单一事实源）---
+
+export const toolContractManifestSchema = z.object({
+  providerId: z.string(),
+  toolName: z.string(),
+  version: z.string(),
+  parametersSchema: z.record(z.string(), z.unknown()),
+  resultSchema: z.record(z.string(), z.unknown()),
+  valueRefInputs: z.array(z.string()).default([]),
+  valueRefOutputs: z.array(z.string()).default([]),
+  readOnly: z.boolean().default(true),
+  destructive: z.boolean().default(false),
+  timeoutSeconds: z.number().positive().default(300),
+  displaySurfaces: z.array(z.enum(['map', 'mini_app', 'download'])).default([]),
+})
+
+export type ToolContractManifest = z.infer<typeof toolContractManifestSchema>
+
+export const workerToolSpecSchema = z.object({
+  toolName: z.string(),
+  route: z.string(),
+  contract: toolContractManifestSchema,
+  pydanticRequestModel: z.string().default(''),
+  pydanticResponseModel: z.string().default(''),
+})
+
+export type WorkerToolSpec = z.infer<typeof workerToolSpecSchema>
+
