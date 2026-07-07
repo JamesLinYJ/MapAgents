@@ -23,7 +23,8 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { sql } from 'drizzle-orm'
 import { createDb } from './db/connection.js'
-import { metricsResponse } from './observability/metrics.js'
+import { metricsResponse, observeHttpMetrics } from './observability/metrics.js'
+import { errorLogPayload, logger } from './observability/logger.js'
 import { defaultRuntimeConfig } from './agent/defaultRuntimeConfig.js'
 import { getEnv } from './framework/env.js'
 import { discoverAndLoad } from './framework/loader.js'
@@ -74,9 +75,19 @@ await store.initialize()
 if (env.SEED_LAYERS_DIR) {
   const seedDirectory = path.resolve(projectRoot, env.SEED_LAYERS_DIR)
   const seededLayers = await seedLayersFromDirectory(postgis, seedDirectory)
-  console.log(`[layers] seeded ${seededLayers.length} layers from ${seedDirectory}`)
+  logger.info({ count: seededLayers.length, seedDirectory }, 'seeded layers')
 }
 await discoverAndLoad(postgis)
+
+// 跨语言工具契约校验——Worker 工具与 TS registry 不一致时硬失败。
+import { validateToolContracts } from './tools/contractValidator.js'
+if (env.WORKER_URL) {
+  const contractReport = await validateToolContracts(toolRegistry, env.WORKER_URL)
+  if (!contractReport.passed) {
+    logger.error({ contractReport }, '工具契约校验失败——服务启动中止')
+    process.exit(1)
+  }
+}
 
 const app = new Hono()
 const security: SecurityServices = {
@@ -96,6 +107,7 @@ app.use('*', cors({
   allowHeaders: ['Content-Type', env.CSRF_HEADER_NAME],
   allowMethods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
 }))
+app.use('*', observeHttpMetrics)
 app.use('*', async (c, next) => {
   if (isShuttingDown && c.req.path !== '/health' && c.req.path !== '/metrics') return c.json({ detail: '服务正在关闭，请稍后重试。' }, 503)
   await next()
@@ -118,7 +130,7 @@ app.route('/', meteorologyRoutes(db, runtimeRoot, store, security, env))
 app.onError((error, c) => {
   if (error instanceof AuthorizationError) return c.json({ detail: error.message }, 403)
   if (error.message === '未登录。') return c.json({ detail: '未登录' }, 401)
-  console.error('[api] request failed:', error)
+  logger.error({ error: errorLogPayload(error), path: c.req.path, method: c.req.method }, 'request failed')
   return c.json({ detail: '服务处理失败。请查看服务端日志。' }, 500)
 })
 app.notFound(c => c.json({ detail: 'Not found' }, 404))
@@ -142,8 +154,8 @@ installLifecycleManager({
 })
 
 server.listen(env.API_PORT, env.API_HOST, () => {
-  console.log(`server listening on http://${env.API_HOST}:${env.API_PORT}`)
-  console.log(`[tools] ${toolRegistry.list().length} tools from ${toolRegistry.listProviders().length} providers`)
+  logger.info({ host: env.API_HOST, port: env.API_PORT }, 'server listening')
+  logger.info({ tools: toolRegistry.list().length, providers: toolRegistry.listProviders().length }, 'tool providers loaded')
 })
 
 async function checkReadiness(): Promise<{ status: 'ok' | 'degraded'; checks: Record<string, { ok: boolean; detail?: string }> }> {
@@ -152,7 +164,7 @@ async function checkReadiness(): Promise<{ status: 'ok' | 'degraded'; checks: Re
     await db.execute(sql`SELECT 1`)
     checks.database = { ok: true }
   } catch (error) {
-    console.error('[health] database check failed:', error)
+    logger.error({ error: errorLogPayload(error) }, 'database health check failed')
     checks.database = { ok: false, detail: '数据库不可用' }
   }
 
@@ -160,7 +172,7 @@ async function checkReadiness(): Promise<{ status: 'ok' | 'degraded'; checks: Re
   if (postgisStatus.available) {
     checks.postgis = { ok: true }
   } else {
-    if (postgisStatus.error) console.error('[health] postgis check failed:', postgisStatus.error)
+    if (postgisStatus.error) logger.error({ error: errorLogPayload(postgisStatus.error) }, 'postgis health check failed')
     checks.postgis = { ok: false, detail: 'PostGIS 不可用' }
   }
 
@@ -169,7 +181,7 @@ async function checkReadiness(): Promise<{ status: 'ok' | 'degraded'; checks: Re
       const response = await fetch(new URL('/health', env.WORKER_URL).toString(), { signal: AbortSignal.timeout(2_000) })
       checks.worker = response.ok ? { ok: true } : { ok: false, detail: `Worker HTTP ${response.status}` }
     } catch (error) {
-      console.error('[health] worker check failed:', error)
+      logger.error({ error: errorLogPayload(error) }, 'worker health check failed')
       checks.worker = { ok: false, detail: 'Worker 不可用' }
     }
   }
