@@ -63,6 +63,7 @@ import {
   stringField,
 } from './fileConversationIo.js'
 import type { ConversationStorage } from './ConversationStorage.js'
+import { errorLogPayload, logger } from '../observability/logger.js'
 
 const STORE_SCHEMA_VERSION = 2
 const DEFAULT_TRASH_RETENTION_DAYS = 30
@@ -889,7 +890,7 @@ export class FileConversationStore {
 
   private enqueueAppend(filePath: string, record: unknown): Promise<void> {
     const previous = this.writeQueues.get(filePath)?.catch(error => {
-      console.error(`[conversation-store] previous append failed for ${filePath}:`, error instanceof Error ? error.message : String(error))
+      logger.error({ error: errorLogPayload(error), filePath }, 'previous append failed')
     }) ?? Promise.resolve()
     const next = previous.then(async () => {
       await mkdir(path.dirname(filePath), { recursive: true })
@@ -897,7 +898,7 @@ export class FileConversationStore {
     })
     this.writeQueues.set(filePath, next)
     const tracked = next.catch(error => {
-      console.error(`[conversation-store] append failed for ${filePath}:`, error instanceof Error ? error.message : String(error))
+      logger.error({ error: errorLogPayload(error), filePath }, 'append failed')
       throw error
     }).finally(() => {
       if (this.writeQueues.get(filePath) === next) this.writeQueues.delete(filePath)

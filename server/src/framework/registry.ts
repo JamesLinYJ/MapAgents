@@ -11,6 +11,7 @@
 import type { ToolDef, ToolProvider, ToolContext, ToolResult } from './types.js'
 import { validateToolProvider } from './validation.js'
 import { ensureToolSchemas, schemaParameters, isRecord } from './schema.js'
+import { logger } from '../observability/logger.js'
 
 const ARTIFACT_DISPLAY_SURFACES = new Set(['map', 'mini_app', 'download'])
 
@@ -33,7 +34,7 @@ export class ToolRegistry {
     }
     this.providers.set(provider.manifest.id, provider)
     this.unavailableProviders.delete(provider.manifest.id)
-    console.log(`[registry] 已注册 provider "${provider.manifest.id}" (${provider.manifest.language}, ${provider.tools().length} tools)`)
+    logger.info({ providerId: provider.manifest.id, language: provider.manifest.language, toolCount: provider.tools().length }, 'provider registered')
   }
 
   markUnavailable(providerId: string, reason: string): void {

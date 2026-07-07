@@ -21,6 +21,7 @@ import developerProvider from '../tools/developer/index.js'
 import meteorologyProvider from '../tools/meteorology/index.js'
 import { createSpatialProvider } from '../tools/spatial/index.js'
 import { createRoutingProvider } from '../tools/routing/index.js'
+import { logger } from '../observability/logger.js'
 
 const LEGACY_METEOROLOGY_PROVIDER_ID = ['wea', 'ther'].join('')
 
@@ -58,32 +59,32 @@ export async function discoverAndLoad(postgis: PostGisRepository): Promise<void>
     const provider = builtinProviders.get(providerId)
     if (!provider) {
       toolRegistry.markUnavailable(providerId, 'Provider 不在显式内置目录中')
-      console.warn(`[loader] provider "${providerId}" 不可用：Provider 不在显式内置目录中`)
+      logger.warn({ providerId }, 'provider not found in built-in directory')
       continue
     }
     const missing = requiredDependencies(provider).filter(key => !config[key])
     if (missing.length) {
       const reason = `缺少依赖：${missing.join(', ')}`
       toolRegistry.markUnavailable(providerId, reason)
-      console.warn(`[loader] provider "${providerId}" 不可用：${reason}`)
+      logger.warn({ providerId, reason }, 'provider unavailable')
       continue
     }
     try {
       const ctx: InstallContext = {
         config,
         state: new Map(),
-        log: (level, message) => console.log(`[${providerId}] ${level}: ${message}`),
+        log: (level, message) => logger[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info']({ providerId }, message),
       }
       await provider.onInstall?.(ctx)
       toolRegistry.register(provider)
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
       toolRegistry.markUnavailable(providerId, reason)
-      console.warn(`[loader] provider "${providerId}" 不可用：${reason}`)
+      logger.warn({ providerId, reason }, 'provider unavailable')
     }
   }
 
-  console.log(`[loader] 已启用 ${toolRegistry.listProviders().length} 个 provider, ${toolRegistry.list().length} 个 tool`)
+  logger.info({ providers: toolRegistry.listProviders().length, tools: toolRegistry.list().length }, 'providers loaded')
 }
 
 function requiredDependencies(provider: ToolProvider): string[] {
