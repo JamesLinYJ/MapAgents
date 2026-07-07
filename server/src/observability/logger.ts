@@ -35,6 +35,16 @@ export const logger = pino({
   },
 })
 
+import { randomUUID } from 'node:crypto'
+
+// traceId
+//
+// 每次请求或消息生成短 traceId，通过 child logger 注入，贯穿
+// HTTP → WS → Agent → 工具 → Worker 全链路日志。
+export function traceId(): string {
+  return randomUUID().slice(0, 8)
+}
+
 export function errorLogPayload(error: unknown): { message: string; stack?: string; name?: string } {
   if (error instanceof Error) {
     return {
