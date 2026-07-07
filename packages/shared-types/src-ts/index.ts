@@ -832,7 +832,10 @@ export const agentRuntimeConfigSchema = z.object({
     maxResults: 200,
   }),
   nowcast: runtimeNowcastConfigSchema.default({
-    defaultCityName: '杭州市',
+    meteorologicalRegions: [
+      { id: 'hangzhou', label: '杭州市', aliases: ['杭州'], timezone: 'Asia/Shanghai', crs: 'EPSG:4326', defaultNowcastWindowMinutes: 180 },
+    ],
+    defaultMeteorologicalRegionId: 'hangzhou',
     forecastHorizonMinutes: 180,
     pointBufferMeters: 1000,
     districtLayerKey: null,

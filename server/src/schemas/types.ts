@@ -713,8 +713,19 @@ export const runtimePoiConfigSchema = z.object({
   maxResults: z.number().default(200),
 })
 
+export const meteorologicalRegionSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  aliases: z.array(z.string()).default([]),
+  bbox: z.tuple([z.number(), z.number(), z.number(), z.number()]).optional(),
+  crs: z.string().default('EPSG:4326'),
+  timezone: z.string().default('Asia/Shanghai'),
+  defaultNowcastWindowMinutes: z.number().default(180),
+})
+
 export const runtimeNowcastConfigSchema = z.object({
-  defaultCityName: z.string().default('杭州市'),
+  meteorologicalRegions: z.array(meteorologicalRegionSchema).default([]),
+  defaultMeteorologicalRegionId: z.string().default('hangzhou'),
   forecastHorizonMinutes: z.number().default(180),
   pointBufferMeters: z.number().default(1000),
   districtLayerKey: z.string().nullable().default(null),
