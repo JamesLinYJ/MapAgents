@@ -22,8 +22,10 @@ _worker_tools: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {}
 
 
 def worker_tool(name: str):
-    """将函数注册为 Worker 工具。"""
+    """将函数注册为 Worker 工具。重复注册抛出 ValueError。"""
     def decorator(fn: Callable[[dict[str, Any]], dict[str, Any]]):
+        if name in _worker_tools:
+            raise ValueError(f"工具 '{name}' 重复注册——每个工具名只能注册一次")
         _worker_tools[name] = fn
         return fn
     return decorator

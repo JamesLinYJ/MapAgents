@@ -30,6 +30,10 @@ from uuid import uuid4
 
 from worker_app.tool_registry import dispatch, list_tools, worker_tool
 
+# 各工具模块 import 时通过 @worker_tool 自动注册。
+# 新增工具只需在此添加一行 import + 一个独立模块文件。
+import worker_app.tools.meteorological_inspect  # noqa: F401
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -199,13 +203,6 @@ async def run_meteorology_tool(tool_name: str, request: ToolRequest) -> dict[str
     except Exception as exc:
         logger.exception("%s failed", tool_name)
         raise HTTPException(500, "Worker 工具执行失败，请查看 Worker 日志") from exc
-
-
-@worker_tool("meteorological_inspect")
-def _meteorological_inspect(args: dict[str, Any]) -> dict[str, Any]:
-    from gis_meteorology.service import MeteorologicalDataService
-    source = input_path(args)
-    return MeteorologicalDataService().inspect(source, filename=input_filename(args, source))
 
 
 @worker_tool("meteorological_render")
