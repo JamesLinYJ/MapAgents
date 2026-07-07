@@ -16,6 +16,8 @@
 import { useState, type ReactNode } from 'react'
 import type { Variants } from 'framer-motion'
 import { AnimatePresence, m } from 'framer-motion'
+import { formatDistanceToNow } from 'date-fns'
+import { zhCN } from 'date-fns/locale/zh-CN'
 import type { AgentThreadRecord } from '@geo-agent-platform/shared-types'
 
 import { AppIcon, type AppIconName } from '../../shared/components/AppIcon'
@@ -381,8 +383,5 @@ function formatThreadAge(value?: string | null) {
   if (!Number.isFinite(time)) return ''
   const diff = Date.now() - time
   if (diff < 60_000) return '刚刚'
-  if (diff < 3_600_000) return `${Math.max(1, Math.floor(diff / 60_000))} 分钟`
-  if (diff < 86_400_000) return `${Math.max(1, Math.floor(diff / 3_600_000))} 小时`
-  if (diff < 604_800_000) return `${Math.max(1, Math.floor(diff / 86_400_000))} 天`
-  return `${Math.max(1, Math.floor(diff / 604_800_000))} 周`
+  return formatDistanceToNow(time, { addSuffix: true, locale: zhCN })
 }
