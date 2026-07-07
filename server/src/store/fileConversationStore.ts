@@ -62,6 +62,7 @@ import {
   safeId,
   stringField,
 } from './fileConversationIo.js'
+import type { ConversationStorage } from './ConversationStorage.js'
 
 const STORE_SCHEMA_VERSION = 2
 const DEFAULT_TRASH_RETENTION_DAYS = 30
@@ -139,6 +140,8 @@ export class ConversationCorruptionError extends Error {
 // FileConversationStore
 //
 // JSON/JSONL/Markdown 文件是会话事实源；内存映射只保存定位信息，不缓存完整历史。
+// 隐式满足 ConversationStorage 接口的方法签名。
+// 正式 implements 声明需待 saveRun/appendValue/saveMemory 签名对齐。
 export class FileConversationStore {
   readonly root: string
   readonly sessionsRoot: string
@@ -410,7 +413,7 @@ export class FileConversationStore {
 
   async appendArtifact(runId: string, artifact: ArtifactRef): Promise<void> {
     const location = this.requireRunLocation(runId)
-    await this.enqueueAppendAndWait(path.join(location.directory, 'artifacts.jsonl'), artifactRefSchema.parse(artifact))
+    await this.enqueueAppend(path.join(location.directory, 'artifacts.jsonl'), artifactRefSchema.parse(artifact))
   }
 
   async listArtifacts(runId: string): Promise<ArtifactRef[]> {
@@ -421,7 +424,7 @@ export class FileConversationStore {
   async appendAttachment(threadId: string, record: AttachmentRecord): Promise<void> {
     const location = this.requireThreadLocation(threadId)
     if (location.trashed) throw new Error(`线程 '${threadId}' 已在回收站`)
-    await this.enqueueAppendAndWait(path.join(location.directory, 'attachments.jsonl'), record)
+    await this.enqueueAppend(path.join(location.directory, 'attachments.jsonl'), record)
   }
 
   async listItems(runId: string): Promise<ConversationItem[]> {
@@ -609,7 +612,7 @@ export class FileConversationStore {
 
   async appendCompaction(record: CompactionRecord): Promise<void> {
     const location = this.requireThreadLocation(record.threadId)
-    await this.enqueueAppendAndWait(path.join(location.directory, 'compactions.jsonl'), compactionRecordSchema.parse(record))
+    await this.enqueueAppend(path.join(location.directory, 'compactions.jsonl'), compactionRecordSchema.parse(record))
     const current = await this.readThreadFile(location.directory)
     current.manifest.latestCompactionId = record.compactionId
     current.manifest.estimatedContextTokens = record.postTokens
@@ -900,10 +903,6 @@ export class FileConversationStore {
       if (this.writeQueues.get(filePath) === next) this.writeQueues.delete(filePath)
     })
     return tracked
-  }
-
-  private async enqueueAppendAndWait(filePath: string, record: unknown): Promise<void> {
-    await this.enqueueAppend(filePath, record)
   }
 
   private async readJsonLines<T>(
