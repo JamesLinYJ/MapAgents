@@ -12,6 +12,9 @@
 #
 # 包装第三方解码器，输出平台统一的气象变量和地图范围事实。
 # 这里不浏览本机目录，也不吞掉解码错误；不可解析的文件必须明确失败。
+import logging
+
+logger = logging.getLogger("gis_meteorology.radar")
 
 from __future__ import annotations
 
@@ -179,8 +182,9 @@ def _read_header(path: Path) -> dict[str, float | int | None]:
         if len(filedata) < 106:
             return {"height_m": None, "radar_type": None}
         return {
-            "height_m": float(struct.unpack("i", filedata[80:84])[0]),
-            "radar_type": int(struct.unpack("h", filedata[104:106])[0]),
+            "height_m": float(struct.unpack("<i", filedata[80:84])[0]),
+            "radar_type": int(struct.unpack("<h", filedata[104:106])[0]),
         }
-    except Exception:
+    except (struct.error, IndexError, EOFError, OSError) as exc:
+        logger.warning("雷达文件头解析失败 %s: %s", path, exc)
         return {"height_m": None, "radar_type": None}

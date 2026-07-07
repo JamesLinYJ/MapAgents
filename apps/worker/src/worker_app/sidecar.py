@@ -28,6 +28,8 @@ import time
 from typing import Any, Iterator
 from uuid import uuid4
 
+from worker_app.tool_registry import dispatch, list_tools, worker_tool
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -64,13 +66,21 @@ async def require_worker_secret(request: Request, call_next):
     if not WORKER_SHARED_SECRET:
         return JSONResponse({"detail": "WORKER_SHARED_SECRET 未配置"}, status_code=503)
     body = await request.body()
+    # Content-Length 预检：在完整读取 body 前先拒绝明显超大的请求
+    content_length = request.headers.get("content-length")
+    if content_length is not None and int(content_length) > WORKER_MAX_BODY_BYTES:
+        logger.warning("Worker 请求体超过大小限制 content-length=%s limit=%s", content_length, WORKER_MAX_BODY_BYTES)
+        return JSONResponse({"detail": "Worker 请求体超过大小限制"}, status_code=413)
+    body = await request.body()
     if len(body) > WORKER_MAX_BODY_BYTES:
+        logger.warning("Worker 请求体超过大小限制 actual=%s limit=%s", len(body), WORKER_MAX_BODY_BYTES)
         return JSONResponse({"detail": "Worker 请求体超过大小限制"}, status_code=413)
     authorization = request.headers.get("authorization") or ""
     tool_name = _tool_name_from_path(request.url.path)
     auth_error = _verify_worker_authorization(authorization, WORKER_SHARED_SECRET, tool_name, body)
     if auth_error is not None:
         status_code, detail = auth_error
+        logger.warning("Worker 认证失败 tool=%s status=%s detail=%s", tool_name, status_code, detail)
         return JSONResponse({"detail": detail}, status_code=status_code)
     await _replay_body(request, body)
     async with _worker_semaphore:
@@ -178,7 +188,7 @@ async def run_meteorology_tool(tool_name: str, request: ToolRequest) -> dict[str
     """执行无状态科学计算；所有路径都必须是 runtime 根目录内的相对引用。"""
     try:
         payload = await asyncio.wait_for(
-            asyncio.to_thread(execute_meteorology_tool, tool_name, request.args),
+            asyncio.to_thread(dispatch, tool_name, request.args),
             timeout=WORKER_TOOL_TIMEOUT_SECONDS,
         )
         return {"message": f"{tool_name} 执行完成", "payload": payload, "warnings": payload.get("warnings", [])}
@@ -191,214 +201,199 @@ async def run_meteorology_tool(tool_name: str, request: ToolRequest) -> dict[str
         raise HTTPException(500, "Worker 工具执行失败，请查看 Worker 日志") from exc
 
 
-def execute_meteorology_tool(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
-    from gis_meteorology import NowcastAnalysisService, NowcastSequenceService, NowcastTextService
+@worker_tool("meteorological_inspect")
+def _meteorological_inspect(args: dict[str, Any]) -> dict[str, Any]:
     from gis_meteorology.service import MeteorologicalDataService
+    source = input_path(args)
+    return MeteorologicalDataService().inspect(source, filename=input_filename(args, source))
 
-    service = MeteorologicalDataService()
-    if tool_name == "meteorological_inspect":
-        source = input_path(args)
-        return service.inspect(source, filename=input_filename(args, source))
-    if tool_name in {"meteorological_render", "render_nowcast_raster"}:
-        source = input_path(args)
-        filename = input_filename(args, source)
-        output = output_path(args)
-        result = service.render_heatmap(
-            source,
-            output_path=output,
-            filename=filename,
-            variable=optional_text(args, "variable"),
-            time_index=optional_int(args, "time_index"),
-            level_index=optional_int(args, "level_index"),
-            bbox=optional_number_list(args, "bbox"),
-        )
-        return {**result, "outputRelativePath": relative_runtime_path(output)}
-    if tool_name == "meteorological_stats":
-        return service.stats(
-            input_path(args),
-            filename=input_filename(args),
-            variable=optional_text(args, "variable"),
-            time_index=optional_int(args, "time_index"),
-            level_index=optional_int(args, "level_index"),
-            bbox=optional_number_list(args, "bbox"),
-        )
-    if tool_name == "meteorological_threshold":
-        return service.threshold_geojson(
-            input_path(args),
-            threshold=required_float(args, "threshold"),
-            operator=optional_text(args, "operator") or ">=",
-            filename=input_filename(args),
-            variable=optional_text(args, "variable"),
-            time_index=optional_int(args, "time_index"),
-            level_index=optional_int(args, "level_index"),
-            bbox=optional_number_list(args, "bbox"),
-        )
-    if tool_name == "meteorological_contour":
-        return service.contours_geojson(
-            input_path(args),
-            levels=optional_number_list(args, "levels"),
-            filename=input_filename(args),
-            variable=optional_text(args, "variable"),
-            time_index=optional_int(args, "time_index"),
-            level_index=optional_int(args, "level_index"),
-            bbox=optional_number_list(args, "bbox"),
-        )
-    if tool_name == "meteorological_report":
-        source = input_path(args)
-        filename = input_filename(args, source)
-        output = output_path(args)
-        result = service.generate_report_docx(
-            source,
-            output_path=output,
-            filename=filename,
-            llm_interpretation=required_text(args, "interpretation_text"),
-        )
-        return {**result, "outputRelativePath": relative_runtime_path(output)}
-    if tool_name == "create_nowcast_sequence":
-        sequence = create_nowcast_sequence(args)
-        return serialize_nowcast_sequence(sequence)
-    if tool_name == "inspect_nowcast_sequence":
-        sequence = nowcast_sequence_from_reference(args)
-        return NowcastSequenceService().inspect_sequence(sequence)
-    if tool_name == "meteorological_precipitation_nowcast":
-        sequence = nowcast_sequence_from_reference(args, variable_override=optional_text(args, "variable"))
-        analysis = NowcastAnalysisService().analyze(
-            sequence,
-            area=optional_dict(args, "area"),
-            bbox=optional_number_list(args, "bbox"),
-            coordinate=optional_dict(args, "coordinate"),
-            point_buffer_meters=optional_float(args, "point_buffer_meters") or 1000,
-            district_name_field=optional_text(args, "district_name_field"),
-        )
-        relative_paths = {item.dataset_id: relative_runtime_path(item.path) for item in sequence.datasets}
-        analysis["mapCandidates"] = [
-            {**candidate, "relativePath": relative_paths.get(str(candidate.get("datasetId") or ""))}
-            for candidate in analysis.get("mapCandidates", [])
-        ]
-        return analysis
-    if tool_name == "answer_nowcast_question":
-        analysis = args.get("analysis")
-        if not isinstance(analysis, dict):
-            raise ValueError("analysis 必须是对象")
-        return NowcastTextService().build_draft_answer(
-            facts=analysis,
-            question=required_text(args, "question"),
-        )
-    if tool_name == "generate_nowcast_forecast_text":
-        analysis = args.get("analysis")
-        if not isinstance(analysis, dict):
-            raise ValueError("analysis 必须是对象")
-        return NowcastTextService().build_draft_answer(
-            facts=analysis,
-            question="生成正式短时临近预报（短临）预报文字",
-        )
-    if tool_name == "inspect_radar_station_collection":
-        from gis_meteorology.third_party.radar_mosaic_agent.adapter import inspect_radar_station_collection
 
-        with radar_semantic_input_paths(args, "files") as paths:
-            return inspect_radar_station_collection(paths)
-    if tool_name == "recommend_radar_mosaic_strategy":
-        from gis_meteorology.third_party.radar_mosaic_agent.adapter import recommend_radar_mosaic_strategy
+@worker_tool("meteorological_render")
+@worker_tool("render_nowcast_raster")
+def _meteorological_render(args: dict[str, Any]) -> dict[str, Any]:
+    from gis_meteorology.service import MeteorologicalDataService
+    source = input_path(args)
+    filename = input_filename(args, source)
+    output = output_path(args)
+    result = MeteorologicalDataService().render_heatmap(
+        source, output_path=output, filename=filename,
+        variable=optional_text(args, "variable"), time_index=optional_int(args, "time_index"),
+        level_index=optional_int(args, "level_index"), bbox=optional_number_list(args, "bbox"),
+    )
+    return {**result, "outputRelativePath": relative_runtime_path(output)}
 
-        return recommend_radar_mosaic_strategy(
-            goal_mode=optional_text(args, "goal_mode") or "quicklook",
-            time_strategy=optional_text(args, "time_strategy") or "nearest",
+
+@worker_tool("meteorological_stats")
+def _meteorological_stats(args: dict[str, Any]) -> dict[str, Any]:
+    from gis_meteorology.service import MeteorologicalDataService
+    return MeteorologicalDataService().stats(
+        input_path(args), filename=input_filename(args),
+        variable=optional_text(args, "variable"), time_index=optional_int(args, "time_index"),
+        level_index=optional_int(args, "level_index"), bbox=optional_number_list(args, "bbox"),
+    )
+
+
+@worker_tool("meteorological_threshold")
+def _meteorological_threshold(args: dict[str, Any]) -> dict[str, Any]:
+    from gis_meteorology.service import MeteorologicalDataService
+    return MeteorologicalDataService().threshold_geojson(
+        input_path(args), threshold=required_float(args, "threshold"),
+        operator=optional_text(args, "operator") or ">=", filename=input_filename(args),
+        variable=optional_text(args, "variable"), time_index=optional_int(args, "time_index"),
+        level_index=optional_int(args, "level_index"), bbox=optional_number_list(args, "bbox"),
+    )
+
+
+@worker_tool("meteorological_contour")
+def _meteorological_contour(args: dict[str, Any]) -> dict[str, Any]:
+    from gis_meteorology.service import MeteorologicalDataService
+    return MeteorologicalDataService().contours_geojson(
+        input_path(args), levels=optional_number_list(args, "levels"), filename=input_filename(args),
+        variable=optional_text(args, "variable"), time_index=optional_int(args, "time_index"),
+        level_index=optional_int(args, "level_index"), bbox=optional_number_list(args, "bbox"),
+    )
+
+
+@worker_tool("meteorological_report")
+def _meteorological_report(args: dict[str, Any]) -> dict[str, Any]:
+    from gis_meteorology.service import MeteorologicalDataService
+    source = input_path(args)
+    output = output_path(args)
+    result = MeteorologicalDataService().generate_report_docx(
+        source, output_path=output, filename=input_filename(args, source),
+        llm_interpretation=required_text(args, "interpretation_text"),
+    )
+    return {**result, "outputRelativePath": relative_runtime_path(output)}
+
+
+@worker_tool("create_nowcast_sequence")
+def _create_nowcast_sequence(args: dict[str, Any]) -> dict[str, Any]:
+    return serialize_nowcast_sequence(create_nowcast_sequence(args))
+
+
+@worker_tool("inspect_nowcast_sequence")
+def _inspect_nowcast_sequence(args: dict[str, Any]) -> dict[str, Any]:
+    from gis_meteorology import NowcastSequenceService
+    return NowcastSequenceService().inspect_sequence(nowcast_sequence_from_reference(args))
+
+
+@worker_tool("meteorological_precipitation_nowcast")
+def _meteorological_precipitation_nowcast(args: dict[str, Any]) -> dict[str, Any]:
+    from gis_meteorology import NowcastAnalysisService
+    sequence = nowcast_sequence_from_reference(args, variable_override=optional_text(args, "variable"))
+    analysis = NowcastAnalysisService().analyze(
+        sequence, area=optional_dict(args, "area"), bbox=optional_number_list(args, "bbox"),
+        coordinate=optional_dict(args, "coordinate"),
+        point_buffer_meters=optional_float(args, "point_buffer_meters") or 1000,
+        district_name_field=optional_text(args, "district_name_field"),
+    )
+    relative_paths = {item.dataset_id: relative_runtime_path(item.path) for item in sequence.datasets}
+    analysis["mapCandidates"] = [
+        {**candidate, "relativePath": relative_paths.get(str(candidate.get("datasetId") or ""))}
+        for candidate in analysis.get("mapCandidates", [])
+    ]
+    return analysis
+
+
+@worker_tool("answer_nowcast_question")
+def _answer_nowcast_question(args: dict[str, Any]) -> dict[str, Any]:
+    from gis_meteorology import NowcastTextService
+    analysis = args.get("analysis")
+    if not isinstance(analysis, dict): raise ValueError("analysis 必须是对象")
+    return NowcastTextService().build_draft_answer(facts=analysis, question=required_text(args, "question"))
+
+
+@worker_tool("generate_nowcast_forecast_text")
+def _generate_nowcast_forecast_text(args: dict[str, Any]) -> dict[str, Any]:
+    from gis_meteorology import NowcastTextService
+    analysis = args.get("analysis")
+    if not isinstance(analysis, dict): raise ValueError("analysis 必须是对象")
+    return NowcastTextService().build_draft_answer(facts=analysis, question="生成正式短时临近预报（短临）预报文字")
+
+
+@worker_tool("inspect_radar_station_collection")
+def _inspect_radar_station_collection(args: dict[str, Any]) -> dict[str, Any]:
+    from gis_meteorology.third_party.radar_mosaic_agent.adapter import inspect_radar_station_collection
+    with radar_semantic_input_paths(args, "files") as paths:
+        return inspect_radar_station_collection(paths)
+
+
+@worker_tool("recommend_radar_mosaic_strategy")
+def _recommend_radar_mosaic_strategy(args: dict[str, Any]) -> dict[str, Any]:
+    from gis_meteorology.third_party.radar_mosaic_agent.adapter import recommend_radar_mosaic_strategy
+    return recommend_radar_mosaic_strategy(
+        goal_mode=optional_text(args, "goal_mode") or "quicklook",
+        time_strategy=optional_text(args, "time_strategy") or "nearest",
+    )
+
+
+@worker_tool("render_radar_mosaic")
+def _render_radar_mosaic(args: dict[str, Any]) -> dict[str, Any]:
+    from gis_meteorology.third_party.radar_mosaic_agent.adapter import render_radar_mosaic
+    output_png = output_path(args, key="output_png_relative_path")
+    output_npz = output_path(args, key="output_npz_relative_path")
+    output_map_png = output_path(args, key="output_map_png_relative_path") if optional_text(args, "output_map_png_relative_path") else None
+    with radar_semantic_input_paths(args, "files") as paths:
+        result = render_radar_mosaic(
+            paths=paths, output_png=output_png, output_npz=output_npz, output_map_png=output_map_png,
+            target_time=required_text(args, "target_time"), tolerance_sec=optional_int(args, "tolerance_sec") or 300,
+            strategy=optional_text(args, "strategy") or "max", product=optional_text(args, "product") or "reflectivity",
+            level_index=optional_int(args, "level_index") or 0, grid_res_km=optional_float(args, "grid_res_km") or 1.0,
+            min_dbz=optional_float(args, "min_dbz") or 5.0,
         )
-    if tool_name == "render_radar_mosaic":
-        from gis_meteorology.third_party.radar_mosaic_agent.adapter import render_radar_mosaic
+    out: dict[str, Any] = {**result, "outputPngRelativePath": relative_runtime_path(output_png), "outputNpzRelativePath": relative_runtime_path(output_npz)}
+    if output_map_png is not None: out["outputMapPngRelativePath"] = relative_runtime_path(output_map_png)
+    return out
 
-        output_png = output_path(args, key="output_png_relative_path")
-        output_npz = output_path(args, key="output_npz_relative_path")
-        output_map_png_value = optional_text(args, "output_map_png_relative_path")
-        output_map_png = output_path(args, key="output_map_png_relative_path") if output_map_png_value else None
-        with radar_semantic_input_paths(args, "files") as paths:
-            result = render_radar_mosaic(
-                paths=paths,
-                output_png=output_png,
-                output_npz=output_npz,
-                output_map_png=output_map_png,
-                target_time=required_text(args, "target_time"),
-                tolerance_sec=optional_int(args, "tolerance_sec") or 300,
-                strategy=optional_text(args, "strategy") or "max",
-                product=optional_text(args, "product") or "reflectivity",
-                level_index=optional_int(args, "level_index") or 0,
-                grid_res_km=optional_float(args, "grid_res_km") or 1.0,
-                min_dbz=optional_float(args, "min_dbz") or 5.0,
-            )
-        return {
-            **result,
-            "outputPngRelativePath": relative_runtime_path(output_png),
-            "outputNpzRelativePath": relative_runtime_path(output_npz),
-            **({"outputMapPngRelativePath": relative_runtime_path(output_map_png)} if output_map_png is not None else {}),
-        }
-    if tool_name == "compare_radar_mosaic_reference":
-        from gis_meteorology.third_party.radar_mosaic_agent.adapter import compare_radar_mosaic_reference
 
-        output_png = output_path(args, key="output_png_relative_path")
-        output_ref_png = output_path(args, key="output_reference_png_relative_path")
-        result = compare_radar_mosaic_reference(
-            mosaic_npz=referenced_path({"relativePath": required_text(args, "mosaic_npz_relative_path")}),
-            reference_paths=referenced_paths(args, "reference_files"),
-            output_png=output_png,
-            output_reference_png=output_ref_png,
-            target_time=required_text(args, "target_time"),
-            level_index=optional_int(args, "level_index") or 0,
-            product_label=optional_text(args, "product_label") or "反射率",
-            product_unit=optional_text(args, "product_unit") or "dBZ",
-            min_display=optional_float(args, "min_display") or 10.0,
-        )
-        return {
-            **result,
-            "outputPngRelativePath": relative_runtime_path(output_png),
-            "outputReferencePngRelativePath": relative_runtime_path(output_ref_png),
-        }
-    if tool_name == "render_rainfall_risk_map":
-        from gis_meteorology.third_party.rainfall_risk_map.adapter import render_rainfall_risk_map
+@worker_tool("compare_radar_mosaic_reference")
+def _compare_radar_mosaic_reference(args: dict[str, Any]) -> dict[str, Any]:
+    from gis_meteorology.third_party.radar_mosaic_agent.adapter import compare_radar_mosaic_reference
+    output_png = output_path(args, key="output_png_relative_path")
+    output_ref_png = output_path(args, key="output_reference_png_relative_path")
+    result = compare_radar_mosaic_reference(
+        mosaic_npz=referenced_path({"relativePath": required_text(args, "mosaic_npz_relative_path")}),
+        reference_paths=referenced_paths(args, "reference_files"),
+        output_png=output_png, output_reference_png=output_ref_png,
+        target_time=required_text(args, "target_time"), level_index=optional_int(args, "level_index") or 0,
+        product_label=optional_text(args, "product_label") or "反射率",
+        product_unit=optional_text(args, "product_unit") or "dBZ", min_display=optional_float(args, "min_display") or 10.0,
+    )
+    return {**result, "outputPngRelativePath": relative_runtime_path(output_png), "outputReferencePngRelativePath": relative_runtime_path(output_ref_png)}
 
-        output = output_path(args)
-        output_geojson_value = optional_text(args, "output_geojson_relative_path")
-        output_geojson = output_path(args, key="output_geojson_relative_path") if output_geojson_value else None
-        result = render_rainfall_risk_map(
-            nc_path=input_path(args),
-            output_png=output,
-            output_geojson=output_geojson,
-            variable=required_text(args, "variable"),
-            boundary_path=optional_referenced_path(args, "boundary_relative_path"),
-            thresholds=optional_list_of_dicts(args, "thresholds"),
-            map_mode=optional_text(args, "map_mode") or "regional",
-            aggregation=optional_text(args, "aggregation") or "mean",
-            label_field=optional_text(args, "label_field"),
-            title=optional_text(args, "title"),
-        )
-        return {
-            **result,
-            "outputRelativePath": relative_runtime_path(output),
-            **({"outputGeojsonRelativePath": relative_runtime_path(output_geojson)} if output_geojson is not None else {}),
-        }
-    if tool_name == "generate_area_rainfall_table":
-        from gis_meteorology.third_party.short_term_forecast.adapter import generate_area_rainfall_table
 
-        file_items = sequence_items(args)
-        nc_paths = [referenced_path(item) for item in file_items]
-        nc_names = [referenced_filename(item, source) for item, source in zip(file_items, nc_paths)]
-        output_xlsx = output_path(args, key="output_xlsx_relative_path")
-        output_png = output_path(args, key="output_png_relative_path")
-        result = generate_area_rainfall_table(
-            nc_paths=nc_paths,
-            nc_names=nc_names,
-            boundary_path=referenced_path({"relativePath": required_text(args, "boundary_relative_path")}),
-            output_xlsx=output_xlsx,
-            output_png=output_png,
-            top_n=optional_int(args, "top_n") or 10,
-            label_field=optional_text(args, "label_field"),
-            style=optional_dict(args, "style"),
-        )
-        return {
-            **result,
-            "outputXlsxRelativePath": relative_runtime_path(output_xlsx),
-            "outputPngRelativePath": relative_runtime_path(output_png),
-        }
-    raise ValueError(f"未知科学计算工具：{tool_name}")
+@worker_tool("render_rainfall_risk_map")
+def _render_rainfall_risk_map(args: dict[str, Any]) -> dict[str, Any]:
+    from gis_meteorology.third_party.rainfall_risk_map.adapter import render_rainfall_risk_map
+    output = output_path(args)
+    output_geojson = output_path(args, key="output_geojson_relative_path") if optional_text(args, "output_geojson_relative_path") else None
+    result = render_rainfall_risk_map(
+        nc_path=input_path(args), output_png=output, output_geojson=output_geojson,
+        variable=required_text(args, "variable"), boundary_path=optional_referenced_path(args, "boundary_relative_path"),
+        thresholds=optional_list_of_dicts(args, "thresholds"), map_mode=optional_text(args, "map_mode") or "regional",
+        aggregation=optional_text(args, "aggregation") or "mean", label_field=optional_text(args, "label_field"),
+        title=optional_text(args, "title"),
+    )
+    out = {**result, "outputRelativePath": relative_runtime_path(output)}
+    if output_geojson is not None: out["outputGeojsonRelativePath"] = relative_runtime_path(output_geojson)
+    return out
+
+
+@worker_tool("generate_area_rainfall_table")
+def _generate_area_rainfall_table(args: dict[str, Any]) -> dict[str, Any]:
+    from gis_meteorology.third_party.short_term_forecast.adapter import generate_area_rainfall_table
+    file_items = sequence_items(args)
+    nc_paths = [referenced_path(item) for item in file_items]
+    nc_names = [referenced_filename(item, source) for item, source in zip(file_items, nc_paths)]
+    output_xlsx = output_path(args, key="output_xlsx_relative_path")
+    output_png = output_path(args, key="output_png_relative_path")
+    result = generate_area_rainfall_table(
+        nc_paths=nc_paths, nc_names=nc_names,
+        boundary_path=referenced_path({"relativePath": required_text(args, "boundary_relative_path")}),
+        output_xlsx=output_xlsx, output_png=output_png, top_n=optional_int(args, "top_n") or 10,
+        label_field=optional_text(args, "label_field"), style=optional_dict(args, "style"),
+    )
+    return {**result, "outputXlsxRelativePath": relative_runtime_path(output_xlsx), "outputPngRelativePath": relative_runtime_path(output_png)}
 
 
 def create_nowcast_sequence(args: dict[str, Any]) -> Any:
@@ -669,6 +664,11 @@ def optional_number_list(args: dict[str, Any], key: str) -> list[float] | None:
     if not isinstance(value, list):
         raise ValueError(f"{key} 必须是数组")
     return [float(item) for item in value]
+
+
+@app.get("/tools/catalog")
+async def tools_catalog():
+    return {"tools": list_tools(), "count": len(list_tools())}
 
 
 @app.get("/health")
