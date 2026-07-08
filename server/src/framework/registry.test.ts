@@ -13,14 +13,15 @@ import { ToolRegistry } from './registry.js'
 import type { ToolContext, ToolProvider } from './types.js'
 import { parametersForAgentsSdk, parametersFromJsonSchema, stripNullObjectValues } from './schema.js'
 import { validateToolProvider } from './validation.js'
+import { parseEnv } from './env.js'
 import type { PostGisRepository } from '../gis/postgis.js'
 import chartProvider from '../tools/chart/index.js'
 import geocodeProvider from '../tools/geocode/index.js'
-import mediaProvider from '../tools/media/index.js'
+import { createMediaProvider } from '../tools/media/index.js'
 import memoryProvider from '../tools/memory/index.js'
 import planProvider from '../tools/plan/index.js'
 import developerProvider from '../tools/developer/index.js'
-import meteorologyProvider from '../tools/meteorology/index.js'
+import { createMeteorologyProvider } from '../tools/meteorology/index.js'
 import { createSpatialProvider } from '../tools/spatial/index.js'
 import { createRoutingProvider } from '../tools/routing/index.js'
 
@@ -155,22 +156,30 @@ describe('ToolRegistry contract', () => {
 })
 
 function builtinProviders(): ToolProvider[] {
-  process.env.API_PORT ??= '0'
-  process.env.API_HOST ??= '127.0.0.1'
-  process.env.DATABASE_URL ??= 'postgres://user:password@127.0.0.1:5432/geoforge_test'
-  process.env.RUNTIME_ROOT ??= 'runtime-test'
-  process.env.ENABLED_TOOL_PROVIDERS ??= 'geo-platform-spatial'
+  const env = parseEnv({
+    API_PORT: '0',
+    API_HOST: '127.0.0.1',
+    DATABASE_URL: 'postgres://user:password@127.0.0.1:5432/geoforge_test',
+    RUNTIME_ROOT: 'runtime-test',
+    APP_BASE_URL: 'http://localhost:8000',
+    BETTER_AUTH_URL: 'http://localhost:8000',
+    BETTER_AUTH_SECRET: 'test-secret-test-secret-test-secret-1234',
+    ENABLED_TOOL_PROVIDERS: 'geo-platform-spatial',
+  })
   const fakePostgis = {} as unknown as PostGisRepository
   return [
     chartProvider as ToolProvider,
     geocodeProvider as ToolProvider,
-    mediaProvider as ToolProvider,
+    createMediaProvider(env),
     memoryProvider as ToolProvider,
     planProvider as ToolProvider,
     developerProvider as ToolProvider,
-    meteorologyProvider as ToolProvider,
-    createSpatialProvider(fakePostgis),
-    createRoutingProvider(),
+    createMeteorologyProvider(env),
+    createSpatialProvider(fakePostgis, { runtimeRoot: env.RUNTIME_ROOT }),
+    createRoutingProvider({
+      valhallaBaseUrl: env.VALHALLA_BASE_URL,
+      timeoutMs: env.ROUTING_TIMEOUT_MS,
+    }),
   ]
 }
 

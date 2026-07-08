@@ -296,6 +296,8 @@ export const agentStateSchema = z.object({
   tasks: z.array(taskRecordSchema).default([]),
   planMode: z.boolean().default(false),
   subAgents: z.array(subAgentStateSchema).default([]),
+  activeSkills: z.array(z.string()).default([]),
+  activeMcpServers: z.array(z.string()).default([]),
   decisions: z.array(decisionRequestSchema).default([]),
   approvals: z.array(approvalRequestSchema).default([]),
   toolResults: z.array(toolCallSchema).default([]),
@@ -744,10 +746,89 @@ export const runtimeSandboxConfigSchema = z.object({
   dockerImage: z.string().default('node:22-bookworm-slim'),
 })
 
+export const runtimeMcpTransportSchema = z.enum(['streamable_http', 'sse', 'stdio'])
+export const runtimeMcpExecutionModeSchema = z.enum(['function_tools', 'hosted'])
+export const runtimeMcpApprovalSchema = z.enum(['always', 'never'])
+
+export const runtimeMcpServerConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  name: z.string().min(1),
+  description: z.string().default(''),
+  transport: runtimeMcpTransportSchema.default('streamable_http'),
+  executionMode: runtimeMcpExecutionModeSchema.default('function_tools'),
+  url: z.string().nullable().default(null),
+  connectorId: z.string().nullable().default(null),
+  command: z.string().nullable().default(null),
+  args: z.array(z.string()).default([]),
+  cwd: z.string().nullable().default(null),
+  env: z.record(z.string(), z.string()).default({}),
+  headers: z.record(z.string(), z.string()).default({}),
+  authorizationEnv: z.string().nullable().default(null),
+  allowedTools: z.array(z.string()).default([]),
+  blockedTools: z.array(z.string()).default([]),
+  includeServerInToolNames: z.boolean().default(true),
+  convertSchemasToStrict: z.boolean().default(true),
+  cacheToolsList: z.boolean().default(true),
+  useStructuredContent: z.boolean().default(true),
+  approval: runtimeMcpApprovalSchema.default('always'),
+  timeoutMs: z.number().int().positive().default(20_000),
+}).superRefine((server, context) => {
+  if (server.executionMode === 'hosted') {
+    if (server.transport !== 'streamable_http') {
+      context.addIssue({
+        code: 'custom',
+        path: ['transport'],
+        message: 'Hosted MCP 只支持 streamable_http。',
+      })
+    }
+    if (!server.url && !server.connectorId) {
+      context.addIssue({
+        code: 'custom',
+        path: ['url'],
+        message: 'Hosted MCP 必须配置 url 或 connectorId。',
+      })
+    }
+  } else if (server.transport === 'stdio') {
+    if (!server.command?.trim()) {
+      context.addIssue({
+        code: 'custom',
+        path: ['command'],
+        message: 'stdio MCP 必须配置 command。',
+      })
+    }
+  } else if (!server.url?.trim()) {
+    context.addIssue({
+      code: 'custom',
+      path: ['url'],
+      message: 'HTTP/SSE MCP 必须配置 url。',
+    })
+  }
+})
+
+export const runtimeMcpConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  connectTimeoutMs: z.number().int().positive().default(10_000),
+  closeTimeoutMs: z.number().int().positive().default(2_000),
+  servers: z.array(runtimeMcpServerConfigSchema).default([]),
+})
+
+export const runtimeSkillConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  skillsPath: z.string().default('.agents'),
+  skillPaths: z.array(z.string()).default([]),
+  skillRoots: z.array(z.string()).default([]),
+})
+
+export const runtimeSdkConfigSchema = z.object({
+  mcp: runtimeMcpConfigSchema.prefault({}),
+  skills: runtimeSkillConfigSchema.prefault({}),
+})
+
 export const agentRuntimeConfigSchema = z.object({
   loopTraceLimit: z.number().default(80),
   maxTurns: z.number().default(50),
   sandbox: runtimeSandboxConfigSchema.prefault({}),
+  sdk: runtimeSdkConfigSchema.prefault({}),
   supervisor: supervisorRuntimeConfigSchema.prefault({}),
   subAgents: z.array(runtimeSubAgentConfigSchema).default([]),
   ui: runtimeUiConfigSchema.prefault({}),
@@ -929,6 +1010,10 @@ export type RuntimePoiConfig = z.infer<typeof runtimePoiConfigSchema>
 export type RuntimeNowcastConfig = z.infer<typeof runtimeNowcastConfigSchema>
 export type RuntimePlanningConfig = z.infer<typeof runtimePlanningConfigSchema>
 export type RuntimeSandboxConfig = z.infer<typeof runtimeSandboxConfigSchema>
+export type RuntimeMcpServerConfig = z.infer<typeof runtimeMcpServerConfigSchema>
+export type RuntimeMcpConfig = z.infer<typeof runtimeMcpConfigSchema>
+export type RuntimeSkillConfig = z.infer<typeof runtimeSkillConfigSchema>
+export type RuntimeSdkConfig = z.infer<typeof runtimeSdkConfigSchema>
 export type AgentRuntimeConfig = z.infer<typeof agentRuntimeConfigSchema>
 
 export type LayerPropertyDescriptor = z.infer<typeof layerPropertyDescriptorSchema>

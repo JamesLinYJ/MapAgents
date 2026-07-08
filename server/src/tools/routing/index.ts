@@ -7,13 +7,11 @@
 //   日期:       2026年06月15日
 //   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
-import { getEnv } from '../../framework/env.js';
 import manifest from './manifest.json' with { type: 'json' };
 import { createRoutePlannerTool } from './routePlanner.js';
-export function createRoutingProvider() {
-    const env = getEnv();
+export function createRoutingProvider(deps: { valhallaBaseUrl?: string; timeoutMs: number }) {
     return {
         manifest,
-        tools: () => [createRoutePlannerTool(env.VALHALLA_BASE_URL ?? '', env.ROUTING_TIMEOUT_MS)],
+        tools: () => [createRoutePlannerTool(deps.valhallaBaseUrl ?? '', deps.timeoutMs)],
     };
 }

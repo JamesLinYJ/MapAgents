@@ -109,6 +109,5 @@ export class ModelAdapterRegistry {
 function inferContextWindow(model: string | null): number {
   const normalized = (model ?? '').toLowerCase()
   if (normalized.includes('gemini-2.5')) return 1_000_000
-  if (normalized.includes('claude')) return 200_000
   return 128_000
 }

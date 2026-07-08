@@ -13,44 +13,54 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import hashlib
-import hmac
-import json
-from contextlib import contextmanager
 import logging
 import os
 from pathlib import Path
-import shutil
-import sys
-import tempfile
-import time
-from typing import Any, Iterator
+from typing import Any
 from uuid import uuid4
 
-from worker_app.tool_registry import dispatch, list_tools, worker_tool
+from worker_app import tool_contracts as contracts
+from worker_app.bootstrap import configure_science_package_path
+from worker_app.logging import configure_logging
+from worker_app.nowcast_bridge import (
+    create_nowcast_sequence,
+    nowcast_sequence_from_reference,
+    serialize_nowcast_sequence,
+)
+from worker_app.path_sandbox import WorkerPathSandbox, referenced_filename, sequence_items
+from worker_app.request_args import (
+    optional_dict,
+    optional_float,
+    optional_int,
+    optional_list_of_dicts,
+    optional_number_list,
+    optional_text,
+    required_float,
+    required_text,
+)
+from worker_app.routes import register_system_routes
+from worker_app.tool_registry import worker_tool
+from worker_app.tool_routes import register_tool_routes
+from worker_app.worker_auth import WorkerAuthConfig, WorkerAuthVerifier
 
 # 各工具模块 import 时通过 @worker_tool 自动注册。
 # 新增工具只需在此添加一行 import + 一个独立模块文件。
 import worker_app.tools.meteorological_inspect  # noqa: F401
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
 
-logging.basicConfig(level=logging.INFO)
+
+configure_logging()
 logger = logging.getLogger("worker")
 
+
 # 宿主机开发直接从仓库源码启动 worker；生产镜像仍可使用已安装包。
-#
-# 把科学计算源码根加入导入路径，避免 /health 假绿而首次工具调用才暴露缺包。
-REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
-GIS_METEOROLOGY_SOURCE = REPOSITORY_ROOT / "packages" / "gis-meteorology" / "src"
-if GIS_METEOROLOGY_SOURCE.is_dir() and str(GIS_METEOROLOGY_SOURCE) not in sys.path:
-    sys.path.insert(0, str(GIS_METEOROLOGY_SOURCE))
+REPOSITORY_ROOT = configure_science_package_path(Path(__file__))
 
 app = FastAPI(title="geo-agent-science-worker", version="0.2.0")
 RUNTIME_ROOT = Path(os.environ.get("RUNTIME_ROOT", "runtime")).resolve()
+PATH_SANDBOX = WorkerPathSandbox(RUNTIME_ROOT)
 WORKER_SHARED_SECRET = os.environ.get("WORKER_SHARED_SECRET")
 WORKER_MAX_BODY_BYTES = int(os.environ.get("WORKER_MAX_BODY_BYTES", str(16 * 1024 * 1024)))
 WORKER_MAX_CONCURRENCY = int(os.environ.get("WORKER_MAX_CONCURRENCY", "2"))
@@ -58,33 +68,52 @@ WORKER_CLOCK_SKEW_SECONDS = int(os.environ.get("WORKER_CLOCK_SKEW_SECONDS", "30"
 WORKER_TOOL_TIMEOUT_SECONDS = float(os.environ.get("WORKER_TOOL_TIMEOUT_SECONDS", "300"))
 WORKER_NONCE_CACHE_MAX = max(1, int(os.environ.get("WORKER_NONCE_CACHE_MAX", "10000")))
 _worker_semaphore = asyncio.Semaphore(WORKER_MAX_CONCURRENCY)
-_seen_nonces: dict[str, int] = {}
+_worker_auth = WorkerAuthVerifier(WorkerAuthConfig(
+    shared_secret=WORKER_SHARED_SECRET,
+    clock_skew_seconds=WORKER_CLOCK_SKEW_SECONDS,
+    nonce_cache_max=WORKER_NONCE_CACHE_MAX,
+))
+register_system_routes(
+    app,
+    worker_shared_secret=WORKER_SHARED_SECRET,
+    worker_auth=_worker_auth,
+    nonce_cache_max=WORKER_NONCE_CACHE_MAX,
+)
+register_tool_routes(app, tool_timeout_seconds=WORKER_TOOL_TIMEOUT_SECONDS, logger=logger)
 
 
 @app.middleware("http")
 async def require_worker_secret(request: Request, call_next):
     """工具接口必须由 Node API 携带短期签名调用；health 只暴露依赖状态。"""
 
+    trace_id = request.headers.get("x-geoforge-trace-id") or uuid4().hex[:12]
+    request.state.trace_id = trace_id
     if request.url.path == "/health":
         return await call_next(request)
-    if not WORKER_SHARED_SECRET:
-        return JSONResponse({"detail": "WORKER_SHARED_SECRET 未配置"}, status_code=503)
-    body = await request.body()
     # Content-Length 预检：在完整读取 body 前先拒绝明显超大的请求
     content_length = request.headers.get("content-length")
     if content_length is not None and int(content_length) > WORKER_MAX_BODY_BYTES:
-        logger.warning("Worker 请求体超过大小限制 content-length=%s limit=%s", content_length, WORKER_MAX_BODY_BYTES)
+        logger.warning(
+            "Worker 请求体超过大小限制",
+            extra={"trace_id": trace_id, "content_length": int(content_length), "limit": WORKER_MAX_BODY_BYTES},
+        )
         return JSONResponse({"detail": "Worker 请求体超过大小限制"}, status_code=413)
     body = await request.body()
     if len(body) > WORKER_MAX_BODY_BYTES:
-        logger.warning("Worker 请求体超过大小限制 actual=%s limit=%s", len(body), WORKER_MAX_BODY_BYTES)
+        logger.warning(
+            "Worker 请求体超过大小限制",
+            extra={"trace_id": trace_id, "actual": len(body), "limit": WORKER_MAX_BODY_BYTES},
+        )
         return JSONResponse({"detail": "Worker 请求体超过大小限制"}, status_code=413)
     authorization = request.headers.get("authorization") or ""
     tool_name = _tool_name_from_path(request.url.path)
-    auth_error = _verify_worker_authorization(authorization, WORKER_SHARED_SECRET, tool_name, body)
+    auth_error = _worker_auth.verify(authorization, tool_name, body)
     if auth_error is not None:
         status_code, detail = auth_error
-        logger.warning("Worker 认证失败 tool=%s status=%s detail=%s", tool_name, status_code, detail)
+        logger.warning(
+            "Worker 认证失败",
+            extra={"trace_id": trace_id, "tool_name": tool_name, "status": status_code, "detail": detail},
+        )
         return JSONResponse({"detail": detail}, status_code=status_code)
     await _replay_body(request, body)
     async with _worker_semaphore:
@@ -113,100 +142,8 @@ def _tool_name_from_path(path: str) -> str:
     return ""
 
 
-def _verify_worker_authorization(
-    authorization: str,
-    secret: str,
-    tool_name: str,
-    body: bytes,
-) -> tuple[int, str] | None:
-    if not authorization:
-        return 401, "缺少 Worker 授权头"
-    prefix = "GeoForge-Worker "
-    if not authorization.startswith(prefix):
-        return 403, "Worker 授权格式无效"
-    token = authorization[len(prefix) :]
-    try:
-        encoded_payload, signature = token.split(".", 1)
-    except ValueError:
-        return 403, "Worker 授权 token 无效"
-    expected_signature = hmac.new(secret.encode("utf-8"), encoded_payload.encode("utf-8"), hashlib.sha256).digest()
-    actual_signature = _base64url_decode(signature)
-    if not hmac.compare_digest(actual_signature, expected_signature):
-        return 403, "Worker 授权签名无效"
-    try:
-        payload = json.loads(_base64url_decode(encoded_payload).decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
-        return 403, "Worker 授权 payload 无效"
-    if not isinstance(payload, dict) or payload.get("v") != 1:
-        return 403, "Worker 授权版本无效"
-    if payload.get("toolName") != tool_name or not tool_name:
-        return 403, "Worker 授权工具名不匹配"
-    now = int(time.time())
-    iat = _int_payload(payload.get("iat"))
-    exp = _int_payload(payload.get("exp"))
-    if iat is None or exp is None or iat > now + WORKER_CLOCK_SKEW_SECONDS or exp < now:
-        return 403, "Worker 授权已过期或时间无效"
-    body_hash = payload.get("bodyHash")
-    expected_body_hash = hashlib.sha256(body).hexdigest()
-    if not isinstance(body_hash, str) or not hmac.compare_digest(body_hash, expected_body_hash):
-        return 403, "Worker 请求体哈希不匹配"
-    nonce = payload.get("nonce")
-    if not isinstance(nonce, str) or len(nonce) < 16:
-        return 403, "Worker 授权 nonce 无效"
-    _purge_expired_nonces(now, reserve_slots=1)
-    if nonce in _seen_nonces:
-        return 403, "Worker 授权 nonce 已使用"
-    _seen_nonces[nonce] = exp
-    return None
-
-
-def _base64url_decode(value: str) -> bytes:
-    padding = "=" * ((4 - len(value) % 4) % 4)
-    return base64.urlsafe_b64decode((value + padding).encode("utf-8"))
-
-
-def _int_payload(value: Any) -> int | None:
-    return value if isinstance(value, int) and value > 0 else None
-
-
-def _purge_expired_nonces(now: int, reserve_slots: int = 0) -> None:
-    # 清理已过期的 nonce
-    expired = [nonce for nonce, exp in _seen_nonces.items() if exp < now]
-    for nonce in expired:
-        _seen_nonces.pop(nonce, None)
-    # 超容量上限时淘汰最早过期的 nonce（exp 最小优先淘汰）
-    target_size = max(0, WORKER_NONCE_CACHE_MAX - reserve_slots)
-    overflow = len(_seen_nonces) - target_size
-    if overflow > 0:
-        sorted_by_exp = sorted(_seen_nonces.items(), key=lambda item: item[1])
-        for nonce, _exp in sorted_by_exp[:overflow]:
-            _seen_nonces.pop(nonce, None)
-
-
-class ToolRequest(BaseModel):
-    args: dict[str, Any] = Field(default_factory=dict)
-
-
-@app.post("/tools/{tool_name}")
-async def run_meteorology_tool(tool_name: str, request: ToolRequest) -> dict[str, Any]:
-    """执行无状态科学计算；所有路径都必须是 runtime 根目录内的相对引用。"""
-    try:
-        payload = await asyncio.wait_for(
-            asyncio.to_thread(dispatch, tool_name, request.args),
-            timeout=WORKER_TOOL_TIMEOUT_SECONDS,
-        )
-        return {"message": f"{tool_name} 执行完成", "payload": payload, "warnings": payload.get("warnings", [])}
-    except (ValueError, FileNotFoundError) as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except TimeoutError as exc:
-        raise HTTPException(504, "Worker 工具执行超时") from exc
-    except Exception as exc:
-        logger.exception("%s failed", tool_name)
-        raise HTTPException(500, "Worker 工具执行失败，请查看 Worker 日志") from exc
-
-
-@worker_tool("meteorological_render")
-@worker_tool("render_nowcast_raster")
+@worker_tool("meteorological_render", request_model=contracts.MeteorologicalRenderRequest, display_surfaces=("map", "download"), value_ref_outputs=("meteorological_render_result",))
+@worker_tool("render_nowcast_raster", request_model=contracts.MeteorologicalRenderRequest, display_surfaces=("map", "download"), value_ref_outputs=("render_nowcast_raster_result",))
 def _meteorological_render(args: dict[str, Any]) -> dict[str, Any]:
     from gis_meteorology.service import MeteorologicalDataService
     source = input_path(args)
@@ -220,7 +157,7 @@ def _meteorological_render(args: dict[str, Any]) -> dict[str, Any]:
     return {**result, "outputRelativePath": relative_runtime_path(output)}
 
 
-@worker_tool("meteorological_stats")
+@worker_tool("meteorological_stats", request_model=contracts.MeteorologicalStatsRequest, value_ref_outputs=("meteorological_threshold", "meteorological_contour_levels"))
 def _meteorological_stats(args: dict[str, Any]) -> dict[str, Any]:
     from gis_meteorology.service import MeteorologicalDataService
     return MeteorologicalDataService().stats(
@@ -230,7 +167,7 @@ def _meteorological_stats(args: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-@worker_tool("meteorological_threshold")
+@worker_tool("meteorological_threshold", request_model=contracts.MeteorologicalThresholdRequest, display_surfaces=("map", "download"), value_ref_outputs=("meteorological_threshold_result",))
 def _meteorological_threshold(args: dict[str, Any]) -> dict[str, Any]:
     from gis_meteorology.service import MeteorologicalDataService
     return MeteorologicalDataService().threshold_geojson(
@@ -241,7 +178,7 @@ def _meteorological_threshold(args: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-@worker_tool("meteorological_contour")
+@worker_tool("meteorological_contour", request_model=contracts.MeteorologicalContourRequest, display_surfaces=("map", "download"), value_ref_outputs=("meteorological_contour_result",))
 def _meteorological_contour(args: dict[str, Any]) -> dict[str, Any]:
     from gis_meteorology.service import MeteorologicalDataService
     return MeteorologicalDataService().contours_geojson(
@@ -251,7 +188,7 @@ def _meteorological_contour(args: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-@worker_tool("meteorological_report")
+@worker_tool("meteorological_report", request_model=contracts.MeteorologicalReportRequest, read_only=False, display_surfaces=("download",))
 def _meteorological_report(args: dict[str, Any]) -> dict[str, Any]:
     from gis_meteorology.service import MeteorologicalDataService
     source = input_path(args)
@@ -263,21 +200,21 @@ def _meteorological_report(args: dict[str, Any]) -> dict[str, Any]:
     return {**result, "outputRelativePath": relative_runtime_path(output)}
 
 
-@worker_tool("create_nowcast_sequence")
+@worker_tool("create_nowcast_sequence", request_model=contracts.CreateNowcastSequenceRequest, value_ref_outputs=("nowcast_sequence",))
 def _create_nowcast_sequence(args: dict[str, Any]) -> dict[str, Any]:
-    return serialize_nowcast_sequence(create_nowcast_sequence(args))
+    return serialize_nowcast_sequence(create_nowcast_sequence(args, PATH_SANDBOX), PATH_SANDBOX)
 
 
-@worker_tool("inspect_nowcast_sequence")
+@worker_tool("inspect_nowcast_sequence", request_model=contracts.InspectNowcastSequenceRequest, value_ref_outputs=("nowcast_sequence_inspection",))
 def _inspect_nowcast_sequence(args: dict[str, Any]) -> dict[str, Any]:
     from gis_meteorology import NowcastSequenceService
-    return NowcastSequenceService().inspect_sequence(nowcast_sequence_from_reference(args))
+    return NowcastSequenceService().inspect_sequence(nowcast_sequence_from_reference(args, PATH_SANDBOX))
 
 
-@worker_tool("meteorological_precipitation_nowcast")
+@worker_tool("meteorological_precipitation_nowcast", request_model=contracts.MeteorologicalPrecipitationNowcastRequest, value_ref_outputs=("nowcast_analysis", "nowcast_map_candidate"))
 def _meteorological_precipitation_nowcast(args: dict[str, Any]) -> dict[str, Any]:
     from gis_meteorology import NowcastAnalysisService
-    sequence = nowcast_sequence_from_reference(args, variable_override=optional_text(args, "variable"))
+    sequence = nowcast_sequence_from_reference(args, PATH_SANDBOX, variable_override=optional_text(args, "variable"))
     analysis = NowcastAnalysisService().analyze(
         sequence, area=optional_dict(args, "area"), bbox=optional_number_list(args, "bbox"),
         coordinate=optional_dict(args, "coordinate"),
@@ -292,7 +229,7 @@ def _meteorological_precipitation_nowcast(args: dict[str, Any]) -> dict[str, Any
     return analysis
 
 
-@worker_tool("answer_nowcast_question")
+@worker_tool("answer_nowcast_question", request_model=contracts.AnswerNowcastQuestionRequest, value_ref_outputs=("nowcast_answer",))
 def _answer_nowcast_question(args: dict[str, Any]) -> dict[str, Any]:
     from gis_meteorology import NowcastTextService
     analysis = args.get("analysis")
@@ -300,7 +237,7 @@ def _answer_nowcast_question(args: dict[str, Any]) -> dict[str, Any]:
     return NowcastTextService().build_draft_answer(facts=analysis, question=required_text(args, "question"))
 
 
-@worker_tool("generate_nowcast_forecast_text")
+@worker_tool("generate_nowcast_forecast_text", request_model=contracts.GenerateNowcastForecastTextRequest, value_ref_outputs=("nowcast_forecast_text",))
 def _generate_nowcast_forecast_text(args: dict[str, Any]) -> dict[str, Any]:
     from gis_meteorology import NowcastTextService
     analysis = args.get("analysis")
@@ -308,14 +245,14 @@ def _generate_nowcast_forecast_text(args: dict[str, Any]) -> dict[str, Any]:
     return NowcastTextService().build_draft_answer(facts=analysis, question="生成正式短时临近预报（短临）预报文字")
 
 
-@worker_tool("inspect_radar_station_collection")
+@worker_tool("inspect_radar_station_collection", request_model=contracts.RadarStationCollectionRequest, value_ref_outputs=("radar_station_collection", "radar_target_time"))
 def _inspect_radar_station_collection(args: dict[str, Any]) -> dict[str, Any]:
     from gis_meteorology.third_party.radar_mosaic_agent.adapter import inspect_radar_station_collection
     with radar_semantic_input_paths(args, "files") as paths:
         return inspect_radar_station_collection(paths)
 
 
-@worker_tool("recommend_radar_mosaic_strategy")
+@worker_tool("recommend_radar_mosaic_strategy", request_model=contracts.RecommendRadarMosaicStrategyRequest, value_ref_outputs=("radar_mosaic_strategy",))
 def _recommend_radar_mosaic_strategy(args: dict[str, Any]) -> dict[str, Any]:
     from gis_meteorology.third_party.radar_mosaic_agent.adapter import recommend_radar_mosaic_strategy
     return recommend_radar_mosaic_strategy(
@@ -324,7 +261,7 @@ def _recommend_radar_mosaic_strategy(args: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-@worker_tool("render_radar_mosaic")
+@worker_tool("render_radar_mosaic", request_model=contracts.RenderRadarMosaicRequest, display_surfaces=("map", "mini_app", "download"), value_ref_outputs=("radar_mosaic_result",))
 def _render_radar_mosaic(args: dict[str, Any]) -> dict[str, Any]:
     from gis_meteorology.third_party.radar_mosaic_agent.adapter import render_radar_mosaic
     output_png = output_path(args, key="output_png_relative_path")
@@ -343,7 +280,7 @@ def _render_radar_mosaic(args: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-@worker_tool("compare_radar_mosaic_reference")
+@worker_tool("compare_radar_mosaic_reference", request_model=contracts.CompareRadarMosaicReferenceRequest, display_surfaces=("mini_app", "download"), value_ref_outputs=("radar_reference_comparison",))
 def _compare_radar_mosaic_reference(args: dict[str, Any]) -> dict[str, Any]:
     from gis_meteorology.third_party.radar_mosaic_agent.adapter import compare_radar_mosaic_reference
     output_png = output_path(args, key="output_png_relative_path")
@@ -359,7 +296,7 @@ def _compare_radar_mosaic_reference(args: dict[str, Any]) -> dict[str, Any]:
     return {**result, "outputPngRelativePath": relative_runtime_path(output_png), "outputReferencePngRelativePath": relative_runtime_path(output_ref_png)}
 
 
-@worker_tool("render_rainfall_risk_map")
+@worker_tool("render_rainfall_risk_map", request_model=contracts.RenderRainfallRiskMapRequest, display_surfaces=("map", "mini_app", "download"), value_ref_outputs=("rainfall_risk_map_result",))
 def _render_rainfall_risk_map(args: dict[str, Any]) -> dict[str, Any]:
     from gis_meteorology.third_party.rainfall_risk_map.adapter import render_rainfall_risk_map
     output = output_path(args)
@@ -376,7 +313,7 @@ def _render_rainfall_risk_map(args: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-@worker_tool("generate_area_rainfall_table")
+@worker_tool("generate_area_rainfall_table", request_model=contracts.GenerateAreaRainfallTableRequest, display_surfaces=("mini_app", "download"), value_ref_outputs=("area_rainfall_table_result",))
 def _generate_area_rainfall_table(args: dict[str, Any]) -> dict[str, Any]:
     from gis_meteorology.third_party.short_term_forecast.adapter import generate_area_rainfall_table
     file_items = sequence_items(args)
@@ -393,81 +330,8 @@ def _generate_area_rainfall_table(args: dict[str, Any]) -> dict[str, Any]:
     return {**result, "outputXlsxRelativePath": relative_runtime_path(output_xlsx), "outputPngRelativePath": relative_runtime_path(output_png)}
 
 
-def create_nowcast_sequence(args: dict[str, Any]) -> Any:
-    from gis_meteorology import NowcastProductProfile, NowcastSequenceService
-    from gis_meteorology.service import MeteorologicalDataService
-
-    variable = optional_text(args, "variable")
-    datasets = []
-    inspector = MeteorologicalDataService()
-    for index, item in enumerate(sequence_items(args)):
-        source = referenced_path(item)
-        filename = referenced_filename(item, source)
-        datasets.append({
-            "dataset_id": str(item.get("fileId") or item.get("datasetId") or f"dataset_{index + 1}"),
-            "filename": filename,
-            "path": source,
-            "metadata": inspector.inspect(source, filename=filename),
-        })
-    profile = NowcastProductProfile(precipitation_variables=(variable,)) if variable else NowcastProductProfile()
-    return NowcastSequenceService().create_sequence(
-        sequence_id=f"sequence_{uuid4().hex}",
-        datasets=datasets,
-        profile=profile,
-    )
-
-
-def nowcast_sequence_from_reference(args: dict[str, Any], *, variable_override: str | None = None) -> Any:
-    from gis_meteorology import NowcastProductProfile, NowcastSequenceService
-
-    raw = args.get("sequence")
-    if not isinstance(raw, dict):
-        raise ValueError("sequence 必须是对象")
-    raw_datasets = raw.get("datasets")
-    if not isinstance(raw_datasets, list) or not raw_datasets:
-        raise ValueError("sequence.datasets 必须是非空数组")
-    datasets = []
-    for index, item in enumerate(raw_datasets):
-        if not isinstance(item, dict):
-            raise ValueError("sequence.datasets 中每一项必须是对象")
-        source = referenced_path(item)
-        datasets.append({
-            "dataset_id": str(item.get("datasetId") or f"dataset_{index + 1}"),
-            "filename": str(item.get("filename") or source.name),
-            "path": source,
-            "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
-        })
-    variable = variable_override or optional_text(raw, "variable")
-    profile = NowcastProductProfile(precipitation_variables=(variable,)) if variable else NowcastProductProfile()
-    return NowcastSequenceService().create_sequence(
-        sequence_id=str(raw.get("sequenceId") or f"sequence_{uuid4().hex}"),
-        datasets=datasets,
-        profile=profile,
-    )
-
-
-def serialize_nowcast_sequence(sequence: Any) -> dict[str, Any]:
-    payload = sequence.to_payload()
-    datasets = []
-    for item, raw in zip(sequence.datasets, payload.get("datasets", []), strict=True):
-        datasets.append({
-            **{key: value for key, value in raw.items() if key != "storagePath"},
-            "relativePath": relative_runtime_path(item.path),
-        })
-    return {**payload, "datasets": datasets}
-
-
-def sequence_items(args: dict[str, Any]) -> list[dict[str, Any]]:
-    items = args.get("files")
-    if not isinstance(items, list) or not items:
-        raise ValueError("files 必须是非空数组")
-    if not all(isinstance(item, dict) for item in items):
-        raise ValueError("files 中每一项必须是对象")
-    return items
-
-
 def input_path(args: dict[str, Any]) -> Path:
-    return referenced_path({"relativePath": required_text(args, "file_relative_path")})
+    return PATH_SANDBOX.input_path(args)
 
 
 def input_filename(args: dict[str, Any], source: Path | None = None) -> str | None:
@@ -479,218 +343,24 @@ def input_filename(args: dict[str, Any], source: Path | None = None) -> str | No
 
 
 def output_path(args: dict[str, Any], *, key: str = "output_relative_path") -> Path:
-    relative = required_text(args, key)
-    target = resolve_runtime_path(relative, must_exist=False)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    return target
+    return PATH_SANDBOX.output_path(args, key=key)
 
 
 def optional_referenced_path(args: dict[str, Any], key: str) -> Path | None:
-    value = args.get(key)
-    if value is None:
-        return None
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{key} 必须是非空字符串")
-    return referenced_path({"relativePath": value})
+    return PATH_SANDBOX.optional_referenced_path(args, key)
 
 
 def referenced_paths(args: dict[str, Any], key: str) -> list[Path]:
-    items = args.get(key)
-    if not isinstance(items, list) or not items:
-        raise ValueError(f"{key} 必须是非空文件引用数组")
-    paths = []
-    for index, item in enumerate(items):
-        if not isinstance(item, dict):
-            raise ValueError(f"{key}[{index}] 必须是对象")
-        paths.append(referenced_path(item))
-    return paths
+    return PATH_SANDBOX.referenced_paths(args, key)
 
 
 def referenced_path(value: dict[str, Any]) -> Path:
-    relative = value.get("relativePath") or value.get("file_relative_path")
-    if not isinstance(relative, str) or not relative.strip():
-        raise ValueError("文件引用缺少 relativePath")
-    return resolve_runtime_path(relative, must_exist=True)
+    return PATH_SANDBOX.referenced_path(value)
 
 
-def referenced_filename(value: dict[str, Any], source: Path) -> str:
-    for key in ("name", "filename", "fileName"):
-        raw = value.get(key)
-        if isinstance(raw, str) and raw.strip():
-            return Path(raw.strip()).name
-    return source.name
-
-
-@contextmanager
-def radar_semantic_input_paths(args: dict[str, Any], key: str) -> Iterator[list[Path]]:
-    """为依赖文件名和父目录语义的雷达算法重建临时输入视图。"""
-
-    items = sequence_items({key: args.get(key)}) if key == "files" else _file_reference_items(args, key)
-    with tempfile.TemporaryDirectory(prefix="geoforge-radar-input-") as tmp:
-        root = Path(tmp)
-        aliases: list[Path] = []
-        for index, item in enumerate(items):
-            source = referenced_path(item)
-            alias = root / radar_semantic_relative_path(item, source, index)
-            alias.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, alias)
-            aliases.append(alias)
-        yield aliases
-
-
-def _file_reference_items(args: dict[str, Any], key: str) -> list[dict[str, Any]]:
-    items = args.get(key)
-    if not isinstance(items, list) or not items:
-        raise ValueError(f"{key} 必须是非空文件引用数组")
-    if not all(isinstance(item, dict) for item in items):
-        raise ValueError(f"{key} 中每一项必须是对象")
-    return items
-
-
-def radar_semantic_relative_path(value: dict[str, Any], source: Path, index: int) -> Path:
-    """把平台文件引用投影成雷达算法需要的“站点目录/原始文件名”结构。"""
-
-    raw_relative = value.get("sourceRelativePath")
-    filename = referenced_filename(value, source)
-    if isinstance(raw_relative, str) and raw_relative.strip():
-        semantic = safe_relative_path(raw_relative.strip())
-        if semantic.name:
-            return Path(f"{index + 1:04d}") / semantic
-    station = radar_station_from_filename(filename)
-    return Path(f"{index + 1:04d}") / (station or f"station_{index + 1}") / safe_path_segment(filename)
-
-
-def safe_relative_path(value: str) -> Path:
-    candidate = Path(value)
-    if candidate.is_absolute():
-        raise ValueError("雷达文件 sourceRelativePath 不能是绝对路径")
-    clean_parts: list[str] = []
-    for part in candidate.parts:
-        if part in {"", ".", ".."}:
-            if part == "..":
-                raise ValueError("雷达文件 sourceRelativePath 不能包含上级目录")
-            continue
-        clean_parts.append(safe_path_segment(part))
-    if not clean_parts:
-        raise ValueError("雷达文件 sourceRelativePath 不能为空")
-    return Path(*clean_parts)
-
-
-def safe_path_segment(value: str) -> str:
-    name = Path(value.strip()).name
-    if not name or name in {".", ".."} or "\x00" in name:
-        raise ValueError("雷达文件名不合法")
-    return name
-
-
-def radar_station_from_filename(filename: str) -> str | None:
-    parts = filename.split("_")
-    if len(parts) >= 4 and parts[0] == "Z" and parts[1] == "RADR":
-        return safe_path_segment(parts[3])
-    return None
-
-
-def resolve_runtime_path(relative: str, *, must_exist: bool) -> Path:
-    candidate = Path(relative)
-    if candidate.is_absolute():
-        raise ValueError("Worker 禁止接收绝对路径")
-    resolved = (RUNTIME_ROOT / candidate).resolve()
-    if resolved != RUNTIME_ROOT and RUNTIME_ROOT not in resolved.parents:
-        raise ValueError("文件引用越出共享 runtime 根目录")
-    if must_exist and not resolved.is_file():
-        raise FileNotFoundError(f"文件引用不存在：{relative}")
-    return resolved
+def radar_semantic_input_paths(args: dict[str, Any], key: str):
+    return PATH_SANDBOX.radar_semantic_input_paths(args, key)
 
 
 def relative_runtime_path(value: Path) -> str:
-    return value.resolve().relative_to(RUNTIME_ROOT).as_posix()
-
-
-def required_text(args: dict[str, Any], key: str) -> str:
-    value = args.get(key)
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{key} 不能为空")
-    return value.strip()
-
-
-def optional_text(args: dict[str, Any], key: str) -> str | None:
-    value = args.get(key)
-    return value.strip() if isinstance(value, str) and value.strip() else None
-
-
-def optional_int(args: dict[str, Any], key: str) -> int | None:
-    value = args.get(key)
-    return int(value) if value is not None else None
-
-
-def required_float(args: dict[str, Any], key: str) -> float:
-    value = args.get(key)
-    if value is None:
-        raise ValueError(f"{key} 不能为空")
-    return float(value)
-
-def optional_float(args: dict[str, Any], key: str) -> float | None:
-    value = args.get(key)
-    return float(value) if value is not None else None
-
-
-def optional_dict(args: dict[str, Any], key: str) -> dict[str, Any] | None:
-    value = args.get(key)
-    if value is None:
-        return None
-    if not isinstance(value, dict):
-        raise ValueError(f"{key} 必须是对象")
-    return value
-
-
-def optional_list_of_dicts(args: dict[str, Any], key: str) -> list[dict[str, Any]] | None:
-    value = args.get(key)
-    if value is None:
-        return None
-    if not isinstance(value, list):
-        raise ValueError(f"{key} 必须是数组")
-    if not all(isinstance(item, dict) for item in value):
-        raise ValueError(f"{key} 中每一项必须是对象")
-    return value
-
-
-def optional_number_list(args: dict[str, Any], key: str) -> list[float] | None:
-    value = args.get(key)
-    if value is None:
-        return None
-    if not isinstance(value, list):
-        raise ValueError(f"{key} 必须是数组")
-    return [float(item) for item in value]
-
-
-@app.get("/tools/catalog")
-async def tools_catalog():
-    return {"tools": list_tools(), "count": len(list_tools())}
-
-
-@app.get("/health")
-async def health():
-    if not WORKER_SHARED_SECRET:
-        return JSONResponse(
-            {"status": "degraded", "live": True, "ready": False, "detail": "WORKER_SHARED_SECRET 未配置"},
-            status_code=503,
-        )
-    try:
-        import gis_meteorology  # noqa: F401
-        import geopandas  # noqa: F401
-        import matplotlib  # noqa: F401
-        import numpy  # noqa: F401
-        import openpyxl  # noqa: F401
-        import pandas  # noqa: F401
-        import scipy  # noqa: F401
-    except ImportError as exc:
-        raise HTTPException(503, f"gis_meteorology 不可用：{exc}") from exc
-    return {
-        "status": "ok",
-        "live": True,
-        "ready": True,
-        "runtimeRoot": str(RUNTIME_ROOT),
-        "gisMeteorologyAvailable": True,
-        "nonceCacheSize": len(_seen_nonces),
-        "nonceCacheMax": WORKER_NONCE_CACHE_MAX,
-    }
+    return PATH_SANDBOX.relative_runtime_path(value)

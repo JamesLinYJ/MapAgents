@@ -935,6 +935,7 @@ function testSecurity(): SecurityServices {
   return {
     auth: {
       authenticateRequest: async () => TEST_AUTH,
+      authenticateHeaders: async () => TEST_AUTH,
       isTrustedOrigin: (origin?: string | null) => origin === TEST_ORIGIN,
       isAuthContextActive: async () => true,
       requireCsrf: () => {},

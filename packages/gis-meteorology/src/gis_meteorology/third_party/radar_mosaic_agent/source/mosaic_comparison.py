@@ -191,19 +191,6 @@ def _setup_matplotlib_fonts() -> None:
     from matplotlib import font_manager
     import matplotlib.pyplot as plt
 
-    # 强制添加常见中文字体文件
-    font_files = [
-        Path("C:/Windows/Fonts/msyh.ttc"),
-        Path("C:/Windows/Fonts/simhei.ttf"),
-        Path("C:/Windows/Fonts/NotoSansSC-VF.ttf"),
-    ]
-    for font_file in font_files:
-        if font_file.exists():
-            try:
-                font_manager.fontManager.addfont(str(font_file))
-            except Exception:
-                pass
-
     # 按优先级设置
     preferred = ["Microsoft YaHei", "SimHei", "Noto Sans SC", "DengXian", "SimSun"]
     available = {font.name for font in font_manager.fontManager.ttflist}

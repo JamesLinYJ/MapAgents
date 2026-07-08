@@ -5,7 +5,7 @@
 //   文件:       commandTypes.ts
 //
 //   日期:       2026年07月07日
-//   作者:       Claude Code
+//   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
 // 显式区分 Command（写操作/副作用）和 Query（只读）。
@@ -47,9 +47,9 @@ export function categorizeCommand(name: string): CommandCategory {
 }
 
 export function isWriteCommand(definition: WsCommandDefinition): boolean {
-  return definition.name ? categorizeCommand(definition.name) === 'write' : false
+  return categorizeCommand(definition.type) === 'write'
 }
 
 export function isReadCommand(definition: WsCommandDefinition): boolean {
-  return definition.name ? categorizeCommand(definition.name) === 'read' : false
+  return categorizeCommand(definition.type) === 'read'
 }

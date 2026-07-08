@@ -18,6 +18,20 @@ export function defaultRuntimeConfig(options: DefaultRuntimeConfigOptions = {}):
     loopTraceLimit: 80,
     maxTurns: 50,
     sandbox,
+    sdk: {
+      mcp: {
+        enabled: false,
+        connectTimeoutMs: 10_000,
+        closeTimeoutMs: 2_000,
+        servers: [],
+      },
+      skills: {
+        enabled: false,
+        skillsPath: '.agents',
+        skillPaths: [],
+        skillRoots: [],
+      },
+    },
     supervisor: {
       name: 'geo_agent_supervisor',
       systemPrompt: '',

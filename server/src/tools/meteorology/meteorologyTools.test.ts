@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   地理智能平台 - 杭州短时临近预报（短临）工具契约测试
+//   地理智能平台 - 短时临近预报（短临）工具契约测试
 //
 //   文件:       meteorologyTools.test.ts
 //
@@ -12,15 +12,38 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ToolContext } from '../../framework/types.js'
 import { ToolRegistry } from '../../framework/registry.js'
 import { validateToolProvider } from '../../framework/validation.js'
-import provider from './index.js'
-import { meteorologyTools } from './meteorologyTools.js'
+import { parseEnv } from '../../framework/env.js'
+import { createMeteorologyProvider } from './index.js'
+import { createMeteorologyTools } from './meteorologyTools.js'
+import {
+  clearMeteorologyWorkerCatalogCache,
+  REQUIRED_METEOROLOGY_WORKER_TOOLS,
+  workerContractHash,
+} from './meteorologyWorkerClient.js'
+import type { ToolContractManifest, WorkerToolCatalog } from '@geo-agent-platform/shared-types'
+
+const testEnv = parseEnv({
+  API_PORT: '8000',
+  API_HOST: '127.0.0.1',
+  DATABASE_URL: 'postgres://test:test@127.0.0.1/test',
+  RUNTIME_ROOT: 'runtime',
+  APP_BASE_URL: 'http://127.0.0.1:8000',
+  BETTER_AUTH_URL: 'http://127.0.0.1:8000',
+  BETTER_AUTH_SECRET: 'test_better_auth_secret_32_bytes__',
+  WORKER_URL: 'http://worker.test',
+  WORKER_SHARED_SECRET: 'test_worker_shared_secret_32_bytes',
+  ENABLED_TOOL_PROVIDERS: 'geo-platform-meteorology',
+})
+const provider = createMeteorologyProvider(testEnv)
+const meteorologyTools = createMeteorologyTools(testEnv)
 
 afterEach(() => {
+  clearMeteorologyWorkerCatalogCache()
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
 })
 
-describe('Hangzhou nowcast tools', () => {
+describe('nowcast tools', () => {
   it('keeps the meteorology manifest and runtime definitions identical', () => {
     expect(() => validateToolProvider(provider)).not.toThrow()
   })
@@ -47,7 +70,7 @@ describe('Hangzhou nowcast tools', () => {
         ],
       }),
     ]])
-    const tool = meteorologyTools.find(candidate => candidate.name === 'prepare_hangzhou_nowcast_scope')!
+    const tool = meteorologyTools.find(candidate => candidate.name === 'prepare_nowcast_scope')!
     const result = await tool.handler({ question: '接下来天气怎么样？', scope_ref: 'ref_boundary' }, context(state))
 
     expect(result.valueRefs?.[0].kind).toBe('nowcast_area')
@@ -60,34 +83,34 @@ describe('Hangzhou nowcast tools', () => {
       'ref_place',
       valueRef('ref_place', 'place_candidate', { lat: 30.2462469, lon: 120.2060110, label: '市民中心' }),
     ]])
-    const tool = meteorologyTools.find(candidate => candidate.name === 'prepare_hangzhou_nowcast_scope')!
+    const tool = meteorologyTools.find(candidate => candidate.name === 'prepare_nowcast_scope')!
     const result = await tool.handler({ question: '市民中心天气怎么样？', scope_ref: 'ref_place' }, context(state))
 
     expect(result.valueRefs?.[0].kind).toBe('nowcast_coordinate')
     expect(result.valueRefs?.[0].value).toEqual({ lat: 30.2462469, lng: 120.206011, label: '市民中心' })
   })
 
-  it('fails instead of fetching a Hangzhou boundary when no existing reference is provided', async () => {
-    const tool = meteorologyTools.find(candidate => candidate.name === 'prepare_hangzhou_nowcast_scope')!
+  it('fails instead of fetching or fabricating a boundary when no existing reference is provided', async () => {
+    const tool = meteorologyTools.find(candidate => candidate.name === 'prepare_nowcast_scope')!
     await expect(tool.handler({ question: '接下来天气怎么样？' }, context()))
-      .rejects.toThrow('请先使用 list_layers 检索杭州行政区划图层')
+      .rejects.toThrow('短时临近预报范围必须来自平台已有图层')
   })
 
   it('delivers the standard answer together with a peak-time raster artifact', async () => {
     stubRuntimeEnv()
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(workerResponse({
+    const fetchMock = stubWorkerFetch([
+      {
         answer: '15分钟后将下小雨，30分钟后雨量变大。',
         basis: [],
-      }))
-      .mockResolvedValueOnce(workerResponse({
+      },
+      {
         coordinates: [[119, 31], [121, 31], [121, 29], [119, 29]],
         bounds: [119, 29, 121, 31],
         variable: 'QPF',
         width: 640,
         height: 480,
-      }))
-    vi.stubGlobal('fetch', fetchMock)
+      },
+    ])
     const state = new Map<string, unknown>([[
       'ref_analysis',
       {
@@ -121,8 +144,8 @@ describe('Hangzhou nowcast tools', () => {
       context(state),
     )
 
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({
+    expect(workerToolCalls(fetchMock)).toHaveLength(2)
+    expect(workerToolBody(fetchMock, 1)).toMatchObject({
       args: { file_relative_path: 'uploads/peak.nc', variable: 'QPF', bbox: [119, 29, 121, 31] },
     })
     expect(result.payload.answer).toBe('15分钟后将下小雨，30分钟后雨量变大。')
@@ -139,7 +162,7 @@ describe('Hangzhou nowcast tools', () => {
 
   it('passes the full radar mosaic contract to the worker and records provenance', async () => {
     stubRuntimeEnv()
-    const fetchMock = vi.fn(async () => workerResponse({
+    const fetchMock = stubWorkerFetch([{
       targetTime: '202604091955',
       strategy: 'quality',
       product: 'echo_top',
@@ -147,8 +170,7 @@ describe('Hangzhou nowcast tools', () => {
       valueRange: { min: 1, max: 9 },
       bounds: [119, 29, 121, 31],
       coordinates: [[119, 31], [121, 31], [121, 29], [119, 29]],
-    }))
-    vi.stubGlobal('fetch', fetchMock)
+    }])
     const state = new Map<string, unknown>([
       ['ref_radar_collection', valueRef('ref_radar_collection', 'radar_station_collection', {
         files: [{ name: 'sample.bz2', relativePath: 'uploads/sample.bz2' }],
@@ -168,7 +190,7 @@ describe('Hangzhou nowcast tools', () => {
       min_dbz: 3,
     }, context(state))
 
-    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
+    const body = workerToolBody(fetchMock)
     expect(body.args).toMatchObject({
       product: 'echo_top',
       level_index: 2,
@@ -211,13 +233,12 @@ describe('Hangzhou nowcast tools', () => {
 
   it('inspects radar station collections and emits target-time refs', async () => {
     stubRuntimeEnv()
-    const fetchMock = vi.fn(async () => workerResponse({
+    const fetchMock = stubWorkerFetch([{
       stationCount: 1,
       fileCount: 1,
       products: ['reflectivity', 'echo_top'],
       candidateTimes: [{ timestamp: '202604091955', fileCount: 1 }],
-    }))
-    vi.stubGlobal('fetch', fetchMock)
+    }])
     const state = new Map<string, unknown>([
       ['ref_radar_files', valueRef('ref_radar_files', 'radar_file_collection', {
         files: [{ name: 'RADA_CHN_Z9001_VOL_20260409195500_O_DOR_SAD_CAP_FMT.bin.bz2', relativePath: 'objects/sha256/aa/hash.bz2' }],
@@ -226,7 +247,7 @@ describe('Hangzhou nowcast tools', () => {
     const tool = meteorologyTools.find(candidate => candidate.name === 'inspect_radar_station_collection')!
     const result = await tool.handler({ radar_collection_ref: 'ref_radar_files' }, context(state))
 
-    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+    expect(workerToolBody(fetchMock)).toMatchObject({
       args: {
         files: [{ name: 'RADA_CHN_Z9001_VOL_20260409195500_O_DOR_SAD_CAP_FMT.bin.bz2', relativePath: 'objects/sha256/aa/hash.bz2' }],
       },
@@ -243,11 +264,10 @@ describe('Hangzhou nowcast tools', () => {
 
   it('compares radar mosaic output with a NetCDF reference and records slider artifacts', async () => {
     stubRuntimeEnv()
-    const fetchMock = vi.fn(async () => workerResponse({
+    const fetchMock = stubWorkerFetch([{
       ncFile: 'reference.nc',
       stats: { rmse: 0.5, mae: 0.25 },
-    }))
-    vi.stubGlobal('fetch', fetchMock)
+    }])
     const state = new Map<string, unknown>([
       ['ref_mosaic', valueRef('ref_mosaic', 'radar_mosaic_result', {
         npzRelativePath: 'artifacts/run_1/mosaic.npz',
@@ -269,7 +289,7 @@ describe('Hangzhou nowcast tools', () => {
       min_display: 2,
     }, context(state))
 
-    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+    expect(workerToolBody(fetchMock)).toMatchObject({
       args: {
         mosaic_npz_relative_path: 'artifacts/run_1/mosaic.npz',
         reference_files: [{ name: 'reference.nc', relativePath: 'objects/sha256/bb/reference.nc' }],
@@ -308,12 +328,11 @@ describe('Hangzhou nowcast tools', () => {
 
   it('sends the original filename with dataset object paths', async () => {
     stubRuntimeEnv()
-    const fetchMock = vi.fn(async () => workerResponse({
+    const fetchMock = stubWorkerFetch([{
       variables: [{ name: 'QPF', analysisReady: true, mapReady: true }],
       times: [],
       levels: [],
-    }))
-    vi.stubGlobal('fetch', fetchMock)
+    }])
     const state = new Map<string, unknown>([
       ['ref_file', valueRef('ref_file', 'meteorological_file', {
         name: '202604091955_202604092000.nc',
@@ -323,7 +342,7 @@ describe('Hangzhou nowcast tools', () => {
     const tool = meteorologyTools.find(candidate => candidate.name === 'meteorological_inspect')!
     await tool.handler({ dataset_ref: 'ref_file' }, context(state))
 
-    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+    expect(workerToolBody(fetchMock)).toMatchObject({
       args: {
         file_relative_path: 'objects/sha256/ab/abcdef',
         file_name: '202604091955_202604092000.nc',
@@ -347,7 +366,7 @@ describe('Hangzhou nowcast tools', () => {
 
   it('returns a map-native GeoJSON artifact for rainfall risk regions', async () => {
     stubRuntimeEnv()
-    const fetchMock = vi.fn(async () => workerResponse({
+    const fetchMock = stubWorkerFetch([{
       variable: 'QPF',
       units: 'mm',
       mapMode: 'regional',
@@ -355,8 +374,7 @@ describe('Hangzhou nowcast tools', () => {
       thresholds: [{ label: '强降雨', min: 1, max: 999, color: '#d73027' }],
       regionSummary: { counts: { 强降雨: 1 }, topRegions: [{ name: '测试区', value: 3 }] },
       outputs: { png: 'risk.png', geojson: 'risk.geojson' },
-    }))
-    vi.stubGlobal('fetch', fetchMock)
+    }])
     const state = new Map<string, unknown>([
       ['ref_dataset', valueRef('ref_dataset', 'meteorological_dataset', {
         name: 'rain.nc',
@@ -379,7 +397,7 @@ describe('Hangzhou nowcast tools', () => {
       thresholds_ref: 'ref_thresholds',
     }, context(state))
 
-    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
+    const body = workerToolBody(fetchMock)
     expect(body.args).toMatchObject({
       output_relative_path: expect.stringMatching(/artifact_.*\.png$/u),
       output_geojson_relative_path: expect.stringMatching(/artifact_.*\.geojson$/u),
@@ -409,7 +427,7 @@ describe('Hangzhou nowcast tools', () => {
 
   it('accepts a layer valueRef with embedded features as rainfall risk boundary input', async () => {
     stubRuntimeEnv()
-    const fetchMock = vi.fn(async () => workerResponse({
+    const fetchMock = stubWorkerFetch([{
       variable: 'QPF',
       units: 'mm',
       mapMode: 'regional',
@@ -417,8 +435,7 @@ describe('Hangzhou nowcast tools', () => {
       thresholds: [{ label: '强降雨', min: 1, max: 999, color: '#d73027' }],
       regionSummary: { counts: { 强降雨: 1 }, topRegions: [{ name: '测试区', value: 3 }] },
       outputs: { png: 'risk.png', geojson: 'risk.geojson' },
-    }))
-    vi.stubGlobal('fetch', fetchMock)
+    }])
     const state = new Map<string, unknown>([
       ['ref_dataset', valueRef('ref_dataset', 'meteorological_dataset', {
         name: 'rain.nc',
@@ -441,7 +458,7 @@ describe('Hangzhou nowcast tools', () => {
       thresholds_ref: 'ref_thresholds',
     }, context(state))
 
-    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
+    const body = workerToolBody(fetchMock)
     expect(body.args.boundary_relative_path).toMatch(/^artifacts\/run_1\/boundary_.*\.geojson$/u)
   })
 
@@ -461,12 +478,11 @@ describe('Hangzhou nowcast tools', () => {
       sourceSnapshot: 'packages/gis-meteorology/src/gis_meteorology/third_party/rainfall_risk_map/source/original',
     })
 
-    const fetchMock = vi.fn(async () => workerResponse({
+    const fetchMock = stubWorkerFetch([{
       regionCount: 1,
       topN: 1,
       topRows: [{ rank: 1, region: '测试区', areaRainfall: 3 }],
-    }))
-    vi.stubGlobal('fetch', fetchMock)
+    }])
     const state = new Map<string, unknown>([
       ['ref_collection', valueRef('ref_collection', 'meteorological_file_collection', {
         files: [{ name: '202604091955_202604092000.nc', relativePath: 'uploads/a.nc' }],
@@ -484,7 +500,7 @@ describe('Hangzhou nowcast tools', () => {
       style: { titleText: '测试表格' },
     }, context(state))
 
-    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
+    const body = workerToolBody(fetchMock)
     expect(body.args).toMatchObject({
       files: [{ name: '202604091955_202604092000.nc', relativePath: 'uploads/a.nc' }],
       boundary_relative_path: 'uploads/boundary.geojson',
@@ -531,12 +547,67 @@ function workerResponse(payload: Record<string, unknown>): Response {
   return response({ message: '执行完成', payload })
 }
 
+function stubWorkerFetch(payloads: Record<string, unknown>[]) {
+  const queue = [...payloads]
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.endsWith('/tools/catalog')) return response(workerCatalog())
+    const payload = queue.shift()
+    if (!payload) throw new Error(`测试缺少 Worker 工具响应: ${url}`)
+    return workerResponse(payload)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+function workerToolCalls(fetchMock: ReturnType<typeof vi.fn>) {
+  return fetchMock.mock.calls.filter(([input]) => {
+    const url = String(input)
+    return url.includes('/tools/') && !url.endsWith('/tools/catalog')
+  })
+}
+
+function workerToolBody(fetchMock: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {
+  const call = workerToolCalls(fetchMock)[index]
+  if (!call) throw new Error(`缺少第 ${index + 1} 个 Worker 工具调用`)
+  return JSON.parse(String(call[1]?.body)) as Record<string, unknown>
+}
+
+function workerCatalog(): WorkerToolCatalog {
+  const tools = REQUIRED_METEOROLOGY_WORKER_TOOLS.map(toolName => {
+    const contract: ToolContractManifest = {
+      providerId: 'geo-platform-meteorology-worker',
+      toolName,
+      version: '0.1.0',
+      parametersSchema: { type: 'object', additionalProperties: true },
+      resultSchema: { type: 'object', additionalProperties: true },
+      valueRefInputs: [],
+      valueRefOutputs: [],
+      readOnly: toolName !== 'meteorological_report',
+      destructive: false,
+      timeoutSeconds: 300,
+      displaySurfaces: [],
+    }
+    return {
+      toolName,
+      route: `/tools/${toolName}`,
+      contract,
+      schemaHash: workerContractHash(contract),
+    }
+  })
+  return { tools, count: tools.length }
+}
+
 function stubRuntimeEnv() {
   vi.stubEnv('API_PORT', '8000')
   vi.stubEnv('API_HOST', '127.0.0.1')
   vi.stubEnv('DATABASE_URL', 'postgres://test:test@127.0.0.1/test')
   vi.stubEnv('RUNTIME_ROOT', 'runtime')
+  vi.stubEnv('APP_BASE_URL', 'http://127.0.0.1:8000')
+  vi.stubEnv('BETTER_AUTH_URL', 'http://127.0.0.1:8000')
+  vi.stubEnv('BETTER_AUTH_SECRET', 'test_better_auth_secret_32_bytes__')
   vi.stubEnv('WORKER_URL', 'http://worker.test')
+  vi.stubEnv('WORKER_SHARED_SECRET', 'test_worker_shared_secret_32_bytes')
   vi.stubEnv('ENABLED_TOOL_PROVIDERS', 'geo-platform-meteorology')
 }
 

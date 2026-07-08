@@ -24,6 +24,7 @@ interface ComposerProps {
   composerMode: ComposerMode
   tokenBudget?: ChatPanelProps['tokenBudget']
   activeSkills?: string[]
+  activeMcpServers?: string[]
   compactionLevel?: string | null
   runStats?: ChatPanelProps['runStats']
   denialCounts?: Record<string, number>
@@ -62,6 +63,7 @@ export function Composer({
   composerMode,
   tokenBudget,
   activeSkills,
+  activeMcpServers,
   compactionLevel,
   runStats,
   denialCounts,
@@ -273,6 +275,7 @@ export function Composer({
       <ComposerDiagnostics
         tokenBudget={tokenBudget}
         activeSkills={activeSkills}
+        activeMcpServers={activeMcpServers}
         compactionLevel={compactionLevel}
         runStats={runStats}
         denialCounts={denialCounts}
@@ -459,23 +462,26 @@ function consumeUploadInput(input: HTMLInputElement, onUploadFiles: (files: File
 function ComposerDiagnostics({
   tokenBudget,
   activeSkills,
+  activeMcpServers,
   compactionLevel,
   runStats,
   denialCounts,
 }: {
   tokenBudget?: ChatPanelProps['tokenBudget']
   activeSkills?: string[]
+  activeMcpServers?: string[]
   compactionLevel?: string | null
   runStats?: ChatPanelProps['runStats']
   denialCounts?: Record<string, number>
 }) {
   const denialTotal = Object.values(denialCounts ?? {}).reduce((sum, value) => sum + value, 0)
-  if (!tokenBudget && !activeSkills?.length && !compactionLevel && !runStats && !denialTotal) return null
+  if (!tokenBudget && !activeSkills?.length && !activeMcpServers?.length && !compactionLevel && !runStats && !denialTotal) return null
 
   return (
     <div className="cc-composer-diagnostics" aria-label="运行诊断摘要">
       {tokenBudget ? <span>上下文 {Math.round((tokenBudget.used / tokenBudget.max) * 100)}%</span> : null}
       {activeSkills?.length ? <span>技能 {activeSkills.length}</span> : null}
+      {activeMcpServers?.length ? <span>MCP {activeMcpServers.length}</span> : null}
       {compactionLevel ? <span>压缩 {compactionLevel}</span> : null}
       {runStats ? <span>工具 {runStats.toolSuccesses}/{runStats.toolAttempts}</span> : null}
       {denialTotal ? <span>拒绝 {denialTotal}</span> : null}

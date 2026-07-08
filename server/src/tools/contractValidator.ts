@@ -5,16 +5,20 @@
 //   文件:       contractValidator.ts
 //
 //   日期:       2026年07月07日
-//   作者:       Claude Code
+//   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
-// Node 启动时拉取 Worker /tools/catalog，与 TS registry 中已注册工具做契约校验。
-// 任何不一致（缺失工具、参数不匹配、readOnly/破坏性声明不一致）→ 硬失败。
-// 不做 fallback、不合成 artifact、不返回成功文案。
+// Node 启动时拉取 Python Worker 由 Pydantic 生成的 /tools/catalog。
+// Worker schema 是内部 API 的事实源；TS 端验证 catalog 自洽、必需工具存在、
+// 且每个 Worker 工具都有对应平台 ToolDef。任何不一致都硬失败。
 
 import type { ToolRegistry } from '../framework/registry.js'
-import type { ToolContractManifest } from '@geo-agent-platform/shared-types'
 import { logger } from '../observability/logger.js'
+import {
+  fetchMeteorologyWorkerCatalog,
+  REQUIRED_METEOROLOGY_WORKER_TOOLS,
+  workerContractHash,
+} from './meteorology/meteorologyWorkerClient.js'
 
 export interface ContractValidationReport {
   passed: boolean
@@ -28,8 +32,10 @@ export interface ContractValidationReport {
 export async function validateToolContracts(
   registry: ToolRegistry,
   workerUrl: string,
+  workerSharedSecret: string,
 ): Promise<ContractValidationReport> {
   const registryTools = new Set(registry.list().map(t => t.name))
+  const requiredWorkerTools = new Set<string>(REQUIRED_METEOROLOGY_WORKER_TOOLS)
   const report: ContractValidationReport = {
     passed: true,
     workerTools: [],
@@ -39,41 +45,47 @@ export async function validateToolContracts(
     errors: [],
   }
 
-  // 1. 拉取 Worker catalog
-  let catalog: { tools: string[]; count: number }
+  let catalog
   try {
-    const response = await fetch(`${workerUrl.replace(/\/+$/u, '')}/tools/catalog`)
-    if (!response.ok) {
-      report.errors.push(`Worker /tools/catalog 返回 HTTP ${response.status}`)
-      report.passed = false
-      return report
-    }
-    catalog = (await response.json()) as { tools: string[]; count: number }
-    report.workerTools = catalog.tools
+    catalog = await fetchMeteorologyWorkerCatalog(workerUrl, workerSharedSecret)
   } catch (error) {
-    report.errors.push(`无法连接 Worker /tools/catalog: ${error instanceof Error ? error.message : String(error)}`)
+    report.errors.push(error instanceof Error ? error.message : String(error))
     report.passed = false
     return report
   }
+  report.workerTools = catalog.tools.map(tool => tool.toolName)
+  const workerByName = new Map(catalog.tools.map(tool => [tool.toolName, tool]))
 
-  // 2. 交叉对比：Worker 有但 Registry 没有
-  for (const toolName of catalog.tools) {
-    if (!registryTools.has(toolName)) {
-      report.missingInRegistry.push(toolName)
+  for (const requiredName of REQUIRED_METEOROLOGY_WORKER_TOOLS) {
+    if (!workerByName.has(requiredName)) {
+      report.missingInWorker.push(requiredName)
+      report.passed = false
+    }
+    if (!registryTools.has(requiredName)) {
+      report.missingInRegistry.push(requiredName)
       report.passed = false
     }
   }
 
-  // 3. 交叉对比：Registry 有但 Worker 没有（仅对 Python 工具）
-  for (const def of registry.list()) {
-    if (def.language !== 'python') continue
-    if (!catalog.tools.includes(def.name)) {
-      report.missingInWorker.push(def.name)
+  for (const tool of catalog.tools) {
+    if (!registryTools.has(tool.toolName)) {
+      report.missingInRegistry.push(tool.toolName)
+      report.passed = false
+    }
+    if (!requiredWorkerTools.has(tool.toolName)) {
+      report.errors.push(`Worker catalog 暴露了未声明的工具 "${tool.toolName}"`)
+      report.passed = false
+    }
+    if (tool.contract.toolName !== tool.toolName) {
+      report.errors.push(`Worker 工具 "${tool.toolName}" 的 contract.toolName 不一致`)
+      report.passed = false
+    }
+    if (tool.schemaHash !== workerContractHash(tool.contract)) {
+      report.errors.push(`Worker 工具 "${tool.toolName}" schemaHash 与 Pydantic catalog 内容不一致`)
       report.passed = false
     }
   }
 
-  // 4. 输出结果
   if (!report.passed) {
     logger.error({ report }, '工具契约校验失败')
   } else {

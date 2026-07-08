@@ -29,6 +29,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import type {
+  AgentRuntimeConfig,
   ArtifactRef,
   LayerDescriptor,
   SystemComponentsStatus,
@@ -49,6 +50,8 @@ import {
 } from './toolFormState'
 import { ToolMiniAppPanel } from './ToolMiniApp'
 import { isRecord } from '../../shared/utils/guards'
+import type { MemoryEntry } from '../conversation/types'
+import { SdkExtensionManagement, type SdkManagementView } from './SdkExtensionManagement'
 import {
   filterTools,
   findToolCatalogEntry,
@@ -57,35 +60,52 @@ import {
   summarizeTools,
 } from './toolManagementModel'
 
-interface ToolManagementPageProps {
+export interface ToolManagementPageProps {
   tools: ToolDescriptor[]
   artifacts: ArtifactRef[]
   layers: LayerDescriptor[]
   valueRefs: ToolValueRef[]
+  runtimeConfig?: AgentRuntimeConfig
+  memories?: MemoryEntry[]
+  activeSkills?: string[]
+  activeMcpServers?: string[]
   toolRunResult?: Record<string, unknown> | null
   toolCatalogEntries: Array<Record<string, unknown>>
   systemComponents?: SystemComponentsStatus
   isToolSubmitting: boolean
   isToolCatalogSubmitting?: boolean
+  isRuntimeConfigSubmitting?: boolean
   onRunTool: (tool: ToolDescriptor, args: Record<string, unknown>) => void
   onUpsertToolCatalogEntry: (tool: ToolDescriptor, payload: Record<string, unknown>, sortOrder?: number) => void
   onDeleteToolCatalogEntry: (tool: ToolDescriptor) => void
+  onSaveRuntimeConfig?: (config: AgentRuntimeConfig) => void | Promise<void>
+  onRefreshMemories?: () => void
 }
+
+type ToolManagementView = 'tools' | SdkManagementView
 
 export function ToolManagementPage({
   tools,
   artifacts,
   layers,
   valueRefs,
+  runtimeConfig,
+  memories = [],
+  activeSkills = [],
+  activeMcpServers = [],
   toolRunResult,
   toolCatalogEntries,
   systemComponents,
   isToolSubmitting,
   isToolCatalogSubmitting,
+  isRuntimeConfigSubmitting,
   onRunTool,
   onUpsertToolCatalogEntry,
   onDeleteToolCatalogEntry,
+  onSaveRuntimeConfig,
+  onRefreshMemories,
 }: ToolManagementPageProps) {
+  const [activeView, setActiveView] = useState<ToolManagementView>('tools')
   const [query, setQuery] = useState('')
   const [selectedToolName, setSelectedToolName] = useState('')
   const [toolFormsByName, setToolFormsByName] = useState<Record<string, Record<string, string>>>({})
@@ -104,6 +124,14 @@ export function ToolManagementPage({
     : { values: {}, missing: [], parsed: { args: {}, error: null } }
   const schemaPreview = selectedTool ? buildSchemaPreview(selectedTool) : null
   const providers = systemComponents?.toolProviders ?? []
+  const mcpServerCount = runtimeConfig?.sdk.mcp.servers.length ?? 0
+  const skillCount = (runtimeConfig?.sdk.skills.skillPaths.length ?? 0) + (runtimeConfig?.sdk.skills.skillRoots.length ?? 0)
+  const viewTabs: Array<{ id: ToolManagementView; label: string; count: number; description: string }> = [
+    { id: 'tools', label: '内置工具', count: tools.length, description: 'Provider 工具与目录治理' },
+    { id: 'mcp', label: 'MCP', count: mcpServerCount, description: '外部 MCP Server' },
+    { id: 'skills', label: 'Skill', count: skillCount, description: 'SDK Skill 目录' },
+    { id: 'memory', label: '记忆', count: memories.length, description: '长期与会话记忆' },
+  ]
 
   return (
     <section className="tool-management">
@@ -120,11 +148,39 @@ export function ToolManagementPage({
             </p>
           </div>
         </div>
-        <div className="tool-doc-grid">
-          <DocShortcut icon={BookOpen} title="工具接入规范" pathValue="docs/tool-integration-standard.md" />
-          <DocShortcut icon={Code2} title="Provider Demo" pathValue="demo/tool-provider-demo" />
+        <div className="tool-management__top-actions">
+          <label className="tool-management__search tool-management__search--hero">
+            <Search size={15} aria-hidden="true" />
+            <input
+              value={query}
+              placeholder="搜索工具或能力"
+              aria-label="搜索工具或能力"
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </label>
+          <div className="tool-doc-grid">
+            <DocShortcut icon={BookOpen} title="工具接入规范" pathValue="docs/tool-integration-standard.md" />
+            <DocShortcut icon={Code2} title="Provider Demo" pathValue="demo/tool-provider-demo" />
+          </div>
         </div>
       </LiquidGlassSurface>
+
+      <div className="tool-management__tabs" role="tablist" aria-label="能力管理视图">
+        {viewTabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={activeView === tab.id}
+            className={activeView === tab.id ? 'tool-management-tab tool-management-tab--active' : 'tool-management-tab'}
+            onClick={() => setActiveView(tab.id)}
+          >
+            <span>{tab.label}</span>
+            <strong>{tab.count}</strong>
+            <small>{tab.description}</small>
+          </button>
+        ))}
+      </div>
 
       <div className="tool-management__overview">
         <OverviewCard icon={Wrench} label="工具总数" value={String(summary.total)} hint={`${summary.available} 个可用`} />
@@ -133,7 +189,8 @@ export function ToolManagementPage({
         <OverviewCard icon={Box} label="Provider" value={String(summary.providers)} hint={`${summary.unavailableProviders} 个不可用`} />
       </div>
 
-      <div className="tool-management__grid">
+      {activeView === 'tools' ? (
+        <div className="tool-management__grid">
         <LiquidGlassSurface as="aside" variant="strong" className="tool-management__sidebar">
           <div className="tool-management__sidebar-header">
             <div>
@@ -339,7 +396,19 @@ export function ToolManagementPage({
             </div>
           </LiquidGlassSurface>
         </main>
-      </div>
+        </div>
+      ) : (
+        <SdkExtensionManagement
+          view={activeView}
+          runtimeConfig={runtimeConfig}
+          memories={memories}
+          activeSkills={activeSkills}
+          activeMcpServers={activeMcpServers}
+          isSaving={isRuntimeConfigSubmitting}
+          onRefreshMemories={onRefreshMemories}
+          onSaveRuntimeConfig={onSaveRuntimeConfig}
+        />
+      )}
     </section>
   )
 }

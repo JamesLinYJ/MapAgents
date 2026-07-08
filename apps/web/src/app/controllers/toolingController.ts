@@ -42,6 +42,7 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
   const [toolRunResult, setToolRunResult] = useState<Record<string, unknown> | null>(null)
   const [isToolSubmitting, setIsToolSubmitting] = useState(false)
   const [isToolCatalogSubmitting, setIsToolCatalogSubmitting] = useState(false)
+  const [isRuntimeConfigSubmitting, setIsRuntimeConfigSubmitting] = useState(false)
 
   const refresh = useCallback(async () => {
     const [components, tools, catalogEntries, loadedRuntimeConfig] = await Promise.allSettled([
@@ -69,10 +70,13 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
   const saveRuntimeConfig = useCallback(async (nextConfig: AgentRuntimeConfig) => {
     try {
       setUiError(undefined)
+      setIsRuntimeConfigSubmitting(true)
       const saved = await updateRuntimeConfig(nextConfig)
       setRuntimeConfig(saved)
     } catch (error) {
       setUiError(formatUiError(error, '运行时配置保存失败。'))
+    } finally {
+      setIsRuntimeConfigSubmitting(false)
     }
   }, [setUiError])
 
@@ -109,6 +113,7 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
   return {
     availableTools,
     isToolCatalogSubmitting,
+    isRuntimeConfigSubmitting,
     isToolSubmitting,
     removeCatalogEntry,
     runtimeConfig,

@@ -15,7 +15,8 @@ import {
   readWorkspacePointer,
   syncCleanWorkspaceUrl,
 } from '../../shared/workspacePointer'
-import type { PanelMode, PrimaryNav, SidebarItemId, WorkspaceMode } from '../types'
+import type { PrimaryNav, SidebarItemId, WorkspaceMode } from '../types'
+import { useWorkspaceStore } from '../stores/workspaceStore'
 
 interface NavigationControllerOptions {
   currentThreadId?: string | null
@@ -34,10 +35,14 @@ export function useNavigationController({
   setUiError,
 }: NavigationControllerOptions) {
   const [query, setQuery] = useState('')
-  const [activeNav, setActiveNav] = useState<PrimaryNav>('analysis')
-  const [panelMode, setPanelMode] = useState<PanelMode>('summary')
-  const [activeSidebarItem, setActiveSidebarItem] = useState<SidebarItemId>('assistant')
-  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('meteorology')
+  const activeNav = useWorkspaceStore(state => state.activeNav)
+  const panelMode = useWorkspaceStore(state => state.panelMode)
+  const activeSidebarItem = useWorkspaceStore(state => state.activeSidebarItem)
+  const workspaceMode = useWorkspaceStore(state => state.workspaceMode)
+  const setActiveNav = useWorkspaceStore(state => state.setActiveNav)
+  const setPanelMode = useWorkspaceStore(state => state.setPanelMode)
+  const setActiveSidebarItem = useWorkspaceStore(state => state.setActiveSidebarItem)
+  const setWorkspaceMode = useWorkspaceStore(state => state.setWorkspaceMode)
 
   const focusQueryInput = useCallback(() => {
     window.requestAnimationFrame(() => {

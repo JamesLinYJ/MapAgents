@@ -911,9 +911,9 @@
       }
     },
     {
-      "name": "prepare_hangzhou_nowcast_scope",
-      "label": "准备杭州短时临近预报范围",
-      "description": "根据问题和已有边界/坐标引用准备杭州区划或地点范围",
+      "name": "prepare_nowcast_scope",
+      "label": "准备短时临近预报范围",
+      "description": "根据问题和已有边界/坐标引用准备区划或地点范围",
       "group": "气象",
       "tags": [
         "meteorology"
@@ -930,7 +930,7 @@
           },
           "scope_ref": {
             "type": "string",
-            "title": "已有杭州边界或地点引用",
+            "title": "已有边界或地点引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
             "x-source": "value_ref",
             "x-value-ref-kinds": [
@@ -940,6 +940,11 @@
               "nowcast_coordinate",
               "place_candidate"
             ]
+          },
+          "area_name": {
+            "type": "string",
+            "title": "区划名称",
+            "x-source": "text"
           },
           "district_name_field": {
             "type": "string",
@@ -955,7 +960,7 @@
     {
       "name": "meteorological_precipitation_nowcast",
       "label": "分析短时临近预报（短临）降水",
-      "description": "按时次和杭州区划或地点范围计算降水统计事实",
+      "description": "按时次和区划或地点范围计算降水统计事实",
       "group": "气象",
       "tags": [
         "meteorology"
@@ -979,7 +984,7 @@
           },
           "scope_ref": {
             "type": "string",
-            "title": "杭州区划或地点范围引用",
+            "title": "区划或地点范围引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
             "x-source": "value_ref"
           }

@@ -18,6 +18,7 @@ import { WebSocket } from 'ws'
 import type { AnalysisRun, DecisionRequest } from '../schemas/types.js'
 import type { AuthContext } from '../security/types.js'
 import type { OpenAIAgentsRuntime } from '../agent/runtime.js'
+import type { RunTaskManager } from '../agent/runTaskManager.js'
 import { nowUtc } from '../utils/ids.js'
 import type { WsDependencies } from './dependencies.js'
 import { optionalString, requiredRunProvider, requiredString } from './payload.js'
@@ -28,6 +29,7 @@ export async function respondDecision(
   payload: Record<string, unknown>,
   dependencies: WsDependencies,
   runtime: OpenAIAgentsRuntime,
+  runTasks: RunTaskManager,
   ws: WebSocket,
   subscriptions: Map<string, () => void>,
   auth: AuthContext,
@@ -65,7 +67,7 @@ export async function respondDecision(
       runtimeConfigSnapshot: config,
     })
     subscribeToRun(ws, nextRun.id, store, subscriptions)
-    void runtime.run({
+    runTasks.startDetached({
       runId: nextRun.id,
       threadId: run.threadId,
       sessionId: run.sessionId,
@@ -76,7 +78,7 @@ export async function respondDecision(
       executionMode: run.state.planMode ? 'plan' : 'auto',
       reasoning: true,
       auth,
-    }).then(() => void sendRunSnapshot(ws, nextRun.id, store))
+    }, { onComplete: nextRunId => sendRunSnapshot(ws, nextRunId, store) })
     return nextRun
   }
 

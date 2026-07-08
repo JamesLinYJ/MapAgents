@@ -34,8 +34,8 @@ def to_short_path(long_path):
 # 配置
 # ============================================================
 PROJ_DIR = os.path.dirname(__file__)
-NC_DIR = r'C:\work\yan1-2\temp_nc'
-SHP_PATH = r'C:\work\yan1-2\气象\前期培训\前期培训\任务一\shapefile\浙江省县边界.shp'
+NC_DIR = os.environ.get('GEOFORGE_SAMPLE_NC_DIR', '')
+SHP_PATH = os.environ.get('GEOFORGE_SAMPLE_BOUNDARY_PATH', '')
 OUTPUT_PATH = os.path.join(PROJ_DIR, 'output', '降水等级表格.xlsx')
 OUTPUT_IMG = os.path.join(PROJ_DIR, 'output', '降水等级表格.png')
 

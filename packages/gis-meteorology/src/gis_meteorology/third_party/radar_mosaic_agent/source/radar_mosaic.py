@@ -422,16 +422,6 @@ def parse_args() -> argparse.Namespace:
 
 def configure_matplotlib_fonts() -> None:
     global SELECTED_FONT_NAME
-    font_files = [
-        Path(r"C:\Windows\Fonts\NotoSansSC-VF.ttf"),
-        Path(r"C:\Windows\Fonts\msyh.ttc"),
-        Path(r"C:\Windows\Fonts\simhei.ttf"),
-        Path(r"C:\Windows\Fonts\simsun.ttc"),
-    ]
-    for font_file in font_files:
-        if font_file.exists():
-            font_manager.fontManager.addfont(str(font_file))
-
     preferred_fonts = ["Noto Sans SC", "Microsoft YaHei", "SimHei", "DengXian", "SimSun"]
     available = {font.name for font in font_manager.fontManager.ttflist}
     for font_name in preferred_fonts:

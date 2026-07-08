@@ -81,6 +81,7 @@ export function ChatPanel(props: ChatPanelProps) {
     onRefreshMemories,
     tokenBudget,
     activeSkills,
+    activeMcpServers,
     compactionLevel,
     runStats,
     denialCounts,
@@ -340,9 +341,10 @@ export function ChatPanel(props: ChatPanelProps) {
             providerLabel={providerLabel}
             isSubmitting={isSubmitting}
             composerMode={composerMode}
-            tokenBudget={tokenBudget}
-            activeSkills={activeSkills}
-            compactionLevel={compactionLevel}
+              tokenBudget={tokenBudget}
+              activeSkills={activeSkills}
+              activeMcpServers={activeMcpServers}
+              compactionLevel={compactionLevel}
             runStats={runStats}
             denialCounts={denialCounts}
             composerInputRef={composerInputRef}

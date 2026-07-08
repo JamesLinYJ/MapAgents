@@ -18,8 +18,18 @@ function item(overrides: Partial<ConversationItem>): ConversationItem {
     itemType: 'message',
     role: 'user',
     runId: 'run_test',
+    threadId: null,
+    turnId: null,
+    callId: null,
     timestamp: new Date().toISOString(),
     body: null,
+    name: null,
+    arguments: null,
+    output: null,
+    isError: false,
+    phase: null,
+    status: null,
+    metadata: {},
     ...overrides,
   }
 }

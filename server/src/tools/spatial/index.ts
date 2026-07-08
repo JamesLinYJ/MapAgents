@@ -8,7 +8,6 @@
 //   作者:       JamesLinYJ
 // --------------------------------------------------------------------------
 
-import { getEnv } from '../../framework/env.js'
 import manifest from './manifest.json' with { type: 'json' }
 import type { ToolProvider } from '../../framework/types.js'
 import type { PostGisRepository } from '../../gis/postgis.js'
@@ -18,8 +17,8 @@ import { createSpatialAnalysisTool } from '../spatialAnalysis/spatialAnalysis.js
 import { createMapExportTool } from '../mapExport/mapExport.js'
 import { createLayerCreateTool } from '../layerCreate/layerCreate.js'
 
-export function createSpatialProvider(postgis: PostGisRepository): ToolProvider {
-  const runtimeRoot = getEnv().RUNTIME_ROOT
+export function createSpatialProvider(postgis: PostGisRepository, deps: { runtimeRoot: string }): ToolProvider {
+  const runtimeRoot = deps.runtimeRoot
   return {
     manifest,
     tools: () => [

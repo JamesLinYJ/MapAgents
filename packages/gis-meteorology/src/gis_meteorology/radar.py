@@ -12,17 +12,17 @@
 #
 # 包装第三方解码器，输出平台统一的气象变量和地图范围事实。
 # 这里不浏览本机目录，也不吞掉解码错误；不可解析的文件必须明确失败。
-import logging
-
-logger = logging.getLogger("gis_meteorology.radar")
 
 from __future__ import annotations
 
 import bz2
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 import struct
 from typing import Any
+
+logger = logging.getLogger("gis_meteorology.radar")
 
 import numpy as np
 

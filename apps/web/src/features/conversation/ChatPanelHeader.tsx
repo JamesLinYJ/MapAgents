@@ -5,7 +5,7 @@
 //   文件:       ChatPanelHeader.tsx
 //
 //   日期:       2026年07月07日
-//   作者:       Claude Code
+//   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
 import { Maximize2, Minimize2, Pencil } from 'lucide-react'

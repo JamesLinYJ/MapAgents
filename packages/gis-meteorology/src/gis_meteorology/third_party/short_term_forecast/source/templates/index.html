@@ -337,7 +337,7 @@ function aiModify() {
 }
 
 // ══════ 文件浏览器 ══════
-var browseTarget = '', browseFilter = '', currentPath = 'C:\\', selectedPath = '';
+var browseTarget = '', browseFilter = '', currentPath = '', selectedPath = '';
 
 function openBrowser(targetId, filter, title) {
   browseTarget = targetId; browseFilter = filter;
@@ -345,7 +345,7 @@ function openBrowser(targetId, filter, title) {
   document.getElementById('btnSelect').style.display = filter ? 'none' : 'inline-block';
   document.getElementById('fileModal').classList.add('show');
   var curVal = document.getElementById(targetId).value;
-  navigate(curVal && curVal.length > 2 ? curVal : 'C:\\work\\yan1-2\\气象');
+  navigate(curVal && curVal.length > 0 ? curVal : '');
 }
 
 function closeModal() { document.getElementById('fileModal').classList.remove('show'); }

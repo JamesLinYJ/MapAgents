@@ -14,7 +14,7 @@
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import type { ToolDef } from '../../framework/types.js'
-import { getEnv } from '../../framework/env.js'
+import type { Env } from '../../framework/env.js'
 import { AzureSpeechService } from '../../speech/azureSpeechService.js'
 import { makeId } from '../../utils/ids.js'
 import { TEXT_TO_SPEECH_PROMPT } from './prompt.js'
@@ -38,64 +38,66 @@ export const ttsDefinition = {
   },
 } satisfies Omit<ToolDef, 'handler'>
 
-export const ttsTool: ToolDef = {
-  ...ttsDefinition,
-  async handler(args, ctx) {
-    const text = typeof args.text === 'string' ? args.text.trim() : ''
-    if (!text) throw new Error('text 参数不能为空')
+export function createTextToSpeechTool(env: Env): ToolDef {
+  return {
+    ...ttsDefinition,
+    async handler(args, ctx) {
+      const text = typeof args.text === 'string' ? args.text.trim() : ''
+      if (!text) throw new Error('text 参数不能为空')
 
-    const runtimeRoot = ctx.runtimeRoot ?? getEnv().RUNTIME_ROOT
-    const artifactId = makeId('artifact')
-    const relativePath = path.posix.join('artifacts', ctx.runId, `${artifactId}.mp3`)
-    const outputPath = resolveRuntimePath(runtimeRoot, relativePath)
-    await mkdir(path.dirname(outputPath), { recursive: true })
+      const runtimeRoot = ctx.runtimeRoot ?? env.RUNTIME_ROOT
+      const artifactId = makeId('artifact')
+      const relativePath = path.posix.join('artifacts', ctx.runId, `${artifactId}.mp3`)
+      const outputPath = resolveRuntimePath(runtimeRoot, relativePath)
+      await mkdir(path.dirname(outputPath), { recursive: true })
 
-    const speech = new AzureSpeechService(getEnv())
-    const synthesis = await speech.synthesizeTextToFile({
-      text,
-      voice: typeof args.voice === 'string' ? args.voice : null,
-      outputPath,
-    })
+      const speech = new AzureSpeechService(env)
+      const synthesis = await speech.synthesizeTextToFile({
+        text,
+        voice: typeof args.voice === 'string' ? args.voice : null,
+        outputPath,
+      })
 
-    const name = `语音合成-${artifactId}.mp3`
-    return {
-      message: `语音合成完成：${name}`,
-      payload: {
-        operation: 'text_to_speech',
-        artifactId,
-        uri: `/api/v1/results/${artifactId}/file`,
-        downloadUrl: `/api/v1/artifacts/${artifactId}/download`,
-        mimeType: synthesis.mimeType,
-        voice: synthesis.voice,
-        textLength: text.length,
-      },
-      warnings: [],
-      valueRefs: [{
-        refId: makeId('ref'),
-        kind: 'audio_artifact',
-        label: name,
-        value: { artifactId, uri: `/api/v1/results/${artifactId}/file` },
-        metadata: { mimeType: synthesis.mimeType, voice: synthesis.voice },
-      }],
-      artifacts: [{
-        artifactId,
-        artifactType: 'audio_mp3',
-        name,
-        uri: `/api/v1/results/${artifactId}/file`,
-        relativePath,
-        metadata: {
-          relativePath,
+      const name = `语音合成-${artifactId}.mp3`
+      return {
+        message: `语音合成完成：${name}`,
+        payload: {
+          operation: 'text_to_speech',
+          artifactId,
+          uri: `/api/v1/results/${artifactId}/file`,
+          downloadUrl: `/api/v1/artifacts/${artifactId}/download`,
           mimeType: synthesis.mimeType,
           voice: synthesis.voice,
-          outputFormat: synthesis.outputFormat,
-          downloadUrl: `/api/v1/artifacts/${artifactId}/download`,
+          textLength: text.length,
         },
-      }],
-      resultId: makeId('result'),
-      source: 'azure_speech',
-      provenance: { provider: 'azure_speech', operation: 'text_to_speech' },
-    }
-  },
+        warnings: [],
+        valueRefs: [{
+          refId: makeId('ref'),
+          kind: 'audio_artifact',
+          label: name,
+          value: { artifactId, uri: `/api/v1/results/${artifactId}/file` },
+          metadata: { mimeType: synthesis.mimeType, voice: synthesis.voice },
+        }],
+        artifacts: [{
+          artifactId,
+          artifactType: 'audio_mp3',
+          name,
+          uri: `/api/v1/results/${artifactId}/file`,
+          relativePath,
+          metadata: {
+            relativePath,
+            mimeType: synthesis.mimeType,
+            voice: synthesis.voice,
+            outputFormat: synthesis.outputFormat,
+            downloadUrl: `/api/v1/artifacts/${artifactId}/download`,
+          },
+        }],
+        resultId: makeId('result'),
+        source: 'azure_speech',
+        provenance: { provider: 'azure_speech', operation: 'text_to_speech' },
+      }
+    },
+  }
 }
 
 function resolveRuntimePath(runtimeRoot: string, relativePath: string): string {

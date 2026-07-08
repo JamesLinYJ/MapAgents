@@ -27,6 +27,7 @@ interface ConversationEntryViewProps {
   entryVariants: Variants
   reducedMotion: boolean
   expandedIds: Set<string>
+  anchorId?: string
   onToggleExpanded: (id: string) => void
   onSelectArtifact: (id: string) => void
   onForkMessage?: (entryId: string) => void
@@ -37,6 +38,7 @@ export function ConversationEntryView({
   entryVariants,
   reducedMotion,
   expandedIds,
+  anchorId,
   onToggleExpanded,
   onSelectArtifact,
   onForkMessage,
@@ -44,7 +46,19 @@ export function ConversationEntryView({
   if (entry.kind === 'message' && entry.role === 'user') {
     const sourceEntryId = transcriptEntryId(entry)
     return (
-      <m.div key={entry.id} className="cc-user-prompt" role="article" aria-label="用户消息" layout variants={entryVariants} initial="hidden" animate="visible" exit="exit">
+      <m.div
+        key={entry.id}
+        id={anchorId}
+        data-conversation-jump-anchor={anchorId ? 'true' : undefined}
+        className="cc-user-prompt"
+        role="article"
+        aria-label="用户消息"
+        layout
+        variants={entryVariants}
+        initial="hidden"
+        animate="visible"
+        exit="exit"
+      >
         <span>{entry.body}</span>
         {sourceEntryId && onForkMessage && (
           <button className="cc-message-branch" type="button" onClick={() => onForkMessage(sourceEntryId)} title="从这里新建分支">

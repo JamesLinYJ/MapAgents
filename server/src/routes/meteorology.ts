@@ -14,7 +14,6 @@
 // Agent 工具通过 datasetId / latest_upload 解析到同一条 fileRelativePath。
 
 import { Hono } from 'hono'
-import { sql, type SQL } from 'drizzle-orm'
 import type { Database } from '../db/connection.js'
 import type {
   MeteorologicalDatasetRecord,
@@ -22,6 +21,7 @@ import type {
 } from '../schemas/types.js'
 import { RuntimeFileStore, type FileLike } from '../store/fileStore.js'
 import type { PostgresPlatformStore } from '../store/platformStore.js'
+import { MeteorologicalDatasetStore } from '../store/postgres/meteorologicalDatasetStore.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 import type { SecurityServices } from '../security/routes.js'
 import { requireAuth } from '../security/routes.js'
@@ -71,7 +71,7 @@ export function meteorologyRoutes(db: Database, runtimeRoot: string, store: Post
     const threadId = queryString(c.req.query('threadId') ?? c.req.query('thread_id'))
     const filename = queryString(c.req.query('filename'))
     await security.authorization.enforce(auth, 'dataset', 'read', { workspaceId: auth.defaultWorkspaceId })
-    const rows = await listDatasets(db, { workspaceId: auth.defaultWorkspaceId, sessionId, threadId, filename })
+    const rows = await store.listMeteorologicalDatasets({ workspaceId: auth.defaultWorkspaceId, sessionId, threadId, filename })
     return c.json(rows)
   })
 
@@ -123,7 +123,7 @@ export function meteorologyRoutes(db: Database, runtimeRoot: string, store: Post
         createdAt: now,
         updatedAt: now,
       }
-      await insertDataset(db, dataset)
+      await store.createMeteorologicalDataset(dataset)
       await store.updateSession(sessionId, { latestMeteorologicalDatasetId: dataset.datasetId })
       return c.json({ dataset, job: null })
     } catch (error) {
@@ -133,7 +133,7 @@ export function meteorologyRoutes(db: Database, runtimeRoot: string, store: Post
   })
 
   app.get('/api/v1/meteorology/jobs/:jobId', async c => {
-    const job = await getJob(db, c.req.param('jobId'))
+    const job = await store.getMeteorologicalJob(c.req.param('jobId'))
     if (!job) return c.json({ detail: '气象处理任务不存在' }, 404)
     await security.authorization.assertResourceWorkspace(requireAuth(c), 'dataset', 'read', {
       workspaceId: job.workspaceId,
@@ -144,7 +144,7 @@ export function meteorologyRoutes(db: Database, runtimeRoot: string, store: Post
   })
 
   app.post('/api/v1/meteorology/datasets/:datasetId/report', async c => {
-    const dataset = await getDataset(db, c.req.param('datasetId'))
+    const dataset = await store.getMeteorologicalDataset(c.req.param('datasetId'))
     if (!dataset) return c.json({ detail: '气象数据集不存在' }, 404)
     const auth = requireAuth(c)
     await security.authorization.assertResourceWorkspace(auth, 'dataset', 'execute', {
@@ -170,7 +170,7 @@ export function meteorologyRoutes(db: Database, runtimeRoot: string, store: Post
       updatedAt: now,
       completedAt: null,
     }
-    await insertJob(db, job)
+    await store.createMeteorologicalJob(job)
     return c.json(job, 202)
   })
 
@@ -189,130 +189,17 @@ export async function resolveLatestMeteorologicalDataset(
   db: Database,
   params: { sessionId: string; threadId?: string | null; datasetId?: string | null; filename?: string | null },
 ): Promise<MeteorologicalDatasetRecord | null> {
+  const datasetStore = new MeteorologicalDatasetStore(db)
   if (params.datasetId && params.datasetId !== 'latest_upload') {
-    return getDataset(db, params.datasetId)
+    return datasetStore.get(params.datasetId)
   }
-  const matches = await listDatasets(db, {
+  const matches = await datasetStore.list({
     sessionId: params.sessionId,
     threadId: params.threadId ?? null,
     filename: params.filename ?? null,
     limit: 1,
   })
   return matches[0] ?? null
-}
-
-async function listDatasets(
-  db: Database,
-  filters: { workspaceId?: string | null; sessionId?: string | null; threadId?: string | null; filename?: string | null; limit?: number },
-): Promise<MeteorologicalDatasetRecord[]> {
-  const limit = Math.max(1, Math.min(filters.limit ?? 100, 500))
-  const conditions: SQL[] = []
-  if (filters.workspaceId) conditions.push(sql`workspace_id = ${filters.workspaceId}`)
-  if (filters.sessionId) conditions.push(sql`session_id = ${filters.sessionId}`)
-  if (filters.threadId) conditions.push(sql`thread_id = ${filters.threadId}`)
-  if (filters.filename) conditions.push(sql`lower(filename) = lower(${filters.filename})`)
-  const result = await db.execute(sql`
-    SELECT *
-    FROM platform_meteorological_datasets
-    WHERE ${conditions.length ? sql.join(conditions, sql` AND `) : sql`TRUE`}
-    ORDER BY updated_at DESC
-    LIMIT ${limit}
-  `)
-  return result.rows.map(row => mapDatasetRow(row as Record<string, unknown>))
-}
-
-async function getDataset(db: Database, datasetId: string): Promise<MeteorologicalDatasetRecord | null> {
-  const result = await db.execute(sql`
-    SELECT *
-    FROM platform_meteorological_datasets
-    WHERE dataset_id = ${datasetId}
-    LIMIT 1
-  `)
-  return result.rows[0] ? mapDatasetRow(result.rows[0] as Record<string, unknown>) : null
-}
-
-async function getJob(db: Database, jobId: string): Promise<MeteorologicalJobRecord | null> {
-  const result = await db.execute(sql`
-    SELECT *
-    FROM platform_meteorological_jobs
-    WHERE job_id = ${jobId}
-    LIMIT 1
-  `)
-  return result.rows[0] ? mapJobRow(result.rows[0] as Record<string, unknown>) : null
-}
-
-async function insertDataset(db: Database, dataset: MeteorologicalDatasetRecord): Promise<void> {
-  await db.execute(sql`
-    INSERT INTO platform_meteorological_datasets (
-      dataset_id, workspace_id, created_by_user_id, visibility,
-      session_id, thread_id, filename, original_filename, file_id,
-      file_relative_path, size_bytes, content_hash, media_type, status,
-      metadata_json, created_at, updated_at
-    )
-    VALUES (
-      ${dataset.datasetId}, ${dataset.workspaceId}, ${dataset.createdByUserId}, ${dataset.visibility},
-      ${dataset.sessionId}, ${dataset.threadId}, ${dataset.filename},
-      ${dataset.originalFilename}, ${dataset.fileId}, ${dataset.fileRelativePath},
-      ${dataset.sizeBytes}, ${dataset.contentHash}, ${dataset.mediaType}, ${dataset.status},
-      ${JSON.stringify(dataset.metadata)}::jsonb, ${new Date(dataset.createdAt)}, ${new Date(dataset.updatedAt)}
-    )
-  `)
-}
-
-async function insertJob(db: Database, job: MeteorologicalJobRecord): Promise<void> {
-  await db.execute(sql`
-    INSERT INTO platform_meteorological_jobs (
-      job_id, dataset_id, workspace_id, created_by_user_id, session_id, thread_id, kind, status, message,
-      payload_json, created_at, updated_at, completed_at
-    )
-    VALUES (
-      ${job.jobId}, ${job.datasetId}, ${job.workspaceId}, ${job.createdByUserId},
-      ${job.sessionId}, ${job.threadId}, ${job.kind},
-      ${job.status}, ${job.message}, ${JSON.stringify(job.payload)}::jsonb,
-      ${new Date(job.createdAt)}, ${new Date(job.updatedAt)},
-      ${job.completedAt ? new Date(job.completedAt) : null}
-    )
-  `)
-}
-
-function mapDatasetRow(row: Record<string, unknown>): MeteorologicalDatasetRecord {
-  return {
-    datasetId: String(row.dataset_id ?? ''),
-    workspaceId: typeof row.workspace_id === 'string' ? row.workspace_id : null,
-    createdByUserId: typeof row.created_by_user_id === 'string' ? row.created_by_user_id : null,
-    visibility: row.visibility === 'private' || row.visibility === 'public' ? row.visibility : 'workspace',
-    sessionId: String(row.session_id ?? ''),
-    threadId: typeof row.thread_id === 'string' ? row.thread_id : null,
-    filename: String(row.filename ?? ''),
-    originalFilename: String(row.original_filename ?? row.filename ?? ''),
-    fileId: typeof row.file_id === 'string' ? row.file_id : null,
-    fileRelativePath: String(row.file_relative_path ?? ''),
-    sizeBytes: Number(row.size_bytes ?? 0),
-    contentHash: typeof row.content_hash === 'string' ? row.content_hash : null,
-    mediaType: String(row.media_type ?? 'application/octet-stream'),
-    status: String(row.status ?? 'ready'),
-    metadata: isRecord(row.metadata_json) ? row.metadata_json : {},
-    createdAt: toIsoString(row.created_at),
-    updatedAt: toIsoString(row.updated_at),
-  }
-}
-
-function mapJobRow(row: Record<string, unknown>): MeteorologicalJobRecord {
-  return {
-    jobId: String(row.job_id ?? ''),
-    datasetId: String(row.dataset_id ?? ''),
-    workspaceId: typeof row.workspace_id === 'string' ? row.workspace_id : null,
-    createdByUserId: typeof row.created_by_user_id === 'string' ? row.created_by_user_id : null,
-    sessionId: String(row.session_id ?? ''),
-    threadId: typeof row.thread_id === 'string' ? row.thread_id : null,
-    kind: String(row.kind ?? ''),
-    status: String(row.status ?? ''),
-    message: typeof row.message === 'string' ? row.message : null,
-    payload: isRecord(row.payload_json) ? row.payload_json : {},
-    createdAt: toIsoString(row.created_at),
-    updatedAt: toIsoString(row.updated_at),
-    completedAt: row.completed_at ? toIsoString(row.completed_at) : null,
-  }
 }
 
 function isSupportedMeteorologicalFilename(name: string): boolean {
@@ -348,12 +235,6 @@ function isFileLike(value: unknown): value is FileLike {
     && typeof (value as { name?: unknown }).name === 'string'
     && 'arrayBuffer' in value
     && typeof (value as { arrayBuffer?: unknown }).arrayBuffer === 'function'
-}
-
-function toIsoString(value: unknown): string {
-  if (value instanceof Date) return value.toISOString()
-  const parsed = new Date(String(value ?? ''))
-  return Number.isNaN(parsed.getTime()) ? nowUtc() : parsed.toISOString()
 }
 
 async function safeJson(request: Request): Promise<Record<string, unknown>> {

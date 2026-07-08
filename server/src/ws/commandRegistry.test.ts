@@ -11,8 +11,10 @@
 import { z } from 'zod'
 import { describe, expect, it } from 'vitest'
 
+import { createDefaultCommandRegistry } from './defaultCommandRegistry.js'
 import { WsCommandRegistry } from './commandRegistry.js'
-import type { ClientMsg } from './protocol.js'
+import { clientMsgType, type ClientMsg } from './protocol.js'
+import type { AuthContext } from '../security/types.js'
 
 describe('WsCommandRegistry', () => {
   it('rejects duplicate command registration', () => {
@@ -52,19 +54,51 @@ describe('WsCommandRegistry', () => {
     await expect(registry.execute(message('tool:list', {}), emptyContext()))
       .rejects.toThrow('WebSocket 命令需要登录。')
   })
+
+  it('rejects authenticated commands without an authorization policy', async () => {
+    const registry = new WsCommandRegistry()
+    registry.register({
+      type: 'tool:list' as const,
+      payloadSchema: z.object({}).passthrough(),
+      auth: 'required',
+      handler: () => [],
+    })
+
+    await expect(registry.execute(message('tool:list', {}), emptyContext(fakeAuth())))
+      .rejects.toThrow("WS 命令 'tool:list' 缺少授权策略。")
+  })
+
+  it('registers every protocol command exactly once', () => {
+    const registry = createDefaultCommandRegistry()
+    expect(new Set(registry.registeredTypes())).toEqual(new Set(clientMsgType.options))
+  })
 })
 
 function message(type: ClientMsg['type'], payload: Record<string, unknown>): ClientMsg {
   return { id: 'test', type, payload }
 }
 
-function emptyContext(): Parameters<WsCommandRegistry['execute']>[1] {
+function emptyContext(auth: AuthContext | null = null): Parameters<WsCommandRegistry['execute']>[1] {
   return {
     dependencies: {} as Parameters<WsCommandRegistry['execute']>[1]['dependencies'],
     runtime: {} as Parameters<WsCommandRegistry['execute']>[1]['runtime'],
     files: {} as Parameters<WsCommandRegistry['execute']>[1]['files'],
     ws: {} as Parameters<WsCommandRegistry['execute']>[1]['ws'],
     subscriptions: new Map(),
-    auth: null,
+    auth,
+  }
+}
+
+function fakeAuth(): AuthContext {
+  return {
+    userId: 'user_1',
+    subject: 'user_1',
+    email: 'test@example.com',
+    displayName: 'Test User',
+    authSessionId: 'session_1',
+    authSessionExpiresAt: null,
+    csrfToken: 'csrf',
+    defaultWorkspaceId: 'workspace_1',
+    roles: [{ workspaceId: 'workspace_1', role: 'analyst' }],
   }
 }

@@ -8,37 +8,19 @@
 //   作者:       JamesLinYJ
 // --------------------------------------------------------------------------
 
-import { startTransition, useCallback, useState } from 'react'
-import type { ModelProviderDescriptor } from '@geo-agent-platform/shared-types'
-import { supportsAgentSdkLiveSupervisor } from '../../shared/providerCapabilities'
+import { useModelConnectionStore } from '../stores/modelConnectionStore'
 
 // 连接控制器持有模型 Provider 能力事实和当前用户编辑选择。
 //
 // 默认 session 获取函数也从这里暴露，AppShell 不直接依赖网络客户端。
 export function useConnectionController() {
-  const [providers, setProviders] = useState<ModelProviderDescriptor[]>([])
-  const [provider, setProvider] = useState('openai_compatible')
-  const [model, setModel] = useState('')
-
-  const applyProviders = useCallback((providerList: ModelProviderDescriptor[]) => {
-    startTransition(() => {
-      setProviders(providerList)
-      const preferred =
-        providerList.find(item => item.provider === 'openai_compatible' && supportsAgentSdkLiveSupervisor(item)) ??
-        providerList.find(item => supportsAgentSdkLiveSupervisor(item)) ??
-        providerList[0]
-      if (preferred) {
-        setProvider(preferred.provider)
-        setModel(preferred.defaultModel ?? '')
-      }
-    })
-  }, [])
-
-  const changeProvider = useCallback((value: string) => {
-    setProvider(value)
-    const selected = providers.find(item => item.provider === value)
-    setModel(selected?.defaultModel ?? '')
-  }, [providers])
+  const providers = useModelConnectionStore(state => state.providers)
+  const provider = useModelConnectionStore(state => state.provider)
+  const model = useModelConnectionStore(state => state.model)
+  const applyProviders = useModelConnectionStore(state => state.applyProviders)
+  const changeProvider = useModelConnectionStore(state => state.changeProvider)
+  const setProvider = useModelConnectionStore(state => state.setProvider)
+  const setModel = useModelConnectionStore(state => state.setModel)
 
   return {
     applyProviders,

@@ -14,6 +14,7 @@
 // 未写入配置时才使用进程启动时注入的默认配置。
 
 import type { AgentRuntimeConfig } from '../schemas/types.js'
+import { agentRuntimeConfigSchema } from '../schemas/types.js'
 import { defaultRuntimeConfig } from '../agent/defaultRuntimeConfig.js'
 import type { PostgresPlatformStore } from '../store/platformStore.js'
 
@@ -22,5 +23,5 @@ export async function resolveRuntimeConfig(
   fallbackConfig: AgentRuntimeConfig = defaultRuntimeConfig(),
 ): Promise<AgentRuntimeConfig> {
   const stored = await store.getRuntimeConfig('agent-runtime')
-  return stored ? stored as AgentRuntimeConfig : fallbackConfig
+  return stored ? agentRuntimeConfigSchema.parse(stored) : agentRuntimeConfigSchema.parse(fallbackConfig)
 }

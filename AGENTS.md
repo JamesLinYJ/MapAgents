@@ -6,12 +6,15 @@
 
 本文件不是临时笔记、不是 bug 追踪、不是重构待办清单。它描述"应该怎样"，不描述"当前哪里不符合"。不符合标准的代码是技术债务，技术债务在代码中管理，不在这里。
 
-阅读顺序：新成员从头读；查规范按目录跳转；AI Agent 全文加载作为系统提示词。
+本文件不是不可质疑的教条。若某条规则与更清晰的事实源、更强的安全边界、更好的可测试性或更成熟的通用组件冲突，应先修正文档，再修正代码。工程标准服务于系统质量，不服务于历史习惯。
+
+阅读顺序：新成员从头读；查规范按目录跳转；AI Agent 应先读取与当前修改相关的章节，涉及跨层改动、安全边界或架构判断时再全文复核。
 
 ---
 
 ## 目录
 
+0. [架构原则](#零架构原则)
 1. [文件结构规范](#一文件结构规范)
 2. [TypeScript 规范](#二typescript-规范)
 3. [Python 规范](#三python-规范)
@@ -28,11 +31,25 @@
 
 ---
 
+## 零、架构原则
+
+GeoForge 的目标不是"能跑"，而是长期可演进、可审计、可测试的地理智能平台。新增或重构代码必须遵守以下优先级：
+
+1. **事实源唯一**：每类状态只能有一个权威事实源。文件型 conversation store 是会话历史事实源；Postgres 是平台索引和权限事实源；Zustand 是浏览器端实时业务状态事实源；TanStack Query 是 HTTP 查询缓存事实源。
+2. **边界显式**：HTTP、WS、Worker、文件系统、数据库、模型输出都是信任边界。跨边界必须有 schema、权限、错误模型和测试。
+3. **资源所有权清晰**：按 Session、Thread、Run、Artifact、Dataset、Layer、Tool、Config、Audit 等资源拆分模块。任何模块同时拥有三类以上资源的写路径，都需要重新设计。
+4. **通用基础设施优先成熟组件**：弹窗、下拉、表格、虚拟列表、表单、查询缓存、WebSocket 重连、日志、指标、队列、限速、文件锁等通用能力优先使用稳定组件，再用 GeoForge 风格封装。
+5. **平台核心边界自研**：Agent 运行时状态机、valueRef 流、工具审批、地理/气象领域语义、权限策略和跨语言工具契约属于平台核心，必须可审计、可测试，不外包给隐式黑盒。
+6. **硬失败优先于假成功**：schema 漂移、工具失败、权限失败、Worker 失败、索引写失败必须明确失败并暴露中文原因。禁止 fallback 成功文案、兼容旧 payload、catch 后吞错或伪造 artifact。
+7. **测试证明架构边界**：重构不是移动文件。每个新边界必须有测试证明：调用方只依赖窄接口、禁止旧路径回流、失败路径真实失败。
+
+---
+
 ## 一、文件结构规范
 
-### 1.1 文件头
+### 1.1 文件头与模块说明
 
-每个非平凡源文件必须以统一格式的文件头开始。
+文件头用于说明模块身份，不是质量本身。新建关键边界文件、公共服务、长期维护的领域模块建议使用统一文件头；普通小组件、测试局部 fixture、机械拆分出的 re-export 文件不强制补文件头。不得为了补文件头制造大面积无意义 diff。
 
 ```
 # +-------------------------------------------------------------------------
@@ -48,26 +65,31 @@
 
 - Python 文件使用 `#` 注释前缀
 - TypeScript / TSX 文件使用 `//` 注释前缀
-- 日期为文件创建日期，不是最后修改日期
-- 作者字段记录原始作者
+- 日期记录文件创建日期；若无法可靠判断，允许省略日期行
+- 作者字段只在明确有维护归属时填写；没有明确归属时依赖 Git 历史，不伪造作者
+- 文件头缺失本身不构成架构问题；职责不清、边界混乱、测试缺失才构成必须修复的问题
 
-### 1.2 文件大小
+### 1.2 文件复杂度预算
 
-文件大小直接影响可维护性。一个开发者应该能在一次阅读中理解一个文件的全部职责。
+文件可维护性不能用固定行数机械判断。GeoForge 使用**职责复杂度预算**：一个文件应当能用一句话说明唯一职责，且主要修改原因应该集中在同一个资源、协议或 UI 面板边界内。
 
-| 文件类型 | 上限 | 超出时的处理 |
-|---------|------|------------|
-| TypeScript 类/功能模块 | 500 行 | 按单一职责拆分为独立模块，保持公共 API 不变 |
-| React 组件文件 | 400 行 | 提取子组件、自定义 Hook、纯投影函数 |
-| Python 模块 | 400 行 | 按领域关注点拆分（routes / services / middleware / adapters） |
-| 单个函数/方法 | 80 行 | 提取私有辅助函数，保持顶层函数的叙事层次 |
+以下信号出现两个以上时，必须优先考虑拆分，而不是继续堆代码：
+
+- **多资源写路径**：同一文件同时修改 Session、Thread、Run、Artifact、Dataset、Layer、Tool、Config、Audit 中三类以上资源
+- **多协议边界**：同一文件同时处理 HTTP、WS、Worker、文件系统、数据库、模型输出等多个信任边界
+- **多状态机**：同一文件同时维护多个生命周期或交互状态机，例如连接、上传、运行、审批、地图交互混在一起
+- **测试定位困难**：为了验证一个小行为必须构造大量无关依赖，或测试只能通过端到端路径间接覆盖
+- **导入方向异常**：低层模块导入高层模块，或 UI 组件直接导入 transport/store/runtime 细节
+- **重复边界逻辑**：schema 校验、路径解析、鉴权、错误格式、valueRef 解析、artifact 写入在多个文件中重复实现
+- **阅读断层明显**：文件内部自然分成多个大段，每段都有独立的数据模型、错误处理和测试场景
 
 拆分原则：
 
-- **按职责命名**：拆分出的模块名必须表达其唯一职责（如 `StreamProjector`、`ApprovalManager`），拒绝 `*Utils`、`*Helpers` 这类无信息量的命名
-- **保持接口**：拆分时原模块的公共导出签名保持不变，必要时在原路径 re-export
-- **测试随行**：拆分的同时迁移对应测试，不允许"先拆分，测试以后补"
-- **验证依赖**：拆分后运行 `architecture.test.ts` 确认未引入禁止的导入模式
+- **按所有权命名**：拆分出的模块名表达唯一职责，如 `WorkerPathSandbox`、`ToolExecutionRoute`、`RunStore`；避免 `*Utils`、`*Helpers` 这类无所有权命名
+- **边界先行**：优先抽出信任边界、资源所有权、状态机和通用基础设施，而不是为了缩短文件随机切片
+- **接口保持窄**：原模块可以保留 facade 或 re-export，但调用方只能依赖窄接口，不能继续穿透内部实现
+- **测试随行**：拆分同时迁移或新增测试，不允许"先拆分，测试以后补"
+- **守卫职责，不守卫行数**：`architecture.test.ts` 应检查禁止导入、禁止旧路径回流、命令注册完整性、schema/policy 存在等结构事实；不要用固定行数作为质量门槛
 
 ### 1.3 目录组织
 
@@ -76,14 +98,17 @@
 - **`server/src/agent/`**：Agent 运行时编排——run 生命周期、上下文管理、审批、沙箱。不含工具实现
 - **`server/src/framework/`**：工具注册、Provider 加载、环境配置、类型定义。框架级代码，不含业务逻辑
 - **`server/src/tools/`**：每个子目录是一个独立的 ToolProvider。工具适配器（薄层），不包含领域算法
-- **`server/src/store/`**：持久化门面。`platformStore.ts` 是唯一的外部接口，内部实现可以拆分
+- **`server/src/store/`**：持久化门面和文件事实源。`platformStore.ts` 只做 facade，不拥有所有资源写逻辑；Postgres 资源写入放入 `store/postgres/*Store.ts`；会话/线程/运行内存索引放入独立索引模块
 - **`server/src/routes/`**：HTTP 路由。一个文件一组相关端点
-- **`server/src/ws/`**：WebSocket 控制面。一个文件一个命令组（如 `memoryCommand.ts`、`toolCommand.ts`）
+- **`server/src/ws/`**：WebSocket 控制面。命令必须通过 registry 注册；一个文件一个命令组（如 `memoryCommand.ts`、`toolCommand.ts`），禁止新增大型 switch
 - **`server/src/security/`**：认证、授权、限速、CSRF。安全逻辑集中管理
-- **`apps/web/src/app/`**：应用壳层、路由、控制器 Hook、启动流程
-- **`apps/web/src/features/`**：功能模块——每个子目录是一个自包含的功能域（含组件、状态、类型）
+- **`server/src/app/` 或 `server/src/container/`**：应用级依赖装配。只创建 container、store、runtime、registry 和 route/WS 依赖，不写业务逻辑
+- **`apps/web/src/app/`**：应用壳层、路由、全局 store 装配、启动流程
+- **`apps/web/src/app/stores/`**：Zustand slices。只保存跨功能事实状态和 WebSocket streaming 状态，不放 UI 临时表单字段
+- **`apps/web/src/features/`**：功能模块——每个子目录是一个自包含的功能域（含组件、局部状态、类型）
 - **`apps/web/src/shared/`**：跨功能共享的组件和工具函数
 - **`apps/web/src/api/`**：传输层（HTTP + WebSocket），不含业务逻辑
+- **Worker 工具契约**：Worker 内部 API 以 Python Pydantic request/response model 为事实源，`/tools/catalog` 由 `model_json_schema()` 自动生成；Node 只消费 catalog 并校验出站参数，不维护第二份手写 Worker schema
 - **`packages/gis-meteorology/`**：科学计算领域逻辑。不含 Web 框架代码
 - **`apps/worker/`**：Python Web 层——仅路由和中间件。领域逻辑委托给 `gis_meteorology`
 
@@ -93,9 +118,10 @@
 
 **必须写注释的场合**：
 
-- 类、重要函数、测试 fixture 和状态化函数前，写 2-3 行注释块说明其角色
+- 公共边界类、状态化函数、恢复流程、审批流程和跨语言适配器，需要用简短注释说明角色和边界
 - 关键路径源文件中，解释状态所有权、事件语义、审批边界、恢复行为
-- 任何非显而易见的逻辑——尤其是运行时状态、fallback 边界、测试隔离、UI 状态派生
+- 任何非显而易见的逻辑——尤其是运行时状态、fallback 硬边界、测试隔离、UI 状态派生
+- 注释长度由复杂度决定，不按固定行数凑格式；如果需要长注释解释才能理解，优先考虑拆分或改名
 
 **不写注释的场合**：
 
@@ -188,7 +214,7 @@ worker_app/
 ```
 
 - Worker 只做路由和中间件。科学计算逻辑全部放在 `packages/gis-meteorology/`
-- 单一入口 `sidecar.py` 不应超过 100 行——它只创建 app 并注册路由
+- 单一入口 `sidecar.py` 只负责创建 FastAPI app、装配中间件、注册路由和生命周期；日志、认证、路径沙箱、参数解析、工具分发必须拆到独立模块。是否继续拆分按职责复杂度判断，不按固定行数判断
 
 ### 3.3 科学计算包结构
 
@@ -231,30 +257,31 @@ def _np():
 
 在注释中明确标注每种状态的来源：
 
-- **prop-derived**：从父组件 props 直接派生
-- **user-edited local state**：用户交互产生的本地状态
-- **memoized view state**：通过 `useMemo` / `useDeferredValue` 计算的视图状态
+- **server query state**：HTTP 查询结果，归 TanStack Query 管理
+- **streaming app state**：WS 推送、run、timeline、connection status，归 Zustand 管理
+- **workspace state**：workspaceMode、sidebar selection、active thread/run 等跨功能状态，归 Zustand 管理
+- **user-edited local state**：输入框、表单编辑态、临时筛选，优先保留在组件本地或 react-hook-form
+- **memoized view state**：通过 selector、`useMemo`、`useDeferredValue` 计算的视图状态
 - **debug-only diagnostic state**：仅调试页面使用的诊断状态
 
-### 4.2 Props 传递与 Context
+### 4.2 前端状态事实源
 
-Props 传递是 GeoForge 前端的主要数据流模式——它为数据流提供完全可见性。但规模有边界：
+GeoForge 前端使用分层状态，不用单一巨大 Context，也不把所有状态塞进组件 props。
 
-- 当一个组件接收**超过 15 个 props**，或一个 prop **穿过 3 层以上**中间组件而中间组件不使用它时，考虑：
-  1. **React Context**——适用于稳定、跨层级的状态：`authMe`、`session`、`workspaceMode`、主题
-  2. **组件组合**——传递组件作为 children/slots 而非数据
-  3. **聚合 Hook**——将一组相关值封装为单个对象，减少 props 数量
+- **Zustand**：跨功能事实状态。按领域拆成 `authStore`、`workspaceStore`、`sessionStore`、`runStore`、`resourceStore`、`uiStore`。组件必须用 selector 精确订阅，禁止一次订阅整个大对象。
+- **TanStack Query**：HTTP query/cache。只管理 `auth/me`、后台管理、图层/数据列表等可重新获取的数据；不要承载 WebSocket streaming 状态。
+- **React Context**：只用于低频、稳定的 dependency/context，如 theme、i18n、query client、router。高频 run/timeline 状态禁止放 Context。
+- **Props**：用于局部、短链路、纯展示组件。一个 prop 穿过 3 层以上且中间层不使用时，应改为 store selector、组件组合或局部 provider。
+- **react-hook-form + Zod**：登录、管理后台、工具表单、运行时配置表单的默认方案。
 
-- **高频状态不放入 Context**：实时事件流、streaming items、工具执行结果等每秒更新多次的数据，必须保持 props 传递。放入 Context 会导致大范围不必要的重渲染
-- 新增 Context 时，在模块级注释中记录：存储什么、谁提供、谁消费、更新频率
+### 4.3 AppShell 与控制器
 
-### 4.3 AppShell 与控制器模式
+`AppShell.tsx` 是装配层，不是业务 God Component。它负责 Provider、路由、布局壳和少量启动流程，不持有大段业务状态。
 
-`AppShell.tsx` 是应用的中央编排器。所有控制器 Hook 在此调用，结果通过 props 向下分发。
-
-- 控制器 Hook 放在 `app/controllers/`，一个文件一个领域（`connection`、`navigation`、`resource`、`run`、`sessionThread`、`tooling`）
-- 控制器 Hook 返回的数据不要在叶子组件中重复获取——这造成重复的 WebSocket 订阅和状态不一致
-- 当 AppShell 的控制器调用超过 8 个时，考虑将相近领域的控制器合并或提取中间编排层
+- 控制器 Hook 放在 `app/controllers/`，只做 UI orchestration：把用户动作编排成 store action、query mutation 或 `requestControl`。
+- 跨组件事实状态在 Zustand slice 中，不靠 AppShell props 逐层下传。
+- 当 AppShell 同时装配多个互不相关的领域控制器，或回调依赖开始跨资源膨胀时，应拆出 `WorkspaceShell`、`ChatShell`、`MapShell` 等中间装配层。
+- `resourceController` 这类聚合控制器不得同时管理上传、Artifact、水合、底图和图层。按资源所有权拆成 upload、artifactHydration、layer、basemap 等模块。
 
 ### 4.4 性能模式
 
@@ -263,6 +290,8 @@ Props 传递是 GeoForge 前端的主要数据流模式——它为数据流提�
 - **动态导入**：MapLibre、重量级面板（`DebugPage`、`DetailPanel`）使用 `import()` 动态加载，不进入首屏 bundle
 - **惰性激活**：地图在 `requestAnimationFrame` + `requestIdleCallback` 后才初始化
 - **流处理**：高频事件使用 `useDeferredValue` 避免阻塞 UI；非紧急更新包裹 `startTransition`
+- **长列表**：历史对话、日志、属性表、工具目录使用 `@tanstack/react-virtual` 或分页，不手写无限滚动状态机
+- **表格**：属性表、安全后台表格、工具目录表格使用 `@tanstack/react-table`，排序、列状态、分页不手写
 - **SVG 滤镜**：视觉效果（LiquidGlass）延迟到 `requestIdleCallback`
 - **无障碍**：动画效果遵从 `prefers-reduced-motion`；对比度遵从 `prefers-contrast`；数据节省遵从 `Save-Data` header
 
@@ -277,9 +306,11 @@ Props 传递是 GeoForge 前端的主要数据流模式——它为数据流提�
 | `requestControl<T>()` | WebSocket | 业务控制命令 | 45s (WS 超时) |
 
 - 三者共享 CSRF token 注入、错误格式化和 Zod schema 校验
-- 新增后端功能时，99% 的情况使用 `requestControl`（WebSocket 命令），HTTP 仅用于文件上传和 blob 下载
+- 新增后端功能时按协议语义选择边界：实时控制、运行状态、订阅和短命令使用 `requestControl`；认证、文件上传、blob 下载、健康检查、指标、可分页查询和可缓存查询使用 HTTP。例外必须在调用点或 route/command 注册处说明原因
 - API 基地址通过 `deriveApiBaseUrl()` 推断，支持同源部署和跨端口开发两种模式
 - 可选的 Zod schema 参数用于校验后端响应，防止 `as T` 掩藏字段缺失或类型变更
+- 浏览器端 WebSocket 底层连接使用 PartySocket/ReconnectingWebSocket；GeoForge 自己的 transport 只负责 request id、pending map、CSRF、Zod response validation、push 分发和重连后的 resubscribe
+- 禁止组件直接 `new WebSocket()`。所有业务 WS 调用必须通过 `requestControl` 或统一 transport action
 
 ---
 
@@ -322,6 +353,12 @@ Props 传递是 GeoForge 前端的主要数据流模式——它为数据流提�
 - Postgres 中不得存储 transcript entry、conversation item、run event——这些只在文件系统中
 - 文件型存储的 schema 变更必须通过 bump `STORE_SCHEMA_VERSION` 来标识，不兼容版本必须拒绝启动并给出明确的迁移指南
 - 内容寻址对象存储（`runtime/objects/sha256/`）使用 SHA256 哈希寻址，2 字符前缀分片。垃圾回收扫描所有引用后清理未引用对象
+- `PostgresPlatformStore` 是 facade，不是 God Object。它可以组合资源 Store，但不得直接承载所有 SQL、所有索引和所有资源生命周期
+- Postgres 资源按所有权拆分：`SessionStore`、`ThreadStore`、`RunStore`、`ArtifactStore`、`MeteorologicalDatasetStore`、`LayerStore`、`ToolCatalogStore`、`RuntimeConfigStore`、`AuditStore`
+- 普通 CRUD 默认使用 Drizzle schema/query builder。`db.execute(sql...)` 只允许用于 PostGIS、DDL、健康检查或 query builder 无法表达的明确特殊查询，并在代码注释中说明原因
+- 跨表写入必须使用事务。例如创建 run、更新 thread/session 指针、写 audit、更新 latest dataset 指针，不能分散成多个无事务写入
+- 数据库 schema 必须有外键、唯一约束、索引和级联策略。新增表不能只靠应用层约束维持一致性
+- 测试替身必须模拟真实边界。禁止为了旧测试在生产代码里写 `if (db.insert missing)`、`if (security)`、`try fallback` 这类兼容分支
 
 ### 5.3 错误处理
 
@@ -333,10 +370,36 @@ Props 传递是 GeoForge 前端的主要数据流模式——它为数据流提�
 
 ### 5.4 HTTP 与 WebSocket 分工
 
-- **HTTP 数据面**：仅承载 `/health`、`/api/auth/*`、文件上传、图层上传/替换、Artifact 下载、底图配置
-- **WebSocket 控制面**（`/ws`）：承载全部业务命令——会话、线程、运行、工具、配置、内存、语音、文件目录、图层目录
-- 不在 HTTP 路由中实现业务逻辑——HTTP 端点是薄层，验证输入后委托给 Service/Store
+- **HTTP 数据面**：承载认证、健康检查、指标、文件上传、blob 下载、可分页查询、可缓存查询和浏览器/代理天然支持更好的请求响应操作
+- **WebSocket 控制面**（`/ws`）：承载实时运行控制、订阅、决策响应、流式状态、低延迟命令和需要连接级上下文的业务动作
+- HTTP 与 WS 都只是传输层；端点必须是薄层，验证输入后委托给 Service/Store/Runtime，不在 route 或 command 里堆业务逻辑
 - 不在 WebSocket 消息中传输大文件——文件引用使用 `contentRef`（SHA256 路径）
+- 同一能力不得同时维护 HTTP 和 WS 两套可变事实源。若确实需要两种传输，必须共享同一个 service、schema、权限策略和测试
+
+### 5.5 WebSocket 命令注册表
+
+WS 控制面必须使用命令注册表，而不是单个 `handleMessage()` 大型 switch。
+
+每个命令注册项必须包含：
+
+- `type`：命令类型，必须来自共享协议枚举
+- `payloadSchema`：Zod schema，解析后 handler 才能执行
+- `responseSchema`：可选但推荐，用于服务端测试和前端协议校验
+- `auth`：`required` 或 `optional`，默认 required
+- `csrf`：mutating command 必须 true
+- `policy`：RBAC 对象、动作和资源解析器；没有 policy 的命令启动失败
+- `handler`：只接收解析后的 payload、依赖、连接上下文，不直接读原始 WS message
+
+命令组按资源拆分：`sessionCommands`、`threadCommands`、`runCommands`、`toolCommands`、`memoryCommands`、`fileCommands`、`layerCommands`、`systemCommands`。新增命令必须在对应模块注册，并补 happy path、auth fail、schema fail 测试。
+
+### 5.6 依赖注入
+
+服务端使用显式依赖装配，不新增模块级可变单例。
+
+- `main.ts` 只负责读取 env、创建 container、注册 route/WS、启动生命周期
+- route、WS command、runtime、ToolProvider、ModelRegistry、Store 都通过构造参数或 container 获取依赖
+- 测试必须能创建隔离 container；不能依赖全局缓存的 env、registry、store
+- 现有历史单例只能作为债务逐步收敛，新代码不得继续直接导入它们
 
 ---
 
@@ -382,8 +445,8 @@ Props 传递是 GeoForge 前端的主要数据流模式——它为数据流提�
 
 对于不需要 LLM 推理的查询（如气象临近预报），运行时可以走确定性工具链旁路。旁路逻辑在 `deterministicNowcastRunner.ts` 中集中管理：
 
-- 旁路触发条件必须明确可审计（当前：中文气象关键词匹配）
-- 旁路工具链是硬编码序列——不经过 LLM 调用
+- 旁路触发条件必须明确可审计：谓词集中实现、测试覆盖，禁止散落在 prompt 或 UI 文案中
+- 旁路工具链是确定性序列——不经过 LLM 调用；序列可以由配置和工具契约声明，但不能由模型临时拼装
 - 旁路失败时不得回退到 LLM——只能返回明确错误或请求更多信息
 
 ---
@@ -492,7 +555,7 @@ third_party/
 ### 9.1 日志
 
 - 服务端使用结构化日志库（pino 或 winston），不使用裸 `console.log/warn/error`
-- 每个日志行必须包含可用的上下文标识：`runId` 或 `threadId`。在 Agent 运行时上下文中两者都应包含
+- 日志必须带可定位上下文：请求级日志带 `traceId`，Agent 路径尽量带 `threadId` 和 `runId`，Worker/数据库/启动路径至少带 `component` 和操作名。不要为了满足字段要求伪造空 ID
 - 日志级别：`trace`（SDK 事件细节）、`debug`（工具参数和返回值）、`info`（run 开始/完成/审批）、`warn`（可恢复错误）、`error`（不可恢复错误）
 - Agent 数据不得发送到外部 tracing 后端——`setTracingDisabled(true)` 是全局开关且必须保持
 
@@ -521,9 +584,9 @@ third_party/
 
 ### 10.1 文件组织
 
-- 测试文件与源文件同目录，使用 `.test.ts` / `.test.tsx` 后缀（Vitest）或 `test_*.py` 前缀（pytest）
-- 测试文件使用与源文件相同的文件头格式
-- Fixture、builder、场景级测试前加简短注释块
+- 测试文件与源文件同目录，使用 `.test.ts` / `.test.tsx` 后缀（Vitest）或 `test_*.py` 前缀（pytest），或放在领域测试目录中并保持命名可追踪
+- 测试文件可使用文件头，但不强制。测试质量由场景覆盖、断言清晰和隔离性决定
+- 复杂 Fixture、builder、场景级测试前加简短注释块；简单 happy path 不为凑格式写注释
 
 ### 10.2 覆盖率期望
 
@@ -548,6 +611,12 @@ third_party/
 - 禁止的代码模式（`as any`、`finalResponse`、`subscribe_messages` 等已废弃的 API）
 - Transcript entry kind 的白名单验证
 - 文件型 conversation store 的可重放性验证
+- 禁止 `PostgresPlatformStore` 重新拥有所有资源写路径或直接维护 session/thread/run Map
+- 禁止 `server/src/ws/handler.ts` 出现新增大型 command switch；WS 命令必须通过 registry 注册
+- 禁止普通 Store CRUD 使用裸 `db.execute(sql...)`，除非文件位于 PostGIS/DDL/health 明确例外列表
+- 禁止生产源码新增模块级可变 singleton
+- 禁止前端组件直接 `new WebSocket()` 或绕过统一 transport
+- 禁止 Python Worker route 中出现 `if tool_name == ...` 分发链
 
 ### 10.4 测试隔离
 
@@ -568,6 +637,17 @@ third_party/
 - `tools()`：返回 `ToolDef[]`——每个 ToolDef 含 name、label、description、parameters（Zod schema）、handler、isReadOnly、isDestructive、tags
 - `onInstall(ctx)` / `onUninstall(ctx)`：可选的安装/卸载钩子
 
+跨语言工具必须同时声明 `ToolContractManifest`：
+
+- `providerId`、`toolName`、`version`
+- `parametersSchema`、`resultSchema`：JSON Schema 是 TS/Python 之间的中间事实源
+- `valueRefInputs`、`valueRefOutputs`
+- `readOnly`、`destructive`、`requiresApproval`
+- `timeoutSeconds`
+- `displaySurfaces`
+
+TypeScript ToolProvider、OpenAI tool schema、Python Worker catalog、Pydantic request/response model 必须由同一契约生成或启动时校验一致。禁止用注释字符串、人肉表格或松散命名约定维持跨语言同步。
+
 ### 11.2 加载机制
 
 - **显式 allowlist**：只有 `ENABLED_TOOL_PROVIDERS` 环境变量中列出的 Provider ID 进入运行时。安装到仓库 ≠ 启用
@@ -580,6 +660,8 @@ third_party/
 - **硬失败**：未知 valueRef、无效参数、缺失依赖、Worker 错误必须直接失败——不允许 fallback 成功文案
 - **Artifact 展示面**：工具必须通过 `displaySurfaces` 显式声明 artifact 展示面（`map`、`mini_app`、`download`）。前端不得通过类型名或 artifact 名猜测展示意图
 - **参数校验**：每个工具定义在执行前通过 `validate_tool_definition()` 校验。参数经过 Zod schema 验证后传入 handler
+- **契约漂移检测**：Node 启动时拉取 Worker `/tools/catalog`，校验工具名、schema hash、timeout、valueRef、只读/破坏性声明。漂移直接失败，不降级为不可用假状态
+- **统一错误模型**：工具失败返回稳定分类，如 `invalid_request`、`dependency_missing`、`worker_failed`、`timeout`、`schema_mismatch`。前端展示中文原因，日志记录 traceId 和脱敏上下文
 
 ### 11.4 工具 Schema 双模式
 
@@ -589,6 +671,24 @@ third_party/
 - **Agents SDK mode**：optional 字段变为 nullable+optional——满足 OpenAI strict schema 要求（每个属性都必须存在）
 
 Null 值在调用 handler 前自动剥离。
+
+### 11.4.1 Worker 工具注册表
+
+Python Worker 使用 registry dispatch：
+
+- `/tools/catalog` 返回真实注册工具、schema hash、版本、timeout 和 valueRef 声明
+- `/tools/{tool_name}` 只做认证、body limit、Pydantic 校验、registry dispatch
+- 禁止在路由中写 `if tool_name == ...` 链
+- 每个工具一个模块、一个 request model、一个 response model、一组成功/失败测试
+
+### 11.4.2 SDK Skill 目录
+
+OpenAI Agents SDK Skill 是可选扩展能力，不能和 GeoForge 内置工具混成一个事实源。
+
+- Skill 目录的入口文件名必须严格为 `SKILL.md`。`skill.md`、`sKilL.md`、`Skill.md` 都是配置错误，系统必须返回明确中文错误，不得隐式兼容为合法 Skill，也不得继续执行后抛底层异常。
+- Skill 目录只能通过运行时配置显式启用。安装到本机目录不等于进入 GeoForge run。
+- GeoForge 只负责验证目录、读取 `SKILL.md` 以及可选的 `scripts/`、`references/`、`assets/`，再交给 SDK 的 `skills()` capability。不要把宿主绝对路径、用户主目录或产品旧名写进 prompt、manifest 或日志。
+- Skill 是运行时上下文扩展，不是权限绕过入口。Skill 中的脚本和引用文件只进入 sandbox workspace，仍受工具权限、文件沙箱和审批边界约束。
 
 ### 11.5 Provider ID 生命周期
 

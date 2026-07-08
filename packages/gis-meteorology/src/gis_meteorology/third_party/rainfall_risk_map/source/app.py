@@ -31,7 +31,7 @@ PROJECT_ROOT = BASE_DIR.parent
 DEFAULT_SHAPEFILE = str(PROJECT_ROOT / "前期培训" / "前期培训" / "任务一" /
                          "shapefile" / "浙江省县边界.shp")
 
-WORK_DIR = Path("D:/Learning/xiangmu/nc_cache")
+WORK_DIR = Path(os.environ.get("GEOFORGE_THIRD_PARTY_WORK_DIR", str(BASE_DIR / ".cache")))
 WORK_DIR.mkdir(parents=True, exist_ok=True)
 
 SHP_CACHE_DIR = WORK_DIR / "shapefiles"
@@ -52,14 +52,6 @@ def _setup_chinese_font():
             plt.rcParams["font.sans-serif"] = [fn, "sans-serif"]
             plt.rcParams["axes.unicode_minus"] = False
             return
-    for fp in ["C:/Windows/Fonts/simhei.ttf", "C:/Windows/Fonts/msyh.ttc"]:
-        if os.path.exists(fp):
-            font_manager.fontManager.addfont(fp)
-            prop = font_manager.FontProperties(fname=fp)
-            plt.rcParams["font.sans-serif"] = [prop.get_name(), "sans-serif"]
-            plt.rcParams["axes.unicode_minus"] = False
-            return
-
 _setup_chinese_font()
 
 # ---------- 风险等级 ----------

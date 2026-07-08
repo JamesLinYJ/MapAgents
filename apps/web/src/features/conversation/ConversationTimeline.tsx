@@ -13,7 +13,7 @@
 // 维护聊天时间线的滚动、空状态和辅助面板渲染。输入只接受
 // ConversationEntry[]，诊断 RunEvent 面板不得接入这里。
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, m, type Variants } from 'framer-motion'
 import { AlertCircle, CheckCircle2, ChevronDown, Circle, LoaderCircle, PauseCircle } from 'lucide-react'
 import { AppIcon } from '../../shared/components/AppIcon'
@@ -23,6 +23,7 @@ import type { DecisionRequest } from '@geo-agent-platform/shared-types'
 import type { ConversationEntry } from './items'
 import type { ChatPanelProps, MemoryEntry } from './types'
 import { ConversationEntryView } from './ConversationEntry'
+import { buildConversationJumpItems, ConversationJumpRail, conversationJumpAnchorId } from './ConversationJumpRail'
 import { formatTaskStatus } from './entryFormat'
 import { fmtElapsed } from './useConversation'
 
@@ -72,8 +73,10 @@ export function ConversationTimeline({
   reducedMotion,
 }: ConversationTimelineProps) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const [activeJumpAnchorId, setActiveJumpAnchorId] = useState<string | null>(null)
   const timelineRef = useRef<HTMLDivElement>(null)
   const nearBottom = useRef(true)
+  const jumpItems = useMemo(() => buildConversationJumpItems(conversation), [conversation])
 
   const handleTimelineScroll = () => {
     const el = timelineRef.current
@@ -92,6 +95,41 @@ export function ConversationTimeline({
       return next
     })
   }
+
+  const jumpToAnchor = (anchorId: string) => {
+    const container = timelineRef.current
+    const target = document.getElementById(anchorId)
+    if (!container || !target) return
+    target.scrollIntoView({
+      block: 'center',
+      behavior: reducedMotion ? 'auto' : 'smooth',
+    })
+    setActiveJumpAnchorId(anchorId)
+  }
+
+  useEffect(() => {
+    const el = timelineRef.current
+    if (!el || jumpItems.length < 2) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter(entry => entry.isIntersecting)
+          .sort((left, right) => Math.abs(left.boundingClientRect.top) - Math.abs(right.boundingClientRect.top))
+        const active = visible[0]?.target.id
+        if (active) setActiveJumpAnchorId(active)
+      },
+      {
+        root: el,
+        threshold: 0.35,
+        rootMargin: '-20% 0px -55% 0px',
+      },
+    )
+    for (const item of jumpItems) {
+      const target = document.getElementById(item.anchorId)
+      if (target) observer.observe(target)
+    }
+    return () => observer.disconnect()
+  }, [jumpItems])
 
   // 新消息到达时自动滚到底部，除非用户手动上滚。
   useEffect(() => {
@@ -151,6 +189,7 @@ export function ConversationTimeline({
                 entryVariants={entryVariants}
                 reducedMotion={reducedMotion}
                 expandedIds={expandedIds}
+                anchorId={entry.kind === 'message' && entry.role === 'user' ? conversationJumpAnchorId(entry.id) : undefined}
                 onToggleExpanded={toggleExpanded}
                 onSelectArtifact={onSelectArtifact}
                 onForkMessage={onForkMessage}
@@ -183,6 +222,11 @@ export function ConversationTimeline({
           </m.div>
         )}
       </m.div>
+      <ConversationJumpRail
+        items={jumpItems}
+        activeAnchorId={activeJumpAnchorId}
+        onJump={jumpToAnchor}
+      />
 
       <div className="cc-run-footer">
         <span>{runCreatedAt && runStatus === 'running' ? `运行中 ${fmtElapsed(runCreatedAt)}` : '输入空间问题，按回车开始分析'}</span>

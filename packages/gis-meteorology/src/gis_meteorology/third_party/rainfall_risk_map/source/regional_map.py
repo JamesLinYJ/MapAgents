@@ -349,18 +349,6 @@ def _setup_chinese_font():
             plt.rcParams["font.sans-serif"] = [font_name, "sans-serif"]
             plt.rcParams["axes.unicode_minus"] = False
             return
-    font_paths = [
-        "C:/Windows/Fonts/simhei.ttf",
-        "C:/Windows/Fonts/msyh.ttc",
-    ]
-    for fp in font_paths:
-        if os.path.exists(fp):
-            font_manager.fontManager.addfont(fp)
-            prop = font_manager.FontProperties(fname=fp)
-            plt.rcParams["font.sans-serif"] = [prop.get_name(), "sans-serif"]
-            plt.rcParams["axes.unicode_minus"] = False
-            return
-
 
 # ---------- 阈值解析 ----------
 

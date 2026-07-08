@@ -336,13 +336,26 @@ export function extractActiveSkills(
       }
     }
   }
-  const agentSkills = (agentState as Record<string, unknown> | undefined)?.activeSkills
-  if (Array.isArray(agentSkills)) {
-    for (const skill of agentSkills) {
-      if (typeof skill === 'string') skills.add(skill)
+  for (const skill of agentState?.activeSkills ?? []) skills.add(skill)
+  return skills.size > 0 ? [...skills] : undefined
+}
+
+export function extractActiveMcpServers(
+  events: ReadonlyArray<RunEvent>,
+  agentState: AgentState | undefined,
+): string[] | undefined {
+  const servers = new Set<string>()
+  for (const event of events) {
+    const payload = event.payload as Record<string, unknown> | undefined
+    const eventServers = payload?.active_mcp_servers ?? payload?.activeMcpServers ?? payload?.mcpServers
+    if (Array.isArray(eventServers)) {
+      for (const server of eventServers) {
+        if (typeof server === 'string') servers.add(server)
+      }
     }
   }
-  return skills.size > 0 ? [...skills] : undefined
+  for (const server of agentState?.activeMcpServers ?? []) servers.add(server)
+  return servers.size > 0 ? [...servers] : undefined
 }
 
 export function extractRunStats(events: ReadonlyArray<RunEvent>): RuntimeRunStats | undefined {

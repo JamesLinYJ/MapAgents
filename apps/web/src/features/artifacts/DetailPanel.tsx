@@ -15,6 +15,7 @@
 import { memo, useMemo } from 'react'
 import type {
   AgentState,
+  AnalysisRun,
   ArtifactRef,
   ConversationItem,
   LayerDescriptor,
@@ -44,10 +45,10 @@ interface ProgressItem {
 
 type PanelMode = 'summary' | 'layers' | 'history' | 'compute' | 'sources' | 'export' | 'config' | 'layerManager' | 'tools'
 
-interface DetailPanelProps {
+export interface DetailPanelProps {
   panelMode: PanelMode
   currentRunId?: string
-  runStatus?: string
+  runStatus?: AnalysisRun['status']
   agentState?: AgentState
   items: ConversationItem[]
   artifacts: ArtifactRef[]

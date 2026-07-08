@@ -10,10 +10,12 @@
 
 import manifest from './manifest.json' with { type: 'json' }
 import type { ToolProvider } from '../../framework/types.js'
-import { meteorologyTools } from './meteorologyTools.js'
+import type { Env } from '../../framework/env.js'
+import { createMeteorologyTools } from './meteorologyTools.js'
 
-const provider: ToolProvider = {
-  manifest,
-  tools: () => meteorologyTools,
+export function createMeteorologyProvider(env: Env): ToolProvider {
+  return {
+    manifest,
+    tools: () => createMeteorologyTools(env),
+  }
 }
-export default provider

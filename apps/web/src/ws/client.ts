@@ -9,6 +9,8 @@
 // --------------------------------------------------------------------------
 
 import type { WsControlCommand, WsControlResponse, WsRunPush } from '@geo-agent-platform/shared-types'
+import ReconnectingWebSocket, { type CloseEvent as PartyCloseEvent } from 'partysocket/ws'
+import { useConnectionStore } from '../app/stores/connectionStore'
 
 type WsClientMessage =
   | WsRunPush
@@ -30,18 +32,15 @@ const RECONNECT_MAX_DELAY_MS = 30_000
 const RECONNECT_MAX_ATTEMPTS = 8
 
 class WebSocketControlClient {
-  private socket: WebSocket | null = null
+  private socket: ReconnectingWebSocket | null = null
   private connectPromise: Promise<void> | null = null
   private readonly pending = new Map<string, PendingRequest>()
   private readonly listeners = new Set<Listener>()
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
-  private reconnectAttempts = 0
-  private hasConnected = false
   private csrfToken: string | null = null
 
   async send(type: WsControlCommand, payload: Record<string, unknown>): Promise<WsControlResponse> {
     await this.ensureOpen()
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+    if (!this.socket || this.socket.readyState !== ReconnectingWebSocket.OPEN) {
       throw new Error('WebSocket 当前未连接，本次写命令没有发送。')
     }
 
@@ -56,7 +55,8 @@ class WebSocketControlClient {
       }, REQUEST_TIMEOUT_MS)
       this.pending.set(id, { resolve, reject, timer })
       try {
-        this.socket?.send(request)
+        const sent = this.socket?.send(request)
+        if (sent === false) throw new Error('WebSocket 当前未连接，本次写命令没有发送。')
       } catch (error) {
         clearTimeout(timer)
         this.pending.delete(id)
@@ -76,11 +76,19 @@ class WebSocketControlClient {
   }
 
   private async ensureOpen(): Promise<void> {
-    if (this.socket?.readyState === WebSocket.OPEN) return
+    if (this.socket?.readyState === ReconnectingWebSocket.OPEN) return
     if (this.connectPromise) return this.connectPromise
 
+    useConnectionStore.getState().setWsConnecting()
     this.connectPromise = new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(resolveWsUrl())
+      const socket = new ReconnectingWebSocket(resolveWsUrl, undefined, {
+        connectionTimeout: 8_000,
+        minReconnectionDelay: RECONNECT_BASE_DELAY_MS,
+        maxReconnectionDelay: RECONNECT_MAX_DELAY_MS,
+        maxRetries: RECONNECT_MAX_ATTEMPTS,
+        maxEnqueuedMessages: 0,
+        shouldReconnectOnClose: event => !isAuthCloseCode(event.code),
+      })
       this.socket = socket
 
       const cleanupInitial = () => {
@@ -89,15 +97,15 @@ class WebSocketControlClient {
       }
       const handleOpen = () => {
         cleanupInitial()
-        this.hasConnected = true
-        this.reconnectAttempts = 0
         this.connectPromise = null
+        useConnectionStore.getState().setWsConnected()
         this.emit({ type: 'connected', id: null, payload: { data: null } })
         resolve()
       }
       const handleInitialError = () => {
         cleanupInitial()
         this.connectPromise = null
+        useConnectionStore.getState().setWsDisconnected('WebSocket 连接失败，请确认 API 服务和 /ws 代理已经启动。')
         reject(new Error('WebSocket 连接失败，请确认 API 服务和 /ws 代理已经启动。'))
       }
 
@@ -106,14 +114,11 @@ class WebSocketControlClient {
       socket.addEventListener('message', event => this.handleMessage(event.data))
       socket.addEventListener('close', event => {
         this.connectPromise = null
-        if (this.socket === socket) this.socket = null
         this.rejectPending(`WebSocket 已断开：${event.reason || event.code}`)
-        this.emit({ type: 'disconnected', id: null, payload: { data: { reason: event.reason || String(event.code) } } })
-        if (isAuthCloseCode(event.code)) {
-          this.hasConnected = false
-          return
-        }
-        this.scheduleReconnect()
+        const reason = event.reason || String(event.code)
+        useConnectionStore.getState().setWsDisconnected(reason)
+        this.emit({ type: 'disconnected', id: null, payload: { data: { reason } } })
+        if (isTerminalClose(event)) this.socket = null
       })
     })
 
@@ -154,28 +159,6 @@ class WebSocketControlClient {
     }
   }
 
-  private scheduleReconnect() {
-    if (!this.hasConnected || this.reconnectTimer) return
-    if (this.reconnectAttempts >= RECONNECT_MAX_ATTEMPTS) {
-      this.emit({
-        type: 'disconnected',
-        id: null,
-        payload: { data: { reason: 'WebSocket 重连次数已达上限，请刷新或重新登录。' } },
-      })
-      return
-    }
-    const delay = Math.min(
-      RECONNECT_MAX_DELAY_MS,
-      RECONNECT_BASE_DELAY_MS * (2 ** this.reconnectAttempts),
-    )
-    const jitter = Math.floor(Math.random() * 250)
-    this.reconnectAttempts += 1
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null
-      void this.ensureOpen().catch(() => this.scheduleReconnect())
-    }, delay + jitter)
-  }
-
   private emit(message: WsClientMessage) {
     for (const listener of this.listeners) {
       listener(message)
@@ -210,6 +193,10 @@ function deriveApiBaseUrl(envBaseUrl?: string) {
 
 function isAuthCloseCode(code: number): boolean {
   return code === 1008 || code === 4001 || code === 4401
+}
+
+function isTerminalClose(event: PartyCloseEvent): boolean {
+  return isAuthCloseCode(event.code) || event.code === 1000
 }
 
 function isAuthFailure(message: string): boolean {

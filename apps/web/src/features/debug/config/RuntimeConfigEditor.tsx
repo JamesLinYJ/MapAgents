@@ -298,6 +298,308 @@ export function RuntimeConfigEditor({ runtimeConfig, onSaveRuntimeConfig }: Runt
               }}
             />
           </label>
+          <div className="tool-field tool-field--full">
+            <div className="panel__subheader">
+              <span>OpenAI Agents SDK 扩展</span>
+              <span className="panel__muted">MCP 与 Skill 会进入真实 SDK runtime</span>
+            </div>
+            <div className="runtime-config-grid">
+              <label className="tool-field tool-field--checkbox">
+                <span className="composer__label">启用 SDK Skill</span>
+                <input
+                  type="checkbox"
+                  checked={draft.sdk.skills.enabled}
+                  onChange={(event) => {
+                    setDraft({
+                      ...draft,
+                      sdk: { ...draft.sdk, skills: { ...draft.sdk.skills, enabled: event.target.checked } },
+                    })
+                  }}
+                />
+              </label>
+              <label className="tool-field">
+                <span className="composer__label">Skill 工作区路径</span>
+                <input
+                  className="composer__input"
+                  value={draft.sdk.skills.skillsPath}
+                  onChange={(event) => {
+                    setDraft({
+                      ...draft,
+                      sdk: { ...draft.sdk, skills: { ...draft.sdk.skills, skillsPath: event.target.value } },
+                    })
+                  }}
+                />
+              </label>
+              <label className="tool-field tool-field--full">
+                <span className="composer__label">单个 Skill 目录</span>
+                <input
+                  className="composer__input"
+                  value={draft.sdk.skills.skillPaths.join(', ')}
+                  onChange={(event) => {
+                    setDraft({
+                      ...draft,
+                      sdk: { ...draft.sdk, skills: { ...draft.sdk.skills, skillPaths: splitCsv(event.target.value) } },
+                    })
+                  }}
+                />
+              </label>
+              <label className="tool-field tool-field--full">
+                <span className="composer__label">Skill 根目录</span>
+                <input
+                  className="composer__input"
+                  value={draft.sdk.skills.skillRoots.join(', ')}
+                  onChange={(event) => {
+                    setDraft({
+                      ...draft,
+                      sdk: { ...draft.sdk, skills: { ...draft.sdk.skills, skillRoots: splitCsv(event.target.value) } },
+                    })
+                  }}
+                />
+              </label>
+              <label className="tool-field tool-field--checkbox">
+                <span className="composer__label">启用 MCP</span>
+                <input
+                  type="checkbox"
+                  checked={draft.sdk.mcp.enabled}
+                  onChange={(event) => {
+                    setDraft({
+                      ...draft,
+                      sdk: { ...draft.sdk, mcp: { ...draft.sdk.mcp, enabled: event.target.checked } },
+                    })
+                  }}
+                />
+              </label>
+              <label className="tool-field">
+                <span className="composer__label">MCP 连接超时(ms)</span>
+                <input
+                  className="composer__input"
+                  type="number"
+                  min={1000}
+                  value={draft.sdk.mcp.connectTimeoutMs}
+                  onChange={(event) => {
+                    setDraft({
+                      ...draft,
+                      sdk: {
+                        ...draft.sdk,
+                        mcp: { ...draft.sdk.mcp, connectTimeoutMs: Number(event.target.value) || 1000 },
+                      },
+                    })
+                  }}
+                />
+              </label>
+              <label className="tool-field">
+                <span className="composer__label">MCP 关闭超时(ms)</span>
+                <input
+                  className="composer__input"
+                  type="number"
+                  min={500}
+                  value={draft.sdk.mcp.closeTimeoutMs}
+                  onChange={(event) => {
+                    setDraft({
+                      ...draft,
+                      sdk: {
+                        ...draft.sdk,
+                        mcp: { ...draft.sdk.mcp, closeTimeoutMs: Number(event.target.value) || 500 },
+                      },
+                    })
+                  }}
+                />
+              </label>
+            </div>
+            <div className="runtime-config-agents">
+              {draft.sdk.mcp.servers.map((server, index) => (
+                <article key={`${server.name}:${index}`} className="runtime-config-agent">
+                  <div className="runtime-config-agent__header">
+                    <strong>{server.name || 'MCP Server'}</strong>
+                    <button
+                      type="button"
+                      className="toolbar-button toolbar-button--ghost"
+                      onClick={() => setDraft({
+                        ...draft,
+                        sdk: {
+                          ...draft.sdk,
+                          mcp: {
+                            ...draft.sdk.mcp,
+                            servers: draft.sdk.mcp.servers.filter((_, candidateIndex) => candidateIndex !== index),
+                          },
+                        },
+                      })}
+                    >
+                      <Trash2 size={14} aria-hidden="true" />
+                      删除
+                    </button>
+                  </div>
+                  <div className="runtime-config-grid">
+                    <label className="tool-field tool-field--checkbox">
+                      <span className="composer__label">启用</span>
+                      <input
+                        type="checkbox"
+                        checked={server.enabled}
+                        onChange={(event) => setDraft(updateMcpServer(draft, index, { enabled: event.target.checked }))}
+                      />
+                    </label>
+                    <label className="tool-field">
+                      <span className="composer__label">名称</span>
+                      <input
+                        className="composer__input"
+                        value={server.name}
+                        onChange={(event) => setDraft(updateMcpServer(draft, index, { name: event.target.value }))}
+                      />
+                    </label>
+                    <label className="tool-field">
+                      <span className="composer__label">传输</span>
+                      <select
+                        className="composer__input"
+                        value={server.transport}
+                        onChange={(event) => setDraft(updateMcpServer(draft, index, {
+                          transport: event.target.value as AgentRuntimeConfig['sdk']['mcp']['servers'][number]['transport'],
+                        }))}
+                      >
+                        <option value="streamable_http">Streamable HTTP</option>
+                        <option value="sse">SSE</option>
+                        <option value="stdio">stdio</option>
+                      </select>
+                    </label>
+                    <label className="tool-field">
+                      <span className="composer__label">执行模式</span>
+                      <select
+                        className="composer__input"
+                        value={server.executionMode}
+                        onChange={(event) => setDraft(updateMcpServer(draft, index, {
+                          executionMode: event.target.value as AgentRuntimeConfig['sdk']['mcp']['servers'][number]['executionMode'],
+                        }))}
+                      >
+                        <option value="function_tools">函数工具</option>
+                        <option value="hosted">Hosted MCP</option>
+                      </select>
+                    </label>
+                    <label className="tool-field">
+                      <span className="composer__label">审批</span>
+                      <select
+                        className="composer__input"
+                        value={server.approval}
+                        onChange={(event) => setDraft(updateMcpServer(draft, index, {
+                          approval: event.target.value as AgentRuntimeConfig['sdk']['mcp']['servers'][number]['approval'],
+                        }))}
+                      >
+                        <option value="always">始终审批</option>
+                        <option value="never">无需审批</option>
+                      </select>
+                    </label>
+                    <label className="tool-field tool-field--full">
+                      <span className="composer__label">URL</span>
+                      <input
+                        className="composer__input"
+                        value={server.url ?? ''}
+                        onChange={(event) => setDraft(updateMcpServer(draft, index, {
+                          url: event.target.value.trim() || null,
+                        }))}
+                      />
+                    </label>
+                    <label className="tool-field">
+                      <span className="composer__label">命令</span>
+                      <input
+                        className="composer__input"
+                        value={server.command ?? ''}
+                        onChange={(event) => setDraft(updateMcpServer(draft, index, {
+                          command: event.target.value.trim() || null,
+                        }))}
+                      />
+                    </label>
+                    <label className="tool-field">
+                      <span className="composer__label">命令参数</span>
+                      <input
+                        className="composer__input"
+                        value={server.args.join(', ')}
+                        onChange={(event) => setDraft(updateMcpServer(draft, index, { args: splitCsv(event.target.value) }))}
+                      />
+                    </label>
+                    <label className="tool-field">
+                      <span className="composer__label">授权环境变量</span>
+                      <input
+                        className="composer__input"
+                        value={server.authorizationEnv ?? ''}
+                        onChange={(event) => setDraft(updateMcpServer(draft, index, {
+                          authorizationEnv: event.target.value.trim() || null,
+                        }))}
+                      />
+                    </label>
+                    <label className="tool-field">
+                      <span className="composer__label">允许工具</span>
+                      <input
+                        className="composer__input"
+                        value={server.allowedTools.join(', ')}
+                        onChange={(event) => setDraft(updateMcpServer(draft, index, {
+                          allowedTools: splitCsv(event.target.value),
+                        }))}
+                      />
+                    </label>
+                    <label className="tool-field">
+                      <span className="composer__label">屏蔽工具</span>
+                      <input
+                        className="composer__input"
+                        value={server.blockedTools.join(', ')}
+                        onChange={(event) => setDraft(updateMcpServer(draft, index, {
+                          blockedTools: splitCsv(event.target.value),
+                        }))}
+                      />
+                    </label>
+                    <label className="tool-field tool-field--full">
+                      <span className="composer__label">描述</span>
+                      <input
+                        className="composer__input"
+                        value={server.description}
+                        onChange={(event) => setDraft(updateMcpServer(draft, index, {
+                          description: event.target.value,
+                        }))}
+                      />
+                    </label>
+                  </div>
+                </article>
+              ))}
+              <button
+                type="button"
+                className="toolbar-button toolbar-button--ghost"
+                onClick={() => setDraft({
+                  ...draft,
+                  sdk: {
+                    ...draft.sdk,
+                    mcp: {
+                      ...draft.sdk.mcp,
+                      servers: [
+                        ...draft.sdk.mcp.servers,
+                        {
+                          enabled: true,
+                          name: `mcp_${draft.sdk.mcp.servers.length + 1}`,
+                          description: '',
+                          transport: 'streamable_http',
+                          executionMode: 'function_tools',
+                          url: null,
+                          connectorId: null,
+                          command: null,
+                          args: [],
+                          cwd: null,
+                          env: {},
+                          headers: {},
+                          authorizationEnv: null,
+                          allowedTools: [],
+                          blockedTools: [],
+                          includeServerInToolNames: true,
+                          convertSchemasToStrict: true,
+                          cacheToolsList: true,
+                          useStructuredContent: true,
+                          approval: 'always',
+                          timeoutMs: 20_000,
+                        },
+                      ],
+                    },
+                  },
+                })}
+              >
+                新增 MCP Server
+              </button>
+            </div>
+          </div>
           <label className="tool-field">
             <span className="composer__label">地理检索 Provider</span>
             <input
@@ -532,5 +834,24 @@ function updateSubAgent(
     subAgents: config.subAgents.map((item, candidateIndex) =>
       candidateIndex === index ? { ...item, ...fields } : item,
     ),
+  }
+}
+
+function updateMcpServer(
+  config: AgentRuntimeConfig,
+  index: number,
+  fields: Partial<AgentRuntimeConfig['sdk']['mcp']['servers'][number]>,
+) {
+  return {
+    ...config,
+    sdk: {
+      ...config.sdk,
+      mcp: {
+        ...config.sdk.mcp,
+        servers: config.sdk.mcp.servers.map((server, candidateIndex) =>
+          candidateIndex === index ? { ...server, ...fields } : server,
+        ),
+      },
+    },
   }
 }

@@ -62,7 +62,7 @@ import {
 // DebugPageProps
 //
 // 汇总调试台所需的运行态、数据资产、工具清单与管理动作。
-interface DebugPageProps {
+export interface DebugPageProps {
   query: string
   isSubmitting: boolean
   isToolSubmitting: boolean

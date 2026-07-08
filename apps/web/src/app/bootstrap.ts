@@ -15,6 +15,7 @@
 
 import type { ConversationItem, TranscriptEntry } from '@geo-agent-platform/shared-types'
 import { getRunItems } from '../api/client'
+import { reportClientDiagnostic } from '../shared/utils/clientDiagnostics'
 export { mergeConversationItems } from '../features/conversation/timelineProjector'
 
 export function formatUiError(error: unknown, defaultMessage: string) {
@@ -31,7 +32,7 @@ export function reportNonBlockingError(scope: string, error: unknown) {
   // 非阻断刷新失败不覆盖主任务状态。
   //
   // 但失败必须留下诊断线索，避免历史列表或辅助面板悄悄停更。
-  console.warn(`[${scope}]`, error)
+  reportClientDiagnostic('warn', { scope, error })
 }
 
 export async function aggregateThreadItems(runs: { id: string; status: string }[]): Promise<ConversationItem[]> {

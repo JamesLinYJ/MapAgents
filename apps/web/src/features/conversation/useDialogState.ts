@@ -5,7 +5,7 @@
 //   文件:       useDialogState.ts
 //
 //   日期:       2026年07月07日
-//   作者:       Claude Code
+//   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
 import { useCallback, useRef, useState } from 'react'

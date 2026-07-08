@@ -10,11 +10,12 @@
 
 import { and, desc, eq, sql, type SQL } from 'drizzle-orm'
 import type { Database } from '../../db/connection.js'
-import { platformMeteorologicalDatasets } from '../../db/schema.js'
-import type { MeteorologicalDatasetRecord } from '../../schemas/types.js'
+import { platformMeteorologicalDatasets, platformMeteorologicalJobs } from '../../db/schema.js'
+import type { MeteorologicalDatasetRecord, MeteorologicalJobRecord } from '../../schemas/types.js'
 import { isRecord, toIsoString } from '../platformStoreUtils.js'
 
 type DatasetRow = typeof platformMeteorologicalDatasets.$inferSelect
+type JobRow = typeof platformMeteorologicalJobs.$inferSelect
 
 export interface ListMeteorologicalDatasetsFilters {
   sessionId?: string | null
@@ -80,6 +81,64 @@ export class MeteorologicalDatasetStore {
     return matches[0] ?? null
   }
 
+  async get(datasetId: string): Promise<MeteorologicalDatasetRecord | null> {
+    const rows = await this.db
+      .select()
+      .from(platformMeteorologicalDatasets)
+      .where(eq(platformMeteorologicalDatasets.datasetId, datasetId))
+      .limit(1)
+    return rows[0] ? mapDatasetRow(rows[0]) : null
+  }
+
+  async create(dataset: MeteorologicalDatasetRecord): Promise<void> {
+    await this.db.insert(platformMeteorologicalDatasets).values({
+      datasetId: dataset.datasetId,
+      workspaceId: dataset.workspaceId,
+      createdByUserId: dataset.createdByUserId,
+      visibility: dataset.visibility,
+      sessionId: dataset.sessionId,
+      threadId: dataset.threadId,
+      filename: dataset.filename,
+      originalFilename: dataset.originalFilename,
+      fileId: dataset.fileId,
+      fileRelativePath: dataset.fileRelativePath,
+      sizeBytes: dataset.sizeBytes,
+      contentHash: dataset.contentHash,
+      mediaType: dataset.mediaType,
+      status: dataset.status,
+      metadataJson: dataset.metadata,
+      createdAt: new Date(dataset.createdAt),
+      updatedAt: new Date(dataset.updatedAt),
+    })
+  }
+
+  async getJob(jobId: string): Promise<MeteorologicalJobRecord | null> {
+    const rows = await this.db
+      .select()
+      .from(platformMeteorologicalJobs)
+      .where(eq(platformMeteorologicalJobs.jobId, jobId))
+      .limit(1)
+    return rows[0] ? mapJobRow(rows[0]) : null
+  }
+
+  async createJob(job: MeteorologicalJobRecord): Promise<void> {
+    await this.db.insert(platformMeteorologicalJobs).values({
+      jobId: job.jobId,
+      datasetId: job.datasetId,
+      workspaceId: job.workspaceId,
+      createdByUserId: job.createdByUserId,
+      sessionId: job.sessionId,
+      threadId: job.threadId,
+      kind: job.kind,
+      status: job.status,
+      message: job.message,
+      payloadJson: job.payload,
+      createdAt: new Date(job.createdAt),
+      updatedAt: new Date(job.updatedAt),
+      completedAt: job.completedAt ? new Date(job.completedAt) : null,
+    })
+  }
+
   private buildConditions(filters: ListMeteorologicalDatasetsFilters): SQL[] {
     const conditions: SQL[] = []
     if (filters.workspaceId) conditions.push(eq(platformMeteorologicalDatasets.workspaceId, filters.workspaceId))
@@ -116,4 +175,22 @@ function mapDatasetRow(row: DatasetRow): MeteorologicalDatasetRecord {
 
 function normalizeVisibility(value: string): MeteorologicalDatasetRecord['visibility'] {
   return value === 'private' || value === 'public' ? value : 'workspace'
+}
+
+function mapJobRow(row: JobRow): MeteorologicalJobRecord {
+  return {
+    jobId: row.jobId,
+    datasetId: row.datasetId,
+    workspaceId: row.workspaceId,
+    createdByUserId: row.createdByUserId,
+    sessionId: row.sessionId,
+    threadId: row.threadId,
+    kind: row.kind,
+    status: row.status,
+    message: row.message,
+    payload: isRecord(row.payloadJson) ? row.payloadJson : {},
+    createdAt: toIsoString(row.createdAt),
+    updatedAt: toIsoString(row.updatedAt),
+    completedAt: row.completedAt ? toIsoString(row.completedAt) : null,
+  }
 }

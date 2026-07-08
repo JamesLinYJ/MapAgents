@@ -5,7 +5,7 @@
 //   文件:       ConversationStorage.ts
 //
 //   日期:       2026年07月07日
-//   作者:       Claude Code
+//   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
 // FileConversationStore 的存储后端抽象。当前实现为 JSONL 文件型，
@@ -15,14 +15,18 @@
 import type {
   AgentThreadRecord,
   AnalysisRun,
+  ArtifactRef,
   CompactionRecord,
+  ContentRef,
   ConversationItem,
   RunCheckpoint,
   RunEvent,
   SessionRecord,
   ThreadManifest,
   ThreadMemoryDocument,
+  ToolValueRef,
   TranscriptEntry,
+  TranscriptEntryKind,
 } from '../schemas/types.js'
 
 export interface ConversationSnapshot {
@@ -49,38 +53,72 @@ export interface ConversationStorage {
 
   // Run
   createRun(run: AnalysisRun): Promise<void>
-  saveRun(run: AnalysisRun): Promise<RunCheckpoint>
+  saveRun(
+    run: AnalysisRun,
+    fields?: Partial<Pick<RunCheckpoint, 'activeEntryId' | 'pendingToolCallIds' | 'recoveryStatus'>>,
+  ): Promise<void>
   getRunCheckpoint(runId: string): Promise<RunCheckpoint>
+  saveAgentsSdkState(runId: string, serializedState: string, metadata: {
+    agentsSdkVersion: string
+    runtimeConfigDigest: string
+  }): Promise<void>
+  readAgentsSdkState(runId: string): Promise<string>
+  appendAgentTranscript(runId: string, agentId: string, record: Record<string, unknown>): Promise<void>
 
   // Transcript (journal-guaranteed)
   appendTranscript(input: {
     threadId: string; runId?: string | null; turnId?: string | null
-    kind: TranscriptEntry['kind']; payload?: Record<string, unknown>
+    kind: TranscriptEntryKind; payload?: Record<string, unknown>
     parentEntryId?: string | null; logicalParentEntryId?: string | null
-    thread?: AgentThreadRecord; manifest?: ThreadManifest
-    supervisorRun?: AnalysisRun | null
+    entryId?: string
   }): Promise<TranscriptEntry>
   readHistory(threadId: string, cursor?: string | null, limit?: number): Promise<ThreadHistoryPage>
+  readTranscript(threadId: string): Promise<TranscriptEntry[]>
+  readActiveChain(threadId: string, leafEntryId?: string | null): Promise<TranscriptEntry[]>
+  forkTranscript(sourceThreadId: string, targetThreadId: string, sourceEntryId: string): Promise<Map<string, string>>
 
   // Items / Events / Values (journal-guaranteed)
   appendItem(item: ConversationItem): Promise<void>
   appendEvent(event: RunEvent): Promise<void>
-  appendValue(runId: string, value: { refId: string; kind: string; label: string; value: unknown; createdAt: string }): Promise<void>
+  listItems(runId: string): Promise<ConversationItem[]>
+  listEvents(runId: string): Promise<RunEvent[]>
+  appendValue(runId: string, value: ToolValueRef): Promise<void>
 
   // Artifacts / Attachments
-  appendArtifact(runId: string, artifact: { artifactId: string; runId: string; artifactType: string; name: string; uri: string }): Promise<void>
-  appendAttachment(threadId: string, record: { attachmentId: string; action: 'attached' | 'deleted'; name: string; threadId: string; contentRef: unknown | null; createdAt: string }): Promise<void>
+  appendArtifact(runId: string, artifact: ArtifactRef): Promise<void>
+  listArtifacts(runId: string): Promise<ArtifactRef[]>
+  appendAttachment(threadId: string, record: {
+    attachmentId: string
+    action: 'attached' | 'deleted'
+    name: string
+    threadId: string
+    contentRef: ContentRef | null
+    createdAt: string
+  }): Promise<void>
 
   // Compaction
   appendCompaction(record: CompactionRecord): Promise<void>
+  listCompactions(threadId: string): Promise<CompactionRecord[]>
 
   // Memory
-  saveMemory(document: ThreadMemoryDocument): Promise<ThreadMemoryDocument>
+  getMemory(threadId: string): Promise<ThreadMemoryDocument>
+  saveMemory(
+    threadId: string,
+    input: Pick<ThreadMemoryDocument, 'content' | 'generatedContent' | 'pinnedContent' | 'source' | 'basedOnEntryId'>,
+    expectedVersion?: number,
+  ): Promise<ThreadMemoryDocument>
 
   // Trash
   moveThreadToTrash(threadId: string, retentionDays?: number): Promise<unknown>
+  listTrash(sessionId: string): Promise<unknown[]>
+  getTrashedThread(threadId: string): Promise<unknown>
   restoreThread(threadId: string): Promise<unknown>
   purgeThread(threadId: string): Promise<void>
+  purgeExpiredTrash(now?: Date): Promise<string[]>
+
+  // Objects
+  putObject(content: string | Uint8Array, mediaType?: string): Promise<ContentRef>
+  readObject(reference: ContentRef): Promise<Uint8Array>
 
   // Management
   flush(): Promise<void>

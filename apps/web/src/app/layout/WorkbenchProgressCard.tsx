@@ -19,7 +19,7 @@ import type { AnalysisRun, RunEvent } from '@geo-agent-platform/shared-types'
 import type { ProgressTodoItem } from '../derivedState'
 import { deriveWorkbenchProgressSummary, type WorkbenchProgressItem } from './WorkbenchProgressModel'
 
-interface WorkbenchProgressCardProps {
+export interface WorkbenchProgressCardProps {
   runStatus?: AnalysisRun['status']
   progressItems: ReadonlyArray<WorkbenchProgressItem>
   tasks: ReadonlyArray<ProgressTodoItem>

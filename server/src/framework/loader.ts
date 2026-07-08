@@ -8,17 +8,17 @@
 //   作者:       JamesLinYJ
 // --------------------------------------------------------------------------
 
-import { getEnv } from './env.js'
-import { toolRegistry } from './registry.js'
+import type { Env } from './env.js'
+import type { ToolRegistry } from './registry.js'
 import type { InstallContext, ToolProvider } from './types.js'
 import type { PostGisRepository } from '../gis/postgis.js'
 import chartProvider from '../tools/chart/index.js'
 import geocodeProvider from '../tools/geocode/index.js'
-import mediaProvider from '../tools/media/index.js'
+import { createMediaProvider } from '../tools/media/index.js'
 import memoryProvider from '../tools/memory/index.js'
 import planProvider from '../tools/plan/index.js'
 import developerProvider from '../tools/developer/index.js'
-import meteorologyProvider from '../tools/meteorology/index.js'
+import { createMeteorologyProvider } from '../tools/meteorology/index.js'
 import { createSpatialProvider } from '../tools/spatial/index.js'
 import { createRoutingProvider } from '../tools/routing/index.js'
 import { logger } from '../observability/logger.js'
@@ -26,10 +26,18 @@ import { logger } from '../observability/logger.js'
 const LEGACY_METEOROLOGY_PROVIDER_ID = ['wea', 'ther'].join('')
 
 // 安装到仓库并不等于启用；只有 ENABLED_TOOL_PROVIDERS 中的精确 ID 会进入运行时。
-export async function discoverAndLoad(postgis: PostGisRepository): Promise<void> {
-  const env = getEnv()
-  const spatialProvider = createSpatialProvider(postgis)
-  const routingProvider = createRoutingProvider()
+export async function discoverAndLoad(
+  postgis: PostGisRepository,
+  deps: { env: Env; registry: ToolRegistry },
+): Promise<void> {
+  const { env, registry } = deps
+  const spatialProvider = createSpatialProvider(postgis, { runtimeRoot: env.RUNTIME_ROOT })
+  const routingProvider = createRoutingProvider({
+    valhallaBaseUrl: env.VALHALLA_BASE_URL,
+    timeoutMs: env.ROUTING_TIMEOUT_MS,
+  })
+  const mediaProvider = createMediaProvider(env)
+  const meteorologyProvider = createMeteorologyProvider(env)
   const providers: ToolProvider[] = [
     chartProvider as ToolProvider,
     geocodeProvider as ToolProvider,
@@ -58,14 +66,14 @@ export async function discoverAndLoad(postgis: PostGisRepository): Promise<void>
   for (const providerId of enabledIds) {
     const provider = builtinProviders.get(providerId)
     if (!provider) {
-      toolRegistry.markUnavailable(providerId, 'Provider 不在显式内置目录中')
+      registry.markUnavailable(providerId, 'Provider 不在显式内置目录中')
       logger.warn({ providerId }, 'provider not found in built-in directory')
       continue
     }
     const missing = requiredDependencies(provider).filter(key => !config[key])
     if (missing.length) {
       const reason = `缺少依赖：${missing.join(', ')}`
-      toolRegistry.markUnavailable(providerId, reason)
+      registry.markUnavailable(providerId, reason)
       logger.warn({ providerId, reason }, 'provider unavailable')
       continue
     }
@@ -76,15 +84,15 @@ export async function discoverAndLoad(postgis: PostGisRepository): Promise<void>
         log: (level, message) => logger[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info']({ providerId }, message),
       }
       await provider.onInstall?.(ctx)
-      toolRegistry.register(provider)
+      registry.register(provider)
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
-      toolRegistry.markUnavailable(providerId, reason)
+      registry.markUnavailable(providerId, reason)
       logger.warn({ providerId, reason }, 'provider unavailable')
     }
   }
 
-  logger.info({ providers: toolRegistry.listProviders().length, tools: toolRegistry.list().length }, 'providers loaded')
+  logger.info({ providers: registry.listProviders().length, tools: registry.list().length }, 'providers loaded')
 }
 
 function requiredDependencies(provider: ToolProvider): string[] {

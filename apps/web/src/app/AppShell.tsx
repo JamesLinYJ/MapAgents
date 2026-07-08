@@ -12,8 +12,8 @@
 //
 // 负责装配路由、页面容器和六类控制器的 UI 投影。
 
-import { lazy, startTransition, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
-import { domAnimation, LazyMotion, m, MotionConfig, useReducedMotion } from 'framer-motion'
+import { startTransition, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
+import { domAnimation, LazyMotion, MotionConfig, useReducedMotion } from 'framer-motion'
 import { useLocation } from 'react-router-dom'
 
 import type {
@@ -31,17 +31,19 @@ import './styles/layers.css'
 import './styles/layout.css'
 import './styles/tools-debug.css'
 import { pickPreferredArtifactId } from '../features/artifacts/artifactSelection'
-import { buildListItemVariants, buildListVariants, motionSpring } from '../shared/motion'
+import { buildListItemVariants, buildListVariants } from '../shared/motion'
 import { pickConversationHeadline } from '../features/conversation/items'
-import { ChatPanel } from '../features/conversation/ChatPanel'
 import { logout } from '../api/client'
 import { LoginScreen } from './auth/LoginScreen'
 import { TopBar } from './layout/TopBar'
-import { WorkspaceLayout, type WorkspaceSidebarItem } from './layout/WorkspaceLayout'
-import { WorkbenchProgressCard } from './layout/WorkbenchProgressCard'
-import { AppRoutes } from './routes'
+import { WorkspaceConversationPanel } from './layout/WorkspaceConversationPanel'
+import type { WorkspaceSidebarItem } from './layout/WorkspaceLayout'
+import { WorkspaceInspectorPanel } from './layout/WorkspaceInspectorPanel'
+import { WorkspaceMapPanel } from './layout/WorkspaceMapPanel'
+import { WorkspaceToolPanel } from './layout/WorkspaceToolPanel'
+import { WorkspaceRouteHost } from './layout/WorkspaceRouteHost'
+import { useWorkspaceMapActivation } from './layout/useWorkspaceMapActivation'
 import { supportsAgentSdkLiveSupervisor } from '../shared/providerCapabilities'
-import { MapErrorBoundary } from '../features/map/MapErrorBoundary'
 import {
   formatUiError,
   reportNonBlockingError,
@@ -65,6 +67,7 @@ import {
   buildAgentTodoItems,
   buildDataReferences,
   buildProgressItems,
+  extractActiveMcpServers,
   extractActiveSkills,
   extractCompactionLevel,
   extractDenialCounts,
@@ -76,13 +79,6 @@ import {
   formatTopBarRunStatus,
   mergeThreadRuns,
 } from './derivedState'
-
-const DebugPage = lazy(() => import('../features/debug/DebugPage').then((module) => ({ default: module.DebugPage })))
-const DetailPanel = lazy(() => import('../features/artifacts/DetailPanel').then((module) => ({ default: module.DetailPanel })))
-const loadMapCanvasModule = () => import('../features/map/MapCanvas')
-const MapCanvas = lazy(() => loadMapCanvasModule().then((module) => ({ default: module.MapCanvas })))
-const ToolManagementPage = lazy(() => import('../features/tools/ToolManagementPage').then((module) => ({ default: module.ToolManagementPage })))
-const SecurityAdminPage = lazy(() => import('../features/security/SecurityAdminPage'))
 
 const SIDEBAR_ITEMS: ReadonlyArray<WorkspaceSidebarItem & { id: SidebarItemId }> = [
   { id: 'assistant', icon: 'psychology', label: '智能指令', shortLabel: '助手' },
@@ -97,28 +93,19 @@ function useVoidCallback<Args extends unknown[]>(fn: (...args: Args) => Promise<
   return useCallback((...args: Args) => { void fn(...args) }, [fn])
 }
 
-function DetailPanelFallback() {
-  return (
-    <div className="dc-detail-column" aria-label="正在准备结果摘要">
-      <section className="dc-card dc-card--summary">
-        <div className="dc-card__header">
-          <div><div className="dc-card__eyebrow">结果摘要</div><h3>等待分析</h3></div>
-        </div>
-        <p className="dc-empty-copy">摘要面板正在就绪。</p>
-      </section>
-    </div>
-  )
-}
-
 function AppShell() {
   // 主应用壳
   //
   // 装配会话、运行、资源、工具和导航控制器的页面投影。
   // 网络语义和实时订阅分别由控制器与 useRunState 所有。
   const location = useLocation()
-  const [isMapActivated, setIsMapActivated] = useState(false)
-  const [mapFocusRequest, setMapFocusRequest] = useState<{ artifactId?: string; nonce: number }>()
   const [canonicalThreadItems, setCanonicalThreadItems] = useState<ConversationItem[]>([])
+  const {
+    activateMap,
+    isMapActivated,
+    mapFocusRequest,
+    requestMapFocus,
+  } = useWorkspaceMapActivation(location.pathname)
 
   const {
     run, agentState, intent, executionPlan,
@@ -207,6 +194,7 @@ function AppShell() {
   })
   const {
     availableTools,
+    isRuntimeConfigSubmitting,
     isToolCatalogSubmitting,
     isToolSubmitting,
     removeCatalogEntry: handleDeleteToolCatalogEntry,
@@ -223,8 +211,6 @@ function AppShell() {
     loadDiagnostics: location.pathname === '/debug' || panelMode === 'compute' || panelMode === 'config' || panelMode === 'tools',
     setUiError,
   })
-  const { memoryEntries, refreshMemoryEntries } = useMemoryEntries(runtimeConfig?.context.memoryEnabled !== false)
-
   const ensureUploadThread = useCallback(
     () => ensureSessionUploadThread(currentThreadId, syncUrl),
     [currentThreadId, ensureSessionUploadThread, syncUrl],
@@ -293,6 +279,7 @@ function AppShell() {
   const compactionLevel = useMemo(() => extractCompactionLevel(deferredEvents), [deferredEvents])
   const tokenBudget = useMemo(() => extractTokenBudget(events), [events])
   const activeSkills = useMemo(() => extractActiveSkills(deferredEvents, agentState), [agentState, deferredEvents])
+  const activeMcpServers = useMemo(() => extractActiveMcpServers(deferredEvents, agentState), [agentState, deferredEvents])
   const runStats = useMemo(() => extractRunStats(events), [events])
   const denialCounts = useMemo(() => extractDenialCounts(agentState), [agentState])
 
@@ -312,9 +299,8 @@ function AppShell() {
   const handleLayerZoomTo = useCallback((artifactId: string) => {
     // 图层管理的定位是一个显式地图动作：先同步选中结果，再发出一次性视角请求。
     setSelectedArtifactId(artifactId)
-    setIsMapActivated(true)
-    setMapFocusRequest(current => ({ artifactId, nonce: (current?.nonce ?? 0) + 1 }))
-  }, [setSelectedArtifactId])
+    requestMapFocus(artifactId)
+  }, [requestMapFocus, setSelectedArtifactId])
 
   const clearActiveRunState = useCallback(() => {
     clearRun()
@@ -366,6 +352,9 @@ function AppShell() {
     setUiError,
     syncUrl,
   })
+  const { memoryEntries, refreshMemoryEntries } = useMemoryEntries(
+    authStatus === 'authenticated' && runtimeConfig?.context.memoryEnabled !== false,
+  )
 
   useEffect(() => {
     if (!session?.id) return
@@ -374,39 +363,6 @@ function AppShell() {
       setUiError(formatUiError(error, '运行历史加载失败。'))
     })
   }, [loadRunHistory, location.pathname, panelMode, session?.id, setUiError])
-
-  const activateMap = useCallback(() => {
-    setIsMapActivated(true)
-  }, [])
-
-  const preloadMap = useCallback(() => {
-    void loadMapCanvasModule().catch(() => undefined)
-  }, [])
-
-  useEffect(() => {
-    if (location.pathname !== '/' || isMapActivated) return
-    let firstFrame = 0
-    let secondFrame = 0
-    let idleHandle: number | undefined
-    let timer: ReturnType<typeof setTimeout> | undefined
-
-    firstFrame = window.requestAnimationFrame(() => {
-      secondFrame = window.requestAnimationFrame(() => {
-        if ('requestIdleCallback' in window) {
-          idleHandle = window.requestIdleCallback(activateMap, { timeout: 1200 })
-        } else {
-          timer = setTimeout(activateMap, 32)
-        }
-      })
-    })
-
-    return () => {
-      window.cancelAnimationFrame(firstFrame)
-      window.cancelAnimationFrame(secondFrame)
-      if (idleHandle !== undefined && 'cancelIdleCallback' in window) window.cancelIdleCallback(idleHandle)
-      if (timer) clearTimeout(timer)
-    }
-  }, [activateMap, isMapActivated, location.pathname])
 
   const panelNeedsWorkspaceResources = panelMode === 'layers' || panelMode === 'sources' || panelMode === 'layerManager'
   const shouldLoadWorkspaceResources = isMapActivated || panelNeedsWorkspaceResources || location.pathname === '/debug'
@@ -826,9 +782,9 @@ function AppShell() {
     <Suspense fallback={<div className="dc-route-loading">正在加载页面…</div>}>
       <LazyMotion features={domAnimation}>
         <MotionConfig reducedMotion="user">
-          <AppRoutes
-            workspace={
-              <WorkspaceLayout
+          <WorkspaceRouteHost
+            renderWorkspace={(Workspace) => (
+              <Workspace
                 topBar={
                   <TopBar
                     activeNav={activeNav}
@@ -880,31 +836,38 @@ function AppShell() {
                 onWorkspaceModeChange={changeWorkspaceMode}
                 toolsMode={activeNav === 'tools'}
                 toolsSlot={
-                  <div className="tool-management-host min-w-0">
-                    <ToolManagementPage
-                      tools={availableTools}
-                      artifacts={artifacts}
-                      layers={layers}
-                      valueRefs={agentState?.toolValueRefs ?? []}
-                      toolRunResult={toolRunResult}
-                      toolCatalogEntries={toolCatalogEntries}
-                      systemComponents={systemComponents}
-                      isToolSubmitting={isToolSubmitting}
-                      isToolCatalogSubmitting={isToolCatalogSubmitting}
-                      onRunTool={(tool, args) => {
-                        void handleRunTool(tool, args)
-                      }}
-                      onUpsertToolCatalogEntry={(tool, payload, sortOrder) => {
-                        void handleUpsertToolCatalogEntry(tool, payload, sortOrder)
-                      }}
-                      onDeleteToolCatalogEntry={(tool) => {
-                        void handleDeleteToolCatalogEntry(tool)
-                      }}
-                    />
-                  </div>
+                  <WorkspaceToolPanel
+                    tools={availableTools}
+                    artifacts={artifacts}
+                    layers={layers}
+                    valueRefs={agentState?.toolValueRefs ?? []}
+                    runtimeConfig={runtimeConfig}
+                    memories={memoryEntries}
+                    activeSkills={activeSkills}
+                    activeMcpServers={activeMcpServers}
+                    toolRunResult={toolRunResult}
+                    toolCatalogEntries={toolCatalogEntries}
+                    systemComponents={systemComponents}
+                    isToolSubmitting={isToolSubmitting}
+                    isToolCatalogSubmitting={isToolCatalogSubmitting}
+                    isRuntimeConfigSubmitting={isRuntimeConfigSubmitting}
+                    onRunTool={(tool, args) => {
+                      void handleRunTool(tool, args)
+                    }}
+                    onUpsertToolCatalogEntry={(tool, payload, sortOrder) => {
+                      void handleUpsertToolCatalogEntry(tool, payload, sortOrder)
+                    }}
+                    onDeleteToolCatalogEntry={(tool) => {
+                      void handleDeleteToolCatalogEntry(tool)
+                    }}
+                    onSaveRuntimeConfig={(nextConfig) => {
+                      void handleSaveRuntimeConfig(nextConfig)
+                    }}
+                    onRefreshMemories={onRefreshMemoriesAction}
+                  />
                 }
                 mainSlot={
-                  <ChatPanel
+                  <WorkspaceConversationPanel
                     artifactCount={artifacts.length}
                     runStatus={run?.status}
                     providerLabel={providerLabel}
@@ -946,6 +909,7 @@ function AppShell() {
                     onRefreshMemories={onRefreshMemoriesAction}
                     tokenBudget={tokenBudget}
                     activeSkills={activeSkills}
+                    activeMcpServers={activeMcpServers}
                     compactionLevel={compactionLevel}
                     runStats={runStats}
                     denialCounts={denialCounts}
@@ -954,158 +918,116 @@ function AppShell() {
                   />
                 }
                 mapSlot={
-                  <m.section
-                    className="workbench-map-shell"
-                    aria-label="空间地图"
-                    layout
-                    transition={motionSpring.gentle}
-                    onPointerEnter={preloadMap}
-                  >
-                    <div className="workbench-map-shell__head">
-                      <strong>地图与图层</strong>
-                      <button type="button" className="workbench-inspector-link" onClick={() => setPanelMode('layerManager')}>图层管理</button>
-                    </div>
-                    <div className="workbench-map-shell__body">
-                      {isMapActivated ? (
-                        <MapErrorBoundary>
-                          <Suspense fallback={<div className="dc-map-stage dc-map-stage--loading">正在初始化地图…</div>}>
-                            <MapCanvas
-                              artifactCount={artifacts.length}
-                              basemaps={basemaps}
-                              runStatus={run?.status}
-                              selectedBasemapKey={selectedBasemapKey}
-                              onSelectBasemap={setSelectedBasemapKey}
-                              layers={mapLayers}
-                              selectedArtifactId={selectedArtifactId}
-                              selectedArtifactName={selectedArtifact?.name}
-                              focusRequest={mapFocusRequest}
-                              onSelectArtifact={setSelectedArtifactId}
-                              placeResolution={placeResolution}
-                              agentState={agentState}
-                            />
-                          </Suspense>
-                        </MapErrorBoundary>
-                      ) : (
-                        <button
-                          type="button"
-                          className="dc-map-stage dc-map-stage--loading dc-map-activation"
-                          onClick={activateMap}
-                          onFocus={preloadMap}
-                        >
-                          <strong>空间地图</strong>
-                          <span>点击打开地图检查器</span>
-                        </button>
-                      )}
-                    </div>
-                  </m.section>
+                  <WorkspaceMapPanel
+                    artifactCount={artifacts.length}
+                    basemaps={basemaps}
+                    isMapActivated={isMapActivated}
+                    runStatus={run?.status}
+                    selectedBasemapKey={selectedBasemapKey}
+                    onSelectBasemap={setSelectedBasemapKey}
+                    layers={mapLayers}
+                    selectedArtifactId={selectedArtifactId}
+                    selectedArtifactName={selectedArtifact?.name}
+                    focusRequest={mapFocusRequest}
+                    onSelectArtifact={setSelectedArtifactId}
+                    placeResolution={placeResolution}
+                    agentState={agentState}
+                    onActivateMap={activateMap}
+                    onOpenLayerManager={() => setPanelMode('layerManager')}
+                  />
                 }
                 inspectorSlot={
-                  <>
-                    <m.div layout transition={motionSpring.gentle}>
-                      <WorkbenchProgressCard
-                        runStatus={run?.status}
-                        progressItems={progressItems}
-                        tasks={progressTasks}
-                        events={deferredEvents}
-                        onOpenHistory={() => setPanelMode('history')}
-                      />
-                    </m.div>
-                    <m.div className="workbench-inspector-detail" layout transition={motionSpring.gentle}>
-                      <Suspense fallback={<DetailPanelFallback />}>
-                        <m.div layout transition={motionSpring.gentle}>
-                          <DetailPanel
-                            panelMode={panelMode}
-                            currentRunId={run?.id}
-                            runStatus={run?.status}
-                            agentState={agentState}
-                            items={deferredItems}
-                            artifacts={artifacts}
-                            artifactData={artifactData}
-                            mapLayers={mapLayers}
-                            layers={layers}
-                            events={deferredEvents}
-                            sessionRuns={sessionRuns}
-                            hasMoreHistory={hasMoreRunHistory}
-                            isHistoryLoading={isRunHistoryLoading}
-                            progressItems={progressItems}
-                            selectedArtifactId={selectedArtifactId}
-                            uploadedLayerName={uploadedLayerName}
-                            selectedBasemapName={selectedBasemap.name}
-                            provider={provider}
-                            model={model}
-                            providers={providers}
-                            systemComponents={systemComponents}
-                            isToolSubmitting={isToolSubmitting}
-                            onSelectArtifact={setSelectedArtifactId}
-                            onToggleArtifactVisibility={handleToggleArtifactVisibility}
-                            onChangeArtifactOpacity={handleArtifactOpacityChange}
-                            onSelectHistoryRun={(runId) => {
-                              void hydrateRunState(runId)
-                              setPanelMode('history')
-                              setActiveNav('history')
-                            }}
-                            onLoadMoreHistory={handleLoadMoreHistory}
-                            onCopyShareLink={() => {
-                              void handleCopyShareLink()
-                            }}
-                            onProviderChange={handleProviderChange}
-                            onModelChange={setModel}
-                            onImportManagedLayer={(file) => {
-                              void handleImportManagedLayer(file)
-                            }}
-                            onReplaceManagedLayer={(layerKey, file) => {
-                              void handleReplaceManagedLayer(layerKey, file)
-                            }}
-                            onToggleLayerStatus={(layerKey, nextStatus) => {
-                              void handleToggleLayerStatus(layerKey, nextStatus)
-                            }}
-                            onDeleteLayer={(layerKey) => {
-                              void handleDeleteLayer(layerKey)
-                            }}
-                            onRefreshManagedLayers={() => {
-                              void refreshLayers(session?.id, currentThreadId)
-                            }}
-                            onCloseLayerManager={() => setPanelMode('summary')}
-                            layerTree={layerManager.tree}
-                            layerSelectedId={layerManager.selectedId}
-                            layerSearchQuery={layerManager.searchQuery}
-                            layerTotalCount={layerManager.totalCount}
-                            layerVisibleCount={layerManager.visibleCount}
-                            layerSelectedNode={layerManager.selectedNode}
-                            layerActiveView={layerManager.activeView}
-                            layerVisibilityFilter={layerManager.visibilityFilter}
-                            onLayerSelect={layerManager.selectLayer}
-                            onLayerToggleVisibility={layerManager.toggleVisibility}
-                            onLayerToggleAllVisibility={layerManager.toggleAllVisibility}
-                            onLayerSetOpacity={layerManager.setOpacity}
-                            onLayerSetColor={layerManager.setColor}
-                            onLayerRename={layerManager.renameLayer}
-                            onLayerMoveUp={layerManager.moveUp}
-                            onLayerMoveDown={layerManager.moveDown}
-                            onLayerRemove={layerManager.removeLayer}
-                            onLayerCreateGroup={layerManager.createGroup}
-                            onLayerToggleGroup={layerManager.toggleGroup}
-                            onLayerSetSearchQuery={layerManager.setSearchQuery}
-                            onLayerZoomTo={handleLayerZoomTo}
-                            onLayerExport={handleExportLayer}
-                            onLayerSetActiveView={layerManager.setActiveView}
-                            onLayerSetVisibilityFilter={layerManager.setVisibilityFilter}
-                            onLayerSetLabelEnabled={layerManager.setLabelEnabled}
-                            onLayerSetLabelField={layerManager.setLabelField}
-                            allFiles={allFiles}
-                            onUploadFile={(file) => { void handleUploadAnyFile(file) }}
-                            onDeleteFile={(fileId) => { void handleDeleteAnyFile(fileId) }}
-                            isFileSubmitting={isFileSubmitting}
-                          />
-                        </m.div>
-                      </Suspense>
-                    </m.div>
-                  </>
+                  <WorkspaceInspectorPanel
+                    panelMode={panelMode}
+                    currentRunId={run?.id}
+                    runStatus={run?.status}
+                    agentState={agentState}
+                    items={deferredItems}
+                    artifacts={artifacts}
+                    artifactData={artifactData}
+                    mapLayers={mapLayers}
+                    layers={layers}
+                    events={deferredEvents}
+                    sessionRuns={sessionRuns}
+                    hasMoreHistory={hasMoreRunHistory}
+                    isHistoryLoading={isRunHistoryLoading}
+                    progressItems={progressItems}
+                    selectedArtifactId={selectedArtifactId}
+                    uploadedLayerName={uploadedLayerName}
+                    selectedBasemapName={selectedBasemap.name}
+                    provider={provider}
+                    model={model}
+                    providers={providers}
+                    systemComponents={systemComponents}
+                    isToolSubmitting={isToolSubmitting}
+                    onSelectArtifact={setSelectedArtifactId}
+                    onToggleArtifactVisibility={handleToggleArtifactVisibility}
+                    onChangeArtifactOpacity={handleArtifactOpacityChange}
+                    onSelectHistoryRun={(runId) => {
+                      void hydrateRunState(runId)
+                      setPanelMode('history')
+                      setActiveNav('history')
+                    }}
+                    onLoadMoreHistory={handleLoadMoreHistory}
+                    onCopyShareLink={() => {
+                      void handleCopyShareLink()
+                    }}
+                    onProviderChange={handleProviderChange}
+                    onModelChange={setModel}
+                    onImportManagedLayer={(file) => {
+                      void handleImportManagedLayer(file)
+                    }}
+                    onReplaceManagedLayer={(layerKey, file) => {
+                      void handleReplaceManagedLayer(layerKey, file)
+                    }}
+                    onToggleLayerStatus={(layerKey, nextStatus) => {
+                      void handleToggleLayerStatus(layerKey, nextStatus)
+                    }}
+                    onDeleteLayer={(layerKey) => {
+                      void handleDeleteLayer(layerKey)
+                    }}
+                    onRefreshManagedLayers={() => {
+                      void refreshLayers(session?.id, currentThreadId)
+                    }}
+                    onCloseLayerManager={() => setPanelMode('summary')}
+                    layerTree={layerManager.tree}
+                    layerSelectedId={layerManager.selectedId}
+                    layerSearchQuery={layerManager.searchQuery}
+                    layerTotalCount={layerManager.totalCount}
+                    layerVisibleCount={layerManager.visibleCount}
+                    layerSelectedNode={layerManager.selectedNode}
+                    layerActiveView={layerManager.activeView}
+                    layerVisibilityFilter={layerManager.visibilityFilter}
+                    onLayerSelect={layerManager.selectLayer}
+                    onLayerToggleVisibility={layerManager.toggleVisibility}
+                    onLayerToggleAllVisibility={layerManager.toggleAllVisibility}
+                    onLayerSetOpacity={layerManager.setOpacity}
+                    onLayerSetColor={layerManager.setColor}
+                    onLayerRename={layerManager.renameLayer}
+                    onLayerMoveUp={layerManager.moveUp}
+                    onLayerMoveDown={layerManager.moveDown}
+                    onLayerRemove={layerManager.removeLayer}
+                    onLayerCreateGroup={layerManager.createGroup}
+                    onLayerToggleGroup={layerManager.toggleGroup}
+                    onLayerSetSearchQuery={layerManager.setSearchQuery}
+                    onLayerZoomTo={handleLayerZoomTo}
+                    onLayerExport={handleExportLayer}
+                    onLayerSetActiveView={layerManager.setActiveView}
+                    onLayerSetVisibilityFilter={layerManager.setVisibilityFilter}
+                    onLayerSetLabelEnabled={layerManager.setLabelEnabled}
+                    onLayerSetLabelField={layerManager.setLabelField}
+                    allFiles={allFiles}
+                    onUploadFile={(file) => { void handleUploadAnyFile(file) }}
+                    onDeleteFile={(fileId) => { void handleDeleteAnyFile(fileId) }}
+                    isFileSubmitting={isFileSubmitting}
+                    tasks={progressTasks}
+                    onOpenHistory={() => setPanelMode('history')}
+                  />
                 }
               />
-            }
-            debug={
-              <DebugPage
+            )}
+            renderDebug={(Debug) => (
+              <Debug
                 query={query}
                 isSubmitting={isSubmitting}
                 isToolSubmitting={isToolSubmitting}
@@ -1157,8 +1079,7 @@ function AppShell() {
                   void handleSaveRuntimeConfig(nextConfig)
                 }}
               />
-            }
-            security={<SecurityAdminPage />}
+            )}
           />
         </MotionConfig>
       </LazyMotion>

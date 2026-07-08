@@ -78,7 +78,7 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
         runtimeConfigSnapshot: config,
       })
       subscribeToRun(context.ws, run.id, context.dependencies.store, context.subscriptions)
-      void context.runtime.run({
+      context.runTasks.startDetached({
         runId: run.id,
         threadId,
         sessionId,
@@ -89,7 +89,7 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
         executionMode: payload.executionMode === 'plan' ? 'plan' : 'auto',
         reasoning: payload.reasoning !== false,
         auth,
-      }).then(() => void sendRunSnapshot(context.ws, run.id, context.dependencies.store))
+      }, { onComplete: runId => sendRunSnapshot(context.ws, runId, context.dependencies.store) })
       return run
     },
   })
@@ -107,7 +107,7 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
     payloadSchema: runIdPayloadSchema,
     auth: 'required',
     csrf: true,
-    handler: (payload, context) => context.runtime.cancel(payload.runId),
+    handler: (payload, context) => context.runTasks.cancel(payload.runId),
   })
 
   registry.register({
@@ -125,7 +125,7 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
       }
       if (!run.runtimeConfigSnapshot) throw new Error(`运行 '${payload.runId}' 缺少 runtimeConfigSnapshot`)
       subscribeToRun(context.ws, payload.runId, context.dependencies.store, context.subscriptions)
-      void context.runtime.run({
+      context.runTasks.startDetached({
         runId: payload.runId,
         threadId: run.threadId,
         sessionId: run.sessionId,
@@ -135,7 +135,7 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
         runtimeConfig: run.runtimeConfigSnapshot,
         resume: true,
         auth,
-      }).then(() => void sendRunSnapshot(context.ws, payload.runId, context.dependencies.store))
+      }, { onComplete: runId => sendRunSnapshot(context.ws, runId, context.dependencies.store) })
       return context.dependencies.store.getRun(payload.runId)
     },
   })
@@ -149,6 +149,7 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
       payload,
       context.dependencies,
       context.runtime,
+      context.runTasks,
       context.ws,
       context.subscriptions,
       requireAuth(context.auth),

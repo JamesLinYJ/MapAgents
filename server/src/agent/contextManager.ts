@@ -23,6 +23,37 @@ import { RuntimeFileStore } from '../store/fileStore.js'
 const USER_NOTES_START = '<!-- user-notes:start -->'
 const USER_NOTES_END = '<!-- user-notes:end -->'
 
+const THREAD_MEMORY_TEMPLATE = `# 会话标题
+_用 5-10 个词概括本线程。_
+
+# 当前状态
+_正在做什么、还没完成什么、下一步是什么。_
+
+# 任务规格
+_用户要求、关键设计决定和约束。_
+
+# 文件、数据与工具
+_重要文件、数据集、图层、artifact、valueRef、工具或函数，以及为什么相关。_
+
+# 工作流
+_常用命令、工具链、运行顺序和输出解释。_
+
+# 错误与修正
+_遇到的错误、用户纠正、失败路径和不要重复的方法。_
+
+# 系统文档
+_平台组件、运行边界和上下文规则。_
+
+# 学习记录
+_有效做法、无效做法和应避免的行为。_
+
+# 关键结果
+_用户请求的具体结果、表格、结论或产物引用。_
+
+# 工作日志
+_按时间记录已尝试和已完成事项，保持简洁。_
+`
+
 export interface ConversationChatMessage {
   role: string
   content: string | null
@@ -225,9 +256,18 @@ export async function rebuildThreadMemory(
   if (!force && (!lastSemanticEntry || !isCompletedTurnBoundary(lastSemanticEntry))) return current
 
   const sourceText = formatEntriesForSummary(stripCompactionReplay(eligibleChain)).slice(-80_000)
-  const prompt = `请更新线程记忆。只能总结给出的可见对话，不得推测。\n\n` +
-    `输出 Markdown，并严格包含：当前目标、用户约束、已确认事实、数据与产物引用、未完成事项、关键术语。\n\n` +
-    `现有自动记忆：\n${current.generatedContent || '（无）'}\n\n新增对话：\n${sourceText}`
+  const prompt = [
+    '请更新 GeoForge 线程会话记忆。只能使用给出的可见对话，不得推测。',
+    '必须保留固定章节标题；每节内容应短而信息密集。',
+    '不要把当前临时任务、运行日志流水账、可从仓库推导的代码结构或 AGENTS.md 已记录规则写成长期事实。',
+    '涉及文件、函数、配置、图层、工具能力或数据源时，只记录当前对话已经明确验证过的状态；不要把记忆当成未来事实。',
+    '',
+    `章节模板：\n${THREAD_MEMORY_TEMPLATE}`,
+    '',
+    `现有自动记忆：\n${current.generatedContent || '（无）'}`,
+    '',
+    `新增对话：\n${sourceText}`,
+  ].join('\n')
   let generated: string
   try {
     generated = (await summarize(prompt)).trim()

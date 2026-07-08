@@ -1,0 +1,654 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - SDK 扩展管理面板
+//
+//   文件:       SdkExtensionManagement.tsx
+//
+//   日期:       2026年07月08日
+//   作者:       OpenAI Codex
+// --------------------------------------------------------------------------
+
+import { useEffect, useMemo, useState } from 'react'
+import {
+  AlertTriangle,
+  Brain,
+  CheckCircle2,
+  Clock,
+  FolderCog,
+  KeyRound,
+  Network,
+  Plus,
+  Save,
+  Server,
+  Trash2,
+  type LucideIcon,
+} from 'lucide-react'
+import {
+  agentRuntimeConfigSchema,
+  type AgentRuntimeConfig,
+  type RuntimeMcpServerConfig,
+} from '@geo-agent-platform/shared-types'
+
+import { StatusPill } from '../../shared/components/StatusPill'
+import type { MemoryEntry } from '../conversation/types'
+
+export type SdkManagementView = 'mcp' | 'skills' | 'memory'
+
+interface SdkExtensionManagementProps {
+  view: SdkManagementView
+  runtimeConfig?: AgentRuntimeConfig
+  memories?: MemoryEntry[]
+  activeSkills?: string[]
+  activeMcpServers?: string[]
+  isSaving?: boolean
+  onRefreshMemories?: () => void
+  onSaveRuntimeConfig?: (config: AgentRuntimeConfig) => void | Promise<void>
+}
+
+export function SdkExtensionManagement({
+  view,
+  runtimeConfig,
+  memories = [],
+  activeSkills = [],
+  activeMcpServers = [],
+  isSaving,
+  onRefreshMemories,
+  onSaveRuntimeConfig,
+}: SdkExtensionManagementProps) {
+  const [draft, setDraft] = useState<AgentRuntimeConfig | undefined>(runtimeConfig)
+  const [dirty, setDirty] = useState(false)
+  const [error, setError] = useState<string>()
+  const [selectedMcpIndex, setSelectedMcpIndex] = useState(0)
+
+  useEffect(() => {
+    setDraft(runtimeConfig)
+    setDirty(false)
+    setError(undefined)
+    setSelectedMcpIndex(0)
+  }, [runtimeConfig])
+
+  const selectedServer = draft?.sdk.mcp.servers[selectedMcpIndex]
+  const mcpSummary = useMemo(() => {
+    const servers = draft?.sdk.mcp.servers ?? []
+    return {
+      total: servers.length,
+      enabled: servers.filter(server => server.enabled).length,
+      hosted: servers.filter(server => server.executionMode === 'hosted').length,
+      stdio: servers.filter(server => server.transport === 'stdio').length,
+    }
+  }, [draft?.sdk.mcp.servers])
+
+  const applyDraft = (updater: (config: AgentRuntimeConfig) => AgentRuntimeConfig) => {
+    setDraft(current => {
+      if (!current) return current
+      setDirty(true)
+      setError(undefined)
+      return updater(current)
+    })
+  }
+
+  const updateMcpServer = (index: number, fields: Partial<RuntimeMcpServerConfig>) => {
+    applyDraft(config => ({
+      ...config,
+      sdk: {
+        ...config.sdk,
+        mcp: {
+          ...config.sdk.mcp,
+          servers: config.sdk.mcp.servers.map((server, candidateIndex) =>
+            candidateIndex === index ? { ...server, ...fields } : server,
+          ),
+        },
+      },
+    }))
+  }
+
+  const updateMcpServerRecord = (
+    index: number,
+    field: 'env' | 'headers',
+    value: string,
+  ) => {
+    try {
+      updateMcpServer(index, { [field]: parseKeyValueLines(value) })
+    } catch (recordError) {
+      setDirty(true)
+      setError(recordError instanceof Error ? recordError.message : '键值配置格式无效。')
+    }
+  }
+
+  const addMcpServer = () => {
+    applyDraft(config => ({
+      ...config,
+      sdk: {
+        ...config.sdk,
+        mcp: {
+          ...config.sdk.mcp,
+          servers: [...config.sdk.mcp.servers, createMcpServerDraft(config.sdk.mcp.servers.length + 1)],
+        },
+      },
+    }))
+    setSelectedMcpIndex(draft?.sdk.mcp.servers.length ?? 0)
+  }
+
+  const removeMcpServer = (index: number) => {
+    applyDraft(config => ({
+      ...config,
+      sdk: {
+        ...config.sdk,
+        mcp: {
+          ...config.sdk.mcp,
+          servers: config.sdk.mcp.servers.filter((_, candidateIndex) => candidateIndex !== index),
+        },
+      },
+    }))
+    setSelectedMcpIndex(previous => Math.max(0, Math.min(previous, (draft?.sdk.mcp.servers.length ?? 1) - 2)))
+  }
+
+  const save = async () => {
+    if (!draft || !onSaveRuntimeConfig) return
+    const parsed = agentRuntimeConfigSchema.safeParse(draft)
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message ?? '运行时配置校验失败。')
+      return
+    }
+    await onSaveRuntimeConfig(parsed.data)
+    setDirty(false)
+  }
+
+  if (!draft) {
+    return (
+      <main className="tool-management__detail tool-management__detail--extensions">
+        <section className="panel sdk-config-panel">
+          <div className="panel__header">
+            <div>
+              <div className="panel__eyebrow">SDK Extensions</div>
+              <h2>正在加载运行时配置</h2>
+            </div>
+          </div>
+          <div className="panel__section">
+            <div className="panel__empty">运行时配置尚未返回，稍后会显示 MCP、Skill 与记忆管理。</div>
+          </div>
+        </section>
+      </main>
+    )
+  }
+
+  return (
+    <main className="tool-management__detail tool-management__detail--extensions">
+      <section className="panel sdk-config-panel sdk-config-panel--summary">
+        <div className="panel__header">
+          <div>
+            <div className="panel__eyebrow">OpenAI Agents SDK</div>
+            <h2>{viewTitle(view)}</h2>
+          </div>
+          <div className="sdk-config-panel__actions">
+            <StatusPill label={dirty ? '有未应用修改' : '配置已同步'} tone={dirty ? 'warning' : 'success'} />
+            <button
+              type="button"
+              className="toolbar-button toolbar-button--primary"
+              disabled={!dirty || !onSaveRuntimeConfig || Boolean(isSaving)}
+              onClick={() => {
+                void save()
+              }}
+            >
+              <Save size={15} aria-hidden="true" />
+              <span>{isSaving ? '保存中' : '应用配置'}</span>
+            </button>
+          </div>
+        </div>
+        {error ? (
+          <div className="panel__section sdk-config-alert" role="alert">
+            <AlertTriangle size={16} aria-hidden="true" />
+            <span>{error}</span>
+          </div>
+        ) : null}
+        <div className="panel__section sdk-config-overview">
+          <CapabilityStat icon={Network} label="MCP Server" value={`${mcpSummary.enabled}/${mcpSummary.total}`} hint={draft.sdk.mcp.enabled ? '运行时启用' : '运行时关闭'} />
+          <CapabilityStat icon={FolderCog} label="Skill 目录" value={String(draft.sdk.skills.skillPaths.length + draft.sdk.skills.skillRoots.length)} hint={draft.sdk.skills.enabled ? '严格读取 SKILL.md' : '未启用'} />
+          <CapabilityStat icon={Brain} label="长期记忆" value={draft.context.memoryEnabled ? '开启' : '关闭'} hint={`${memories.length} 条索引`} />
+          <CapabilityStat icon={CheckCircle2} label="本轮 Skill" value={String(activeSkills.length)} hint={summarizeNames(activeSkills, '当前运行未装配 Skill')} />
+          <CapabilityStat icon={Server} label="本轮 MCP" value={String(activeMcpServers.length)} hint={summarizeNames(activeMcpServers, '当前运行未连接 MCP')} />
+        </div>
+      </section>
+
+      {view === 'mcp' ? (
+        <section className="sdk-config-grid">
+          <section className="panel sdk-config-panel">
+            <div className="panel__header">
+              <div>
+                <div className="panel__eyebrow">Control Plane</div>
+                <h2>MCP 连接策略</h2>
+              </div>
+              <StatusPill label={draft.sdk.mcp.enabled ? '已启用' : '已关闭'} tone={draft.sdk.mcp.enabled ? 'success' : 'neutral'} />
+            </div>
+            <div className="panel__section sdk-form-grid">
+              <ToggleField
+                label="启用 MCP"
+                checked={draft.sdk.mcp.enabled}
+                onChange={enabled => applyDraft(config => ({ ...config, sdk: { ...config.sdk, mcp: { ...config.sdk.mcp, enabled } } }))}
+              />
+              <NumberField
+                label="连接超时 ms"
+                value={draft.sdk.mcp.connectTimeoutMs}
+                onChange={connectTimeoutMs => applyDraft(config => ({ ...config, sdk: { ...config.sdk, mcp: { ...config.sdk.mcp, connectTimeoutMs } } }))}
+              />
+              <NumberField
+                label="关闭超时 ms"
+                value={draft.sdk.mcp.closeTimeoutMs}
+                onChange={closeTimeoutMs => applyDraft(config => ({ ...config, sdk: { ...config.sdk, mcp: { ...config.sdk.mcp, closeTimeoutMs } } }))}
+              />
+            </div>
+          </section>
+
+          <section className="panel sdk-config-panel">
+            <div className="panel__header">
+              <div>
+                <div className="panel__eyebrow">Server Registry</div>
+                <h2>MCP Server</h2>
+              </div>
+              <button type="button" className="toolbar-button toolbar-button--primary" onClick={addMcpServer}>
+                <Plus size={15} aria-hidden="true" />
+                <span>新增 Server</span>
+              </button>
+            </div>
+            <div className="panel__section sdk-mcp-layout">
+              <div className="sdk-mcp-list">
+                {draft.sdk.mcp.servers.length ? draft.sdk.mcp.servers.map((server, index) => (
+                  <button
+                    key={`${server.name}:${index}`}
+                    type="button"
+                    className={index === selectedMcpIndex ? 'sdk-mcp-card sdk-mcp-card--active' : 'sdk-mcp-card'}
+                    onClick={() => setSelectedMcpIndex(index)}
+                  >
+                    <span className="sdk-mcp-card__icon"><Server size={15} aria-hidden="true" /></span>
+                    <span className="sdk-mcp-card__body">
+                      <strong>{server.name || `server-${index + 1}`}</strong>
+                      <small>{server.transport} · {server.executionMode}</small>
+                    </span>
+                    <span className={server.enabled ? 'tool-card__status tool-card__status--ready' : 'tool-card__status'} />
+                  </button>
+                )) : (
+                  <div className="panel__empty">还没有 MCP Server。</div>
+                )}
+              </div>
+
+              {selectedServer ? (
+                <div className="sdk-mcp-editor">
+                  <div className="sdk-mcp-editor__head">
+                    <strong>{selectedServer.name}</strong>
+                    <button type="button" className="toolbar-button toolbar-button--danger" onClick={() => removeMcpServer(selectedMcpIndex)}>
+                      <Trash2 size={14} aria-hidden="true" />
+                      <span>删除</span>
+                    </button>
+                  </div>
+                  <div className="sdk-form-grid sdk-form-grid--two">
+                    <TextField label="名称" value={selectedServer.name} onChange={name => updateMcpServer(selectedMcpIndex, { name })} />
+                    <ToggleField label="启用" checked={selectedServer.enabled} onChange={enabled => updateMcpServer(selectedMcpIndex, { enabled })} />
+                    <SelectField
+                      label="传输方式"
+                      value={selectedServer.transport}
+                      options={[['streamable_http', 'Streamable HTTP'], ['sse', 'SSE'], ['stdio', 'stdio']]}
+                      onChange={transport => updateMcpServer(selectedMcpIndex, { transport: transport as RuntimeMcpServerConfig['transport'] })}
+                    />
+                    <SelectField
+                      label="执行模式"
+                      value={selectedServer.executionMode}
+                      options={[['function_tools', '函数工具'], ['hosted', 'Hosted MCP']]}
+                      onChange={executionMode => updateMcpServer(selectedMcpIndex, { executionMode: executionMode as RuntimeMcpServerConfig['executionMode'] })}
+                    />
+                    <SelectField
+                      label="审批策略"
+                      value={selectedServer.approval}
+                      options={[['always', '总是审批'], ['never', '无需审批']]}
+                      onChange={approval => updateMcpServer(selectedMcpIndex, { approval: approval as RuntimeMcpServerConfig['approval'] })}
+                    />
+                    <NumberField label="工具超时 ms" value={selectedServer.timeoutMs} onChange={timeoutMs => updateMcpServer(selectedMcpIndex, { timeoutMs })} />
+                    <TextField label="URL" value={selectedServer.url ?? ''} onChange={url => updateMcpServer(selectedMcpIndex, { url: emptyToNull(url) })} />
+                    <TextField label="Connector ID" value={selectedServer.connectorId ?? ''} onChange={connectorId => updateMcpServer(selectedMcpIndex, { connectorId: emptyToNull(connectorId) })} />
+                    <TextField label="stdio command" value={selectedServer.command ?? ''} onChange={command => updateMcpServer(selectedMcpIndex, { command: emptyToNull(command) })} />
+                    <TextField label="stdio args" value={joinCsv(selectedServer.args)} onChange={args => updateMcpServer(selectedMcpIndex, { args: splitCsv(args) })} />
+                    <TextField label="工作目录" value={selectedServer.cwd ?? ''} onChange={cwd => updateMcpServer(selectedMcpIndex, { cwd: emptyToNull(cwd) })} />
+                    <TextField label="授权环境变量" value={selectedServer.authorizationEnv ?? ''} onChange={authorizationEnv => updateMcpServer(selectedMcpIndex, { authorizationEnv: emptyToNull(authorizationEnv) })} />
+                    <TextField label="允许工具" value={joinCsv(selectedServer.allowedTools)} onChange={allowedTools => updateMcpServer(selectedMcpIndex, { allowedTools: splitCsv(allowedTools) })} />
+                    <TextField label="屏蔽工具" value={joinCsv(selectedServer.blockedTools)} onChange={blockedTools => updateMcpServer(selectedMcpIndex, { blockedTools: splitCsv(blockedTools) })} />
+                    <TextAreaField
+                      label="HTTP Headers"
+                      value={formatKeyValueLines(selectedServer.headers)}
+                      placeholder="例如：x-api-version: 2026-07-08"
+                      onChange={value => updateMcpServerRecord(selectedMcpIndex, 'headers', value)}
+                    />
+                    <TextAreaField
+                      label="stdio 环境变量"
+                      value={formatKeyValueLines(selectedServer.env)}
+                      placeholder="例如：NODE_ENV=production"
+                      onChange={value => updateMcpServerRecord(selectedMcpIndex, 'env', value)}
+                    />
+                    <ToggleField label="工具名包含服务器名" checked={selectedServer.includeServerInToolNames} onChange={includeServerInToolNames => updateMcpServer(selectedMcpIndex, { includeServerInToolNames })} />
+                    <ToggleField label="严格化工具结构" checked={selectedServer.convertSchemasToStrict} onChange={convertSchemasToStrict => updateMcpServer(selectedMcpIndex, { convertSchemasToStrict })} />
+                    <ToggleField label="缓存工具列表" checked={selectedServer.cacheToolsList} onChange={cacheToolsList => updateMcpServer(selectedMcpIndex, { cacheToolsList })} />
+                    <ToggleField label="使用结构化内容" checked={selectedServer.useStructuredContent} onChange={useStructuredContent => updateMcpServer(selectedMcpIndex, { useStructuredContent })} />
+                    <TextAreaField label="说明" value={selectedServer.description} onChange={description => updateMcpServer(selectedMcpIndex, { description })} />
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </section>
+        </section>
+      ) : null}
+
+      {view === 'skills' ? (
+        <section className="panel sdk-config-panel">
+          <div className="panel__header">
+            <div>
+              <div className="panel__eyebrow">SDK Skills</div>
+              <h2>Skill 目录</h2>
+            </div>
+            <StatusPill label={draft.sdk.skills.enabled ? '已启用' : '已关闭'} tone={draft.sdk.skills.enabled ? 'success' : 'neutral'} />
+          </div>
+          <div className="panel__section sdk-form-grid">
+            <ToggleField
+              label="启用 Skill"
+              checked={draft.sdk.skills.enabled}
+              onChange={enabled => applyDraft(config => ({ ...config, sdk: { ...config.sdk, skills: { ...config.sdk.skills, enabled } } }))}
+            />
+            <TextField
+              label="sandbox 内路径"
+              value={draft.sdk.skills.skillsPath}
+              onChange={skillsPath => applyDraft(config => ({ ...config, sdk: { ...config.sdk, skills: { ...config.sdk.skills, skillsPath } } }))}
+            />
+            <TextAreaField
+              label="单个 Skill 目录"
+              value={draft.sdk.skills.skillPaths.join('\n')}
+              placeholder="每行一个 Skill 目录，目录内必须有 SKILL.md"
+              onChange={value => applyDraft(config => ({ ...config, sdk: { ...config.sdk, skills: { ...config.sdk.skills, skillPaths: splitLines(value) } } }))}
+            />
+            <TextAreaField
+              label="Skill 根目录"
+              value={draft.sdk.skills.skillRoots.join('\n')}
+              placeholder="每行一个根目录，子目录会作为 Skill 扫描"
+              onChange={value => applyDraft(config => ({ ...config, sdk: { ...config.sdk, skills: { ...config.sdk.skills, skillRoots: splitLines(value) } } }))}
+            />
+          </div>
+          <div className="panel__section sdk-rule-list">
+            <RuleItem icon={CheckCircle2} title="入口文件严格为 SKILL.md" body="大小写错误会被明确拒绝，避免 Windows/macOS 上的隐式兼容污染运行时。" />
+            <RuleItem icon={FolderCog} title="只导入明确目录" body="GeoForge 会读取 SKILL.md、scripts、references、assets 并交给 SDK skills capability，不把宿主绝对路径注入 prompt。" />
+            <RuleItem icon={KeyRound} title="不是权限绕过入口" body="Skill 脚本进入 sandbox workspace 后仍受工具审批、文件沙箱和运行模式约束。" />
+          </div>
+        </section>
+      ) : null}
+
+      {view === 'memory' ? (
+        <section className="sdk-config-grid sdk-config-grid--memory">
+          <section className="panel sdk-config-panel">
+            <div className="panel__header">
+              <div>
+                <div className="panel__eyebrow">Memory Runtime</div>
+                <h2>记忆系统</h2>
+              </div>
+              <button type="button" className="toolbar-button" onClick={onRefreshMemories}>
+                <Clock size={15} aria-hidden="true" />
+                <span>刷新索引</span>
+              </button>
+            </div>
+            <div className="panel__section sdk-form-grid">
+              <ToggleField label="启用长期记忆" checked={draft.context.memoryEnabled} onChange={memoryEnabled => applyDraft(config => ({ ...config, context: { ...config.context, memoryEnabled } }))} />
+              <ToggleField label="启用团队记忆" checked={draft.context.teamMemoryEnabled} onChange={teamMemoryEnabled => applyDraft(config => ({ ...config, context: { ...config.context, teamMemoryEnabled } }))} />
+              <ToggleField label="启用会话记忆" checked={draft.context.sessionMemoryEnabled} onChange={sessionMemoryEnabled => applyDraft(config => ({ ...config, context: { ...config.context, sessionMemoryEnabled } }))} />
+              <ToggleField label="自动提取" checked={draft.context.memoryAutoExtractEnabled} onChange={memoryAutoExtractEnabled => applyDraft(config => ({ ...config, context: { ...config.context, memoryAutoExtractEnabled } }))} />
+              <ToggleField label="自动整理" checked={draft.context.memoryAutoDreamEnabled} onChange={memoryAutoDreamEnabled => applyDraft(config => ({ ...config, context: { ...config.context, memoryAutoDreamEnabled } }))} />
+              <TextField label="记忆基目录" value={draft.context.memoryBaseDir} onChange={memoryBaseDir => applyDraft(config => ({ ...config, context: { ...config.context, memoryBaseDir } }))} />
+              <TextField label="私有目录覆盖" value={draft.context.privateMemoryDir ?? ''} onChange={privateMemoryDir => applyDraft(config => ({ ...config, context: { ...config.context, privateMemoryDir: emptyToNull(privateMemoryDir) } }))} />
+              <TextField label="团队目录覆盖" value={draft.context.teamMemoryDir ?? ''} onChange={teamMemoryDir => applyDraft(config => ({ ...config, context: { ...config.context, teamMemoryDir: emptyToNull(teamMemoryDir) } }))} />
+              <NumberField label="索引最大行数" value={draft.context.memoryMaxIndexLines} onChange={memoryMaxIndexLines => applyDraft(config => ({ ...config, context: { ...config.context, memoryMaxIndexLines } }))} />
+              <NumberField label="相关记忆上限" value={draft.context.memoryRelevantLimit} onChange={memoryRelevantLimit => applyDraft(config => ({ ...config, context: { ...config.context, memoryRelevantLimit } }))} />
+            </div>
+          </section>
+          <section className="panel sdk-config-panel">
+            <div className="panel__header">
+              <div>
+                <div className="panel__eyebrow">Memory Index</div>
+                <h2>当前记忆</h2>
+              </div>
+              <StatusPill label={`${memories.length} 条`} tone={memories.length ? 'accent' : 'neutral'} />
+            </div>
+            <div className="panel__section sdk-memory-list">
+              {memories.length ? memories.map(memory => (
+                <article key={`${memory.type}:${memory.name}`} className="sdk-memory-card">
+                  <span className={`cc-memory-item__type cc-memory-item__type--${memory.type}`}>{memory.type}</span>
+                  <div>
+                    <strong>{memory.name}</strong>
+                    <p>{memory.description}</p>
+                  </div>
+                  <small>{memory.age}</small>
+                </article>
+              )) : (
+                <div className="panel__empty">暂无可展示的记忆索引。</div>
+              )}
+            </div>
+          </section>
+        </section>
+      ) : null}
+    </main>
+  )
+}
+
+function CapabilityStat({
+  icon: Icon,
+  label,
+  value,
+  hint,
+}: {
+  icon: LucideIcon
+  label: string
+  value: string
+  hint: string
+}) {
+  return (
+    <article className="sdk-capability-stat">
+      <span><Icon size={16} aria-hidden="true" /></span>
+      <div>
+        <strong>{value}</strong>
+        <p>{label} · {hint}</p>
+      </div>
+    </article>
+  )
+}
+
+function RuleItem({
+  icon: Icon,
+  title,
+  body,
+}: {
+  icon: LucideIcon
+  title: string
+  body: string
+}) {
+  return (
+    <article className="sdk-rule-item">
+      <span><Icon size={16} aria-hidden="true" /></span>
+      <div>
+        <strong>{title}</strong>
+        <p>{body}</p>
+      </div>
+    </article>
+  )
+}
+
+function TextField({
+  label,
+  value,
+  placeholder,
+  onChange,
+}: {
+  label: string
+  value: string
+  placeholder?: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <label className="composer__label sdk-field">
+      <span>{label}</span>
+      <input className="composer__input" value={value} placeholder={placeholder} onChange={event => onChange(event.target.value)} />
+    </label>
+  )
+}
+
+function TextAreaField({
+  label,
+  value,
+  placeholder,
+  onChange,
+}: {
+  label: string
+  value: string
+  placeholder?: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <label className="composer__label sdk-field sdk-field--wide">
+      <span>{label}</span>
+      <textarea className="composer__textarea" rows={4} value={value} placeholder={placeholder} onChange={event => onChange(event.target.value)} />
+    </label>
+  )
+}
+
+function NumberField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: number
+  onChange: (value: number) => void
+}) {
+  return (
+    <label className="composer__label sdk-field">
+      <span>{label}</span>
+      <input
+        className="composer__input"
+        type="number"
+        min={1}
+        value={value}
+        onChange={event => onChange(Number(event.target.value) || 1)}
+      />
+    </label>
+  )
+}
+
+function SelectField({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string
+  value: string
+  options: Array<[string, string]>
+  onChange: (value: string) => void
+}) {
+  return (
+    <label className="composer__label sdk-field">
+      <span>{label}</span>
+      <select className="composer__select" value={value} onChange={event => onChange(event.target.value)}>
+        {options.map(([optionValue, optionLabel]) => (
+          <option key={optionValue} value={optionValue}>{optionLabel}</option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+function ToggleField({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string
+  checked: boolean
+  onChange: (checked: boolean) => void
+}) {
+  return (
+    <label className="sdk-toggle">
+      <input type="checkbox" checked={checked} onChange={event => onChange(event.target.checked)} />
+      <span aria-hidden="true" />
+      <strong>{label}</strong>
+    </label>
+  )
+}
+
+function viewTitle(view: SdkManagementView) {
+  if (view === 'mcp') return 'MCP 管理'
+  if (view === 'skills') return 'Skill 管理'
+  return '记忆管理'
+}
+
+function createMcpServerDraft(index: number): RuntimeMcpServerConfig {
+  return {
+    enabled: true,
+    name: `mcp-${index}`,
+    description: '',
+    transport: 'streamable_http',
+    executionMode: 'function_tools',
+    url: null,
+    connectorId: null,
+    command: null,
+    args: [],
+    cwd: null,
+    env: {},
+    headers: {},
+    authorizationEnv: null,
+    allowedTools: [],
+    blockedTools: [],
+    includeServerInToolNames: true,
+    convertSchemasToStrict: true,
+    cacheToolsList: true,
+    useStructuredContent: true,
+    approval: 'always',
+    timeoutMs: 20_000,
+  }
+}
+
+function splitCsv(value: string): string[] {
+  return value.split(',').map(item => item.trim()).filter(Boolean)
+}
+
+function joinCsv(value: string[]): string {
+  return value.join(', ')
+}
+
+function splitLines(value: string): string[] {
+  return value.split(/\r?\n/u).map(item => item.trim()).filter(Boolean)
+}
+
+function emptyToNull(value: string): string | null {
+  const trimmed = value.trim()
+  return trimmed ? trimmed : null
+}
+
+function formatKeyValueLines(record: Record<string, string>): string {
+  return Object.entries(record).map(([key, value]) => `${key}: ${value}`).join('\n')
+}
+
+function parseKeyValueLines(value: string): Record<string, string> {
+  const output: Record<string, string> = {}
+  for (const line of value.split(/\r?\n/u)) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const equalsIndex = trimmed.indexOf('=')
+    const colonIndex = trimmed.indexOf(':')
+    const separator = equalsIndex >= 0 && (colonIndex < 0 || equalsIndex < colonIndex)
+      ? equalsIndex
+      : colonIndex
+    if (separator < 1) throw new Error(`键值行格式无效：${trimmed}`)
+    const key = trimmed.slice(0, separator).trim()
+    const nextValue = trimmed.slice(separator + 1).trim()
+    if (!key) throw new Error(`键值行缺少键名：${trimmed}`)
+    output[key] = nextValue
+  }
+  return output
+}
+
+function summarizeNames(values: string[], emptyLabel: string): string {
+  if (!values.length) return emptyLabel
+  const visible = values.slice(0, 3).join('、')
+  return values.length > 3 ? `${visible} 等 ${values.length} 项` : visible
+}

@@ -19,6 +19,19 @@ export interface ArtifactOwnerProjection {
   visibility: string
 }
 
+export interface ArtifactIndexRecord {
+  artifactId: string
+  runId: string
+  workspaceId: string | null
+  createdByUserId: string | null
+  visibility: string
+  artifactType: string
+  name: string
+  uri: string
+  metadata: Record<string, unknown>
+  relativePath: string
+}
+
 // Artifact 正文仍在文件型 conversation store 中；Postgres 只保存可授权、
 // 可下载和可检索的查询索引。索引写入硬失败，避免 UI 看到不存在的下载项。
 export class ArtifactIndexStore {
@@ -60,4 +73,32 @@ export class ArtifactIndexStore {
   async deleteRunArtifacts(runId: string): Promise<void> {
     await this.db.delete(platformArtifacts).where(eq(platformArtifacts.runId, runId))
   }
+
+  async getArtifact(artifactId: string): Promise<ArtifactIndexRecord | null> {
+    const rows = await this.db
+      .select()
+      .from(platformArtifacts)
+      .where(eq(platformArtifacts.artifactId, artifactId))
+      .limit(1)
+    return rows[0] ? mapArtifactRow(rows[0]) : null
+  }
+}
+
+function mapArtifactRow(row: typeof platformArtifacts.$inferSelect): ArtifactIndexRecord {
+  return {
+    artifactId: row.artifactId,
+    runId: row.runId,
+    workspaceId: row.workspaceId,
+    createdByUserId: row.createdByUserId,
+    visibility: row.visibility,
+    artifactType: row.artifactType,
+    name: row.name,
+    uri: row.uri,
+    metadata: isRecord(row.metadataJson) ? row.metadataJson : {},
+    relativePath: row.geojsonRelativePath,
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

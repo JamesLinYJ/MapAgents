@@ -8,28 +8,20 @@
 //   作者:       JamesLinYJ
 // --------------------------------------------------------------------------
 
-import { startTransition, useCallback, useEffect, useMemo, useState } from 'react'
+import { startTransition, useCallback, useEffect, useMemo } from 'react'
 import type {
   AnalysisRun,
   ArtifactRef,
-  BasemapDescriptor,
-  LayerDescriptor,
   SessionRecord,
 } from '@geo-agent-platform/shared-types'
-import type { FileEntry } from '../../api/client'
 import {
   apiBaseUrl,
   deleteAnyFile,
-  deleteLayer,
   getArtifactGeoJson,
   getArtifactMetadata,
   getSession,
-  importManagedLayer,
   listAllFiles,
   listBasemaps,
-  listLayers,
-  replaceManagedLayer,
-  updateLayer,
   uploadAnyFile,
   uploadLayer,
   uploadMeteorologicalDataset,
@@ -38,6 +30,8 @@ import { useLayerManager } from '../../features/layers/useLayerManager'
 import { artifactHasDisplaySurface } from '../../features/artifacts/artifactDisplay'
 import { DEFAULT_BASEMAP } from '../../shared/constants'
 import { formatUiError, reportNonBlockingError, retryAsync } from '../bootstrap'
+import { useLayerStore } from '../stores/layerStore'
+import { useResourceStore } from '../stores/resourceStore'
 import {
   classifyUploadFile,
   describeCollectionGeometry,
@@ -49,7 +43,6 @@ import {
   upsertUploadReference,
 } from '../derivedState'
 import type {
-  MapLayerPreference,
   MapRenderLayer,
   UploadReference,
 } from '../types'
@@ -80,17 +73,34 @@ export function useResourceController({
   session,
   setUiError,
 }: ResourceControllerOptions) {
-  const [layers, setLayers] = useState<LayerDescriptor[]>([])
-  const [basemaps, setBasemaps] = useState<BasemapDescriptor[]>([DEFAULT_BASEMAP])
-  const [selectedBasemapKey, setSelectedBasemapKey] = useState('osm')
-  const [artifactData, setArtifactData] = useState<Record<string, GeoJSON.FeatureCollection>>({})
-  const [artifactMetadata, setArtifactMetadata] = useState<Record<string, Record<string, unknown>>>({})
-  const [mapLayerPreferences, setMapLayerPreferences] = useState<Record<string, MapLayerPreference>>({})
-  const [selectedArtifactId, setSelectedArtifactId] = useState<string>()
-  const [uploadedLayerName, setUploadedLayerName] = useState<string>()
-  const [uploadReferences, setUploadReferences] = useState<UploadReference[]>([])
-  const [allFiles, setAllFiles] = useState<FileEntry[]>([])
-  const [isFileSubmitting, setIsFileSubmitting] = useState(false)
+  const layers = useLayerStore(state => state.layers)
+  const refreshLayerStore = useLayerStore(state => state.refreshLayers)
+  const importLayerStore = useLayerStore(state => state.importLayer)
+  const toggleLayerStatusStore = useLayerStore(state => state.toggleLayerStatus)
+  const replaceLayerStore = useLayerStore(state => state.replaceLayer)
+  const removeLayerStore = useLayerStore(state => state.removeLayer)
+  const basemaps = useResourceStore(state => state.basemaps)
+  const selectedBasemapKey = useResourceStore(state => state.selectedBasemapKey)
+  const artifactData = useResourceStore(state => state.artifactData)
+  const artifactMetadata = useResourceStore(state => state.artifactMetadata)
+  const mapLayerPreferences = useResourceStore(state => state.mapLayerPreferences)
+  const selectedArtifactId = useResourceStore(state => state.selectedArtifactId)
+  const uploadedLayerName = useResourceStore(state => state.uploadedLayerName)
+  const uploadReferences = useResourceStore(state => state.uploadReferences)
+  const allFiles = useResourceStore(state => state.allFiles)
+  const isFileSubmitting = useResourceStore(state => state.isFileSubmitting)
+  const setBasemaps = useResourceStore(state => state.setBasemaps)
+  const setSelectedBasemapKey = useResourceStore(state => state.setSelectedBasemapKey)
+  const mergeArtifactData = useResourceStore(state => state.mergeArtifactData)
+  const mergeArtifactMetadata = useResourceStore(state => state.mergeArtifactMetadata)
+  const setMapLayerPreferences = useResourceStore(state => state.setMapLayerPreferences)
+  const setSelectedArtifactId = useResourceStore(state => state.setSelectedArtifactId)
+  const setUploadedLayerName = useResourceStore(state => state.setUploadedLayerName)
+  const setUploadReferences = useResourceStore(state => state.setUploadReferences)
+  const setAllFiles = useResourceStore(state => state.setAllFiles)
+  const setIsFileSubmitting = useResourceStore(state => state.setIsFileSubmitting)
+  const clearArtifactState = useResourceStore(state => state.clearArtifacts)
+  const clearUploadState = useResourceStore(state => state.clearUploads)
 
   const selectedBasemap = useMemo(
     () => basemaps.find(item => item.basemapKey === selectedBasemapKey) ?? basemaps[0] ?? DEFAULT_BASEMAP,
@@ -126,46 +136,34 @@ export function useResourceController({
 
     startTransition(() => {
       if (bundles.length) {
-        setArtifactData(current => Object.fromEntries([
-          ...Object.entries(current),
-          ...bundles.map(bundle => [bundle.artifactId, bundle.data]),
-        ]))
+        mergeArtifactData(bundles)
       }
       if (bundles.length || rasterMetadata.length) {
-        setArtifactMetadata(current => Object.fromEntries([
-          ...Object.entries(current),
-          ...bundles.map(bundle => [bundle.artifactId, bundle.metadata]),
-          ...rasterMetadata.map(bundle => [bundle.artifactId, bundle.metadata]),
-        ]))
+        mergeArtifactMetadata([...bundles, ...rasterMetadata])
       }
     })
-  }, [])
+  }, [mergeArtifactData, mergeArtifactMetadata])
 
   const refreshLayers = useCallback(async (sessionId?: string | null, threadId?: string | null) => {
-    const layerList = await listLayers(sessionId, threadId)
-    setLayers(layerList ?? [])
-  }, [])
+    await refreshLayerStore(sessionId, threadId)
+  }, [refreshLayerStore])
 
   const loadBasemaps = useCallback(async () => {
     const available = (await listBasemaps()).filter(item => item.available)
     if (!available.length) return
     setBasemaps(available)
     const defaultBasemap = available.find(item => item.isDefault) ?? available[0]
-    setSelectedBasemapKey(current => available.some(item => item.basemapKey === current) ? current : defaultBasemap.basemapKey)
-  }, [])
+    const currentBasemapKey = useResourceStore.getState().selectedBasemapKey
+    setSelectedBasemapKey(available.some(item => item.basemapKey === currentBasemapKey) ? currentBasemapKey : defaultBasemap.basemapKey)
+  }, [setBasemaps, setSelectedBasemapKey])
 
   const clearArtifacts = useCallback(() => {
-    setArtifactData({})
-    setArtifactMetadata({})
-    setMapLayerPreferences({})
-    setSelectedArtifactId(undefined)
-  }, [])
+    clearArtifactState()
+  }, [clearArtifactState])
 
   const clearUploads = useCallback(() => {
-    setUploadedLayerName(undefined)
-    setUploadReferences([])
-    setAllFiles([])
-  }, [])
+    clearUploadState()
+  }, [clearUploadState])
 
   useEffect(() => {
     const missing = artifacts.filter(artifact => (
@@ -316,10 +314,12 @@ export function useResourceController({
 
     if (layerUploaded || meteorologyUploaded) {
       try {
-        const [sessionRecord, layerList] = await Promise.all([getSession(session.id), listLayers(session.id)])
+        const [sessionRecord] = await Promise.all([
+          getSession(session.id),
+          refreshLayerStore(session.id),
+        ])
         startTransition(() => {
           onSessionRecord(sessionRecord)
-          setLayers(layerList ?? [])
         })
       } catch (error) {
         setUiError(formatUiError(error, '文件已上传，但数据源列表刷新失败，请手动刷新页面确认。'))
@@ -338,43 +338,39 @@ export function useResourceController({
     try {
       setUiError(undefined)
       onShowSources()
-      await importManagedLayer(file)
-      await refreshLayers()
+      await importLayerStore(file)
     } catch (error) {
       setUiError(formatUiError(error, '图层导入没成功，请再试一次。'))
     }
-  }, [onShowSources, refreshLayers, setUiError])
+  }, [importLayerStore, onShowSources, setUiError])
 
   const toggleLayerStatus = useCallback(async (layerKey: string, nextStatus: string) => {
     try {
       setUiError(undefined)
-      await updateLayer(layerKey, { status: nextStatus })
-      await refreshLayers()
+      await toggleLayerStatusStore(layerKey, nextStatus)
     } catch (error) {
       setUiError(formatUiError(error, '图层状态更新失败，请再试一次。'))
     }
-  }, [refreshLayers, setUiError])
+  }, [setUiError, toggleLayerStatusStore])
 
   const replaceLayer = useCallback(async (layerKey: string, file: File) => {
     try {
       setUiError(undefined)
       onShowSources()
-      await replaceManagedLayer(layerKey, file)
-      await refreshLayers()
+      await replaceLayerStore(layerKey, file)
     } catch (error) {
       setUiError(formatUiError(error, '图层数据替换失败，请再试一次。'))
     }
-  }, [onShowSources, refreshLayers, setUiError])
+  }, [onShowSources, replaceLayerStore, setUiError])
 
   const removeLayer = useCallback(async (layerKey: string) => {
     try {
       setUiError(undefined)
-      await deleteLayer(layerKey)
-      await refreshLayers()
+      await removeLayerStore(layerKey)
     } catch (error) {
       setUiError(formatUiError(error, '图层删除失败，请再试一次。'))
     }
-  }, [refreshLayers, setUiError])
+  }, [removeLayerStore, setUiError])
 
   const refreshAllFiles = useCallback(async (threadId?: string | null) => {
     try {

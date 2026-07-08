@@ -28,7 +28,7 @@ import { memoryScopeSchema, memoryTypeSchema } from '../memory/schemas.js'
 import type { ClientMsg } from './protocol.js'
 import type { WsDependencies } from './dependencies.js'
 import type { WsCommandRegistry } from './commandRegistry.js'
-import { optionalNonNegativeInteger, optionalString, requiredString } from './payload.js'
+import { isRecord, optionalNonNegativeInteger, optionalString, requiredString } from './payload.js'
 import { resolveRuntimeConfig } from './runtimeConfig.js'
 import { makeOptionalStructuredSelector, makeStructuredSelector, makeSummarizer } from './modelSelectors.js'
 import { z } from 'zod'
@@ -86,7 +86,7 @@ export function registerMemoryCommands(registry: WsCommandRegistry): void {
       payloadSchema,
       auth: 'required',
       csrf,
-      handler: (payload, context) => handleMemoryCommand(type, payload, context.dependencies),
+      handler: (payload, context) => handleMemoryCommand(type, requireMemoryPayload(payload), context.dependencies),
     })
   }
 
@@ -103,6 +103,11 @@ export function registerMemoryCommands(registry: WsCommandRegistry): void {
   register('memory:session:get', threadMemoryGetSchema, false)
   register('memory:session:rebuild', threadMemoryRebuildSchema, true)
   register('memory:instructions:list', emptyMemorySchema, false)
+}
+
+function requireMemoryPayload(payload: unknown): Record<string, unknown> {
+  if (!isRecord(payload)) throw new Error('记忆命令 payload 必须是对象。')
+  return payload
 }
 
 export async function handleMemoryCommand(

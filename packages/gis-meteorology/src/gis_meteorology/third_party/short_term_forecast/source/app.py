@@ -19,8 +19,8 @@ app = Flask(__name__)
 
 # === 默认配置 ===
 CONFIG = {
-    'nc_dir': r'C:\work\yan1-2\气象\202604091955',
-    'shp_path': r'C:\work\yan1-2\气象\前期培训\前期培训\任务一\shapefile\浙江省县边界.shp',
+    'nc_dir': os.environ.get('GEOFORGE_SAMPLE_NC_DIR', ''),
+    'shp_path': os.environ.get('GEOFORGE_SAMPLE_BOUNDARY_PATH', ''),
     'output_dir': os.path.join(os.path.dirname(__file__), 'output'),
     'data_source': '雷达QPF网格数据',
     'top_n': 10,
@@ -284,15 +284,9 @@ def do_generate(config):
         with open(tmp_html, 'w', encoding='utf-8') as f:
             f.write(html_str)
 
-        edge_paths = [
-            r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
-            r'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
-        ]
-        edge_exe = None
-        for p in edge_paths:
-            if os.path.exists(p):
-                edge_exe = p
-                break
+        edge_exe = os.environ.get('GEOFORGE_BROWSER_EXECUTABLE')
+        if edge_exe and not os.path.exists(edge_exe):
+            edge_exe = None
 
         if edge_exe:
             est_height = 250 + 40 * len(county_top)
@@ -505,18 +499,19 @@ def api_ai_styles():
 @app.route('/api/browse')
 def api_browse():
     """目录浏览：返回指定路径下的目录和文件列表"""
-    base = request.args.get('path', 'C:\\')
+    default_base = os.path.expanduser('~')
+    base = request.args.get('path') or default_base
     filter_ext = request.args.get('filter', '')  # 可选：过滤后缀，如 '.shp' 或 '.nc'
 
     # 安全检查
     base = os.path.abspath(base)
     if not os.path.exists(base):
-        base = 'C:\\'
+        base = default_base
     # 如果是文件路径，自动取父目录
     if os.path.isfile(base):
         base = os.path.dirname(base)
 
-    parent = os.path.dirname(base) if os.path.exists(base) else 'C:\\'
+    parent = os.path.dirname(base) if os.path.exists(base) else default_base
 
     items = []
     try:
@@ -534,10 +529,7 @@ def api_browse():
         pass
 
     # 常用根目录快捷入口
-    roots = []
-    for r in ['C:\\work', 'C:\\work\\yan1-2', 'C:\\work\\yan1-2\\气象']:
-        if os.path.exists(r):
-            roots.append({'name': os.path.basename(r) or r, 'path': r})
+    roots = [{'name': os.path.basename(default_base) or default_base, 'path': default_base}]
 
     return jsonify({
         'current': base,

@@ -27,6 +27,34 @@ import { persistToolExecutionResult, resolveRuntimeValueRef } from '../tools/res
 import { formatError, isRecord, optionalString, requiredRecord, requiredString } from './payload.js'
 import { errorLogPayload, logger } from '../observability/logger.js'
 import { resolveRuntimeConfig } from './runtimeConfig.js'
+import type { WsCommandRegistry } from './commandRegistry.js'
+import { z } from 'zod'
+
+const toolRunPayloadSchema = z.object({
+  toolName: z.string().min(1),
+  args: z.record(z.string(), z.unknown()),
+  runId: z.string().min(1).nullable().optional(),
+  sessionId: z.string().min(1).nullable().optional(),
+  threadId: z.string().min(1).nullable().optional(),
+}).passthrough()
+
+export function registerToolCommands(registry: WsCommandRegistry): void {
+  registry.register({
+    type: 'tool:run',
+    payloadSchema: toolRunPayloadSchema,
+    auth: 'required',
+    csrf: true,
+    handler: (payload, context) => executeTool(
+      payload,
+      context.dependencies.store,
+      context.dependencies.toolRegistry,
+      context.dependencies.modelRegistry,
+      context.dependencies.defaultRuntimeConfig,
+      context.dependencies.security,
+      requireAuth(context.auth),
+    ),
+  })
+}
 
 export async function executeTool(
   payload: Record<string, unknown>,
@@ -145,4 +173,9 @@ export async function executeTool(
 
 function logNonBlockingError(scope: string, error: unknown): void {
   logger.warn({ error: errorLogPayload(error), scope }, 'ws tool error')
+}
+
+function requireAuth(auth: AuthContext | null): AuthContext {
+  if (!auth) throw new Error('WebSocket 命令需要登录。')
+  return auth
 }

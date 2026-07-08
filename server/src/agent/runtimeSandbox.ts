@@ -15,6 +15,7 @@
 
 import {
   Manifest,
+  type SandboxPathGrantInit,
   type SandboxSessionLike,
 } from '@openai/agents/sandbox'
 import {
@@ -35,8 +36,10 @@ export interface OpenAIAgentsRuntimeOptions {
 export function buildSandboxManifest(
   options: { runId: string; sessionId: string },
   threadId: string,
+  extraPathGrants: SandboxPathGrantInit[] = [],
 ): Manifest {
   return new Manifest({
+    extraPathGrants,
     entries: {
       'README.md': {
         type: 'file',

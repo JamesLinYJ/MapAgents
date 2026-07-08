@@ -137,18 +137,24 @@ function Set-DefaultEnvironment {
     Set-ProcessDefault 'WEB_DEV_PORT' '5173'
     Set-ProcessDefault 'RUNTIME_ROOT' $RuntimeRoot
     Set-ProcessDefault 'SEED_LAYERS_DIR' (Join-Path $Root 'infra\seeds\layers')
-    Set-ProcessDefault 'DATABASE_URL' "postgresql://geo_agent:geo_agent@127.0.0.1:$($env:POSTGIS_PORT)/geo_agent"
-    Set-ProcessDefault 'WORKER_URL' "http://127.0.0.1:$($env:WORKER_PORT)"
-    Set-ProcessDefault 'API_PROXY_TARGET' "http://127.0.0.1:$($env:API_PORT)"
-    Set-ProcessDefault 'APP_BASE_URL' "http://127.0.0.1:$($env:API_PORT)"
-    Set-ProcessDefault 'WEB_BASE_URL' "http://127.0.0.1:$($env:WEB_DEV_PORT)"
-    Set-ProcessDefault 'BETTER_AUTH_URL' $env:APP_BASE_URL
+    Set-ResolvedDevPort 'API_PORT' 'api' ([int]$env:API_PORT) 8100
+    Set-ResolvedDevPort 'WORKER_PORT' 'worker' ([int]$env:WORKER_PORT) 8102
+    Set-ResolvedDevPort 'WEB_DEV_PORT' 'web' ([int]$env:WEB_DEV_PORT) 5300
+    Set-ProcessValue 'DATABASE_URL' "postgresql://geo_agent:geo_agent@127.0.0.1:$($env:POSTGIS_PORT)/geo_agent"
+    Set-ProcessValue 'WORKER_URL' "http://127.0.0.1:$($env:WORKER_PORT)"
+    Set-ProcessValue 'API_PROXY_TARGET' "http://127.0.0.1:$($env:API_PORT)"
+    Set-ProcessValue 'APP_BASE_URL' "http://127.0.0.1:$($env:API_PORT)"
+    Set-ProcessValue 'WEB_BASE_URL' "http://127.0.0.1:$($env:WEB_DEV_PORT)"
+    Set-ProcessValue 'BETTER_AUTH_URL' $env:APP_BASE_URL
+    # 本地 Vite 开发环境统一通过同源 /api 与 /ws 代理访问 API。
+    # 这样端口自动调整后，浏览器端不会继续注入 .env 中过期的跨端口 API 地址。
+    Set-ProcessValue 'VITE_API_BASE_URL' '/'
     Set-ProcessDefault 'BETTER_AUTH_SECRET' 'development-only-better-auth-secret-change-before-production'
     Set-ProcessDefault 'BETTER_AUTH_ALLOW_SIGN_UP' 'true'
     Set-ProcessDefault 'BETTER_AUTH_REQUIRE_EMAIL_VERIFICATION' 'false'
     Set-ProcessDefault 'BETTER_AUTH_MIN_PASSWORD_LENGTH' '12'
     Set-ProcessDefault 'CSRF_HEADER_NAME' 'x-geoforge-csrf'
-    Set-ProcessDefault 'TRUSTED_ORIGINS' "http://127.0.0.1:$($env:WEB_DEV_PORT),http://localhost:$($env:WEB_DEV_PORT)"
+    Set-ProcessValue 'TRUSTED_ORIGINS' "http://127.0.0.1:$($env:WEB_DEV_PORT),http://localhost:$($env:WEB_DEV_PORT)"
     $devToolProviders = 'geo-platform-chart,geo-platform-geocode,geo-platform-plan,geo-platform-developer-tools,geo-platform-spatial,geo-platform-routing,geo-platform-meteorology'
     Set-ProcessDefault 'ENABLED_TOOL_PROVIDERS' $devToolProviders
     Ensure-ProcessCsvIncludes 'ENABLED_TOOL_PROVIDERS' $devToolProviders.Split(',')
@@ -186,6 +192,53 @@ function Set-ProcessDefault {
     if (-not [Environment]::GetEnvironmentVariable($Name, 'Process')) {
         [Environment]::SetEnvironmentVariable($Name, $Value, 'Process')
     }
+}
+
+function Set-ProcessValue {
+    param([string]$Name, [string]$Value)
+    [Environment]::SetEnvironmentVariable($Name, $Value, 'Process')
+}
+
+function Test-TcpPortBindable {
+    param([int]$Port)
+    $listener = $null
+    try {
+        $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $Port)
+        $listener.Start()
+        return $true
+    } catch {
+        return $false
+    } finally {
+        if ($listener) {
+            $listener.Stop()
+        }
+    }
+}
+
+function Test-PortOwnedByManagedTree {
+    param([string]$ServiceName, [int]$Port)
+    $managedProcessId = Get-ManagedPid $ServiceName
+    if (-not $managedProcessId) { return $false }
+    $portProcessId = Get-PortPid $Port
+    if (-not $portProcessId) { return $false }
+    if ($portProcessId -eq $managedProcessId) { return $true }
+    return @(Get-DescendantProcessIds $managedProcessId) -contains $portProcessId
+}
+
+function Set-ResolvedDevPort {
+    param([string]$EnvName, [string]$ServiceName, [int]$PreferredPort, [int]$FallbackStart)
+    if ((Test-TcpPortBindable $PreferredPort) -or (Test-PortOwnedByManagedTree $ServiceName $PreferredPort)) {
+        Set-ProcessValue $EnvName ([string]$PreferredPort)
+        return
+    }
+
+    for ($candidate = $FallbackStart; $candidate -lt ($FallbackStart + 600); $candidate++) {
+        if ((Test-TcpPortBindable $candidate) -or (Test-PortOwnedByManagedTree $ServiceName $candidate)) {
+            Set-ProcessValue $EnvName ([string]$candidate)
+            return
+        }
+    }
+    throw "$EnvName 端口不可用：首选 $PreferredPort，且 $FallbackStart-$($FallbackStart + 599) 没有可绑定端口。"
 }
 
 function Ensure-ProcessCsvIncludes {

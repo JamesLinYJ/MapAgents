@@ -10,8 +10,8 @@
 
 import { z } from 'zod'
 
-import { getEnv } from '../framework/env.js'
 import { AzureSpeechService } from '../speech/azureSpeechService.js'
+import { agentRuntimeConfigSchema } from '../schemas/types.js'
 import { StoreNotFoundError } from '../store/platformStore.js'
 import type { WsCommandRegistry } from './commandRegistry.js'
 
@@ -27,7 +27,7 @@ const toolCatalogDeleteSchema = z.object({
   toolName: z.string().min(1),
 }).passthrough()
 const runtimeConfigUpdateSchema = z.object({
-  config: z.record(z.string(), z.unknown()),
+  config: agentRuntimeConfigSchema,
 }).passthrough()
 const fileDeleteSchema = z.object({
   fileId: z.string().min(1),
@@ -94,7 +94,7 @@ export function registerControlCommands(registry: WsCommandRegistry): void {
     payloadSchema: emptyPayloadSchema,
     auth: 'required',
     csrf: true,
-    handler: () => new AzureSpeechService(getEnv()).issueAuthorization(),
+    handler: (_payload, context) => new AzureSpeechService(context.dependencies.env).issueAuthorization(),
   })
 
   registry.register({

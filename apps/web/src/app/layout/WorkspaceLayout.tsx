@@ -33,7 +33,7 @@ export interface WorkspaceSidebarItem {
   shortLabel: string
 }
 
-interface WorkspaceLayoutProps {
+export interface WorkspaceLayoutProps {
   topBar: ReactNode
   sidebarItems: readonly WorkspaceSidebarItem[]
   activeSidebarItem: string

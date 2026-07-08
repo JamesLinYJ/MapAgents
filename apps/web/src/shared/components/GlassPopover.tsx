@@ -5,7 +5,7 @@
 //   文件:       GlassPopover.tsx
 //
 //   日期:       2026年07月07日
-//   作者:       Claude Code
+//   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
 import * as Popover from '@radix-ui/react-popover'

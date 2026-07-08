@@ -150,20 +150,21 @@ export const METEOROLOGY_TOOL_PROMPTS: Record<string, string> = {
 - 本工具只检查序列，不回答天气问题、不生成地图。
 - 后续分析必须继续传 nowcast_sequence 或本工具返回的相关 valueRef。`,
 
-  prepare_hangzhou_nowcast_scope: `用于根据杭州短时临近预报问题准备区划或地点范围。
+  prepare_nowcast_scope: `用于根据短时临近预报问题准备区划或地点范围。
 
 使用规则：
 - question 必须是用户的短时临近预报问题或其忠实改写。
-- 区划问题应传真实杭州区县边界 feature_collection/layer/nowcast_area；地点问题可传 place_candidate 或 nowcast_coordinate。
+- 区划问题应传真实区划边界 feature_collection/layer/nowcast_area；地点问题可传 place_candidate 或 nowcast_coordinate。
+- 用户明确指定某个区划时，area_name 必须使用边界属性中的真实名称。
 - district_name_field 不明确时，优先根据边界属性判断；仍不明确时请求澄清。
-- 不要用地理编码 bbox 代替杭州区县边界。`,
+- 不要用地理编码 bbox 代替真实区划边界。`,
 
-  meteorological_precipitation_nowcast: `用于按时次和杭州区划或地点范围计算短时临近预报降水事实。
+  meteorological_precipitation_nowcast: `用于按时次和区划或地点范围计算短时临近预报降水事实。
 
 使用规则：
 - sequence_ref 必须来自 create_nowcast_sequence。
 - variable_ref 应来自数据集检查或序列检查中的降水变量引用。
-- scope_ref 必须来自 prepare_hangzhou_nowcast_scope。
+- scope_ref 必须来自 prepare_nowcast_scope。
 - 本工具产出确定性分析事实；不要在调用前后编造趋势、峰值、区域排行或结论。`,
 
   answer_nowcast_question: `用于根据短时临近预报分析事实回答用户问题，并生成代表时次地图。

@@ -91,6 +91,7 @@ export interface ChatPanelProps {
   tokenBudget?: { used: number; max: number; status: 'normal' | 'warning' | 'critical' | 'exceeded' }
 
   activeSkills?: string[]
+  activeMcpServers?: string[]
   compactionLevel?: string | null
   runStats?: { toolAttempts: number; toolSuccesses: number; toolFailures: number; tokensUsed: number }
   denialCounts?: Record<string, number>

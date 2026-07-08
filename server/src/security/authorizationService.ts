@@ -9,9 +9,8 @@
 // --------------------------------------------------------------------------
 
 import { newEnforcer, newModelFromString, type Enforcer } from 'casbin'
-import { sql } from 'drizzle-orm'
 import type { Database } from '../db/connection.js'
-import { makeId } from '../utils/ids.js'
+import type { AuditStore } from '../store/postgres/auditStore.js'
 import type { AuthContext, AuthorizationScope, RbacAction, RbacObject } from './types.js'
 import { CasbinPostgresAdapter } from './casbinPostgresAdapter.js'
 
@@ -39,7 +38,10 @@ export class AuthorizationError extends Error {
 export class AuthorizationService {
   private enforcerPromise: Promise<Enforcer> | null = null
 
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly auditStore: AuditStore,
+  ) {}
 
   async enforce(
     auth: AuthContext,
@@ -99,15 +101,15 @@ export class AuthorizationService {
     outcome: 'allowed' | 'denied' | 'error',
     metadata: Record<string, unknown> = {},
   ): Promise<void> {
-    await this.db.execute(sql`
-      INSERT INTO platform_audit_events (
-        audit_event_id, actor_user_id, workspace_id, action, object_type, object_id, outcome, metadata_json, created_at
-      )
-      VALUES (
-        ${makeId('audit')}, ${auth?.userId ?? null}, ${scope.workspaceId ?? null}, ${action}, ${object},
-        ${scope.resourceId ?? null}, ${outcome}, ${JSON.stringify(metadata)}::jsonb, now()
-      )
-    `)
+    await this.auditStore.recordEvent({
+      actorUserId: auth?.userId ?? null,
+      workspaceId: scope.workspaceId ?? null,
+      action,
+      objectType: object,
+      objectId: scope.resourceId ?? null,
+      outcome,
+      metadata,
+    })
   }
 
   async reload(): Promise<void> {

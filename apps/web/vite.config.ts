@@ -26,9 +26,12 @@ const API_UNAVAILABLE_MESSAGE = 'GeoForge API 未连接，请启动 Node API 服
 // 运行态页面已经通过 React.lazy / dynamic import 建立自动切块边界；
 // 生产构建交给 Rolldown 根据依赖图自动提取动态 chunk 和共享模块。
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), '')
+  const env = {
+    ...loadEnv(mode, process.cwd(), ''),
+    ...processEnvRecord(process.env),
+  }
   const webPort = parseOptionalPort(env.WEB_DEV_PORT || env.VITE_WEB_PORT)
-  const apiProxyTarget = deriveApiProxyTarget(env)
+  const apiProxyTarget = deriveApiProxyTarget(env) ?? 'http://127.0.0.1:8000'
   const proxy = buildDevProxy(apiProxyTarget)
 
   return {
@@ -53,6 +56,12 @@ export default defineConfig(({ mode }) => {
     },
   }
 })
+
+function processEnvRecord(env: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+  )
+}
 
 function parseOptionalPort(value?: string) {
   // 开发端口只来自环境变量或 CLI 参数，不在业务代码里固定。

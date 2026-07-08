@@ -11,7 +11,6 @@
 import { drizzle } from 'drizzle-orm/node-postgres'
 import { Pool } from 'pg'
 import * as schema from './schema.js'
-import { getEnv } from '../framework/env.js'
 import { errorLogPayload, logger } from '../observability/logger.js'
 
 type DrizzleDatabase = ReturnType<typeof drizzle<typeof schema>>
@@ -21,10 +20,9 @@ export type Database = DrizzleDatabase & {
   close: () => Promise<void>
 }
 
-export function createDb(databaseUrl?: string) {
-  const url = databaseUrl ?? getEnv().DATABASE_URL
+export function createDb(databaseUrl: string) {
   const pool = new Pool({
-    connectionString: url,
+    connectionString: databaseUrl,
     max: 10,
     connectionTimeoutMillis: 5_000,
     idleTimeoutMillis: 30_000,

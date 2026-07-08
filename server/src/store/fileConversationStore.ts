@@ -8,7 +8,6 @@
 //   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
-import { createHash } from 'node:crypto'
 import {
   mkdir,
   readFile,
@@ -25,7 +24,6 @@ import {
   runEventSchema,
   sessionRecordSchema,
   threadManifestSchema,
-  threadMemoryDocumentSchema,
   transcriptEntrySchema,
   type AgentThreadRecord,
   type AnalysisRun,
@@ -43,27 +41,26 @@ import {
   type TranscriptEntryKind,
 } from '../schemas/types.js'
 import { makeId, nowUtc } from '../utils/ids.js'
-import { z } from 'zod'
 import {
-  appendJsonLineDurable,
   atomicWriteJson,
   atomicWriteText,
   decodeCursor,
   encodeCursor,
   estimateTokens,
   isRecord,
-  jsonLinesContainId,
   listDirectories,
   listFileNames,
-  listFilesRecursively,
   readJson,
   readRawJson,
-  recordJsonLineCorruption,
   safeId,
   stringField,
 } from './fileConversationIo.js'
 import type { ConversationStorage } from './ConversationStorage.js'
-import { errorLogPayload, logger } from '../observability/logger.js'
+import { ContentAddressedObjectStore } from './contentAddressedObjectStore.js'
+import { ConversationObjectGarbageCollector } from './conversationObjectGarbageCollector.js'
+import { DurableJsonlStore } from './durableJsonlStore.js'
+import { ThreadJournalStore, type ThreadJournal } from './threadJournalStore.js'
+import { ThreadMemoryFileStore } from './threadMemoryFileStore.js'
 
 const STORE_SCHEMA_VERSION = 2
 const DEFAULT_TRASH_RETENTION_DAYS = 30
@@ -84,21 +81,6 @@ interface RunLocation {
   threadId: string
   directory: string
 }
-
-const threadJournalSchema = z.object({
-  schemaVersion: z.literal(STORE_SCHEMA_VERSION),
-  operationId: z.string(),
-  type: z.literal('appendTranscript'),
-  entry: transcriptEntrySchema,
-  threadFile: z.object({
-    thread: z.custom<AgentThreadRecord>(value => typeof value === 'object' && value !== null),
-    manifest: threadManifestSchema,
-  }),
-  supervisorTranscriptPath: z.string().nullable(),
-  createdAt: z.string(),
-})
-
-type ThreadJournal = z.infer<typeof threadJournalSchema>
 
 export interface ConversationStoreSnapshot {
   sessions: SessionRecord[]
@@ -141,17 +123,20 @@ export class ConversationCorruptionError extends Error {
 // FileConversationStore
 //
 // JSON/JSONL/Markdown 文件是会话事实源；内存映射只保存定位信息，不缓存完整历史。
-// 隐式满足 ConversationStorage 接口的方法签名。
-// 正式 implements 声明需待 saveRun/appendValue/saveMemory 签名对齐。
-export class FileConversationStore {
+// ConversationStorage 是它对上层暴露的 Port，签名不一致时必须由编译器失败。
+export class FileConversationStore implements ConversationStorage {
   readonly root: string
   readonly sessionsRoot: string
   readonly objectsRoot: string
 
   private threadLocations = new Map<string, ThreadLocation>()
   private runLocations = new Map<string, RunLocation>()
-  private writeQueues = new Map<string, Promise<void>>()
   private threadQueues = new Map<string, Promise<unknown>>()
+  private readonly jsonlStore = new DurableJsonlStore()
+  private readonly threadJournalStore = new ThreadJournalStore()
+  private readonly threadMemoryStore = new ThreadMemoryFileStore(this.jsonlStore)
+  private readonly objectStore: ContentAddressedObjectStore
+  private readonly objectGarbageCollector: ConversationObjectGarbageCollector
 
   constructor(root: string) {
     this.root = path.resolve(root)
@@ -160,6 +145,8 @@ export class FileConversationStore {
       ? path.dirname(this.root)
       : this.root
     this.objectsRoot = path.join(runtimeRoot, 'objects', 'sha256')
+    this.objectStore = new ContentAddressedObjectStore(this.objectsRoot)
+    this.objectGarbageCollector = new ConversationObjectGarbageCollector(this.sessionsRoot, this.objectsRoot)
   }
 
   async initialize(): Promise<ConversationStoreSnapshot> {
@@ -370,12 +357,12 @@ export class FileConversationStore {
 
   appendItem(item: ConversationItem): Promise<void> {
     const location = this.requireRunLocation(item.runId)
-    return this.enqueueAppend(path.join(location.directory, 'items.jsonl'), conversationItemSchema.parse(item))
+    return this.jsonlStore.append(path.join(location.directory, 'items.jsonl'), conversationItemSchema.parse(item))
   }
 
   appendEvent(event: RunEvent): Promise<void> {
     const location = this.requireRunLocation(event.runId)
-    return this.enqueueAppend(path.join(location.directory, 'events.jsonl'), runEventSchema.parse(event))
+    return this.jsonlStore.append(path.join(location.directory, 'events.jsonl'), runEventSchema.parse(event))
   }
 
   async appendAgentTranscript(
@@ -400,7 +387,7 @@ export class FileConversationStore {
         updatedAt: timestamp,
       })
     }
-    await this.enqueueAppend(path.join(directory, 'transcript.jsonl'), {
+    await this.jsonlStore.append(path.join(directory, 'transcript.jsonl'), {
       schemaVersion: STORE_SCHEMA_VERSION,
       timestamp: nowUtc(),
       ...record,
@@ -409,35 +396,35 @@ export class FileConversationStore {
 
   appendValue(runId: string, value: ToolValueRef): Promise<void> {
     const location = this.requireRunLocation(runId)
-    return this.enqueueAppend(path.join(location.directory, 'values.jsonl'), value)
+    return this.jsonlStore.append(path.join(location.directory, 'values.jsonl'), value)
   }
 
   async appendArtifact(runId: string, artifact: ArtifactRef): Promise<void> {
     const location = this.requireRunLocation(runId)
-    await this.enqueueAppend(path.join(location.directory, 'artifacts.jsonl'), artifactRefSchema.parse(artifact))
+    await this.jsonlStore.append(path.join(location.directory, 'artifacts.jsonl'), artifactRefSchema.parse(artifact))
   }
 
   async listArtifacts(runId: string): Promise<ArtifactRef[]> {
     const location = this.requireRunLocation(runId)
-    return this.readJsonLines(path.join(location.directory, 'artifacts.jsonl'), location.threadId, artifactRefSchema)
+    return this.jsonlStore.read(path.join(location.directory, 'artifacts.jsonl'), location.threadId, artifactRefSchema)
   }
 
   async appendAttachment(threadId: string, record: AttachmentRecord): Promise<void> {
     const location = this.requireThreadLocation(threadId)
     if (location.trashed) throw new Error(`线程 '${threadId}' 已在回收站`)
-    await this.enqueueAppend(path.join(location.directory, 'attachments.jsonl'), record)
+    await this.jsonlStore.append(path.join(location.directory, 'attachments.jsonl'), record)
   }
 
   async listItems(runId: string): Promise<ConversationItem[]> {
     const location = this.requireRunLocation(runId)
-    const records = await this.readJsonLines(path.join(location.directory, 'items.jsonl'), location.threadId, conversationItemSchema)
+    const records = await this.jsonlStore.read(path.join(location.directory, 'items.jsonl'), location.threadId, conversationItemSchema)
     const latest = new Map(records.map(item => [item.itemId, item]))
     return [...latest.values()].sort((left, right) => left.timestamp.localeCompare(right.timestamp))
   }
 
   async listEvents(runId: string): Promise<RunEvent[]> {
     const location = this.requireRunLocation(runId)
-    return this.readJsonLines(path.join(location.directory, 'events.jsonl'), location.threadId, runEventSchema)
+    return this.jsonlStore.read(path.join(location.directory, 'events.jsonl'), location.threadId, runEventSchema)
   }
 
   async appendTranscript(input: {
@@ -489,46 +476,9 @@ export class FileConversationStore {
         supervisorTranscriptPath,
         createdAt: nowUtc(),
       }
-      const journalPath = await this.writeThreadJournal(location.directory, journal)
-      await this.applyThreadJournal(location.directory, journal, journalPath)
+      await this.threadJournalStore.writeAndApply(location.directory, journal)
       return entry
     })
-  }
-
-  private async writeThreadJournal(directory: string, journal: ThreadJournal): Promise<string> {
-    const journalDirectory = path.join(directory, 'journals')
-    await mkdir(journalDirectory, { recursive: true })
-    const journalPath = path.join(journalDirectory, `${safeId(journal.operationId, 'journalId')}.json`)
-    await atomicWriteJson(journalPath, journal)
-    return journalPath
-  }
-
-  private async applyThreadJournal(directory: string, journal: ThreadJournal, journalPath?: string): Promise<void> {
-    if (journal.type !== 'appendTranscript') return
-    const transcriptPath = path.join(directory, 'transcript.jsonl')
-    if (!await jsonLinesContainId(transcriptPath, 'entryId', journal.entry.entryId)) {
-      await appendJsonLineDurable(transcriptPath, journal.entry)
-    }
-    if (journal.supervisorTranscriptPath && !await jsonLinesContainId(journal.supervisorTranscriptPath, 'entryId', journal.entry.entryId)) {
-      await appendJsonLineDurable(journal.supervisorTranscriptPath, journal.entry)
-    }
-    await atomicWriteJson(path.join(directory, 'thread.json'), journal.threadFile)
-    if (journalPath) await rm(journalPath, { force: true })
-  }
-
-  private async recoverThreadJournals(directory: string): Promise<void> {
-    const journalDirectory = path.join(directory, 'journals')
-    for (const fileName of await listFileNames(journalDirectory)) {
-      if (!fileName.endsWith('.json')) continue
-      const journalPath = path.join(journalDirectory, fileName)
-      const raw = await readRawJson(journalPath)
-      if (!raw) {
-        await rm(journalPath, { force: true })
-        continue
-      }
-      const parsed = threadJournalSchema.parse(raw)
-      await this.applyThreadJournal(directory, parsed, journalPath)
-    }
   }
 
   async readHistory(threadId: string, cursor?: string | null, limit = 100): Promise<ThreadHistoryPage> {
@@ -546,7 +496,7 @@ export class FileConversationStore {
   async readTranscript(threadId: string): Promise<TranscriptEntry[]> {
     const location = this.requireThreadLocation(threadId)
     try {
-      return await this.readJsonLines(path.join(location.directory, 'transcript.jsonl'), threadId, transcriptEntrySchema)
+      return await this.jsonlStore.read(path.join(location.directory, 'transcript.jsonl'), threadId, transcriptEntrySchema)
     } catch (error) {
       if (error instanceof ConversationCorruptionError) await this.quarantineThread(threadId, error.message)
       throw error
@@ -613,7 +563,7 @@ export class FileConversationStore {
 
   async appendCompaction(record: CompactionRecord): Promise<void> {
     const location = this.requireThreadLocation(record.threadId)
-    await this.enqueueAppend(path.join(location.directory, 'compactions.jsonl'), compactionRecordSchema.parse(record))
+    await this.jsonlStore.append(path.join(location.directory, 'compactions.jsonl'), compactionRecordSchema.parse(record))
     const current = await this.readThreadFile(location.directory)
     current.manifest.latestCompactionId = record.compactionId
     current.manifest.estimatedContextTokens = record.postTokens
@@ -623,27 +573,12 @@ export class FileConversationStore {
 
   async listCompactions(threadId: string): Promise<CompactionRecord[]> {
     const location = this.requireThreadLocation(threadId)
-    return this.readJsonLines(path.join(location.directory, 'compactions.jsonl'), threadId, compactionRecordSchema)
+    return this.jsonlStore.read(path.join(location.directory, 'compactions.jsonl'), threadId, compactionRecordSchema)
   }
 
   async getMemory(threadId: string): Promise<ThreadMemoryDocument> {
     const location = this.requireThreadLocation(threadId)
-    const versions = await this.readJsonLines(
-      path.join(location.directory, 'memory', 'versions.jsonl'),
-      threadId,
-      threadMemoryDocumentSchema,
-    )
-    return versions.at(-1) ?? {
-      threadId,
-      version: 0,
-      content: '',
-      generatedContent: '',
-      pinnedContent: '',
-      source: 'system',
-      basedOnEntryId: null,
-      estimatedTokens: 0,
-      updatedAt: nowUtc(),
-    }
+    return this.threadMemoryStore.get(threadId, location.directory)
   }
 
   async saveMemory(
@@ -653,31 +588,13 @@ export class FileConversationStore {
   ): Promise<ThreadMemoryDocument> {
     const location = this.requireThreadLocation(threadId)
     return this.withThreadLock(threadId, async () => {
-      const current = await this.getMemory(threadId)
-      if (expectedVersion !== undefined && current.version !== expectedVersion) {
-        throw new Error(`memory 版本冲突：期望 ${expectedVersion}，当前 ${current.version}`)
-      }
-      const document: ThreadMemoryDocument = {
+      return this.threadMemoryStore.save({
         threadId,
-        version: current.version + 1,
-        content: input.content,
-        generatedContent: input.generatedContent,
-        pinnedContent: input.pinnedContent,
-        source: input.source,
-        basedOnEntryId: input.basedOnEntryId,
-        estimatedTokens: estimateTokens(input.content),
-        updatedAt: nowUtc(),
-      }
-      const memoryDir = path.join(location.directory, 'memory')
-      await mkdir(memoryDir, { recursive: true })
-      await appendJsonLineDurable(path.join(memoryDir, 'versions.jsonl'), document)
-      await atomicWriteText(path.join(memoryDir, 'current.md'), document.content)
-      const threadFile = await this.readThreadFile(location.directory)
-      threadFile.manifest.memoryVersion = document.version
-      threadFile.manifest.memoryBasedOnTokens = threadFile.manifest.estimatedContextTokens
-      threadFile.manifest.updatedAt = document.updatedAt
-      await atomicWriteJson(path.join(location.directory, 'thread.json'), threadFile)
-      return document
+        directory: location.directory,
+        input,
+        expectedVersion,
+        threadFile: await this.readThreadFile(location.directory),
+      })
     })
   }
 
@@ -760,82 +677,19 @@ export class FileConversationStore {
 
   // 会话、artifact 和上传 metadata 共同声明对象存活；回收站内对象在保留期结束前同样受保护。
   async garbageCollectObjects(): Promise<{ removed: number; retained: number }> {
-    const referenced = new Set<string>()
-    const runtimeRoot = path.dirname(this.root)
-    const files = [
-      ...await listFilesRecursively(this.sessionsRoot),
-      ...await listFilesRecursively(path.join(runtimeRoot, 'uploads')),
-    ]
-    for (const filePath of files) {
-      if (path.basename(filePath) === 'attachments.jsonl') {
-        const latest = new Map<string, AttachmentRecord>()
-        for (const line of (await readFile(filePath, 'utf8')).split('\n')) {
-          if (!line.trim()) continue
-          try {
-            const value = JSON.parse(line) as AttachmentRecord
-            if (value.attachmentId) latest.set(value.attachmentId, value)
-          } catch { /* 损坏由 thread 读取路径负责隔离，GC 只跳过不可确认记录。 */ }
-        }
-        for (const record of latest.values()) {
-          if (record.action === 'attached' && record.contentRef?.hash) referenced.add(record.contentRef.hash)
-        }
-        continue
-      }
-      if (!/\.(?:json|jsonl)$/u.test(filePath)) continue
-      const content = await readFile(filePath, 'utf8')
-      for (const match of content.matchAll(/(?:"hash"\s*:\s*"|objects\/sha256\/[a-f0-9]{2}\/)([a-f0-9]{64})/giu)) {
-        referenced.add(match[1].toLowerCase())
-      }
-    }
-
-    let removed = 0
-    let retained = 0
-    for (const prefix of await listDirectories(this.objectsRoot)) {
-      const prefixRoot = path.join(this.objectsRoot, prefix)
-      for (const objectName of await listFileNames(prefixRoot)) {
-        if (referenced.has(objectName.toLowerCase())) retained += 1
-        else {
-          await rm(path.join(prefixRoot, objectName), { force: true })
-          removed += 1
-        }
-      }
-    }
-    return { removed, retained }
+    return this.objectGarbageCollector.collect()
   }
 
   async putObject(content: string | Uint8Array, mediaType = 'application/octet-stream'): Promise<ContentRef> {
-    const bytes = typeof content === 'string' ? Buffer.from(content, 'utf8') : Buffer.from(content)
-    const hash = createHash('sha256').update(bytes).digest('hex')
-    const relativePath = path.posix.join('objects', 'sha256', hash.slice(0, 2), hash)
-    const target = path.join(this.objectsRoot, hash.slice(0, 2), hash)
-    await mkdir(path.dirname(target), { recursive: true })
-    try {
-      await writeFile(target, bytes, { flag: 'wx' })
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    }
-    return { algorithm: 'sha256', hash, mediaType, sizeBytes: bytes.byteLength, relativePath }
+    return this.objectStore.put(content, mediaType)
   }
 
   async readObject(reference: ContentRef): Promise<Uint8Array> {
-    if (reference.algorithm !== 'sha256' || !/^[a-f0-9]{64}$/u.test(reference.hash)) {
-      throw new Error('contentRef 哈希格式无效')
-    }
-    const target = path.join(this.objectsRoot, reference.hash.slice(0, 2), reference.hash)
-    const bytes = await readFile(target)
-    const actualHash = createHash('sha256').update(bytes).digest('hex')
-    if (actualHash !== reference.hash) throw new Error(`contentRef 校验失败：${reference.hash}`)
-    return bytes
+    return this.objectStore.read(reference)
   }
 
   async flush(): Promise<void> {
-    const results = await Promise.allSettled([...this.writeQueues.values()])
-    const failures = results
-      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-      .map(result => result.reason)
-    if (failures.length > 0) {
-      throw new AggregateError(failures, `conversation store flush 失败：${failures.length} 个写入队列未完成`)
-    }
+    await this.jsonlStore.flush()
   }
 
   private async ensureStoreManifest(): Promise<void> {
@@ -856,7 +710,7 @@ export class FileConversationStore {
   private async loadThreadDirectory(sessionId: string, threadId: string, trashed: boolean): Promise<(ThreadFile & { directory: string }) | null> {
     const safeThreadId = safeId(threadId, 'threadId')
     const directory = path.join(this.sessionsRoot, sessionId, trashed ? 'trash' : 'threads', safeThreadId)
-    await this.recoverThreadJournals(directory)
+    await this.threadJournalStore.recover(directory)
     const loaded = await this.readThreadFileOrNull(directory)
     if (!loaded) return null
     this.threadLocations.set(safeThreadId, { sessionId, directory, trashed })
@@ -886,52 +740,6 @@ export class FileConversationStore {
       runs.push(checkpoint.run)
     }
     return runs
-  }
-
-  private enqueueAppend(filePath: string, record: unknown): Promise<void> {
-    const previous = this.writeQueues.get(filePath)?.catch(error => {
-      logger.error({ error: errorLogPayload(error), filePath }, 'previous append failed')
-    }) ?? Promise.resolve()
-    const next = previous.then(async () => {
-      await mkdir(path.dirname(filePath), { recursive: true })
-      await appendJsonLineDurable(filePath, record)
-    })
-    this.writeQueues.set(filePath, next)
-    const tracked = next.catch(error => {
-      logger.error({ error: errorLogPayload(error), filePath }, 'append failed')
-      throw error
-    }).finally(() => {
-      if (this.writeQueues.get(filePath) === next) this.writeQueues.delete(filePath)
-    })
-    return tracked
-  }
-
-  private async readJsonLines<T>(
-    filePath: string,
-    threadId: string,
-    schema: { parse(value: unknown): T },
-  ): Promise<T[]> {
-    let text: string
-    try {
-      text = await readFile(filePath, 'utf8')
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-      throw error
-    }
-    const lines = text.split('\n')
-    const records: T[] = []
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = lines[index]
-      if (!line.trim()) continue
-      try {
-        records.push(schema.parse(JSON.parse(line)))
-      } catch (error) {
-        const isFinalPartialLine = index === lines.length - 1 && !text.endsWith('\n')
-        if (isFinalPartialLine) break
-        await recordJsonLineCorruption(filePath, threadId, index + 1, error)
-      }
-    }
-    return records
   }
 
   private async quarantineThread(threadId: string, reason: string): Promise<void> {

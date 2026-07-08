@@ -12,6 +12,7 @@ import type { WebSocket } from 'ws'
 import type { z } from 'zod'
 
 import type { OpenAIAgentsRuntime } from '../agent/runtime.js'
+import type { RunTaskManager } from '../agent/runTaskManager.js'
 import type { AuthContext } from '../security/types.js'
 import type { RuntimeFileStore } from '../store/fileStore.js'
 import type { ClientMsg } from './protocol.js'
@@ -21,6 +22,7 @@ export interface WsCommandContext {
   msg: ClientMsg
   dependencies: WsDependencies
   runtime: OpenAIAgentsRuntime
+  runTasks: RunTaskManager
   files: RuntimeFileStore
   ws: WebSocket
   subscriptions: Map<string, () => void>
@@ -32,6 +34,7 @@ export interface WsCommandDefinition<TPayload extends z.ZodTypeAny = z.ZodTypeAn
   payloadSchema: TPayload
   auth?: 'required' | 'optional'
   csrf?: boolean
+  authorize?: (payload: Record<string, unknown>, context: WsCommandContext) => Promise<void> | void
   handler: (payload: z.infer<TPayload>, context: WsCommandContext) => Promise<unknown> | unknown
 }
 
@@ -51,6 +54,15 @@ export class WsCommandRegistry {
     return this.commands.get(type) ?? null
   }
 
+  setAuthorize(
+    type: ClientMsg['type'],
+    authorize: NonNullable<WsCommandDefinition['authorize']>,
+  ): void {
+    const definition = this.get(type)
+    if (!definition) throw new Error(`WS 命令 '${type}' 尚未注册，不能挂载授权策略`)
+    definition.authorize = authorize
+  }
+
   async execute(msg: ClientMsg, context: Omit<WsCommandContext, 'msg'>): Promise<unknown> {
     const definition = this.get(msg.type)
     if (!definition) throw new Error(`WS 命令 '${msg.type}' 尚未注册`)
@@ -58,10 +70,26 @@ export class WsCommandRegistry {
       throw new Error('WebSocket 命令需要登录。')
     }
     const parsedPayload = definition.payloadSchema.parse(msg.payload)
-    return definition.handler(parsedPayload, { ...context, msg })
+    const commandContext = { ...context, msg }
+    if (!definition.authorize) throw new Error(`WS 命令 '${msg.type}' 缺少授权策略。`)
+    await definition.authorize(requireRecordPayload(parsedPayload, msg.type), commandContext)
+    return definition.handler(parsedPayload, commandContext)
   }
 
   registeredTypes(): ClientMsg['type'][] {
     return [...this.commands.keys()]
   }
+
+  commandsWithoutAuthorization(): ClientMsg['type'][] {
+    return [...this.commands.values()]
+      .filter(definition => !definition.authorize)
+      .map(definition => definition.type)
+  }
+}
+
+function requireRecordPayload(payload: unknown, type: ClientMsg['type']): Record<string, unknown> {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    throw new Error(`WS 命令 '${type}' payload 必须是对象。`)
+  }
+  return payload as Record<string, unknown>
 }

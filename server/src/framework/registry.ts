@@ -174,5 +174,3 @@ function formatIssue(issue: unknown): string {
   return `${path}: ${message}`
 }
 
-// 全局单例
-export const toolRegistry = new ToolRegistry()

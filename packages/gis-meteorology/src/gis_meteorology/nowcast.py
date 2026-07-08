@@ -356,7 +356,7 @@ class NowcastTextService:
         is_qa = "正式" not in question and "预报文字" not in question
         if is_qa:
             return (
-                "你是杭州短时临近预报（短临）降水预报员。只基于 facts 和 draft 输出最终答案。\n"
+                "你是目标区域短时临近预报（短临）降水预报员。只基于 facts 和 draft 输出最终答案。\n"
                 "要求：\n"
                 "1. answer 直接用 draft 中的 answer 内容，不添加任何新信息。\n"
                 "2. basis 每条不超过 15 字。\n"
@@ -365,7 +365,7 @@ class NowcastTextService:
                 f"{facts_text}"
             )
         return (
-            "你是杭州短时临近预报（短临）降水预报员。只基于 facts 和 draft 输出正式预报文字。\n"
+            "你是目标区域短时临近预报（短临）降水预报员。只基于 facts 和 draft 输出正式预报文字。\n"
             "要求：\n"
             "1. answer 用 draft 中的 answer 内容，不加任何新信息。\n"
             "2. basis 每条不超过 15 字。\n"
@@ -722,7 +722,7 @@ def _lead_phrase(minutes: Any) -> str:
 
 def _is_generic_nowcast_question(question: str) -> bool:
     compact = re.sub(r"[？?。！!\s]", "", question)
-    return compact in {"接下来天气怎么样", "接下来天气如何", "未来天气怎么样", "杭州天气怎么样", "杭州市天气怎么样", "全市天气怎么样"}
+    return compact in {"接下来天气怎么样", "接下来天气如何", "未来天气怎么样", "全市天气怎么样", "当前区域天气怎么样"}
 
 
 def _rain_level_label(level: Any) -> str:

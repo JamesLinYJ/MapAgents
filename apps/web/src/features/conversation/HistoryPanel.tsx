@@ -5,7 +5,7 @@
 //   文件:       HistoryPanel.tsx
 //
 //   日期:       2026年07月07日
-//   作者:       Claude Code
+//   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
 import { Pencil, RefreshCw, Trash2 } from 'lucide-react'

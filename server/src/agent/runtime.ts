@@ -77,6 +77,11 @@ import {
   createConfiguredSandboxSession,
   type OpenAIAgentsRuntimeOptions,
 } from './runtimeSandbox.js'
+import {
+  buildRuntimeSdkSandboxIntegration,
+  createRuntimeSdkTools,
+  type RuntimeSdkToolIntegration,
+} from './runtimeSdkIntegrations.js'
 
 export type { OpenAIAgentsRuntimeOptions, SandboxSessionFactory } from './runtimeSandbox.js'
 
@@ -104,6 +109,7 @@ interface RuntimeAssembly {
   coordinator: ToolExecutionCoordinator
   adapter: ModelAdapter
   sandboxSession: SandboxSessionLike
+  sdkTools: RuntimeSdkToolIntegration
   configDigest: string
   sdkVersion: string
   threadId: string
@@ -465,18 +471,47 @@ export class OpenAIAgentsRuntime {
         },
       })
     })
-    const sandboxManifest = buildSandboxManifest(options, threadId)
+    const sandboxIntegration = buildRuntimeSdkSandboxIntegration(options.runtimeConfig)
+    const sandboxManifest = buildSandboxManifest(options, threadId, sandboxIntegration.pathGrants)
     const createSandboxSession = this.runtimeOptions.createSandboxSession ?? createConfiguredSandboxSession
-    const sandboxSession = await createSandboxSession(sandboxManifest, options.runtimeConfig.sandbox)
+    let sandboxSession: SandboxSessionLike | null = null
+    let sdkTools: RuntimeSdkToolIntegration | null = null
+    try {
+      sandboxSession = await createSandboxSession(sandboxManifest, options.runtimeConfig.sandbox)
+      const reservedToolNames = new Set([
+        ...this.toolRegistry.list().map(tool => tool.name),
+        ...options.runtimeConfig.subAgents.map(config => config.agentId),
+      ])
+      sdkTools = await createRuntimeSdkTools(options.runtimeConfig, reservedToolNames)
+    } catch (error) {
+      await sdkTools?.close().catch(closeError => {
+        logger.warn({ error: errorLogPayload(closeError) }, 'sdk mcp close after assembly failure failed')
+      })
+      await sandboxSession?.close?.().catch(closeError => {
+        logger.warn({ error: errorLogPayload(closeError) }, 'sandbox close after assembly failure failed')
+      })
+      throw error
+    }
+    if (!sandboxSession || !sdkTools) throw new Error('Agents SDK 运行时装配未完成')
+    await this.store.updateRunState(options.runId, {
+      activeSkills: sandboxIntegration.activeSkills,
+      activeMcpServers: sdkTools.activeMcpServers,
+    })
+    if (sandboxIntegration.activeSkills.length || sdkTools.activeMcpServers.length) {
+      eventSink.emit('step.started', 'SDK 扩展已装配', {
+        active_skills: sandboxIntegration.activeSkills,
+        active_mcp_servers: sdkTools.activeMcpServers,
+      })
+    }
     const agent = new SandboxAgent<AgentsExecutionContext>({
       name: options.runtimeConfig.supervisor.name,
       instructions: systemPrompt,
       model,
       modelSettings: modelSettings(options.reasoning),
-      tools: [...supervisorTools, ...subAgentTools],
+      tools: [...supervisorTools, ...subAgentTools, ...sdkTools.tools],
       toolUseBehavior: { stopAtToolNames: ['answer_nowcast_question', 'request_clarification'] },
       defaultManifest: sandboxManifest,
-      capabilities: Capabilities.default(),
+      capabilities: [...Capabilities.default(), ...sandboxIntegration.capabilities],
     })
     const runner = new Runner({
       model,
@@ -584,6 +619,7 @@ export class OpenAIAgentsRuntime {
       coordinator,
       adapter,
       sandboxSession,
+      sdkTools,
       configDigest: runtimeConfigDigest(options.runtimeConfig),
       sdkVersion: await agentsSdkVersion(),
       threadId,
@@ -697,6 +733,9 @@ export class OpenAIAgentsRuntime {
       outcome = 'completed'
       return outcome
     } finally {
+      await assembly.sdkTools.close().catch(error => {
+        logger.warn({ error: errorLogPayload(error) }, 'sdk mcp close failed')
+      })
       if (outcome !== 'waiting_approval') {
         await assembly.sandboxSession.close?.().catch(error => {
           logger.warn({ error: errorLogPayload(error) }, 'sandbox close failed')

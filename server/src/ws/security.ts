@@ -16,144 +16,143 @@
 import { StoreNotFoundError } from '../store/platformStore.js'
 import type { AuthContext } from '../security/types.js'
 import { assertDirectToolRunAllowed } from '../security/toolExecutionPolicy.js'
-import type { ClientMsg } from './protocol.js'
+import type { WsCommandContext, WsCommandRegistry } from './commandRegistry.js'
 import type { WsDependencies } from './dependencies.js'
 import { optionalString, requiredString } from './payload.js'
-
-const MUTATING_COMMANDS = new Set([
-  'thread:create', 'thread:update', 'thread:delete', 'thread:fork', 'thread:compact',
-  'thread:memory:update', 'thread:memory:rebuild',
-  'thread:trash:restore', 'thread:trash:purge',
-  'run:start', 'run:cancel', 'run:resume', 'run:respond-decision',
-  'tool:run', 'tool-catalog:upsert', 'tool-catalog:delete',
-  'runtime-config:update',
-  'speech:authorization',
-  'memory:write', 'memory:delete', 'memory:extract', 'memory:dream', 'memory:session:rebuild',
-  'file:delete', 'layer:update', 'layer:delete',
-])
-
-export function assertWsCsrf(msg: ClientMsg, auth: AuthContext | undefined): void {
-  if (!auth || !MUTATING_COMMANDS.has(msg.type)) return
-  const token = msg.payload.csrfToken
-  if (token !== auth.csrfToken) throw new Error('CSRF 校验失败。')
-}
 
 export function requireWsAuth(auth: AuthContext | null): AuthContext {
   if (!auth) throw new Error('WebSocket 命令需要登录。')
   return auth
 }
 
-export async function authorizeWsMessage(
-  msg: ClientMsg,
-  dependencies: WsDependencies,
-  auth: AuthContext | null,
-): Promise<void> {
-  const security = dependencies.security
-  if (!auth) throw new Error('WebSocket 命令需要登录。')
-  if (!(await security.auth.isAuthContextActive(auth))) {
+type AuthorizationPolicy = (
+  payload: Record<string, unknown>,
+  context: WsCommandContext,
+  auth: AuthContext,
+) => Promise<void> | void
+
+export function registerWsAuthorizationPolicies(registry: WsCommandRegistry): void {
+  const set = (type: Parameters<WsCommandRegistry['setAuthorize']>[0], policy: AuthorizationPolicy) => {
+    registry.setAuthorize(type, async (payload, context) => policy(payload, context, await requireActiveAuth(context)))
+  }
+
+  set('workspace:bootstrap', workspaceRead)
+  set('session:get-default', workspaceRead)
+  set('session:get', sessionRead)
+  set('thread:list', sessionRead)
+  set('thread:trash:list', sessionRead)
+  set('run:list', sessionRead)
+  set('thread:create', (payload, context, auth) => authorizeSession(context.dependencies, auth, requiredString(payload, 'sessionId'), 'create', 'thread'))
+  set('thread:get', threadRead)
+  set('thread:history', threadRead)
+  set('thread:context', threadRead)
+  set('thread:memory:get', threadRead)
+  set('memory:session:get', threadRead)
+  set('thread:subscribe', threadRead)
+  set('thread:update', threadUpdate)
+  set('thread:compact', threadUpdate)
+  set('thread:memory:update', threadUpdate)
+  set('thread:memory:rebuild', threadUpdate)
+  set('memory:session:rebuild', threadUpdate)
+  set('thread:delete', (payload, context, auth) => authorizeThread(context.dependencies, auth, requiredString(payload, 'threadId'), 'delete'))
+  set('thread:trash:restore', (payload, context, auth) => authorizeTrashedThread(context.dependencies, auth, requiredString(payload, 'threadId'), 'update'))
+  set('thread:trash:purge', (payload, context, auth) => authorizeTrashedThread(context.dependencies, auth, requiredString(payload, 'threadId'), 'delete'))
+  set('thread:fork', threadRead)
+  set('run:start', authorizeRunStart)
+  set('run:get', runRead)
+  set('run:subscribe', runRead)
+  set('run:cancel', runExecute)
+  set('run:resume', runExecute)
+  set('run:respond-decision', (payload, context, auth) => authorizeRun(context.dependencies, auth, requiredString(payload, 'runId'), 'approve'))
+  set('tool:list', (payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'tool', 'read', { workspaceId: auth.defaultWorkspaceId }))
+  set('tool:run', (payload, context, auth) => assertDirectToolRunAllowed(auth, context.dependencies.security.authorization, context.dependencies.toolRegistry, requiredString(payload, 'toolName')))
+  set('tool-catalog:list', workspaceRead)
+  set('runtime-config:get', workspaceRead)
+  set('provider:list', workspaceRead)
+  set('system:get', workspaceRead)
+  set('tool-catalog:upsert', admin)
+  set('tool-catalog:delete', admin)
+  set('runtime-config:update', admin)
+  set('speech:authorization', (payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'speech', 'execute', { workspaceId: auth.defaultWorkspaceId }))
+  set('memory:list', memoryRead)
+  set('memory:read', memoryRead)
+  set('memory:search', memoryRead)
+  set('memory:instructions:list', memoryRead)
+  set('memory:write', (payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'memory', 'create', { workspaceId: auth.defaultWorkspaceId, userId: auth.userId }))
+  set('memory:delete', (payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'memory', 'delete', { workspaceId: auth.defaultWorkspaceId, userId: auth.userId }))
+  set('memory:extract', memoryExecute)
+  set('memory:dream', memoryExecute)
+  set('file:list', authorizeFileList)
+  set('file:delete', authorizeFileDelete)
+  set('layer:list', (payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'layer', 'read', { workspaceId: auth.defaultWorkspaceId }))
+  set('layer:update', (payload, context, auth) => authorizeLayer(context.dependencies, auth, requiredString(payload, 'layerKey'), 'update'))
+  set('layer:delete', (payload, context, auth) => authorizeLayer(context.dependencies, auth, requiredString(payload, 'layerKey'), 'delete'))
+  set('run:unsubscribe', noop)
+  set('thread:unsubscribe', noop)
+}
+
+async function requireActiveAuth(context: WsCommandContext): Promise<AuthContext> {
+  const auth = requireWsAuth(context.auth)
+  if (!(await context.dependencies.security.auth.isAuthContextActive(auth))) {
     throw new Error('登录会话已失效，请重新登录。')
   }
-  const payload = msg.payload
-  switch (msg.type) {
-    case 'workspace:bootstrap':
-    case 'session:get-default':
-      await security.authorization.enforce(auth, 'workspace', 'read', { workspaceId: auth.defaultWorkspaceId })
-      return
-    case 'session:get':
-    case 'thread:list':
-    case 'thread:trash:list':
-    case 'run:list':
-      return authorizeSession(dependencies, auth, requiredString(payload, 'sessionId'), 'read')
-    case 'thread:create':
-      return authorizeSession(dependencies, auth, requiredString(payload, 'sessionId'), 'create', 'thread')
-    case 'thread:get':
-    case 'thread:history':
-    case 'thread:context':
-    case 'thread:memory:get':
-    case 'memory:session:get':
-    case 'thread:subscribe':
-      return authorizeThread(dependencies, auth, requiredString(payload, 'threadId'), 'read')
-    case 'thread:update':
-    case 'thread:compact':
-    case 'thread:memory:update':
-    case 'thread:memory:rebuild':
-    case 'memory:session:rebuild':
-      return authorizeThread(dependencies, auth, requiredString(payload, 'threadId'), 'update')
-    case 'thread:delete':
-      return authorizeThread(dependencies, auth, requiredString(payload, 'threadId'), 'delete')
-    case 'thread:trash:restore':
-      return authorizeTrashedThread(dependencies, auth, requiredString(payload, 'threadId'), 'update')
-    case 'thread:trash:purge':
-      return authorizeTrashedThread(dependencies, auth, requiredString(payload, 'threadId'), 'delete')
-    case 'thread:fork':
-      return authorizeThread(dependencies, auth, requiredString(payload, 'threadId'), 'read')
-    case 'run:start': {
-      const threadId = optionalString(payload.threadId)
-      if (threadId) return authorizeThread(dependencies, auth, threadId, 'create', 'run')
-      return authorizeSession(dependencies, auth, requiredString(payload, 'sessionId'), 'create', 'run')
-    }
-    case 'run:get':
-    case 'run:subscribe':
-      return authorizeRun(dependencies, auth, requiredString(payload, 'runId'), 'read')
-    case 'run:cancel':
-    case 'run:resume':
-      return authorizeRun(dependencies, auth, requiredString(payload, 'runId'), 'execute')
-    case 'run:respond-decision':
-      return authorizeRun(dependencies, auth, requiredString(payload, 'runId'), 'approve')
-    case 'tool:list':
-      await security.authorization.enforce(auth, 'tool', 'read', { workspaceId: auth.defaultWorkspaceId })
-      return
-    case 'tool:run':
-      return assertDirectToolRunAllowed(auth, security.authorization, dependencies.toolRegistry, requiredString(payload, 'toolName'))
-    case 'tool-catalog:list':
-    case 'runtime-config:get':
-    case 'provider:list':
-    case 'system:get':
-      await security.authorization.enforce(auth, 'workspace', 'read', { workspaceId: auth.defaultWorkspaceId })
-      return
-    case 'tool-catalog:upsert':
-    case 'tool-catalog:delete':
-    case 'runtime-config:update':
-      await security.authorization.enforce(auth, 'admin', 'admin', { workspaceId: auth.defaultWorkspaceId })
-      return
-    case 'speech:authorization':
-      await security.authorization.enforce(auth, 'speech', 'execute', { workspaceId: auth.defaultWorkspaceId })
-      return
-    case 'memory:list':
-    case 'memory:read':
-    case 'memory:search':
-    case 'memory:instructions:list':
-      await security.authorization.enforce(auth, 'memory', 'read', { workspaceId: auth.defaultWorkspaceId, userId: auth.userId })
-      return
-    case 'memory:write':
-      await security.authorization.enforce(auth, 'memory', 'create', { workspaceId: auth.defaultWorkspaceId, userId: auth.userId })
-      return
-    case 'memory:delete':
-      await security.authorization.enforce(auth, 'memory', 'delete', { workspaceId: auth.defaultWorkspaceId, userId: auth.userId })
-      return
-    case 'memory:extract':
-    case 'memory:dream':
-      await security.authorization.enforce(auth, 'memory', 'execute', { workspaceId: auth.defaultWorkspaceId, userId: auth.userId })
-      return
-    case 'file:list':
-      if (optionalString(payload.threadId)) return authorizeThread(dependencies, auth, requiredString(payload, 'threadId'), 'read')
-      await security.authorization.enforce(auth, 'thread', 'read', { workspaceId: auth.defaultWorkspaceId })
-      return
-    case 'file:delete':
-      if (optionalString(payload.threadId)) return authorizeThread(dependencies, auth, requiredString(payload, 'threadId'), 'update')
-      await security.authorization.enforce(auth, 'thread', 'update', { workspaceId: auth.defaultWorkspaceId })
-      return
-    case 'layer:list':
-      await security.authorization.enforce(auth, 'layer', 'read', { workspaceId: auth.defaultWorkspaceId })
-      return
-    case 'layer:update':
-      return authorizeLayer(dependencies, auth, requiredString(payload, 'layerKey'), 'update')
-    case 'layer:delete':
-      return authorizeLayer(dependencies, auth, requiredString(payload, 'layerKey'), 'delete')
-    case 'run:unsubscribe':
-    case 'thread:unsubscribe':
-      return
-  }
+  return auth
+}
+
+async function workspaceRead(_payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {
+  await context.dependencies.security.authorization.enforce(auth, 'workspace', 'read', { workspaceId: auth.defaultWorkspaceId })
+}
+
+function sessionRead(payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {
+  return authorizeSession(context.dependencies, auth, requiredString(payload, 'sessionId'), 'read')
+}
+
+function threadRead(payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {
+  return authorizeThread(context.dependencies, auth, requiredString(payload, 'threadId'), 'read')
+}
+
+function threadUpdate(payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {
+  return authorizeThread(context.dependencies, auth, requiredString(payload, 'threadId'), 'update')
+}
+
+async function authorizeRunStart(payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {
+  const threadId = optionalString(payload.threadId)
+  if (threadId) return authorizeThread(context.dependencies, auth, threadId, 'create', 'run')
+  return authorizeSession(context.dependencies, auth, requiredString(payload, 'sessionId'), 'create', 'run')
+}
+
+function runRead(payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {
+  return authorizeRun(context.dependencies, auth, requiredString(payload, 'runId'), 'read')
+}
+
+function runExecute(payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {
+  return authorizeRun(context.dependencies, auth, requiredString(payload, 'runId'), 'execute')
+}
+
+async function admin(_payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {
+  await context.dependencies.security.authorization.enforce(auth, 'admin', 'admin', { workspaceId: auth.defaultWorkspaceId })
+}
+
+async function memoryRead(_payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {
+  await context.dependencies.security.authorization.enforce(auth, 'memory', 'read', { workspaceId: auth.defaultWorkspaceId, userId: auth.userId })
+}
+
+async function memoryExecute(_payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {
+  await context.dependencies.security.authorization.enforce(auth, 'memory', 'execute', { workspaceId: auth.defaultWorkspaceId, userId: auth.userId })
+}
+
+async function authorizeFileList(payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {
+  if (optionalString(payload.threadId)) return authorizeThread(context.dependencies, auth, requiredString(payload, 'threadId'), 'read')
+  await context.dependencies.security.authorization.enforce(auth, 'thread', 'read', { workspaceId: auth.defaultWorkspaceId })
+}
+
+async function authorizeFileDelete(payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {
+  if (optionalString(payload.threadId)) return authorizeThread(context.dependencies, auth, requiredString(payload, 'threadId'), 'update')
+  await context.dependencies.security.authorization.enforce(auth, 'thread', 'update', { workspaceId: auth.defaultWorkspaceId })
+}
+
+function noop(): void {
+  // 会话活跃性由包装器统一校验；取消订阅本身不访问资源。
 }
 
 async function authorizeSession(
