@@ -11,6 +11,41 @@ import { isRecord } from '../shared/utils/guards'
 
 export const API_UNAVAILABLE_MESSAGE = 'GeoForge API 未连接，请启动 Node API 服务。'
 
+export type TransportKind = 'http' | 'websocket'
+
+export interface TransportErrorOptions {
+  transport: TransportKind
+  code: string
+  status?: number
+  cause?: unknown
+}
+
+export class GeoForgeTransportError extends Error {
+  readonly transport: TransportKind
+  readonly code: string
+  readonly status?: number
+
+  constructor(message: string, options: TransportErrorOptions) {
+    super(message, { cause: options.cause })
+    this.name = 'GeoForgeTransportError'
+    this.transport = options.transport
+    this.code = options.code
+    this.status = options.status
+  }
+}
+
+export function isGeoForgeTransportError(error: unknown): error is GeoForgeTransportError {
+  return error instanceof GeoForgeTransportError
+}
+
+export function isResourceAccessError(error: unknown): boolean {
+  return isGeoForgeTransportError(error)
+    && (error.status === 403
+      || error.status === 404
+      || error.code === 'forbidden'
+      || error.code === 'not_found')
+}
+
 const API_UNAVAILABLE_PATTERNS = [
   'bad gateway',
   'proxy failed',

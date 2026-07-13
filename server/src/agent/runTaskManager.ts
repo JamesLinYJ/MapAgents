@@ -7,9 +7,10 @@
 // --------------------------------------------------------------------------
 
 import type { AnalysisRun } from '../schemas/types.js'
-import type { PostgresPlatformStore } from '../store/platformStore.js'
+import type { RunLookupStore } from '../store/runtimePorts.js'
 import { errorLogPayload, logger } from '../observability/logger.js'
 import type { OpenAIAgentsRuntime, RunOptions } from './runtime.js'
+import type { BackgroundTaskRegistry } from '../workflows/backgroundTaskRegistry.js'
 
 export interface RunTaskCompletionTarget {
   onComplete?: (runId: string) => Promise<void> | void
@@ -22,13 +23,25 @@ export class RunTaskManager {
 
   constructor(
     private readonly runtime: OpenAIAgentsRuntime,
-    private readonly store: PostgresPlatformStore,
+    private readonly store: RunLookupStore,
+    private readonly backgroundTasks?: BackgroundTaskRegistry,
   ) {}
 
   start(options: RunOptions, target: RunTaskCompletionTarget = {}): Promise<AnalysisRun> {
     const existing = this.activeTasks.get(options.runId)
     if (existing) throw new Error(`运行 '${options.runId}' 已在后台执行中`)
-    const task = this.runtime.run(options)
+    const runTask = (signal?: AbortSignal) => this.runtime.run(signal ? { ...options, signal } : options)
+    const task = (this.backgroundTasks
+      ? this.backgroundTasks.start({
+        taskId: options.runId,
+        label: options.query.slice(0, 80) || `运行 ${options.runId}`,
+        kind: 'agent_run',
+        workspaceId: this.store.getRun(options.runId).workspaceId,
+        userId: this.store.getRun(options.runId).createdByUserId,
+        metadata: { runId: options.runId, threadId: options.threadId ?? null, sessionId: options.sessionId },
+        run: signal => runTask(signal),
+      })
+      : runTask())
       .then(async run => {
         await this.sendSnapshotIfConnected(options.runId, target)
         return run
@@ -55,7 +68,13 @@ export class RunTaskManager {
   }
 
   cancel(runId: string): Promise<AnalysisRun> {
+    if (this.backgroundTasks?.get(runId)?.status === 'running') this.backgroundTasks.cancel(runId)
     return this.runtime.cancel(runId)
+  }
+
+  steer(runId: string, steeringId: string, content: string) {
+    if (!this.activeTasks.has(runId)) throw new Error(`运行 '${runId}' 当前没有活动任务`)
+    return this.runtime.steer(runId, steeringId, content)
   }
 
   activeRunIds(): string[] {

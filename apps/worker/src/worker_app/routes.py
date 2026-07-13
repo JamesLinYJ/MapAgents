@@ -17,7 +17,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
-from worker_app.tool_registry import tool_catalog
+from worker_app.tool_registry import WorkerToolRegistry
 from worker_app.worker_auth import WorkerAuthVerifier
 
 
@@ -27,10 +27,11 @@ def register_system_routes(
     worker_shared_secret: str | None,
     worker_auth: WorkerAuthVerifier,
     nonce_cache_max: int,
+    tool_registry: WorkerToolRegistry,
 ) -> None:
     @app.get("/tools/catalog")
     async def tools_catalog() -> dict[str, Any]:
-        return tool_catalog()
+        return tool_registry.catalog()
 
     @app.get("/health")
     async def health():

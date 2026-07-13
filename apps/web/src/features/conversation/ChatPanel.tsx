@@ -19,6 +19,7 @@ import { createPortal } from 'react-dom'
 import { AnimatePresence, LayoutGroup, m, useReducedMotion } from 'framer-motion'
 import { SAMPLES } from '../../shared/constants'
 import { buildFadeUpMotion, buildListItemVariants, buildListVariants, motionSpring } from '../../shared/motion'
+import { executionModeForComposerMode } from './composerModes'
 import { Composer } from './Composer'
 import { DecisionSheet } from './DecisionSheet'
 import type { ChatPanelProps, ComposerMode, TaskView } from './types'
@@ -178,15 +179,20 @@ export function ChatPanel(props: ChatPanelProps) {
     )
   }, [search, sessionThreads])
 
-  const handleSubmit = (event?: FormEvent) => {
+  const handleSubmit = async (event?: FormEvent) => {
     event?.preventDefault()
-    if (submittingRef.current || isSubmitting || composing || !query.trim()) {
+    const canSteerActiveRun = isSubmitting && runStatus === 'running'
+    if (submittingRef.current || (isSubmitting && !canSteerActiveRun) || composing || !query.trim()) {
       return
     }
     submittingRef.current = true
     setModeDecisionOpen(false)
     stopSpeechRecognition()
-    onSubmit(composerMode)
+    try {
+      await onSubmit(executionModeForComposerMode(composerMode))
+    } finally {
+      submittingRef.current = false
+    }
   }
   const handleKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Tab' && event.shiftKey) {
@@ -299,7 +305,7 @@ export function ChatPanel(props: ChatPanelProps) {
                     onRefreshMemories={onRefreshMemories}
                     onSelectArtifact={onSelectArtifact}
                     onForkMessage={onForkMessage}
-                    onRetry={() => onSubmit(composerMode)}
+                    onRetry={() => onSubmit(executionModeForComposerMode(composerMode))}
                     onFocusDecision={openServerDecision}
                     feedVariants={feedVariants}
                     entryVariants={entryVariants}
@@ -340,6 +346,7 @@ export function ChatPanel(props: ChatPanelProps) {
             query={query}
             providerLabel={providerLabel}
             isSubmitting={isSubmitting}
+            canSteerActiveRun={runStatus === 'running'}
             composerMode={composerMode}
               tokenBudget={tokenBudget}
               activeSkills={activeSkills}

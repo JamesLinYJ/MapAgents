@@ -72,7 +72,7 @@ export class BetterAuthService {
   readonly auth: BetterAuthRuntime
   private readonly identityStore: PlatformIdentityStore
 
-  constructor(private readonly db: Database, private readonly env: Env) {
+  constructor(db: Database, private readonly env: Env) {
     this.auth = createBetterAuthRuntime(db, env, [...this.trustedOrigins()])
     this.identityStore = new PlatformIdentityStore(db)
   }
@@ -198,6 +198,29 @@ export class BetterAuthService {
 
   async listUserRoles(userId: string): Promise<AuthRoleBinding[]> {
     return this.identityStore.listUserRoles(userId)
+  }
+
+  async buildServiceAuthContext(platformUserId: string, workspaceId: string): Promise<AuthContext> {
+    const user = await this.identityStore.getUserByPlatformUserId(platformUserId)
+    if (!user || user.status !== 'active') {
+      throw new Error('Workflow 创建者已禁用或不存在，任务不会执行。')
+    }
+    const roles = await this.listUserRoles(platformUserId)
+    const hasWorkspaceRole = roles.some(role => role.role === 'platform_admin' || role.workspaceId === workspaceId)
+    if (!hasWorkspaceRole) {
+      throw new Error('Workflow 创建者已失去当前工作区权限，任务不会执行。')
+    }
+    return {
+      userId: user.userId,
+      subject: requireString(user.subject, '平台用户 subject'),
+      email: requireString(user.email, '平台用户 email').toLowerCase(),
+      displayName: requireString(user.displayName, '平台用户 displayName'),
+      authSessionId: `workflow:${user.userId}`,
+      authSessionExpiresAt: null,
+      csrfToken: '',
+      defaultWorkspaceId: workspaceId,
+      roles,
+    }
   }
 
   private csrfForSession(sessionId: string): string {

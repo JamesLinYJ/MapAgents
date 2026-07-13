@@ -23,13 +23,16 @@ import type {
 } from '@geo-agent-platform/shared-types'
 
 import { getAuthMe } from '../api/client'
+import { isResourceAccessError } from '../api/errors'
 import { formatUiError, retryAsync, transcriptEntriesToConversationItems } from './bootstrap'
 
 export type AuthStatus = 'checking' | 'authenticated' | 'unauthenticated' | 'error'
 
 export interface WorkspaceBootstrapPointer {
+  activeSessionId?: string
   activeThreadId?: string
   activeRunId?: string
+  sessionSource?: 'route' | 'query' | 'persisted'
 }
 
 export interface WorkspaceBootstrapLoadResult {
@@ -40,16 +43,20 @@ export interface WorkspaceBootstrapLoadResult {
 // URL 中的 session/thread/run 是分享指针，不是身份事实源。
 // 当分享指针不可读时，权限拒绝必须成立；前端随后回到当前用户默认工作区。
 export async function loadBootstrapFromWorkspacePointer(
-  sharedSessionId: string | undefined,
+  pointer: WorkspaceBootstrapPointer,
   loadWorkspaceBootstrap: (sessionId?: string) => Promise<WorkspaceBootstrapSnapshot>,
 ): Promise<WorkspaceBootstrapLoadResult> {
+  const sessionId = pointer.activeSessionId
   try {
     return {
-      snapshot: await loadWorkspaceBootstrap(sharedSessionId),
+      snapshot: await loadWorkspaceBootstrap(sessionId),
       pointerRejected: false,
     }
   } catch (error) {
-    if (!sharedSessionId || !isRejectedWorkspacePointer(error)) throw error
+    const canDiscardStaleLocalPointer = pointer.sessionSource === 'persisted'
+      && Boolean(sessionId)
+      && isResourceAccessError(error)
+    if (!canDiscardStaleLocalPointer) throw error
     return {
       snapshot: await loadWorkspaceBootstrap(undefined),
       pointerRejected: true,
@@ -57,17 +64,10 @@ export async function loadBootstrapFromWorkspacePointer(
   }
 }
 
-function isRejectedWorkspacePointer(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error)
-  return message.includes('无权限对 session')
-    || (message.includes('会话') && message.includes('不存在'))
-    || message.includes('403')
-    || message.includes('not_found')
-}
-
 export function useWorkspaceBootstrap({
   applyProviders,
   clearActiveRunState,
+  disabled = false,
   getThreadHistory,
   hydrateRunState,
   loadWorkspaceBootstrap,
@@ -76,9 +76,11 @@ export function useWorkspaceBootstrap({
   setCanonicalThreadItems,
   setUiError,
   syncUrl,
+  syncWorkspaceUrl = true,
 }: {
   applyProviders: (providers: WorkspaceBootstrapSnapshot['providers']) => void
   clearActiveRunState: () => void
+  disabled?: boolean
   getThreadHistory: (threadId: string, cursor?: string | null, limit?: number) => Promise<ThreadHistoryPage>
   hydrateRunState: (runId: string) => Promise<AnalysisRun>
   loadWorkspaceBootstrap: (sessionId?: string) => Promise<WorkspaceBootstrapSnapshot>
@@ -87,6 +89,7 @@ export function useWorkspaceBootstrap({
   setCanonicalThreadItems: (items: ConversationItem[]) => void
   setUiError: (message: string | undefined) => void
   syncUrl: (sessionId: string, runId?: string, threadId?: string) => void
+  syncWorkspaceUrl?: boolean
 }) {
   const [authStatus, setAuthStatus] = useState<AuthStatus>('checking')
   const [authMe, setAuthMe] = useState<AuthMe | null>(null)
@@ -103,14 +106,17 @@ export function useWorkspaceBootstrap({
   }, [])
 
   useEffect(() => {
+    if (disabled) {
+      setAuthStatus('unauthenticated')
+      setAuthMe(null)
+      return
+    }
     // 首屏只吸收一次 workspace bootstrap；thread 摘要足以校验本地指针。
     // 完整运行通过 run:subscribe 一次恢复，不能再展开 thread/run 请求瀑布。
     let disposed = false
-    const searchParams = new URLSearchParams(window.location.search)
     const workspacePointer = readWorkspacePointer()
-    const sharedSessionId = searchParams.get('session') ?? undefined
-    const sharedThreadId = searchParams.get('thread') ?? undefined
-    const sharedRunId = searchParams.get('run') ?? undefined
+    const sharedThreadId = workspacePointer.activeThreadId
+    const sharedRunId = workspacePointer.activeRunId
 
     void (async () => {
       try {
@@ -127,7 +133,7 @@ export function useWorkspaceBootstrap({
         setAuthMe(auth)
         setAuthStatus('authenticated')
         const { snapshot, pointerRejected } = await retryAsync(
-          () => loadBootstrapFromWorkspacePointer(sharedSessionId, loadWorkspaceBootstrap),
+          () => loadBootstrapFromWorkspacePointer(workspacePointer, loadWorkspaceBootstrap),
           2,
           300,
         )
@@ -150,14 +156,14 @@ export function useWorkspaceBootstrap({
         if (threadToRestore && !thread) {
           if (effectiveSharedThreadId) throw new Error('分享链接中的对话不属于当前会话。')
           clearActiveRunState()
-          syncUrl(sessionRecord.id)
+          if (syncWorkspaceUrl) syncUrl(sessionRecord.id)
           return
         }
 
         if (thread) setActiveThreadId(thread.id)
         const preferredRunId = runToRestore ?? thread?.latestRunId ?? undefined
         if (!preferredRunId) {
-          syncUrl(sessionRecord.id, undefined, thread?.id)
+          if (syncWorkspaceUrl) syncUrl(sessionRecord.id, undefined, thread?.id)
           return
         }
 
@@ -172,11 +178,11 @@ export function useWorkspaceBootstrap({
             if (disposed) return
             setCanonicalThreadItems(transcriptEntriesToConversationItems(history.entries))
           }
-          if (pointerRejected) syncUrl(sessionRecord.id, restoredRun.id, restoredRun.threadId ?? undefined)
+          if (pointerRejected && syncWorkspaceUrl) syncUrl(sessionRecord.id, restoredRun.id, restoredRun.threadId ?? undefined)
         } catch (error) {
           if (effectiveSharedRunId || effectiveSharedThreadId) throw error
           clearActiveRunState()
-          syncUrl(sessionRecord.id)
+          if (syncWorkspaceUrl) syncUrl(sessionRecord.id)
         }
       } catch (error) {
         if (!disposed) {
@@ -191,6 +197,7 @@ export function useWorkspaceBootstrap({
     applyProviders,
     authRefreshNonce,
     clearActiveRunState,
+    disabled,
     hydrateRunState,
     getThreadHistory,
     loadWorkspaceBootstrap,
@@ -199,6 +206,7 @@ export function useWorkspaceBootstrap({
     setCanonicalThreadItems,
     setUiError,
     syncUrl,
+    syncWorkspaceUrl,
   ])
 
   return { authMe, authStatus, clearAuth, retryAuth }

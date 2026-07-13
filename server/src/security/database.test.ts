@@ -53,9 +53,22 @@ function completeSecurityTables(): Record<string, string[]> {
     platform_users: ['user_id', 'subject', 'email', 'display_name', 'status', 'last_login_at', 'created_at', 'updated_at'],
     platform_workspaces: ['workspace_id', 'name', 'description', 'status', 'created_by_user_id', 'created_at', 'updated_at'],
     platform_memberships: ['membership_id', 'workspace_id', 'user_id', 'role', 'created_at'],
+    platform_sessions: ['session_id', 'workspace_id', 'created_by_user_id', 'visibility', 'status', 'share_token', 'latest_thread_id', 'latest_run_id', 'latest_uploaded_layer_key', 'latest_meteorological_dataset_id', 'created_at', 'updated_at'],
+    platform_threads: ['thread_id', 'session_id', 'workspace_id', 'created_by_user_id', 'visibility', 'title', 'status', 'latest_run_id', 'latest_user_query', 'latest_assistant_summary', 'latest_run_status', 'latest_artifact_id', 'latest_artifact_name', 'history_preview', 'run_count', 'next_entry_sequence', 'active_leaf_entry_id', 'transcript_entry_count', 'estimated_context_tokens', 'latest_compaction_id', 'memory_version', 'memory_based_on_tokens', 'forked_from_thread_id', 'forked_from_entry_id', 'quarantined', 'quarantine_reason', 'deleted_at', 'purge_after', 'created_at', 'updated_at'],
+    platform_runs: ['run_id', 'session_id', 'thread_id', 'workspace_id', 'created_by_user_id', 'visibility', 'user_query', 'model_provider', 'model_name', 'status', 'state_json', 'runtime_config_json', 'active_entry_id', 'pending_tool_call_ids', 'recovery_status', 'orchestration_engine', 'sdk_state_content_hash', 'sdk_version', 'runtime_config_digest', 'sdk_state_schema_version', 'sdk_state_updated_at', 'next_record_sequence', 'created_at', 'updated_at'],
+    platform_conversation_entries: ['entry_id', 'session_id', 'thread_id', 'run_id', 'turn_id', 'sequence', 'parent_entry_id', 'logical_parent_entry_id', 'kind', 'payload_json', 'trace_id', 'created_at'],
+    platform_thread_memory_versions: ['thread_id', 'version', 'content_hash', 'source', 'based_on_entry_id', 'estimated_tokens', 'created_at'],
+    platform_thread_compactions: ['compaction_id', 'thread_id', 'boundary_entry_id', 'summary_entry_id', 'first_compacted_entry_id', 'last_compacted_entry_id', 'preserved_from_entry_id', 'summary', 'strategy', 'pre_tokens', 'post_tokens', 'created_at'],
+    platform_run_records: ['record_id', 'run_id', 'thread_id', 'sequence', 'record_type', 'payload_json', 'trace_id', 'created_at'],
+    platform_run_inputs: ['input_id', 'run_id', 'thread_id', 'entry_id', 'item_id', 'kind', 'content', 'status', 'queued_at', 'consumed_at'],
+    platform_event_outbox: ['outbox_id', 'aggregate_type', 'aggregate_id', 'event_type', 'payload_json', 'trace_id', 'attempt_count', 'created_at', 'published_at'],
     platform_rbac_policies: ['policy_id', 'ptype', 'v0', 'v1', 'v2', 'v3', 'v4', 'v5'],
     platform_audit_events: ['audit_event_id', 'actor_user_id', 'workspace_id', 'action', 'object_type', 'object_id', 'outcome', 'metadata_json', 'created_at'],
-    platform_artifacts: ['artifact_id', 'run_id', 'artifact_type', 'name', 'uri', 'metadata_json', 'geojson_relative_path', 'created_at', 'workspace_id', 'created_by_user_id', 'visibility'],
+    platform_artifacts: ['artifact_id', 'run_id', 'artifact_type', 'name', 'uri', 'metadata_json', 'content_relative_path', 'created_at', 'workspace_id', 'created_by_user_id', 'visibility'],
+    platform_workflow_definitions: ['workflow_id', 'workspace_id', 'created_by_user_id', 'name', 'description', 'version', 'revision', 'published_revision', 'source', 'lifecycle', 'enabled', 'parameters_schema_json', 'default_parameters_json', 'required_tools_json', 'requires_approval', 'timeout_seconds', 'output_type', 'definition_json', 'created_at', 'updated_at'],
+    platform_workflow_versions: ['workflow_id', 'revision', 'lifecycle', 'definition_json', 'created_by_user_id', 'created_at', 'published_at'],
+    platform_scheduled_tasks: ['task_id', 'target_kind', 'target_id', 'workspace_id', 'created_by_user_id', 'title', 'prompt', 'parameters_json', 'cron', 'timezone', 'recurring', 'enabled', 'status', 'last_fired_at', 'next_fire_at', 'last_run_id', 'queue_job_id', 'failure_count', 'last_error_message', 'created_at', 'updated_at'],
+    platform_workflow_runs: ['workflow_run_id', 'workflow_id', 'workflow_revision', 'scheduled_task_id', 'workspace_id', 'created_by_user_id', 'run_id', 'status', 'current_step', 'trigger_kind', 'error_message', 'metadata_json', 'node_runs_json', 'pending_approval_json', 'outputs_json', 'started_at', 'completed_at'],
   }
 }
 
@@ -225,7 +238,11 @@ describe('ensureSecurityTables', () => {
         platform_memberships: ['membership_id', 'workspace_id', 'user_id', 'role', 'created_at'],
         platform_rbac_policies: ['policy_id', 'ptype', 'v0', 'v1', 'v2', 'v3', 'v4', 'v5'],
         platform_audit_events: ['audit_event_id', 'actor_user_id', 'workspace_id', 'action', 'object_type', 'object_id', 'outcome', 'metadata_json', 'created_at'],
-        platform_artifacts: ['artifact_id', 'run_id', 'artifact_type', 'name', 'uri', 'metadata_json', 'geojson_relative_path', 'created_at', 'workspace_id', 'created_by_user_id', 'visibility'],
+        platform_artifacts: ['artifact_id', 'run_id', 'artifact_type', 'name', 'uri', 'metadata_json', 'content_relative_path', 'created_at', 'workspace_id', 'created_by_user_id', 'visibility'],
+        platform_workflow_definitions: ['workflow_id', 'workspace_id', 'created_by_user_id', 'name', 'description', 'version', 'revision', 'published_revision', 'source', 'lifecycle', 'enabled', 'parameters_schema_json', 'default_parameters_json', 'required_tools_json', 'requires_approval', 'timeout_seconds', 'output_type', 'definition_json', 'created_at', 'updated_at'],
+        platform_workflow_versions: ['workflow_id', 'revision', 'lifecycle', 'definition_json', 'created_by_user_id', 'created_at', 'published_at'],
+        platform_scheduled_tasks: ['task_id', 'target_kind', 'target_id', 'workspace_id', 'created_by_user_id', 'title', 'prompt', 'parameters_json', 'cron', 'timezone', 'recurring', 'enabled', 'status', 'last_fired_at', 'next_fire_at', 'last_run_id', 'queue_job_id', 'failure_count', 'last_error_message', 'created_at', 'updated_at'],
+        platform_workflow_runs: ['workflow_run_id', 'workflow_id', 'workflow_revision', 'scheduled_task_id', 'workspace_id', 'created_by_user_id', 'run_id', 'status', 'current_step', 'trigger_kind', 'error_message', 'metadata_json', 'node_runs_json', 'pending_approval_json', 'outputs_json', 'started_at', 'completed_at'],
       },
     })
     await expect(ensureSecurityTables(db)).rejects.toThrow(/缺少表/)

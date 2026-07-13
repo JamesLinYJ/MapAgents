@@ -1,0 +1,38 @@
+"""气象栅格渲染工具。"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from worker_app import tool_contracts as contracts
+from worker_app.request_args import optional_int, optional_number_list, optional_text
+from worker_app.tool_context import WorkerToolContext
+from worker_app.tool_io import input_filename, input_path, output_path, relative_runtime_path
+from worker_app.tool_registry import WorkerToolRegistry
+
+
+def execute(args: dict[str, Any], context: WorkerToolContext) -> dict[str, Any]:
+    from gis_meteorology.service import MeteorologicalDataService
+
+    source = input_path(args, context)
+    output = output_path(args, context)
+    result = MeteorologicalDataService().render_heatmap(
+        source,
+        output_path=output,
+        filename=input_filename(args, source),
+        variable=optional_text(args, "variable"),
+        time_index=optional_int(args, "time_index"),
+        level_index=optional_int(args, "level_index"),
+        bbox=optional_number_list(args, "bbox"),
+    )
+    return {**result, "outputRelativePath": relative_runtime_path(output, context)}
+
+
+def register(registry: WorkerToolRegistry) -> None:
+    registry.register(
+        "meteorological_render",
+        execute,
+        request_model=contracts.MeteorologicalRenderRequest,
+        display_surfaces=("map", "download"),
+        value_ref_outputs=("meteorological_render_result",),
+    )

@@ -54,11 +54,11 @@ import {
 export function createMeteorologyTools(env: Env): ToolDef[] {
   const deps: MeteorologyToolDeps = {
     runtimeRoot: env.RUNTIME_ROOT,
-    callWorker: (name, args) => callMeteorologyWorker({
-      workerUrl: env.WORKER_URL,
-      workerSharedSecret: env.WORKER_SHARED_SECRET,
+    callWorker: (name, args, signal) => callMeteorologyWorker({
+      ...(env.WORKER_URL ? { workerUrl: env.WORKER_URL } : {}),
+      ...(env.WORKER_SHARED_SECRET ? { workerSharedSecret: env.WORKER_SHARED_SECRET } : {}),
       requestTimeoutMs: env.WORKER_REQUEST_TIMEOUT_MS,
-    }, name, args),
+    }, name, args, signal),
   }
 
   return [
@@ -178,7 +178,7 @@ async function renderRainfallRiskMap(args: Record<string, unknown>, ctx: ToolCon
     title: typeof args.title === 'string' ? args.title : undefined,
     output_relative_path: artifact.relativePath,
     output_geojson_relative_path: regionLayer.relativePath,
-  })
+  }, ctx.signal)
   mergeArtifactMetadata(artifact, {
     ...worker.payload,
     previewRole: 'rainfall_risk_map',
@@ -231,7 +231,7 @@ async function generateAreaRainfallTable(args: Record<string, unknown>, ctx: Too
     style: isRecord(args.style) ? args.style : undefined,
     output_xlsx_relative_path: xlsx.relativePath,
     output_png_relative_path: png.relativePath,
-  })
+  }, ctx.signal)
   mergeArtifactMetadata(xlsx, {
     ...worker.payload,
     downloadRole: 'area_rainfall_table_xlsx',

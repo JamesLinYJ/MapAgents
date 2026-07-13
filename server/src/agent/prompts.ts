@@ -101,6 +101,8 @@ function defaultSupervisorPrompt(): string {
 - 优先使用 GeoForge 平台工具、MCP 工具、SDK Skill 和 valueRef 数据流，不用自由文本模拟工具结果。
 - 每个工具都有自己的中文工具说明、参数结构、valueRef 类型、审批规则和执行模式限制。调用前必须同时满足这些规则。
 - valueRef 是跨工具传递事实的唯一句柄。后续工具需要 ref 时传 refId；不要复制大段 GeoJSON、路径、坐标数组、变量列表或统计详情。
+- 平台 artifact URI（如 /api/v1/results/...）是前端和下载接口使用的资源引用，不是开发者沙箱本地文件路径。当前 run 的 Artifact 会按工具返回的「artifacts/<runId>/<filename>」相对路径只读挂载到沙箱；只有工具明确返回这种当前 run 路径时，才可用 view_image 检查图片。不得用 read_file 或 exec_command 猜测、搜索宿主机路径。
+- 图片检查失败时必须明确说“Artifact 已注册，但视觉内容尚未验证”，不得把注册成功写成视觉检查成功，也不得用 shell 搜索路径后继续拼接成功结论。
 - 能并行收集的只读信息可以并行；存在数据依赖的工具链必须按顺序推进，上一工具失败时不得继续伪造下一步输入。
 - 工具、MCP、Worker、模型、结构校验或安全护栏失败必须真实失败并说明中文原因。禁止返回伪兜底成功文本、合成产物、兼容旧载荷或吞掉错误。
 

@@ -27,9 +27,9 @@ interface PendingRequest {
 }
 
 const REQUEST_TIMEOUT_MS = 45_000
+const CONNECT_WAIT_TIMEOUT_MS = 12_000
 const RECONNECT_BASE_DELAY_MS = 1_200
 const RECONNECT_MAX_DELAY_MS = 30_000
-const RECONNECT_MAX_ATTEMPTS = 8
 
 class WebSocketControlClient {
   private socket: ReconnectingWebSocket | null = null
@@ -45,8 +45,12 @@ class WebSocketControlClient {
     }
 
     const id = `req_${crypto.randomUUID().replaceAll('-', '')}`
-    const securedPayload = this.csrfToken ? { ...payload, csrfToken: this.csrfToken } : payload
-    const request = JSON.stringify({ type, id, payload: securedPayload })
+    const request = JSON.stringify({
+      type,
+      id,
+      payload,
+      ...(this.csrfToken ? { meta: { csrfToken: this.csrfToken } } : {}),
+    })
 
     return new Promise<WsControlResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -80,49 +84,57 @@ class WebSocketControlClient {
     if (this.connectPromise) return this.connectPromise
 
     useConnectionStore.getState().setWsConnecting()
+    const socket = this.socket ?? this.createSocket()
     this.connectPromise = new Promise<void>((resolve, reject) => {
-      const socket = new ReconnectingWebSocket(resolveWsUrl, undefined, {
-        connectionTimeout: 8_000,
-        minReconnectionDelay: RECONNECT_BASE_DELAY_MS,
-        maxReconnectionDelay: RECONNECT_MAX_DELAY_MS,
-        maxRetries: RECONNECT_MAX_ATTEMPTS,
-        maxEnqueuedMessages: 0,
-        shouldReconnectOnClose: event => !isAuthCloseCode(event.code),
-      })
-      this.socket = socket
-
-      const cleanupInitial = () => {
+      const cleanupWait = () => {
+        clearTimeout(timer)
         socket.removeEventListener('open', handleOpen)
-        socket.removeEventListener('error', handleInitialError)
+        socket.removeEventListener('close', handleTerminalClose)
+        this.connectPromise = null
       }
       const handleOpen = () => {
-        cleanupInitial()
-        this.connectPromise = null
-        useConnectionStore.getState().setWsConnected()
-        this.emit({ type: 'connected', id: null, payload: { data: null } })
+        cleanupWait()
         resolve()
       }
-      const handleInitialError = () => {
-        cleanupInitial()
-        this.connectPromise = null
-        useConnectionStore.getState().setWsDisconnected('WebSocket 连接失败，请确认 API 服务和 /ws 代理已经启动。')
-        reject(new Error('WebSocket 连接失败，请确认 API 服务和 /ws 代理已经启动。'))
+      const handleTerminalClose = (event: PartyCloseEvent) => {
+        if (!isTerminalClose(event)) return
+        cleanupWait()
+        reject(new Error('登录会话已失效，WebSocket 连接已关闭。'))
       }
+      const timer = setTimeout(() => {
+        cleanupWait()
+        reject(new Error('WebSocket 重连超时，请确认 API 服务和 /ws 代理已经启动。'))
+      }, CONNECT_WAIT_TIMEOUT_MS)
 
       socket.addEventListener('open', handleOpen)
-      socket.addEventListener('error', handleInitialError)
-      socket.addEventListener('message', event => this.handleMessage(event.data))
-      socket.addEventListener('close', event => {
-        this.connectPromise = null
-        this.rejectPending(`WebSocket 已断开：${event.reason || event.code}`)
-        const reason = event.reason || String(event.code)
-        useConnectionStore.getState().setWsDisconnected(reason)
-        this.emit({ type: 'disconnected', id: null, payload: { data: { reason } } })
-        if (isTerminalClose(event)) this.socket = null
-      })
+      socket.addEventListener('close', handleTerminalClose)
     })
 
     return this.connectPromise
+  }
+
+  private createSocket(): ReconnectingWebSocket {
+    const socket = new ReconnectingWebSocket(resolveWsUrl, undefined, {
+      connectionTimeout: 8_000,
+      minReconnectionDelay: RECONNECT_BASE_DELAY_MS,
+      maxReconnectionDelay: RECONNECT_MAX_DELAY_MS,
+      maxEnqueuedMessages: 0,
+      shouldReconnectOnClose: event => !isAuthCloseCode(event.code),
+    })
+    this.socket = socket
+    socket.addEventListener('open', () => {
+      useConnectionStore.getState().setWsConnected()
+      this.emit({ type: 'connected', id: null, payload: { data: null } })
+    })
+    socket.addEventListener('message', event => this.handleMessage(event.data))
+    socket.addEventListener('close', event => {
+      this.rejectPending(`WebSocket 已断开：${event.reason || event.code}`)
+      const reason = event.reason || String(event.code)
+      useConnectionStore.getState().setWsDisconnected(reason)
+      this.emit({ type: 'disconnected', id: null, payload: { data: { reason } } })
+      if (isTerminalClose(event) && this.socket === socket) this.socket = null
+    })
+    return socket
   }
 
   private handleMessage(raw: unknown) {

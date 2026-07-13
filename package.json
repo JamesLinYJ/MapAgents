@@ -16,7 +16,7 @@
     "dev:server": "npm run dev --workspace server",
     "dev:web": "npm run dev --workspace apps/web",
     "dev:worker": "python -m uvicorn worker_app.sidecar:app --app-dir apps/worker/src --host 127.0.0.1 --port 8012 --reload",
-    "build": "npm run build --workspace server && npm run build --workspace apps/web",
+    "build": "npm run typecheck --workspace @geo-agent-platform/shared-types && npm run build --workspace server && npm run build --workspace apps/web",
     "build:server": "npm run build --workspace server",
     "build:web": "npm run build --workspace apps/web",
     "test": "npm run test --workspace server && npm run test --workspace apps/web",
@@ -31,7 +31,7 @@
     "reset:conversations": "node scripts/reset-conversation-store.mjs --confirm"
   },
   "dependencies": {
-    "@openai/agents": "^0.11.8",
+    "@openai/agents": "^0.13.2",
     "openai": "^6.42.0"
   },
   "devDependencies": {

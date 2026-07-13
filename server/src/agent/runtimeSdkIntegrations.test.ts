@@ -11,7 +11,7 @@ import {
   buildRuntimeSdkSandboxIntegration,
   createRuntimeSdkTools,
 } from './runtimeSdkIntegrations.js'
-import { agentRuntimeConfigSchema } from '../schemas/types.js'
+import { agentRuntimeConfigSchema } from '@geo-agent-platform/shared-types/runtime'
 import type { AgentsExecutionContext } from './agentsToolBridge.js'
 
 describe('runtime SDK integrations', () => {
@@ -99,6 +99,25 @@ describe('runtime SDK integrations', () => {
     } finally {
       await rm(root, { recursive: true, force: true })
     }
+  })
+
+  it('mounts current-run artifacts read-only at the relative path returned by tools', () => {
+    const artifactDirectory = path.join(process.cwd(), 'runtime', 'artifacts', 'run_1')
+    const manifest = buildSandboxManifest(
+      { runId: 'run_1', sessionId: 'session_1' },
+      'thread_1',
+      [],
+      { artifactDirectory },
+    )
+    const artifactsEntry = manifest.entries.artifacts
+    expect(artifactsEntry?.type).toBe('dir')
+    if (!artifactsEntry || artifactsEntry.type !== 'dir') throw new Error('artifacts manifest entry missing')
+    expect(artifactsEntry.children?.run_1).toMatchObject({
+      type: 'mount',
+      source: path.resolve(artifactDirectory),
+      readOnly: true,
+      mountStrategy: { type: 'local_bind' },
+    })
   })
 
   it('rejects enabled SDK skills when no SKILL.md exists', async () => {

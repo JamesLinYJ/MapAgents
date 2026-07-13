@@ -11,7 +11,7 @@
 import type { ToolRegistry } from '../framework/registry.js'
 import type { ToolContext, ToolResult, ValueRef } from '../framework/types.js'
 import type { ModelAdapter } from '../model/registry.js'
-import type { PostgresPlatformStore } from '../store/platformStore.js'
+import type { ToolExecutionStore } from '../store/runtimePorts.js'
 import type { AuthContext } from '../security/types.js'
 import { persistToolExecutionResult, resolveRuntimeValueRef } from '../tools/resultPersistence.js'
 import { makeId } from '../utils/ids.js'
@@ -19,7 +19,7 @@ import { ItemSink } from '../conversation/itemSink.js'
 import { RunEventSink } from './turnRunner.js'
 
 interface CoordinatorOptions {
-  store: PostgresPlatformStore
+  store: ToolExecutionStore
   registry: ToolRegistry
   adapter: ModelAdapter | null
   runId: string
@@ -33,6 +33,7 @@ interface CoordinatorOptions {
   eventSink: RunEventSink
   itemSink: ItemSink
   valueState: Map<string, unknown>
+  signal: AbortSignal
 }
 
 // ToolExecutionCoordinator
@@ -94,6 +95,7 @@ export class ToolExecutionCoordinator {
   }
 
   private async execute(toolName: string, args: Record<string, unknown>, callId: string): Promise<ToolResult> {
+    this.options.signal.throwIfAborted()
     await this.prepare(toolName, args, callId)
     const itemId = this.callItems.get(callId)
     try {
@@ -160,8 +162,9 @@ export class ToolExecutionCoordinator {
       runId: this.options.runId,
       sessionId: this.options.sessionId,
       threadId: this.options.threadId,
+      signal: this.options.signal,
       runtimeRoot: this.options.store.runtimeRoot,
-      runtimeConfig: this.options.runtimeConfig,
+      ...(this.options.runtimeConfig ? { runtimeConfig: this.options.runtimeConfig } : {}),
       auth: this.options.auth ?? null,
       state: this.options.valueState,
       resolveValueRef: refId => resolveRuntimeValueRef(this.options.valueState, refId),
@@ -174,7 +177,7 @@ export class ToolExecutionCoordinator {
       }),
       invokeStructuredModel: prompt => {
         if (!this.options.adapter) throw new Error('当前确定性工具链未配置结构化模型调用')
-        return invokeStructuredModel(this.options.adapter, prompt, this.options.modelName)
+        return invokeStructuredModel(this.options.adapter, prompt, this.options.modelName, this.options.signal)
       },
       log: (level, message) => this.options.eventSink.emit('tool.completed', message, { level }),
     }
@@ -275,8 +278,13 @@ async function invokeStructuredModel(
   adapter: ModelAdapter,
   prompt: string,
   modelName?: string | null,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
-  const response = await adapter.chat(prompt, { model: modelName ?? adapter.defaultModel, reasoning: false })
+  const response = await adapter.chat(prompt, {
+    model: modelName ?? adapter.defaultModel,
+    reasoning: false,
+    ...(signal ? { signal } : {}),
+  })
   const content = response.content
   if (typeof content !== 'string' || !content.trim()) throw new Error('模型未返回结构化内容')
   const cleaned = content.replace(/^```json\s*|\s*```$/gu, '')

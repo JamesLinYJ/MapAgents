@@ -16,13 +16,17 @@ import type {
   TranscriptEntry,
   TranscriptEntryKind,
 } from '../schemas/types.js'
+import { threadMemoryDocumentSchema } from '../schemas/types.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 import type { ConversationIndexStore } from './conversationIndexStore.js'
 import type { InMemoryEventBus } from './eventBus.js'
-import type { FileConversationStore, TrashEntry } from './fileConversationStore.js'
+import type { FileConversationStore } from './fileConversationStore.js'
+import { estimateTokens } from './fileConversationIo.js'
 import { RuntimeFileStore } from './fileStore.js'
 import { splitMemoryContent } from './platformStoreUtils.js'
 import type { SessionStore } from './sessionStore.js'
+import type { ConversationRepository, DeletedThreadRecord } from './postgres/conversationRepository.js'
+import { MemoryVersionConflictError } from './storeErrors.js'
 
 export interface ThreadStoreEvents {
   threadUpdateBus: InMemoryEventBus<{ thread: AgentThreadRecord; manifest: ThreadManifest }>
@@ -38,6 +42,7 @@ export class ThreadStore {
     private readonly index: ConversationIndexStore,
     private readonly conversationStore: FileConversationStore,
     private readonly sessionStore: SessionStore,
+    private readonly repository: ConversationRepository,
     private readonly runtimeRoot: string,
     private readonly events: ThreadStoreEvents,
   ) {}
@@ -69,11 +74,15 @@ export class ThreadStore {
       historyPreview: null,
       conversationPath: null,
     }
-    const manifest = await this.conversationStore.createThread(thread)
-    this.index.setThread(thread)
-    this.events.threadUpdateBus.publish(thread.id, { thread: structuredClone(thread), manifest })
-    await this.sessionStore.update(sessionId, { latestThreadId: thread.id })
-    return thread
+    const persisted = await this.repository.createThreadLifecycle(thread)
+    this.conversationStore.registerThread(persisted.thread)
+    this.sessionStore.acceptPersisted(persisted.session)
+    this.index.setThread(persisted.thread)
+    this.events.threadUpdateBus.publish(thread.id, {
+      thread: structuredClone(persisted.thread),
+      manifest: persisted.manifest,
+    })
+    return persisted.thread
   }
 
   get(threadId: string): AgentThreadRecord {
@@ -81,10 +90,14 @@ export class ThreadStore {
   }
 
   async update(threadId: string, fields: Partial<AgentThreadRecord>): Promise<AgentThreadRecord> {
-    const next = { ...this.get(threadId), ...fields, updatedAt: nowUtc() }
-    const manifest = await this.conversationStore.saveThread(next)
-    if (next.status === 'deleted') this.index.deleteThread(threadId)
-    else this.index.setThread(next)
+    const current = this.get(threadId)
+    if (fields.status !== undefined && fields.status !== current.status) {
+      throw new Error('线程状态只能通过删除或恢复操作修改')
+    }
+    const next = { ...current, ...fields, updatedAt: nowUtc() }
+    await this.repository.saveThread(next)
+    const manifest = await this.repository.getThreadManifest(threadId)
+    this.index.setThread(next)
     this.events.threadUpdateBus.publish(threadId, { thread: structuredClone(next), manifest })
     return next
   }
@@ -92,29 +105,27 @@ export class ThreadStore {
   async delete(threadId: string): Promise<void> {
     const thread = this.get(threadId)
     const next = { ...thread, status: 'deleted' as const, updatedAt: nowUtc() }
-    await this.conversationStore.saveThread(next)
-    await this.conversationStore.moveThreadToTrash(threadId)
+    const purgeAfter = new Date(Date.now() + 30 * 86_400_000).toISOString()
+    const replacement = this.listForSession(next.sessionId).find(candidate => candidate.id !== threadId) ?? null
+    const persisted = await this.repository.trashThread(next, purgeAfter, replacement?.id ?? null)
+    this.conversationStore.setThreadTrashed(threadId, true)
     this.index.deleteThread(threadId)
-    const session = this.sessionStore.get(next.sessionId)
-    if (session.latestThreadId === threadId) {
-      const replacement = this.listForSession(next.sessionId)[0] ?? null
-      await this.sessionStore.update(next.sessionId, { latestThreadId: replacement?.id ?? null })
-    }
+    this.sessionStore.acceptPersisted(persisted.session)
   }
 
   async getManifest(threadId: string): Promise<ThreadManifest> {
     this.get(threadId)
-    return this.conversationStore.getThreadManifest(threadId)
+    return this.repository.getThreadManifest(threadId)
   }
 
   async listHistory(threadId: string, cursor?: string | null, limit?: number) {
     this.get(threadId)
-    return this.conversationStore.readHistory(threadId, cursor, limit)
+    return this.repository.readThreadHistory(threadId, cursor, limit)
   }
 
   async activeTranscript(threadId: string, leafEntryId?: string | null): Promise<TranscriptEntry[]> {
     this.get(threadId)
-    return this.conversationStore.readActiveChain(threadId, leafEntryId)
+    return this.repository.readActiveConversation(threadId, leafEntryId)
   }
 
   async appendTranscript(input: {
@@ -128,7 +139,7 @@ export class ThreadStore {
     entryId?: string
   }): Promise<TranscriptEntry> {
     this.get(input.threadId)
-    const entry = await this.conversationStore.appendTranscript(input)
+    const entry = await this.repository.appendConversationEntry(input)
     this.events.threadEntryBus.publish(input.threadId, entry)
     return entry
   }
@@ -136,17 +147,46 @@ export class ThreadStore {
   async fork(sourceThreadId: string, sourceEntryId: string, title?: string | null): Promise<AgentThreadRecord> {
     const source = this.get(sourceThreadId)
     const target = await this.create(source.sessionId, title ?? `${source.title} · 分支`)
-    const targetManifest = await this.conversationStore.getThreadManifest(target.id)
-    targetManifest.forkedFrom = { threadId: sourceThreadId, entryId: sourceEntryId }
-    await this.conversationStore.saveThread(target, targetManifest)
-    await this.conversationStore.forkTranscript(sourceThreadId, target.id, sourceEntryId)
+    const mapping = await this.repository.forkConversation(sourceThreadId, target.id, sourceEntryId)
     await new RuntimeFileStore(this.runtimeRoot).cloneThreadFiles(sourceThreadId, target.id)
+    const sourceMemory = await this.getMemory(sourceThreadId)
+    if (sourceMemory.version > 0 || sourceMemory.content.trim()) {
+      await this.updateMemory(
+        target.id,
+        sourceMemory.content,
+        0,
+        'fork',
+        sourceMemory.basedOnEntryId ? mapping.get(sourceMemory.basedOnEntryId) ?? null : null,
+      )
+    }
+    const targetManifest = await this.repository.getThreadManifest(target.id)
+    this.events.threadUpdateBus.publish(target.id, { thread: structuredClone(target), manifest: targetManifest })
     return target
   }
 
   async getMemory(threadId: string): Promise<ThreadMemoryDocument> {
     this.get(threadId)
-    return this.conversationStore.getMemory(threadId)
+    const reference = await this.repository.getLatestThreadMemoryVersion(threadId)
+    if (!reference) {
+      const manifest = await this.repository.getThreadManifest(threadId)
+      return threadMemoryDocumentSchema.parse({
+        threadId,
+        version: 0,
+        content: '',
+        generatedContent: '',
+        pinnedContent: '',
+        source: 'system',
+        basedOnEntryId: null,
+        estimatedTokens: 0,
+        updatedAt: manifest.updatedAt,
+      })
+    }
+    const bytes = await this.conversationStore.readObjectByHash(reference.contentHash)
+    const document = threadMemoryDocumentSchema.parse(JSON.parse(Buffer.from(bytes).toString('utf8')))
+    if (document.threadId !== threadId || document.version !== reference.version) {
+      throw new Error(`线程 '${threadId}' 的记忆对象与数据库版本不一致`)
+    }
+    return document
   }
 
   async updateMemory(
@@ -157,53 +197,85 @@ export class ThreadStore {
     basedOnEntryId: string | null = null,
   ): Promise<ThreadMemoryDocument> {
     this.get(threadId)
+    const manifest = await this.repository.getThreadManifest(threadId)
+    if (expectedVersion !== undefined && expectedVersion !== manifest.memoryVersion) {
+      throw new MemoryVersionConflictError(expectedVersion, manifest.memoryVersion)
+    }
     const { generatedContent, pinnedContent } = splitMemoryContent(content)
-    const document = await this.conversationStore.saveMemory(threadId, {
+    const document = threadMemoryDocumentSchema.parse({
+      threadId,
+      version: manifest.memoryVersion + 1,
       content,
       generatedContent,
       pinnedContent,
       source,
       basedOnEntryId,
-    }, expectedVersion)
+      estimatedTokens: estimateTokens(content),
+      updatedAt: nowUtc(),
+    })
+    const reference = await this.conversationStore.putObject(
+      JSON.stringify(document),
+      'application/vnd.geoforge.thread-memory+json',
+    )
+    await this.repository.saveThreadMemoryVersion({
+      threadId,
+      expectedVersion: manifest.memoryVersion,
+      version: document.version,
+      contentHash: reference.hash,
+      source: document.source,
+      basedOnEntryId: document.basedOnEntryId,
+      estimatedTokens: document.estimatedTokens,
+      createdAt: document.updatedAt,
+    })
     this.events.threadMemoryBus.publish(threadId, document)
     return document
   }
 
   async appendCompaction(record: CompactionRecord): Promise<void> {
     this.get(record.threadId)
-    await this.conversationStore.appendCompaction(record)
+    await this.repository.appendCompaction(record)
     this.events.threadCompactionBus.publish(record.threadId, record)
   }
 
   async listCompactions(threadId: string): Promise<CompactionRecord[]> {
     this.get(threadId)
-    return this.conversationStore.listCompactions(threadId)
+    return this.repository.listCompactions(threadId)
   }
 
-  async listTrash(sessionId: string): Promise<TrashEntry[]> {
+  async listTrash(sessionId: string): Promise<DeletedThreadRecord[]> {
     this.sessionStore.get(sessionId)
-    return this.conversationStore.listTrash(sessionId)
+    return this.repository.listTrash(sessionId)
   }
 
   async getTrashed(threadId: string): Promise<AgentThreadRecord> {
-    const trashed = await this.conversationStore.getTrashedThread(threadId)
+    const trashed = await this.repository.getTrashedThread(threadId)
     return trashed.thread
   }
 
   async restore(threadId: string): Promise<AgentThreadRecord> {
-    const restored = await this.conversationStore.restoreThread(threadId)
-    const nextThread = { ...restored.thread, status: 'active' as const, updatedAt: nowUtc() }
-    await this.conversationStore.saveThread(nextThread, restored.manifest)
+    const trashed = await this.repository.getTrashedThread(threadId)
+    const restored = await this.repository.restoreThread(threadId, trashed.thread.sessionId)
+    const nextThread = restored.thread
+    this.conversationStore.setThreadTrashed(threadId, false)
+    this.sessionStore.acceptPersisted(restored.session)
     this.index.setThread(nextThread)
+    for (const run of await this.repository.listRunsForThread(threadId)) {
+      this.index.setRun(run)
+      this.conversationStore.registerRun(run)
+    }
     this.index.rebuildDerivedIndexes()
     this.events.threadUpdateBus.publish(threadId, { thread: structuredClone(nextThread), manifest: restored.manifest })
     return nextThread
   }
 
   async purge(threadId: string): Promise<void> {
+    const trashed = await this.repository.getTrashedThread(threadId)
+    const session = await this.repository.purgeThread(threadId, trashed.thread.sessionId)
+    this.sessionStore.acceptPersisted(session)
     this.index.deleteRunsForThread(threadId)
-    await this.conversationStore.purgeThread(threadId)
-    await this.conversationStore.garbageCollectObjects()
+    await this.conversationStore.purgeThreadPayload(threadId)
+    const references = await this.repository.listReferencedObjectHashes()
+    await this.conversationStore.garbageCollectObjects(references)
   }
 
   async recordAttachment(threadId: string, input: {
@@ -231,4 +303,3 @@ export class ThreadStore {
     })
   }
 }
-

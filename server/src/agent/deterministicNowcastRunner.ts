@@ -9,7 +9,7 @@
 // --------------------------------------------------------------------------
 
 import type { ToolResult, ValueRef } from '../framework/types.js'
-import type { PostgresPlatformStore } from '../store/platformStore.js'
+import type { DeterministicNowcastStore } from '../store/runtimePorts.js'
 import { RuntimeFileStore } from '../store/fileStore.js'
 import { ItemSink } from '../conversation/itemSink.js'
 import type { RunEventSink } from './turnRunner.js'
@@ -18,7 +18,7 @@ import type { ToolExecutionCoordinator } from './toolExecutionCoordinator.js'
 const METEOROLOGICAL_FILE_SUFFIXES = ['.nc', '.nc4', '.tif', '.tiff', '.grib', '.grb', '.grb2', '.h5', '.hdf5', '.bz2']
 
 export async function shouldRunDeterministicNowcast(
-  store: PostgresPlatformStore,
+  store: DeterministicNowcastStore,
   query: string,
   threadId: string,
 ): Promise<boolean> {
@@ -31,7 +31,7 @@ export async function shouldRunDeterministicNowcast(
 //
 // 气象事实只经工具和 valueRef 流转；模型不参与该交付链，也没有文本降级路径。
 export async function runDeterministicNowcast(options: {
-  store: PostgresPlatformStore
+  store: DeterministicNowcastStore
   coordinator: ToolExecutionCoordinator
   eventSink: RunEventSink
   itemSink: ItemSink
@@ -39,8 +39,11 @@ export async function runDeterministicNowcast(options: {
   threadId: string
   turnId: string
   query: string
+  signal: AbortSignal
 }): Promise<void> {
+  options.signal.throwIfAborted()
   const listed = await options.coordinator.executeDirect('list_meteorological_files', {})
+  options.signal.throwIfAborted()
   const collectionRef = requiredResultRef(listed, ['meteorological_file_collection'])
   const files = isRecord(collectionRef.value) && Array.isArray(collectionRef.value.files) ? collectionRef.value.files : []
   if (files.length < 2) throw new Error(`短时临近预报至少需要两个气象文件，当前线程找到 ${files.length} 个`)
@@ -48,19 +51,23 @@ export async function runDeterministicNowcast(options: {
   const sequence = await options.coordinator.executeDirect('create_nowcast_sequence', {
     file_collection_ref: collectionRef.refId,
   })
+  options.signal.throwIfAborted()
   const sequenceRef = requiredResultRef(sequence, ['nowcast_sequence'])
   const analyzed = await options.coordinator.executeDirect('meteorological_precipitation_nowcast', {
     sequence_ref: sequenceRef.refId,
   })
+  options.signal.throwIfAborted()
   const analysisRef = requiredResultRef(analyzed, ['nowcast_analysis'])
   const answered = await options.coordinator.executeDirect('answer_nowcast_question', {
     nowcast_analysis_ref: analysisRef.refId,
     question: options.query,
   })
+  options.signal.throwIfAborted()
   if (typeof answered.payload.answer !== 'string' || !answered.payload.answer.trim()) {
     throw new Error('短时临近预报（短临）回答工具未返回可交付文本')
   }
   const answer = answered.payload.answer.trim()
+  options.signal.throwIfAborted()
   const answerEntry = await options.store.appendTranscript({
     threadId: options.threadId,
     runId: options.runId,

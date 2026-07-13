@@ -72,7 +72,7 @@ describe('ResponseSchema interface (contract)', () => {
     }
     const result = schema.safeParse('not-a-number')
     if (!result.success) {
-      expect(result.error.issues[0].path).toEqual(['body'])
+      expect(result.error.issues.at(0)?.path).toEqual(['body'])
     }
   })
 })

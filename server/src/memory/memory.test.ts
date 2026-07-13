@@ -12,8 +12,8 @@ import { mkdtemp, mkdir, symlink, writeFile, utimes, rm } from 'node:fs/promises
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { Database } from '../db/connection.js'
 import { PostgresPlatformStore } from '../store/platformStore.js'
+import { createTestPlatformStore } from '../../test-support/platformStoreHarness.js'
 import { defaultRuntimeConfig } from '../agent/defaultRuntimeConfig.js'
 import { parseMemoryMarkdown, truncateEntrypointContent } from './markdown.js'
 import { createMemoryPathConfig, resolveMemoryFilePath, validateRelativeMemoryPath } from './paths.js'
@@ -24,7 +24,12 @@ const tempRoots: string[] = []
 
 describe('memory core', () => {
   afterEach(async () => {
-    await Promise.all(tempRoots.splice(0).map(root => rm(root, { recursive: true, force: true })))
+    await Promise.all(tempRoots.splice(0).map(root => rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 50,
+    })))
   })
 
   it('rejects traversal, encoded traversal, unicode traversal, null bytes, and symlink escape', async () => {
@@ -136,7 +141,7 @@ describe('memory core', () => {
 
   it('extracts memories through restricted memory tool operations only', async () => {
     const root = await makeTempRoot()
-    const store = new PostgresPlatformStore(noOpDb(), root)
+    const store = createTestPlatformStore(root)
     await store.initialize()
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '受限提取')
@@ -193,7 +198,7 @@ describe('memory core', () => {
 
   it('rejects non-memory tools in automatic extraction output', async () => {
     const root = await makeTempRoot()
-    const store = new PostgresPlatformStore(noOpDb(), root)
+    const store = createTestPlatformStore(root)
     await store.initialize()
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '提取白名单')
@@ -218,7 +223,7 @@ describe('memory core', () => {
 
   it('excludes current run entries when rebuilding session memory for the next prompt', async () => {
     const root = await makeTempRoot()
-    const store = new PostgresPlatformStore(noOpDb(), root)
+    const store = createTestPlatformStore(root)
     await store.initialize()
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '当前轮隔离')
@@ -305,8 +310,4 @@ async function makeTempRoot(): Promise<string> {
 
 function frontmatter(name: string, description: string, type: string): string {
   return ['---', `name: ${name}`, `description: ${description}`, `type: ${type}`, '---', '', '内容。'].join('\n')
-}
-
-function noOpDb(): Database {
-  return { execute: async () => ({ rows: [] }) } as unknown as Database
 }

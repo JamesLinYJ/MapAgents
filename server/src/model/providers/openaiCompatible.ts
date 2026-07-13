@@ -14,6 +14,7 @@ import type {
   ChatCompletionMessageParam,
 } from 'openai/resources/chat/completions/completions'
 import type { ModelAdapter } from '../registry.js'
+import { abortSignalWithTimeout } from '../../utils/abort.js'
 import { CompatibleChatCompletionsModel } from '../compatibleChatCompletionsModel.js'
 
 export interface OpenAIOptions {
@@ -31,7 +32,7 @@ export function createOpenAIAdapter(opts: OpenAIOptions): ModelAdapter {
     provider: 'openai_compatible',
     displayName: opts.displayName ?? 'OpenAI Compatible',
     defaultModel: opts.defaultModel,
-    subagentModel: opts.subagentModel,
+    ...(opts.subagentModel ? { subagentModel: opts.subagentModel } : {}),
     contextWindowTokens: inferContextWindow(opts.defaultModel),
 
     isConfigured(): boolean {
@@ -58,7 +59,9 @@ export function createOpenAIAdapter(opts: OpenAIOptions): ModelAdapter {
         stream: false,
         ...(kwargs?.reasoning !== false ? { reasoning_effort: 'high' as const } : {}),
       }
-      const completion = await client.chat.completions.create(request)
+      const completion = await client.chat.completions.create(request, {
+        signal: abortSignalWithTimeout(kwargs?.signal, 60_000),
+      })
 
       const content = completion.choices[0]?.message?.content ?? ''
       return { provider: 'openai_compatible', content, raw: completion as unknown as Record<string, unknown>, model }

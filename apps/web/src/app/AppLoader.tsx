@@ -22,21 +22,27 @@ export function AppLoader() {
 
 export function BootScreen() {
   return (
-    <div className="dc-boot" aria-label="正在加载 GeoForge 工作台">
-      <header className="dc-boot__bar">
-        <strong>GeoForge</strong>
-        <span>气象空间决策平台</span>
-        <i>正在准备工作区</i>
-      </header>
-      <aside className="dc-boot__side">
-        <strong>气象空间分析</strong>
-        <span>智能指令</span><span>空间查询</span><span>数据源</span>
-      </aside>
-      <main className="dc-boot__main">
-        <section className="dc-boot__panel"><b>智能分析</b><span>输入框正在就绪…</span></section>
-        <section className="dc-boot__map"><b>空间地图</b><span>将在工作台显示后自动加载</span></section>
-        <section className="dc-boot__panel"><b>结果摘要</b><span>等待分析任务</span></section>
-      </main>
-    </div>
+    <main className="dc-boot" aria-label="正在加载 GeoForge 工作台">
+      <section className="dc-boot__shell">
+        <div className="dc-boot__brand">
+          <span aria-hidden="true">G</span>
+          <strong>GeoForge</strong>
+          <small>气象空间智能平台</small>
+        </div>
+        <div className="dc-boot__copy">
+          <h1>正在准备工作台</h1>
+          <p>连接认证、工具目录、地图引擎和会话运行时。</p>
+        </div>
+        <div className="dc-boot__progress" aria-hidden="true">
+          <span />
+        </div>
+        <div className="dc-boot__deck" aria-hidden="true">
+          <span className="dc-boot__card dc-boot__card--conversation" />
+          <span className="dc-boot__card dc-boot__card--map" />
+          <span className="dc-boot__card dc-boot__card--result" />
+        </div>
+        <p className="dc-boot__status">启动阶段只加载轻量壳层；地图和重型工具会在工作台就绪后按需加载。</p>
+      </section>
+    </main>
   )
 }

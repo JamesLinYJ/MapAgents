@@ -96,7 +96,10 @@ export function formatMeasurementDistance(points: Array<[number, number]>) {
 function totalDistanceMeters(points: Array<[number, number]>) {
   let total = 0
   for (let index = 1; index < points.length; index += 1) {
-    total += haversineMeters(points[index - 1], points[index])
+    const start = points[index - 1]
+    const end = points[index]
+    if (!start || !end) continue
+    total += haversineMeters(start, end)
   }
   return total
 }

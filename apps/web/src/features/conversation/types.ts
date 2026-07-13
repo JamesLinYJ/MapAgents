@@ -15,6 +15,7 @@
 
 import type {
   AgentRuntimeConfig,
+  AgentExecutionMode,
   AgentThreadRecord,
   ConversationItem,
   DecisionRequest,
@@ -41,7 +42,7 @@ export type MemoryWriteInput = {
   relativePath?: string | null
 }
 
-export type ComposerMode = 'plan' | 'auto'
+export type ComposerMode = 'approval' | 'plan' | 'auto'
 export type TaskView = 'chat' | 'history'
 
 export type ActiveDecision = DecisionRequest & {
@@ -67,7 +68,7 @@ export interface ChatPanelProps {
   runtimeConfig?: AgentRuntimeConfig
   availableTools?: ToolDescriptor[]
   onQueryChange: (value: string) => void
-  onSubmit: (mode: ComposerMode) => void
+  onSubmit: (mode: AgentExecutionMode) => Promise<void>
   onInterrupt?: () => void
   onNewConversation: () => void
   onFillSample: (value: string) => void

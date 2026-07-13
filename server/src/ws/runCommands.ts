@@ -24,6 +24,11 @@ const runListPayloadSchema = z.object({
   limit: z.number().int().positive().optional(),
 }).passthrough()
 const runIdPayloadSchema = z.object({ runId: z.string().min(1) }).passthrough()
+const runSteerPayloadSchema = z.object({
+  runId: z.string().min(1),
+  steeringId: z.string().min(1).max(160),
+  content: z.string().trim().min(1).max(4000),
+}).strict()
 const runStartPayloadSchema = z.object({
   query: z.string().min(1),
   sessionId: z.string().min(1).nullable().optional(),
@@ -47,12 +52,15 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
     payloadSchema: runListPayloadSchema,
     auth: 'required',
     csrf: false,
-    handler: (payload, context) => context.dependencies.store.listRunSummaries({
-      sessionId: payload.sessionId,
-      threadId: payload.threadId ?? null,
-      cursor: payload.cursor ?? null,
-      limit: optionalPositiveInteger(payload.limit, 'limit'),
-    }),
+    handler: (payload, context) => {
+      const limit = optionalPositiveInteger(payload.limit, 'limit')
+      return context.dependencies.store.listRunSummaries({
+        sessionId: payload.sessionId,
+        threadId: payload.threadId ?? null,
+        cursor: payload.cursor ?? null,
+        ...(limit !== undefined ? { limit } : {}),
+      })
+    },
   })
 
   registry.register({
@@ -65,6 +73,7 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
       let threadId = payload.threadId ?? null
       const sessionId = payload.sessionId ?? (threadId ? context.dependencies.store.getThread(threadId).sessionId : null)
       if (!sessionId) throw new Error('sessionId 不能为空')
+      context.dependencies.usageStats.assertWorkspaceCanStartModelRun(auth)
       if (!threadId) threadId = (await context.dependencies.store.createThread(sessionId, payload.query.slice(0, 32))).id
       const config = await resolveRuntimeConfig(context.dependencies.store, context.dependencies.defaultRuntimeConfig)
       const selectedProvider = payload.provider
@@ -111,6 +120,18 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
   })
 
   registry.register({
+    type: 'run:steer',
+    payloadSchema: runSteerPayloadSchema,
+    auth: 'required',
+    csrf: true,
+    handler: (payload, context) => context.runTasks.steer(
+      payload.runId,
+      payload.steeringId,
+      payload.content,
+    ),
+  })
+
+  registry.register({
     type: 'run:resume',
     payloadSchema: runIdPayloadSchema,
     auth: 'required',
@@ -124,6 +145,7 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
         throw new Error(`运行包含状态未知的工具调用，禁止自动重放：${checkpoint.pendingToolCallIds.join(', ')}`)
       }
       if (!run.runtimeConfigSnapshot) throw new Error(`运行 '${payload.runId}' 缺少 runtimeConfigSnapshot`)
+      context.dependencies.usageStats.assertWorkspaceCanStartModelRun(auth)
       subscribeToRun(context.ws, payload.runId, context.dependencies.store, context.subscriptions)
       context.runTasks.startDetached({
         runId: payload.runId,

@@ -148,7 +148,9 @@ export function MapCanvas({
     }
     const currentIndex = availableBasemaps.findIndex((item) => item.basemapKey === selectedBasemapKey)
     const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % availableBasemaps.length : 0
-    onSelectBasemap(availableBasemaps[nextIndex]?.basemapKey ?? availableBasemaps[0].basemapKey)
+    const nextBasemap = availableBasemaps[nextIndex]
+    if (!nextBasemap) throw new Error('底图目录没有可轮换的条目。')
+    onSelectBasemap(nextBasemap.basemapKey)
   }, [availableBasemaps, onSelectBasemap, selectedBasemapKey])
 
   const focusLayerBounds = useCallback((artifactId?: string) => {

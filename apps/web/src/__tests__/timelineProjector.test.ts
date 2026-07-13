@@ -63,7 +63,7 @@ describe('projectTimeline', () => {
     ]
     const result = projectTimeline(canonical, live)
     expect(result).toHaveLength(1)
-    expect(result[0].body).toBe('fresh text')
+    expect(result.at(0)?.body).toBe('fresh text')
   })
 
   it('sorts by timestamp, then transcriptSeq, then itemType rank, then itemId', () => {
@@ -78,9 +78,9 @@ describe('projectTimeline', () => {
 
     const result = projectTimeline(items, [])
     // a (later time) > m (reasoning rank 20) > z (user rank 10)
-    expect(result[0].itemId).toBe('z')   // base time, user rank=10
-    expect(result[1].itemId).toBe('m')   // base time, reasoning rank=20
-    expect(result[2].itemId).toBe('a')   // later time
+    expect(result.at(0)?.itemId).toBe('z')   // base time, user rank=10
+    expect(result.at(1)?.itemId).toBe('m')   // base time, reasoning rank=20
+    expect(result.at(2)?.itemId).toBe('a')   // later time
   })
 
   it('sorts by transcriptSeq when timestamps are equal', () => {
@@ -90,8 +90,8 @@ describe('projectTimeline', () => {
       item({ itemId: 'a', itemType: 'message', role: 'user', timestamp: ts, metadata: { transcriptSeq: 1 } }),
     ]
     const result = projectTimeline(items, [])
-    expect(result[0].itemId).toBe('a')
-    expect(result[1].itemId).toBe('b')
+    expect(result.at(0)?.itemId).toBe('a')
+    expect(result.at(1)?.itemId).toBe('b')
   })
 
   it('keeps canonical items without transcriptEntryId even when overlay exists', () => {
@@ -117,7 +117,7 @@ describe('projectTimeline', () => {
       item({ itemId: 'aaa', itemType: 'message', role: 'user', timestamp: ts }),
     ]
     const result = projectTimeline(items, [])
-    expect(result[0].itemId).toBe('aaa')
-    expect(result[1].itemId).toBe('bbb')
+    expect(result.at(0)?.itemId).toBe('aaa')
+    expect(result.at(1)?.itemId).toBe('bbb')
   })
 })

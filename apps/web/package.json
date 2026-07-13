@@ -12,6 +12,7 @@
     "test:watch": "vitest src"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^1.1.8",
     "@geo-agent-platform/shared-types": "file:../../packages/shared-types",
     "@hookform/resolvers": "^5.4.0",
     "@radix-ui/react-accordion": "^1.2.16",
@@ -23,6 +24,7 @@
     "@tanstack/react-query": "^5.101.2",
     "@tanstack/react-table": "^8.21.3",
     "@tanstack/react-virtual": "^3.14.5",
+    "@xyflow/react": "^12.11.2",
     "better-auth": "^1.6.23",
     "date-fns": "^4.4.0",
     "framer-motion": "^12.38.0",

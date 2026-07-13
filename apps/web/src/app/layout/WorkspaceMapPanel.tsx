@@ -14,9 +14,9 @@ import type { BasemapDescriptor } from '@geo-agent-platform/shared-types'
 import { MapErrorBoundary } from '../../features/map/MapErrorBoundary'
 import { motionSpring } from '../../shared/motion'
 import type { MapRenderLayer } from '../types'
+import { loadWorkspaceMapCanvas, preloadWorkspaceMap } from './workspaceMapPreload'
 
-const loadMapCanvasModule = () => import('../../features/map/MapCanvas')
-const MapCanvas = lazy(() => loadMapCanvasModule().then((module) => ({ default: module.MapCanvas })))
+const MapCanvas = lazy(() => loadWorkspaceMapCanvas().then((module) => ({ default: module.MapCanvas })))
 
 interface WorkspaceMapPanelProps {
   artifactCount: number
@@ -34,10 +34,6 @@ interface WorkspaceMapPanelProps {
   onOpenLayerManager: () => void
   onSelectArtifact: (artifactId: string) => void
   onSelectBasemap: (basemapKey: string) => void
-}
-
-export function preloadWorkspaceMap() {
-  return loadMapCanvasModule()
 }
 
 export function WorkspaceMapPanel({

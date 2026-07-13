@@ -19,8 +19,14 @@ import type { PostGisRepository } from '../gis/postgis.js'
 import type { ModelAdapterRegistry } from '../model/registry.js'
 import type { ToolRegistry } from '../framework/registry.js'
 import type { SandboxSessionFactory } from '../agent/runtime.js'
+import type { OpenAIAgentsRuntime } from '../agent/runtime.js'
+import type { RunTaskManager } from '../agent/runTaskManager.js'
 import type { PostgresPlatformStore } from '../store/platformStore.js'
 import type { SecurityServices } from '../security/routes.js'
+import type { ScheduledTaskService } from '../workflows/scheduledTaskService.js'
+import type { WorkflowDefinitionService } from '../workflows/workflowDefinitionService.js'
+import type { BackgroundTaskRegistry } from '../workflows/backgroundTaskRegistry.js'
+import type { UsageStatsService } from '../usage/usageStatsService.js'
 
 export interface WsDependencies {
   env: Env
@@ -31,5 +37,11 @@ export interface WsDependencies {
   runtimeRoot: string
   defaultRuntimeConfig?: AgentRuntimeConfig
   createSandboxSession?: SandboxSessionFactory
+  runtime: OpenAIAgentsRuntime
+  runTasks: RunTaskManager
+  scheduledTaskService: ScheduledTaskService
+  workflowDefinitionService: WorkflowDefinitionService
+  backgroundTasks: BackgroundTaskRegistry
+  usageStats: UsageStatsService
   security: SecurityServices
 }

@@ -120,23 +120,24 @@ export function ConversationEntryView({
 
   if (entry.kind === 'command_batch') {
     const commands = entry.commands ?? []
-    if (commands.length === 1 && isSpeechSynthesisCommand(commands[0])) {
+    const firstCommand = commands[0]
+    if (commands.length === 1 && firstCommand && isSpeechSynthesisCommand(firstCommand)) {
       return (
         <div key={entry.id} className="cc-timeline-item cc-timeline-item--answer">
           <span className="cc-timeline-dot" />
           <div className="cc-timeline-body">
             <VoiceBar
-              text={extractSpeechText(commands[0])}
+              text={extractSpeechText(firstCommand)}
               messageId={entry.id}
-              initialAudioUrl={extractSpeechAudioUrl(commands[0])}
+              initialAudioUrl={extractSpeechAudioUrl(firstCommand)}
             />
           </div>
         </div>
       )
     }
-    if (commands.length === 1 && commands[0].toolName === 'answer_nowcast_question') {
-      const forecastText = extractNowcastAnswer(commands[0])
-      const artifactId = firstArtifactId(commands[0])
+    if (commands.length === 1 && firstCommand?.toolName === 'answer_nowcast_question') {
+      const forecastText = extractNowcastAnswer(firstCommand)
+      const artifactId = firstArtifactId(firstCommand)
       return (
         <div key={entry.id} className="cc-timeline-item cc-timeline-item--answer">
           <span className="cc-timeline-dot" />

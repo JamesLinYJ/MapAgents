@@ -15,11 +15,11 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { ToolResult, ValueRef } from '../framework/types.js'
 import type { ArtifactRef, ClarificationState, DecisionRequest, ExecutionPlan, TodoItem, ToolValueRef } from '../schemas/types.js'
-import type { PostgresPlatformStore } from '../store/platformStore.js'
+import type { ToolExecutionStore } from '../store/runtimePorts.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 
 export async function persistToolExecutionResult(
-  store: PostgresPlatformStore,
+  store: ToolExecutionStore,
   runId: string,
   toolName: string,
   args: Record<string, unknown>,
@@ -73,10 +73,10 @@ export async function persistToolExecutionResult(
       valueRefs: refs,
     }],
   })
-  await Promise.all([
-    ...refs.map(ref => store.appendToolValue(runId, ref)),
-    ...artifacts.map(artifact => store.persistArtifact(artifact)),
-  ])
+  // value 与 Artifact 元数据写入 PostgreSQL 事实源。按结果声明顺序持久化，
+  // 避免 Promise.all 让同一次工具调用的记录顺序依赖调度时机。
+  for (const ref of refs) await store.appendToolValue(runId, ref)
+  for (const artifact of artifacts) await store.persistArtifact(artifact)
 }
 
 // 计划模式是运行状态，不是普通工具 payload。

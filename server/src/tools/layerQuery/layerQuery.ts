@@ -72,5 +72,8 @@ function parseBbox(value: unknown): BBox | undefined {
     const bbox = value.map(Number);
     if (!bbox.every(item => Number.isFinite(item)))
         throw new Error('bbox 必须只包含有限数字');
-    return [bbox[0], bbox[1], bbox[2], bbox[3]];
+    const [minX, minY, maxX, maxY] = bbox;
+    if (minX === undefined || minY === undefined || maxX === undefined || maxY === undefined)
+        throw new Error('bbox 必须包含四个坐标');
+    return [minX, minY, maxX, maxY];
 }

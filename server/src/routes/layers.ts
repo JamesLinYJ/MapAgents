@@ -125,7 +125,7 @@ async function importLayerFromForm(
     const threadId = formString(form, 'threadId') ?? formString(form, 'thread_id') ?? opts.threadId ?? null
     const collection = parseGeoJsonPayload(await parseJsonFile(file), env)
     const layer = await postgis.importGeoJsonLayer({
-      layerKey: opts.layerKey,
+      layerKey: opts.layerKey ?? null,
       name: formString(form, 'name') ?? opts.defaultName ?? stripExtension(file.name),
       description: formString(form, 'description') ?? opts.defaultDescription ?? '',
       sourceType: opts.sourceType,

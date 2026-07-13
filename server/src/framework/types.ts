@@ -45,6 +45,7 @@ export interface ToolContext {
     runId: string;
     sessionId: string;
     threadId: string | null;
+    signal: AbortSignal;
     runtimeRoot?: string;
     runtimeConfig?: AgentRuntimeConfig;
     auth?: AuthContext | null;

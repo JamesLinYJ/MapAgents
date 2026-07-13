@@ -11,6 +11,7 @@
 import type { Server } from 'node:http'
 import type { WebSocketServer } from 'ws'
 import type { Database } from './db/connection.js'
+import type { ApplicationInstanceLock } from './db/applicationInstanceLock.js'
 import type { PostgresPlatformStore } from './store/platformStore.js'
 import { errorLogPayload, logger } from './observability/logger.js'
 
@@ -19,7 +20,9 @@ interface LifecycleOptions {
   wsServer: WebSocketServer
   store: PostgresPlatformStore
   db: Database
+  instanceLock: ApplicationInstanceLock
   onShutdownStart: () => void
+  beforeDrain?: () => Promise<void>
   timeoutMs?: number
 }
 
@@ -52,6 +55,7 @@ export function installLifecycleManager(options: LifecycleOptions): void {
 }
 
 async function drain(options: LifecycleOptions): Promise<void> {
+  await options.beforeDrain?.()
   for (const socket of options.wsServer.clients) {
     socket.close(1001, 'server shutting down')
   }
@@ -59,6 +63,7 @@ async function drain(options: LifecycleOptions): Promise<void> {
     new Promise<void>((resolve, reject) => options.server.close(error => error ? reject(error) : resolve())),
     new Promise<void>(resolve => options.wsServer.close(() => resolve())),
   ])
-  await options.store.flushConversationStore()
+  await options.store.closeConversationStore()
+  await options.instanceLock.release()
   await options.db.close()
 }

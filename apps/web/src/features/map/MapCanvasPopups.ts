@@ -63,8 +63,11 @@ export function buildFeaturePopupHtml(feature: maplibregl.MapGeoJSONFeature, lay
   }
   if (props.kind === 'route_start' || props.kind === 'route_end') {
     const label = props.kind === 'route_start' ? '起点' : '终点'
-    const coords = feature.geometry.type === 'Point'
-      ? ` ${(feature.geometry.coordinates as number[])[0].toFixed(4)}, ${(feature.geometry.coordinates as number[])[1].toFixed(4)}`
+    const coordinates = feature.geometry.type === 'Point' ? feature.geometry.coordinates : null
+    const longitude = coordinates?.[0]
+    const latitude = coordinates?.[1]
+    const coords = Number.isFinite(longitude) && Number.isFinite(latitude)
+      ? ` ${Number(longitude).toFixed(4)}, ${Number(latitude).toFixed(4)}`
       : ''
     const rows = [
       `<div><span>类型</span><strong>${label}</strong></div>`,

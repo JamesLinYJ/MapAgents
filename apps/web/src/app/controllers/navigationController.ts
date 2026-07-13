@@ -22,6 +22,7 @@ interface NavigationControllerOptions {
   currentThreadId?: string | null
   runId?: string
   sessionId?: string
+  shareToken?: string | null
   setUiError: (error?: string) => void
 }
 
@@ -29,9 +30,7 @@ interface NavigationControllerOptions {
 //
 // URL 只在显式分享或恢复 thread/run 时编码，普通导航不会制造业务状态。
 export function useNavigationController({
-  currentThreadId,
-  runId,
-  sessionId,
+  shareToken,
   setUiError,
 }: NavigationControllerOptions) {
   const [query, setQuery] = useState('')
@@ -58,11 +57,11 @@ export function useNavigationController({
     setActiveNav('layers')
     setPanelMode('layerManager')
     setActiveSidebarItem('sources')
-  }, [])
+  }, [setActiveNav, setActiveSidebarItem, setPanelMode])
 
   const changeWorkspaceMode = useCallback((mode: WorkspaceMode) => {
     setWorkspaceMode(mode)
-  }, [])
+  }, [setWorkspaceMode])
 
   const changePrimaryNav = useCallback((nav: PrimaryNav) => {
     setActiveNav(nav)
@@ -88,7 +87,7 @@ export function useNavigationController({
     }
     setPanelMode('compute')
     setActiveSidebarItem('assistant')
-  }, [focusQueryInput, showSources])
+  }, [focusQueryInput, setActiveNav, setActiveSidebarItem, setPanelMode, showSources])
 
   const selectSample = useCallback((value: string) => {
     setQuery(value)
@@ -96,11 +95,13 @@ export function useNavigationController({
     setPanelMode('summary')
     setActiveSidebarItem('assistant')
     focusQueryInput()
-  }, [focusQueryInput])
+  }, [focusQueryInput, setActiveNav, setActiveSidebarItem, setPanelMode])
 
   const useNextTemplate = useCallback(() => {
     const currentIndex = SAMPLES.findIndex(item => item === query)
-    selectSample(SAMPLES[(currentIndex + 1 + SAMPLES.length) % SAMPLES.length])
+    const nextSample = SAMPLES[(currentIndex + 1 + SAMPLES.length) % SAMPLES.length]
+    if (!nextSample) throw new Error('示例问题目录不能为空。')
+    selectSample(nextSample)
   }, [query, selectSample])
 
   const selectSidebarItem = useCallback((itemId: SidebarItemId) => {
@@ -125,16 +126,16 @@ export function useNavigationController({
     }
     setActiveNav('analysis')
     setPanelMode(itemId === 'config' ? 'config' : 'export')
-  }, [changePrimaryNav, showSources])
+  }, [changePrimaryNav, setActiveNav, setActiveSidebarItem, setPanelMode, showSources])
 
   const copyShareLink = useCallback(async () => {
     try {
-      const url = buildWorkspaceShareUrl(window.location.origin, sessionId, runId, currentThreadId ?? undefined)
+      const url = buildWorkspaceShareUrl(window.location.origin, shareToken ?? undefined)
       await navigator.clipboard.writeText(url)
     } catch {
       setUiError('复制分享链接失败，请稍后重试。')
     }
-  }, [currentThreadId, runId, sessionId, setUiError])
+  }, [shareToken, setUiError])
 
   return {
     activeNav,

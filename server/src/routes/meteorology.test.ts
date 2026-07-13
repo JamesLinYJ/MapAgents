@@ -32,7 +32,7 @@ describe('meteorology routes', () => {
       c.set('auth', TEST_AUTH)
       await next()
     })
-    app.route('/', meteorologyRoutes(noOpDb(), os.tmpdir(), store, testSecurity()))
+    app.route('/', meteorologyRoutes(os.tmpdir(), store, testSecurity()))
 
     const response = await app.request('/api/v1/meteorology/datasets?threadId=thread-b&filename=target.nc')
     const rows = await response.json() as Array<{ datasetId: string }>

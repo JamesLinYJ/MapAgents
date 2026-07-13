@@ -1,5 +1,6 @@
 // Anthropic 模型适配器
 import type { ModelAdapter } from '../registry.js'
+import { abortSignalWithTimeout } from '../../utils/abort.js'
 
 export interface AnthropicOptions {
   baseUrl: string; apiKey: string; defaultModel: string; version: string; displayName?: string
@@ -29,7 +30,7 @@ export function createAnthropicAdapter(opts: AnthropicOptions): ModelAdapter {
         method: 'POST',
         headers: { 'x-api-key': opts.apiKey, 'anthropic-version': opts.version, 'content-type': 'application/json' },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(30_000),
+        signal: abortSignalWithTimeout(kwargs?.signal, 30_000),
       })
       if (!res.ok) throw new Error(`Anthropic API error: ${res.status}`)
       const payload = (await res.json()) as Record<string, unknown>

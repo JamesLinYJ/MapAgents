@@ -87,9 +87,9 @@ export class AuthorizationService {
     }
     await this.enforce(auth, object, action, {
       workspaceId,
-      userId: resource.createdByUserId,
-      visibility: resource.visibility,
-      resourceId: resource.resourceId,
+      userId: resource.createdByUserId ?? null,
+      visibility: resource.visibility ?? null,
+      resourceId: resource.resourceId ?? null,
     })
   }
 

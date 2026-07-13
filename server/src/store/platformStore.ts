@@ -12,23 +12,36 @@ import type { Database } from '../db/connection.js'
 import type {
   SessionRecord, AgentThreadRecord, AnalysisRun, RunSummary, AgentState,
   RunEvent, ConversationItem, AgentRuntimeConfig, ArtifactRef, ContentRef,
-  RunCheckpoint, TranscriptEntry, TranscriptEntryKind, ThreadManifest,
+  RunCheckpoint, RunSteeringRecord, TranscriptEntry, TranscriptEntryKind, ThreadManifest,
   ThreadMemoryDocument, CompactionRecord, MeteorologicalDatasetRecord,
   MeteorologicalJobRecord, ToolValueRef,
 } from '../schemas/types.js'
 import { ArtifactStore } from './artifactStore.js'
-import { ConversationIndexStore, StoreNotFoundError } from './conversationIndexStore.js'
+import { ConversationIndexStore } from './conversationIndexStore.js'
 import { ConversationObjectStore } from './conversationObjectStore.js'
 import { InMemoryEventBus } from './eventBus.js'
-import { FileConversationStore, type TrashEntry } from './fileConversationStore.js'
+import { FileConversationStore } from './fileConversationStore.js'
 import { RunStore } from './runStore.js'
 import { DEFAULT_SESSION_ID, SessionStore, type ResourceOwner } from './sessionStore.js'
 import { ThreadStore } from './threadStore.js'
 import path from 'node:path'
-import { ArtifactIndexStore } from './postgres/artifactIndexStore.js'
+import { ArtifactIndexStore, type ArtifactRepository } from './postgres/artifactIndexStore.js'
 import { MeteorologicalDatasetStore } from './postgres/meteorologicalDatasetStore.js'
 import { RuntimeConfigStore } from './postgres/runtimeConfigStore.js'
 import { ToolCatalogStore, type ToolCatalogEntry } from './postgres/toolCatalogStore.js'
+import {
+  WorkflowStore,
+  type CreateScheduledTaskInput,
+  type CreateWorkflowRunInput,
+  type UpdateScheduledTaskInput,
+  type UpdateWorkflowRunInput,
+} from './postgres/workflowStore.js'
+import type { ScheduledTask, WorkflowDefinition, WorkflowRunRecord, WorkflowVersionRecord } from '../workflows/schemas.js'
+import {
+  PostgresConversationRepository,
+  type ConversationRepository,
+  type DeletedThreadRecord,
+} from './postgres/conversationRepository.js'
 
 export { StoreNotFoundError } from './conversationIndexStore.js'
 
@@ -46,11 +59,11 @@ export class PostgresPlatformStore {
   readonly threadUpdateBus = new InMemoryEventBus<{ thread: AgentThreadRecord; manifest: ThreadManifest }>()
   readonly threadCompactionBus = new InMemoryEventBus<CompactionRecord>()
   readonly threadMemoryBus = new InMemoryEventBus<ThreadMemoryDocument>()
-  readonly conversationStore: FileConversationStore
   readonly conversationStoreRoot: string
   readonly runtimeRoot: string
 
   private readonly index = new ConversationIndexStore()
+  private readonly conversationStore: FileConversationStore
   private readonly sessionStore: SessionStore
   private readonly threadStore: ThreadStore
   private readonly runStore: RunStore
@@ -59,46 +72,46 @@ export class PostgresPlatformStore {
   private readonly meteorologicalDatasetStore: MeteorologicalDatasetStore
   private readonly runtimeConfigStore: RuntimeConfigStore
   private readonly toolCatalogStore: ToolCatalogStore
+  private readonly workflowStore: WorkflowStore
+  private readonly conversationRepository: ConversationRepository
 
-  constructor(db: Database, storageRoot: string) {
+  constructor(db: Database, storageRoot: string, options: {
+    conversationRepository?: ConversationRepository
+    artifactRepository?: ArtifactRepository
+  } = {}) {
     this.conversationStoreRoot = storageRoot
     this.runtimeRoot = ['sessions', 'conversations'].includes(path.basename(storageRoot))
       ? path.dirname(storageRoot)
       : storageRoot
     this.conversationStore = new FileConversationStore(storageRoot)
-    this.sessionStore = new SessionStore(this.index, this.conversationStore)
-    this.threadStore = new ThreadStore(this.index, this.conversationStore, this.sessionStore, this.runtimeRoot, {
+    this.conversationRepository = options.conversationRepository ?? new PostgresConversationRepository(db)
+    this.sessionStore = new SessionStore(this.index, this.conversationRepository)
+    this.threadStore = new ThreadStore(this.index, this.conversationStore, this.sessionStore, this.conversationRepository, this.runtimeRoot, {
       threadUpdateBus: this.threadUpdateBus,
       threadEntryBus: this.threadEntryBus,
       threadCompactionBus: this.threadCompactionBus,
       threadMemoryBus: this.threadMemoryBus,
     })
-    this.runStore = new RunStore(this.index, this.conversationStore, this.sessionStore, {
+    this.runStore = new RunStore(this.index, this.conversationStore, this.sessionStore, this.conversationRepository, {
       runBus: this.runBus,
       eventBus: this.eventBus,
       itemBus: this.itemBus,
     })
-    this.artifactStore = new ArtifactStore(this.index, this.conversationStore, new ArtifactIndexStore(db))
+    this.artifactStore = new ArtifactStore(this.index, options.artifactRepository ?? new ArtifactIndexStore(db))
     this.objectStore = new ConversationObjectStore(this.conversationStore)
     this.meteorologicalDatasetStore = new MeteorologicalDatasetStore(db)
     this.runtimeConfigStore = new RuntimeConfigStore(db)
     this.toolCatalogStore = new ToolCatalogStore(db)
+    this.workflowStore = new WorkflowStore(db)
   }
 
   // --- Sessions ---
 
   async initialize(): Promise<void> {
-    // manifest 是轻量索引；消息、事件和工具结果按 thread/run 文件延迟读取。
-    const snapshot = await this.conversationStore.initialize()
+    const snapshot = await this.conversationRepository.loadSnapshot()
+    // PostgreSQL 决定有哪些 session/thread/run；文件层只按该快照定位 checkpoint 与大对象。
+    await this.conversationStore.initialize(snapshot)
     this.index.load(snapshot)
-    await this.artifactStore.hydrateIndexForRuns(snapshot.runs)
-    for (const session of this.sessionStore.values()) {
-      if (session.latestThreadId && !this.index.hasThread(session.latestThreadId)) {
-        await this.sessionStore.update(session.id, {
-          latestThreadId: this.listThreadsForSession(session.id)[0]?.id ?? null,
-        })
-      }
-    }
   }
 
   async createSession(owner?: ResourceOwner | null): Promise<SessionRecord> {
@@ -115,6 +128,10 @@ export class PostgresPlatformStore {
 
   getSession(sessionId: string): SessionRecord {
     return this.sessionStore.get(sessionId)
+  }
+
+  getSessionByShareToken(shareToken: string): SessionRecord | null {
+    return this.sessionStore.getByShareToken(shareToken)
   }
 
   async updateSession(sessionId: string, fields: Partial<SessionRecord>): Promise<SessionRecord> {
@@ -139,6 +156,86 @@ export class PostgresPlatformStore {
 
   async deleteToolCatalogEntry(toolKind: string, toolName: string): Promise<void> {
     await this.toolCatalogStore.delete(toolKind, toolName)
+  }
+
+  async syncWorkflowDefinitions(definitions: WorkflowDefinition[]): Promise<void> {
+    await this.workflowStore.syncDefinitions(definitions)
+  }
+
+  async listWorkflowDefinitions(workspaceId: string): Promise<WorkflowDefinition[]> {
+    return this.workflowStore.listDefinitions(workspaceId)
+  }
+
+  async getWorkflowDefinition(workflowId: string): Promise<WorkflowDefinition | null> {
+    return this.workflowStore.getDefinition(workflowId)
+  }
+
+  async getWorkflowDefinitionVersion(workflowId: string, revision: number): Promise<WorkflowDefinition | null> {
+    return this.workflowStore.getDefinitionVersion(workflowId, revision)
+  }
+
+  async getPublishedWorkflowDefinition(workflowId: string): Promise<WorkflowDefinition | null> {
+    return this.workflowStore.getPublishedDefinition(workflowId)
+  }
+
+  async listWorkflowDefinitionVersions(workflowId: string): Promise<WorkflowVersionRecord[]> {
+    return this.workflowStore.listDefinitionVersions(workflowId)
+  }
+
+  async createWorkflowDefinition(definition: WorkflowDefinition): Promise<WorkflowDefinition> {
+    return this.workflowStore.createDefinition(definition)
+  }
+
+  async saveWorkflowDefinitionRevision(definition: WorkflowDefinition, expectedRevision: number): Promise<WorkflowDefinition> {
+    return this.workflowStore.saveDefinitionRevision(definition, expectedRevision)
+  }
+
+  async publishWorkflowDefinition(workflowId: string, revision: number): Promise<WorkflowDefinition> {
+    return this.workflowStore.publishDefinition(workflowId, revision)
+  }
+
+  async disableWorkflowDefinition(workflowId: string): Promise<WorkflowDefinition> {
+    return this.workflowStore.disableDefinition(workflowId)
+  }
+
+  async listScheduledTasks(workspaceId: string): Promise<ScheduledTask[]> {
+    return this.workflowStore.listScheduledTasks(workspaceId)
+  }
+
+  async listActiveScheduledTasks(): Promise<ScheduledTask[]> {
+    return this.workflowStore.listActiveScheduledTasks()
+  }
+
+  async getScheduledTask(taskId: string): Promise<ScheduledTask | null> {
+    return this.workflowStore.getScheduledTask(taskId)
+  }
+
+  async createScheduledTask(input: CreateScheduledTaskInput): Promise<ScheduledTask> {
+    return this.workflowStore.createScheduledTask(input)
+  }
+
+  async updateScheduledTask(taskId: string, input: UpdateScheduledTaskInput): Promise<ScheduledTask> {
+    return this.workflowStore.updateScheduledTask(taskId, input)
+  }
+
+  async deleteScheduledTask(taskId: string): Promise<ScheduledTask> {
+    return this.workflowStore.markScheduledTaskDeleted(taskId)
+  }
+
+  async createWorkflowRunRecord(input: CreateWorkflowRunInput): Promise<WorkflowRunRecord> {
+    return this.workflowStore.createWorkflowRun(input)
+  }
+
+  async getWorkflowRunRecord(workflowRunId: string): Promise<WorkflowRunRecord | null> {
+    return this.workflowStore.getWorkflowRun(workflowRunId)
+  }
+
+  async updateWorkflowRunRecord(workflowRunId: string, input: UpdateWorkflowRunInput): Promise<WorkflowRunRecord> {
+    return this.workflowStore.updateWorkflowRun(workflowRunId, input)
+  }
+
+  async listWorkflowRuns(workspaceId: string, scheduledTaskId?: string | null): Promise<WorkflowRunRecord[]> {
+    return this.workflowStore.listWorkflowRuns(workspaceId, scheduledTaskId)
   }
 
   async listMeteorologicalDatasets(filters: {
@@ -211,6 +308,10 @@ export class PostgresPlatformStore {
 
   listRunsForThread(threadId: string): AnalysisRun[] {
     return this.runStore.listForThread(threadId)
+  }
+
+  listRunsForWorkspace(workspaceId: string): AnalysisRun[] {
+    return this.runStore.listForWorkspace(workspaceId)
   }
 
   listRunSummaries(options: {
@@ -301,6 +402,10 @@ export class PostgresPlatformStore {
     await this.objectStore.flush()
   }
 
+  async closeConversationStore(): Promise<void> {
+    await this.conversationStore.close()
+  }
+
   getConversationStoreRoot(): string {
     return this.conversationStoreRoot
   }
@@ -317,6 +422,24 @@ export class PostgresPlatformStore {
 
   async appendItem(item: ConversationItem): Promise<void> {
     await this.runStore.appendItem(item)
+  }
+
+  async enqueueRunInput(input: {
+    inputId: string
+    entryId: string
+    itemId: string
+    runId: string
+    content: string
+  }): Promise<RunSteeringRecord> {
+    return this.conversationRepository.enqueueRunInput(input)
+  }
+
+  async consumeRunInputs(runId: string): Promise<RunSteeringRecord[]> {
+    return this.conversationRepository.consumeRunInputs(runId)
+  }
+
+  async listRunInputs(runId: string): Promise<RunSteeringRecord[]> {
+    return this.conversationRepository.listRunInputs(runId)
   }
 
   async listItems(runId: string): Promise<ConversationItem[]> {
@@ -374,7 +497,7 @@ export class PostgresPlatformStore {
     return this.threadStore.listCompactions(threadId)
   }
 
-  async listTrash(sessionId: string): Promise<TrashEntry[]> {
+  async listTrash(sessionId: string): Promise<DeletedThreadRecord[]> {
     return this.threadStore.listTrash(sessionId)
   }
 

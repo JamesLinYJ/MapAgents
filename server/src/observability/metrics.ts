@@ -56,6 +56,26 @@ export const toolExecutionDurationMs = new Histogram({
   buckets: [50, 100, 250, 500, 1000, 2500, 5000, 15000, 30000],
 })
 
+// Workflow
+export const workflowRunsTotal = new Counter({
+  name: 'geoforge_workflow_runs_total',
+  help: 'Workflow 运行终态总数',
+  labelNames: ['trigger', 'status'],
+})
+
+export const workflowNodeExecutionsTotal = new Counter({
+  name: 'geoforge_workflow_node_executions_total',
+  help: 'Workflow 节点执行总数',
+  labelNames: ['node_type', 'status'],
+})
+
+export const workflowNodeDurationMs = new Histogram({
+  name: 'geoforge_workflow_node_duration_ms',
+  help: 'Workflow 节点执行耗时 (ms)',
+  labelNames: ['node_type'],
+  buckets: [5, 25, 100, 500, 1000, 5000, 15000, 60000, 300000],
+})
+
 // Worker
 export const workerRequestsTotal = new Counter({
   name: 'geoforge_worker_requests_total',
@@ -87,6 +107,23 @@ export const jsonlFlushLatencyMs = new Histogram({
 export const jsonlCorruptionTotal = new Counter({
   name: 'geoforge_jsonl_corruption_total',
   help: 'JSONL 损坏行总数',
+  labelNames: ['scope'],
+})
+
+export const applicationInstanceLockHeld = new Gauge({
+  name: 'geoforge_application_instance_lock_held',
+  help: '当前进程是否持有 PostgreSQL 平台单写实例锁（1=持有，0=未持有）',
+})
+
+export const runtimeMutationQueueDepth = new Gauge({
+  name: 'geoforge_runtime_mutation_queue_depth',
+  help: '运行时跨文件变更队列深度',
+  labelNames: ['scope'],
+})
+
+export const runtimeMutationFailuresTotal = new Counter({
+  name: 'geoforge_runtime_mutation_failures_total',
+  help: '运行时跨文件变更导致队列关闭的失败总数',
   labelNames: ['scope'],
 })
 

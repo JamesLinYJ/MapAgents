@@ -19,6 +19,7 @@ export type CommandCategory = 'read' | 'write' | 'admin'
 // 标记命令的读写属性
 export function categorizeCommand(name: string): CommandCategory {
   if (name.startsWith('run:start') || name.startsWith('run:cancel')
+    || name === 'run:steer'
     || name === 'run:respond-decision'
     || name === 'thread:create' || name === 'thread:update'
     || name === 'thread:delete' || name === 'thread:fork'

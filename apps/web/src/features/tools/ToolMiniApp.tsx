@@ -358,6 +358,7 @@ export function ToolMiniAppResult({ toolName, result, artifacts, onSelectArtifac
   const selectableArtifacts = artifacts.filter((artifact) => (
     artifact.artifactId && artifactHasDisplaySurface(artifact, 'map')
   ))
+  const comparisonArtifacts = firstTwo(imageArtifacts)
   return (
     <section className={`tool-mini-result tool-mini-result--${kind}`}>
       <div className="tool-mini-result__header">
@@ -367,8 +368,8 @@ export function ToolMiniAppResult({ toolName, result, artifacts, onSelectArtifac
           <p>{resultSummary(toolName, payload)}</p>
         </div>
       </div>
-      {toolName === 'compare_radar_mosaic_reference' && imageArtifacts.length >= 2 ? (
-        <ImageSlider artifacts={imageArtifacts} />
+      {toolName === 'compare_radar_mosaic_reference' && comparisonArtifacts ? (
+        <ImageSlider base={comparisonArtifacts[0]} overlay={comparisonArtifacts[1]} />
       ) : imageArtifacts.length ? (
         <div className="tool-mini-result__preview-grid">
           {imageArtifacts.map((artifact) => (
@@ -418,10 +419,14 @@ export function ToolMiniAppResult({ toolName, result, artifacts, onSelectArtifac
   )
 }
 
-function ImageSlider({ artifacts }: { artifacts: MiniArtifact[] }) {
+function firstTwo<T>(values: T[]): [T, T] | null {
+  const first = values[0]
+  const second = values[1]
+  return first !== undefined && second !== undefined ? [first, second] : null
+}
+
+function ImageSlider({ base, overlay }: { base: MiniArtifact; overlay: MiniArtifact }) {
   const [split, setSplit] = useState(50)
-  const base = artifacts[0]
-  const overlay = artifacts[1]
   return (
     <div className="tool-mini-slider">
       <div className="tool-mini-slider__canvas">

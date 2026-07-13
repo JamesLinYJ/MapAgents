@@ -18,7 +18,7 @@ import { ItemSink } from '../conversation/itemSink.js'
 import { RunEventSink, TurnFinalizer } from './turnRunner.js'
 
 describe('ItemSink', () => {
-  it('publishes started, delta, and completed ConversationItem updates', () => {
+  it('publishes started, delta, and completed ConversationItem updates', async () => {
     const bus = new InMemoryEventBus<ConversationItem>()
     const items: ConversationItem[] = []
     bus.subscribe('run_1', (item) => items.push(item))
@@ -28,6 +28,7 @@ describe('ItemSink', () => {
     sink.deltaItem('item_1', '你')
     sink.deltaItem('item_1', '好')
     sink.completeItem('item_1')
+    await sink.flush()
 
     expect(items).toHaveLength(4)
     expect(items[0].status).toBe('running')
@@ -38,7 +39,7 @@ describe('ItemSink', () => {
     expect(new Set(items.map(item => item.timestamp)).size).toBe(1)
   })
 
-  it('keeps item order stable when metadata is linked after completion', () => {
+  it('keeps item order stable when metadata is linked after completion', async () => {
     const items: ConversationItem[] = []
     const sink = new ItemSink((item) => items.push(item), 'run_1', 'thread_1')
 
@@ -51,6 +52,7 @@ describe('ItemSink', () => {
       body: '先说明。',
       metadata: { transcriptEntryId: 'entry_1' },
     })
+    await sink.flush()
 
     const latest = new Map(items.map(item => [item.itemId, item]))
     const sorted = [...latest.values()].sort((left, right) => left.timestamp.localeCompare(right.timestamp))
@@ -58,10 +60,32 @@ describe('ItemSink', () => {
     expect(sorted[0].metadata.transcriptEntryId).toBe('entry_1')
     expect(sorted[0].timestamp).toBe(items[0].timestamp)
   })
+
+  it('serializes durable writes and exposes the first failure through flush', async () => {
+    const order: string[] = []
+    let releaseFirst: (() => void) | null = null
+    const firstWrite = new Promise<void>(resolve => { releaseFirst = resolve })
+    const sink = new ItemSink(async item => {
+      order.push(`start:${item.itemId}`)
+      if (item.itemId === 'item_1') await firstWrite
+      if (item.itemId === 'item_2') throw new Error('database write failed')
+      order.push(`end:${item.itemId}`)
+    }, 'run_1', 'thread_1')
+
+    sink.startItem('message', { itemId: 'item_1' })
+    sink.startItem('message', { itemId: 'item_2' })
+    sink.startItem('message', { itemId: 'item_3' })
+    await Promise.resolve()
+    expect(order).toEqual(['start:item_1'])
+    releaseFirst?.()
+
+    await expect(sink.flush()).rejects.toThrow('database write failed')
+    expect(order).toEqual(['start:item_1', 'end:item_1', 'start:item_2'])
+  })
 })
 
 describe('TurnFinalizer', () => {
-  it('marks terminal result items with a resultType for the web run state', () => {
+  it('marks terminal result items with a resultType for the web run state', async () => {
     const eventBus = new InMemoryEventBus<RunEvent>()
     const itemBus = new InMemoryEventBus<ConversationItem>()
     const items: ConversationItem[] = []
@@ -73,7 +97,7 @@ describe('TurnFinalizer', () => {
       () => undefined,
     )
 
-    finalizer.complete()
+    await finalizer.complete()
 
     expect(items).toHaveLength(1)
     expect(items[0].itemType).toBe('result')

@@ -62,7 +62,9 @@ export function requireSingleFeature(entity: GeoJsonEntity, label: string): GeoJ
     if (entity.features.length !== 1) {
         throw new Error(`${label} 必须是单个 Feature，当前包含 ${entity.features.length} 个要素`);
     }
-    return entity.features[0];
+    const feature = entity.features[0];
+    if (!feature) throw new Error(`${label} 缺少 Feature`);
+    return feature;
 }
 export function requirePointFeature(entity: GeoJsonEntity, label: string): PointFeature {
     const feature = requireSingleFeature(entity, label);

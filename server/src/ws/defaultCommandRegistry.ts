@@ -17,6 +17,8 @@ import { registerWsAuthorizationPolicies } from './security.js'
 import { registerThreadCommands } from './threadCommands.js'
 import { registerThreadContextCommands } from './threadContextCommands.js'
 import { registerToolCommands } from './toolCommand.js'
+import { registerUsageCommands } from './usageCommands.js'
+import { registerWorkflowCommands } from './workflowCommands.js'
 import { registerWorkspaceCommands } from './workspaceCommands.js'
 
 // 所有 WS 控制命令必须从这里注册。handler 只持有这个注册表，不再知道
@@ -31,6 +33,8 @@ export function createDefaultCommandRegistry(): WsCommandRegistry {
   registerRunCommands(registry)
   registerMemoryCommands(registry)
   registerToolCommands(registry)
+  registerUsageCommands(registry)
+  registerWorkflowCommands(registry)
   registerWsAuthorizationPolicies(registry)
   const missingAuthorization = registry.commandsWithoutAuthorization()
   if (missingAuthorization.length) {

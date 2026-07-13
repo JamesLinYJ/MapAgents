@@ -9,6 +9,7 @@
 // --------------------------------------------------------------------------
 
 import { describe, expect, it } from 'vitest'
+import { requiredAt } from './testSupport'
 import { deriveWorkbenchProgressSummary } from '../app/layout/WorkbenchProgressModel'
 
 const progressItems = [
@@ -59,7 +60,7 @@ describe('workbench progress card model', () => {
     const summary = deriveWorkbenchProgressSummary({
       runStatus: 'failed',
       progressItems: [
-        progressItems[0],
+        requiredAt(progressItems, 0, '进度条目'),
         { id: 'data', title: '准备数据', description: '数据读取失败', status: 'warning' as const },
       ],
       tasks: [],

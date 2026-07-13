@@ -4,10 +4,23 @@
   "version": "0.1.0",
   "type": "module",
   "exports": {
-    ".": "./src-ts/index.ts"
+    ".": "./src-ts/index.ts",
+    "./core": "./src-ts/core.ts",
+    "./conversation": "./src-ts/conversation.ts",
+    "./runtime": "./src-ts/runtime.ts",
+    "./platform": "./src-ts/platform.ts",
+    "./resources": "./src-ts/resources.ts",
+    "./transport": "./src-ts/transport.ts",
+    "./worker": "./src-ts/worker.ts"
   },
   "types": "./src-ts/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
   "dependencies": {
     "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.2"
   }
 }

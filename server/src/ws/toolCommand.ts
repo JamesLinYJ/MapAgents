@@ -1,34 +1,18 @@
-// +-------------------------------------------------------------------------
-//
-//   地理智能平台 - WS 工具执行命令
-//
-//   文件:       toolCommand.ts
-//
-//   日期:       2026年07月06日
-//   作者:       JamesLinYJ
-// --------------------------------------------------------------------------
+// GeoForge WS 直接工具执行命令。
+// 管理员调试入口和 Workflow 工具节点共享 executePersistedTool；这里只拥有权限、运行创建和终态。
 
-// 模块职责
-//
-// 只承载 tool:run 的直接执行路径。普通用户的 Agent 工具调用仍走 runtime 审批链；
-// 这里必须先经过 ToolExecutionPolicy，再把结果按运行历史事实源落盘。
-
+import { z } from 'zod'
 import type { AgentRuntimeConfig } from '../schemas/types.js'
 import type { ModelAdapterRegistry } from '../model/registry.js'
 import type { ToolRegistry } from '../framework/registry.js'
-import type { ToolContext } from '../framework/types.js'
 import type { SecurityServices } from '../security/routes.js'
 import type { AuthContext } from '../security/types.js'
 import { assertDirectToolRunAllowed } from '../security/toolExecutionPolicy.js'
-import { ItemSink } from '../conversation/itemSink.js'
-import { makeId, nowUtc } from '../utils/ids.js'
 import type { PostgresPlatformStore } from '../store/platformStore.js'
-import { persistToolExecutionResult, resolveRuntimeValueRef } from '../tools/resultPersistence.js'
-import { formatError, isRecord, optionalString, requiredRecord, requiredString } from './payload.js'
-import { errorLogPayload, logger } from '../observability/logger.js'
+import { executePersistedTool } from '../tools/persistentToolExecutor.js'
+import { optionalString, requiredRecord, requiredString } from './payload.js'
 import { resolveRuntimeConfig } from './runtimeConfig.js'
 import type { WsCommandRegistry } from './commandRegistry.js'
-import { z } from 'zod'
 
 const toolRunPayloadSchema = z.object({
   toolName: z.string().min(1),
@@ -36,7 +20,7 @@ const toolRunPayloadSchema = z.object({
   runId: z.string().min(1).nullable().optional(),
   sessionId: z.string().min(1).nullable().optional(),
   threadId: z.string().min(1).nullable().optional(),
-}).passthrough()
+}).strict()
 
 export function registerToolCommands(registry: WsCommandRegistry): void {
   registry.register({
@@ -82,97 +66,29 @@ export async function executeTool(
     directRun = true
     await store.updateRunStatus(runId, 'running')
   }
-  const run = store.getRun(runId)
-  const values = new Map(run.state.toolValueRefs.map(ref => [ref.refId, ref]))
-  const pendingToolLogWrites: Promise<void>[] = []
-  const context: ToolContext = {
-    runId,
-    sessionId: run.sessionId,
-    threadId: run.threadId,
-    runtimeRoot: store.runtimeRoot,
-    runtimeConfig: run.runtimeConfigSnapshot ?? await resolveRuntimeConfig(store, runtimeConfigDefaults),
-    auth,
-    state: values,
-    resolveValueRef: refId => resolveRuntimeValueRef(values, refId),
-    resolveMeteorologicalDataset: input => store.resolveMeteorologicalDataset({
-      sessionId: run.sessionId,
-      threadId: run.threadId,
-      workspaceId: run.workspaceId,
-      datasetId: input.datasetId ?? null,
-      filename: input.filename ?? null,
-    }),
-    invokeStructuredModel: async prompt => {
-      const adapter = modelRegistry.resolveProvider(run.modelProvider)
-      const response = await adapter.chat(prompt, { model: run.modelName ?? adapter.defaultModel, reasoning: false })
-      const content = response.content
-      if (typeof content !== 'string' || !content.trim()) throw new Error('模型未返回结构化内容')
-      const parsed: unknown = JSON.parse(content.replace(/^```json\s*|\s*```$/gu, ''))
-      if (!isRecord(parsed)) throw new Error('模型结构化输出必须是 JSON object')
-      return parsed
-    },
-    log: (_level, message) => {
-      const persisted = store.appendEvent(runId, {
-        eventId: makeId('event'), runId, threadId: run.threadId, type: 'tool.completed',
-        message, timestamp: nowUtc(), payload: {},
-      })
-      pendingToolLogWrites.push(persisted)
-      persisted.catch(error => logNonBlockingError('tool:run:log', error))
-    },
-  }
-  const args = requiredRecord(payload, 'args')
-  const callId = makeId('call')
-  const itemSink = new ItemSink(item => store.appendItem(item), runId, run.threadId)
-  const callItem = itemSink.startItem('function_call', {
-    name: toolName,
-    callId,
-    arguments: JSON.stringify(args),
-  })
   try {
-    const result = await registry.execute(toolName, args, context)
-    await persistToolExecutionResult(store, runId, toolName, args, result)
-    itemSink.completeItem(callItem.itemId, {
-      callId,
-      name: toolName,
-      output: JSON.stringify(result.payload),
-      metadata: { resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [] },
+    const result = await executePersistedTool({
+      runId,
+      toolName,
+      args: requiredRecord(payload, 'args'),
+      auth,
+    }, {
+      store,
+      registry,
+      modelRegistry,
+      defaultRuntimeConfig: runtimeConfigDefaults,
     })
-    const outputItem = itemSink.startItem('function_call_output', {
-      callId,
-      name: toolName,
-      role: 'tool',
-      metadata: { resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [] },
-    })
-    itemSink.completeItem(outputItem.itemId, {
-      callId,
-      name: toolName,
-      output: JSON.stringify(result.payload),
-      metadata: { resultId: result.resultId, source: result.source, valueRefs: result.valueRefs ?? [], artifacts: result.artifacts ?? [] },
-    })
-    await Promise.allSettled(pendingToolLogWrites)
-    await itemSink.flush()
     if (directRun) await store.completeRun(runId, 'completed')
     return { result, run: store.getRun(runId) }
   } catch (error) {
-    const message = formatError(error)
-    itemSink.completeItem(callItem.itemId, {
-      callId,
-      name: toolName,
-      body: message,
-      isError: true,
-    })
     if (directRun) {
-      const current = store.getRun(runId)
-      await store.updateRunState(runId, { errors: [...current.state.errors, message], failedTool: toolName })
+      const run = store.getRun(runId)
+      const message = error instanceof Error && error.message.trim() ? error.message : '工具执行失败。'
+      await store.updateRunState(runId, { errors: [...run.state.errors, message], failedTool: toolName })
       await store.completeRun(runId, 'failed')
     }
-    await Promise.allSettled(pendingToolLogWrites)
-    await itemSink.flush()
     throw error
   }
-}
-
-function logNonBlockingError(scope: string, error: unknown): void {
-  logger.warn({ error: errorLogPayload(error), scope }, 'ws tool error')
 }
 
 function requireAuth(auth: AuthContext | null): AuthContext {

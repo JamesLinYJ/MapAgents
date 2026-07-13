@@ -11,7 +11,7 @@
 import { asc, eq } from 'drizzle-orm'
 import type { Database } from '../db/connection.js'
 import { authSession, platformMemberships, platformUsers, platformWorkspaces } from '../db/schema.js'
-import { platformRoleSchema, type PlatformRole } from '../schemas/types.js'
+import { platformRoleSchema, type PlatformRole } from '@geo-agent-platform/shared-types/platform'
 import { makeId } from '../utils/ids.js'
 import type { AuthRoleBinding } from './types.js'
 
@@ -25,6 +25,21 @@ export class PlatformIdentityStore {
       .where(eq(platformUsers.userId, platformUserId))
       .limit(1)
     return rows[0]?.subject ?? null
+  }
+
+  async getUserByPlatformUserId(platformUserId: string): Promise<PlatformUserProjection | null> {
+    const rows = await this.db
+      .select({
+        userId: platformUsers.userId,
+        subject: platformUsers.subject,
+        email: platformUsers.email,
+        displayName: platformUsers.displayName,
+        status: platformUsers.status,
+      })
+      .from(platformUsers)
+      .where(eq(platformUsers.userId, platformUserId))
+      .limit(1)
+    return rows[0] ?? null
   }
 
   async upsertUserProjection(input: {
@@ -141,5 +156,8 @@ export class PlatformIdentityStore {
 
 export interface PlatformUserProjection {
   userId: string
+  subject?: string
+  email?: string
+  displayName?: string
   status: string
 }

@@ -601,14 +601,18 @@ export function parseRasterCoordinates(value: unknown): [[number, number], [numb
     const lat = Number(point[1])
     return Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] as [number, number] : undefined
   })
-  return points.every(Boolean) ? points as [[number, number], [number, number], [number, number], [number, number]] : undefined
+  const [topLeft, topRight, bottomRight, bottomLeft] = points
+  return topLeft && topRight && bottomRight && bottomLeft
+    ? [topLeft, topRight, bottomRight, bottomLeft]
+    : undefined
 }
 
 export function describeRasterMetadata(metadata: Record<string, unknown>) {
   const variable = typeof metadata.variable === 'string' ? metadata.variable : '气象栅格'
   const valueRange = Array.isArray(metadata.valueRange) ? metadata.valueRange.map(Number).filter(Number.isFinite) : []
-  if (valueRange.length >= 2) {
-    return `${variable} · ${valueRange[0].toFixed(2)} - ${valueRange[1].toFixed(2)}`
+  const [minimum, maximum] = valueRange
+  if (minimum !== undefined && maximum !== undefined) {
+    return `${variable} · ${minimum.toFixed(2)} - ${maximum.toFixed(2)}`
   }
   return variable
 }

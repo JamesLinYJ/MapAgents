@@ -8,7 +8,7 @@
 //   作者:       JamesLinYJ
 // --------------------------------------------------------------------------
 
-import { boolean, pgTable, text, timestamp, jsonb, index, integer, primaryKey, uniqueIndex } from 'drizzle-orm/pg-core'
+import { boolean, pgTable, text, timestamp, jsonb, index, integer, primaryKey, uniqueIndex, type AnyPgColumn } from 'drizzle-orm/pg-core'
 
 export const authUser = pgTable('auth_user', {
   id: text('id').primaryKey(),
@@ -101,6 +101,192 @@ export const platformMemberships = pgTable('platform_memberships', {
   userIdx: index('idx_platform_memberships_user').on(table.userId),
 }))
 
+// 会话、线程与运行是 PostgreSQL 中的在线事实源。文件系统只保存通过 contentRef
+// 引用的大对象，不再保存另一套可写 session/thread/run manifest。
+export const platformSessions = pgTable('platform_sessions', {
+  sessionId: text('session_id').primaryKey(),
+  workspaceId: text('workspace_id').references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
+  createdByUserId: text('created_by_user_id').references(() => platformUsers.userId, { onDelete: 'set null' }),
+  visibility: text('visibility').notNull().default('workspace'),
+  status: text('status').notNull().default('active'),
+  shareToken: text('share_token').notNull(),
+  latestThreadId: text('latest_thread_id'),
+  latestRunId: text('latest_run_id'),
+  latestUploadedLayerKey: text('latest_uploaded_layer_key'),
+  latestMeteorologicalDatasetId: text('latest_meteorological_dataset_id'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  shareTokenIdx: uniqueIndex('idx_platform_sessions_share_token_unique').on(table.shareToken),
+  workspaceUpdatedIdx: index('idx_platform_sessions_workspace_updated').on(table.workspaceId, table.updatedAt),
+  ownerUpdatedIdx: index('idx_platform_sessions_owner_updated').on(table.createdByUserId, table.updatedAt),
+}))
+
+export const platformThreads = pgTable('platform_threads', {
+  threadId: text('thread_id').primaryKey(),
+  sessionId: text('session_id').notNull().references(() => platformSessions.sessionId, { onDelete: 'cascade' }),
+  workspaceId: text('workspace_id').references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
+  createdByUserId: text('created_by_user_id').references(() => platformUsers.userId, { onDelete: 'set null' }),
+  visibility: text('visibility').notNull().default('workspace'),
+  title: text('title').notNull(),
+  status: text('status').notNull().default('active'),
+  latestRunId: text('latest_run_id'),
+  latestUserQuery: text('latest_user_query'),
+  latestAssistantSummary: text('latest_assistant_summary'),
+  latestRunStatus: text('latest_run_status'),
+  latestArtifactId: text('latest_artifact_id'),
+  latestArtifactName: text('latest_artifact_name'),
+  historyPreview: text('history_preview'),
+  runCount: integer('run_count').notNull().default(0),
+  nextEntrySequence: integer('next_entry_sequence').notNull().default(1),
+  activeLeafEntryId: text('active_leaf_entry_id'),
+  transcriptEntryCount: integer('transcript_entry_count').notNull().default(0),
+  estimatedContextTokens: integer('estimated_context_tokens').notNull().default(0),
+  latestCompactionId: text('latest_compaction_id'),
+  memoryVersion: integer('memory_version').notNull().default(0),
+  memoryBasedOnTokens: integer('memory_based_on_tokens').notNull().default(0),
+  forkedFromThreadId: text('forked_from_thread_id'),
+  forkedFromEntryId: text('forked_from_entry_id'),
+  quarantined: boolean('quarantined').notNull().default(false),
+  quarantineReason: text('quarantine_reason'),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  purgeAfter: timestamp('purge_after', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  sessionUpdatedIdx: index('idx_platform_threads_session_updated').on(table.sessionId, table.updatedAt),
+  workspaceUpdatedIdx: index('idx_platform_threads_workspace_updated').on(table.workspaceId, table.updatedAt),
+}))
+
+export const platformRuns = pgTable('platform_runs', {
+  runId: text('run_id').primaryKey(),
+  sessionId: text('session_id').notNull().references(() => platformSessions.sessionId, { onDelete: 'cascade' }),
+  threadId: text('thread_id').references(() => platformThreads.threadId, { onDelete: 'cascade' }),
+  workspaceId: text('workspace_id').references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
+  createdByUserId: text('created_by_user_id').references(() => platformUsers.userId, { onDelete: 'set null' }),
+  visibility: text('visibility').notNull().default('workspace'),
+  userQuery: text('user_query').notNull(),
+  modelProvider: text('model_provider'),
+  modelName: text('model_name'),
+  status: text('status').notNull().default('queued'),
+  stateJson: jsonb('state_json').notNull().$type<Record<string, unknown>>(),
+  runtimeConfigJson: jsonb('runtime_config_json').$type<Record<string, unknown>>(),
+  activeEntryId: text('active_entry_id'),
+  pendingToolCallIds: jsonb('pending_tool_call_ids').notNull().$type<string[]>().default([]),
+  recoveryStatus: text('recovery_status').notNull().default('clean'),
+  orchestrationEngine: text('orchestration_engine'),
+  sdkStateContentHash: text('sdk_state_content_hash'),
+  sdkVersion: text('sdk_version'),
+  runtimeConfigDigest: text('runtime_config_digest'),
+  sdkStateSchemaVersion: integer('sdk_state_schema_version'),
+  sdkStateUpdatedAt: timestamp('sdk_state_updated_at', { withTimezone: true }),
+  nextRecordSequence: integer('next_record_sequence').notNull().default(1),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  threadUpdatedIdx: index('idx_platform_runs_thread_updated').on(table.threadId, table.updatedAt),
+  sessionUpdatedIdx: index('idx_platform_runs_session_updated').on(table.sessionId, table.updatedAt),
+  workspaceUpdatedIdx: index('idx_platform_runs_workspace_updated').on(table.workspaceId, table.updatedAt),
+  statusUpdatedIdx: index('idx_platform_runs_status_updated').on(table.status, table.updatedAt),
+}))
+
+export const platformConversationEntries = pgTable('platform_conversation_entries', {
+  entryId: text('entry_id').primaryKey(),
+  sessionId: text('session_id').notNull().references(() => platformSessions.sessionId, { onDelete: 'cascade' }),
+  threadId: text('thread_id').notNull().references(() => platformThreads.threadId, { onDelete: 'cascade' }),
+  runId: text('run_id').references(() => platformRuns.runId, { onDelete: 'set null' }),
+  turnId: text('turn_id'),
+  sequence: integer('sequence').notNull(),
+  parentEntryId: text('parent_entry_id').references((): AnyPgColumn => platformConversationEntries.entryId, { onDelete: 'set null' }),
+  logicalParentEntryId: text('logical_parent_entry_id').references((): AnyPgColumn => platformConversationEntries.entryId, { onDelete: 'set null' }),
+  kind: text('kind').notNull(),
+  payloadJson: jsonb('payload_json').notNull().$type<Record<string, unknown>>(),
+  traceId: text('trace_id'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  threadSequenceIdx: uniqueIndex('idx_conversation_entries_thread_sequence_unique').on(table.threadId, table.sequence),
+  runCreatedIdx: index('idx_conversation_entries_run_created').on(table.runId, table.createdAt),
+  parentIdx: index('idx_conversation_entries_parent').on(table.parentEntryId),
+}))
+
+export const platformThreadMemoryVersions = pgTable('platform_thread_memory_versions', {
+  threadId: text('thread_id').notNull().references(() => platformThreads.threadId, { onDelete: 'cascade' }),
+  version: integer('version').notNull(),
+  contentHash: text('content_hash').notNull(),
+  source: text('source').notNull(),
+  basedOnEntryId: text('based_on_entry_id'),
+  estimatedTokens: integer('estimated_tokens').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  primaryKey: primaryKey({ columns: [table.threadId, table.version] }),
+  threadCreatedIdx: index('idx_thread_memory_versions_thread_created').on(table.threadId, table.createdAt),
+}))
+
+export const platformThreadCompactions = pgTable('platform_thread_compactions', {
+  compactionId: text('compaction_id').primaryKey(),
+  threadId: text('thread_id').notNull().references(() => platformThreads.threadId, { onDelete: 'cascade' }),
+  boundaryEntryId: text('boundary_entry_id').notNull(),
+  summaryEntryId: text('summary_entry_id').notNull(),
+  firstCompactedEntryId: text('first_compacted_entry_id').notNull(),
+  lastCompactedEntryId: text('last_compacted_entry_id').notNull(),
+  preservedFromEntryId: text('preserved_from_entry_id'),
+  summary: text('summary').notNull(),
+  strategy: text('strategy').notNull(),
+  preTokens: integer('pre_tokens').notNull(),
+  postTokens: integer('post_tokens').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  threadCreatedIdx: index('idx_thread_compactions_thread_created').on(table.threadId, table.createdAt),
+}))
+
+// 运行记录统一保存 UI item、进度事件、工具 value 和诊断事件；recordType 决定
+// 对应的 Zod payload schema，避免继续为每一种记录增加 JSONL 文件。
+export const platformRunRecords = pgTable('platform_run_records', {
+  recordId: text('record_id').primaryKey(),
+  runId: text('run_id').notNull().references(() => platformRuns.runId, { onDelete: 'cascade' }),
+  threadId: text('thread_id').references(() => platformThreads.threadId, { onDelete: 'cascade' }),
+  sequence: integer('sequence').notNull(),
+  recordType: text('record_type').notNull(),
+  payloadJson: jsonb('payload_json').notNull().$type<Record<string, unknown>>(),
+  traceId: text('trace_id'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  runSequenceIdx: uniqueIndex('idx_run_records_run_sequence_unique').on(table.runId, table.sequence),
+  runTypeCreatedIdx: index('idx_run_records_run_type_created').on(table.runId, table.recordType, table.createdAt),
+  traceIdx: index('idx_run_records_trace').on(table.traceId),
+}))
+
+export const platformRunInputs = pgTable('platform_run_inputs', {
+  inputId: text('input_id').primaryKey(),
+  runId: text('run_id').notNull().references(() => platformRuns.runId, { onDelete: 'cascade' }),
+  threadId: text('thread_id').notNull().references(() => platformThreads.threadId, { onDelete: 'cascade' }),
+  entryId: text('entry_id').notNull().references(() => platformConversationEntries.entryId, { onDelete: 'cascade' }),
+  itemId: text('item_id').notNull(),
+  kind: text('kind').notNull().default('steering'),
+  content: text('content').notNull(),
+  status: text('status').notNull().default('queued'),
+  queuedAt: timestamp('queued_at', { withTimezone: true }).notNull().defaultNow(),
+  consumedAt: timestamp('consumed_at', { withTimezone: true }),
+}, (table) => ({
+  runStatusQueuedIdx: index('idx_run_inputs_run_status_queued').on(table.runId, table.status, table.queuedAt),
+  entryIdx: uniqueIndex('idx_run_inputs_entry_unique').on(table.entryId),
+}))
+
+export const platformEventOutbox = pgTable('platform_event_outbox', {
+  outboxId: text('outbox_id').primaryKey(),
+  aggregateType: text('aggregate_type').notNull(),
+  aggregateId: text('aggregate_id').notNull(),
+  eventType: text('event_type').notNull(),
+  payloadJson: jsonb('payload_json').notNull().$type<Record<string, unknown>>(),
+  traceId: text('trace_id'),
+  attemptCount: integer('attempt_count').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  publishedAt: timestamp('published_at', { withTimezone: true }),
+}, (table) => ({
+  unpublishedIdx: index('idx_event_outbox_unpublished').on(table.publishedAt, table.createdAt),
+  aggregateIdx: index('idx_event_outbox_aggregate').on(table.aggregateType, table.aggregateId, table.createdAt),
+}))
+
 export const platformRbacPolicies = pgTable('platform_rbac_policies', {
   policyId: text('policy_id').primaryKey(),
   ptype: text('ptype').notNull(),
@@ -131,15 +317,15 @@ export const platformAuditEvents = pgTable('platform_audit_events', {
 
 export const platformArtifacts = pgTable('platform_artifacts', {
   artifactId: text('artifact_id').primaryKey(),
-  runId: text('run_id').notNull(),
-  workspaceId: text('workspace_id'),
-  createdByUserId: text('created_by_user_id'),
+  runId: text('run_id').notNull().references(() => platformRuns.runId, { onDelete: 'cascade' }),
+  workspaceId: text('workspace_id').references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
+  createdByUserId: text('created_by_user_id').references(() => platformUsers.userId, { onDelete: 'set null' }),
   visibility: text('visibility').notNull().default('workspace'),
   artifactType: text('artifact_type').notNull(),
   name: text('name').notNull(),
   uri: text('uri').notNull(),
   metadataJson: jsonb('metadata_json').notNull().default({}),
-  geojsonRelativePath: text('geojson_relative_path').notNull(),
+  contentRelativePath: text('content_relative_path').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   runIdIdx: index('idx_platform_artifacts_run_id').on(table.runId),
@@ -200,4 +386,93 @@ export const platformMeteorologicalJobs = pgTable('platform_meteorological_jobs'
 }, (table) => ({
   datasetUpdatedIdx: index('idx_meteorological_jobs_dataset_updated').on(table.datasetId, table.updatedAt),
   sessionUpdatedIdx: index('idx_meteorological_jobs_session_updated').on(table.sessionId, table.updatedAt),
+}))
+
+export const platformWorkflowDefinitions = pgTable('platform_workflow_definitions', {
+  workflowId: text('workflow_id').primaryKey(),
+  workspaceId: text('workspace_id').references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
+  createdByUserId: text('created_by_user_id').references(() => platformUsers.userId, { onDelete: 'set null' }),
+  name: text('name').notNull(),
+  description: text('description').notNull().default(''),
+  version: text('version').notNull(),
+  revision: integer('revision').notNull().default(1),
+  publishedRevision: integer('published_revision'),
+  source: text('source').notNull().default('builtin'),
+  lifecycle: text('lifecycle').notNull().default('published'),
+  enabled: boolean('enabled').notNull().default(true),
+  parametersSchemaJson: jsonb('parameters_schema_json').notNull().$type<Record<string, unknown>>().default({}),
+  defaultParametersJson: jsonb('default_parameters_json').notNull().$type<Record<string, unknown>>().default({}),
+  requiredToolsJson: jsonb('required_tools_json').notNull().$type<string[]>().default([]),
+  requiresApproval: boolean('requires_approval').notNull().default(false),
+  timeoutSeconds: integer('timeout_seconds').notNull().default(900),
+  outputType: text('output_type').notNull().default('conversation'),
+  definitionJson: jsonb('definition_json').notNull().$type<Record<string, unknown>>(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  workspaceUpdatedIdx: index('idx_workflow_definitions_workspace_updated').on(table.workspaceId, table.updatedAt),
+  sourceLifecycleIdx: index('idx_workflow_definitions_source_lifecycle').on(table.source, table.lifecycle),
+}))
+
+export const platformWorkflowVersions = pgTable('platform_workflow_versions', {
+  workflowId: text('workflow_id').notNull().references(() => platformWorkflowDefinitions.workflowId, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  lifecycle: text('lifecycle').notNull(),
+  definitionJson: jsonb('definition_json').notNull().$type<Record<string, unknown>>(),
+  createdByUserId: text('created_by_user_id').references(() => platformUsers.userId, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  publishedAt: timestamp('published_at', { withTimezone: true }),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.workflowId, table.revision], name: 'platform_workflow_versions_pk' }),
+  lifecycleIdx: index('idx_workflow_versions_lifecycle').on(table.workflowId, table.lifecycle),
+}))
+
+export const platformScheduledTasks = pgTable('platform_scheduled_tasks', {
+  taskId: text('task_id').primaryKey(),
+  targetKind: text('target_kind').notNull(),
+  targetId: text('target_id').notNull(),
+  workspaceId: text('workspace_id').notNull().references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
+  createdByUserId: text('created_by_user_id').notNull().references(() => platformUsers.userId, { onDelete: 'restrict' }),
+  title: text('title').notNull(),
+  prompt: text('prompt').notNull(),
+  parametersJson: jsonb('parameters_json').notNull().$type<Record<string, unknown>>().default({}),
+  cron: text('cron').notNull(),
+  timezone: text('timezone').notNull(),
+  recurring: boolean('recurring').notNull().default(true),
+  enabled: boolean('enabled').notNull().default(true),
+  status: text('status').notNull().default('active'),
+  lastFiredAt: timestamp('last_fired_at', { withTimezone: true }),
+  nextFireAt: timestamp('next_fire_at', { withTimezone: true }),
+  lastRunId: text('last_run_id'),
+  queueJobId: text('queue_job_id'),
+  failureCount: integer('failure_count').notNull().default(0),
+  lastErrorMessage: text('last_error_message'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  workspaceNextIdx: index('idx_scheduled_tasks_workspace_next').on(table.workspaceId, table.nextFireAt),
+  targetIdx: index('idx_scheduled_tasks_target').on(table.targetKind, table.targetId),
+}))
+
+export const platformWorkflowRuns = pgTable('platform_workflow_runs', {
+  workflowRunId: text('workflow_run_id').primaryKey(),
+  workflowId: text('workflow_id').notNull().references(() => platformWorkflowDefinitions.workflowId, { onDelete: 'restrict' }),
+  workflowRevision: integer('workflow_revision').notNull(),
+  scheduledTaskId: text('scheduled_task_id').references(() => platformScheduledTasks.taskId, { onDelete: 'set null' }),
+  workspaceId: text('workspace_id').notNull().references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
+  createdByUserId: text('created_by_user_id').notNull().references(() => platformUsers.userId, { onDelete: 'restrict' }),
+  runId: text('run_id'),
+  status: text('status').notNull().default('queued'),
+  currentStep: text('current_step'),
+  triggerKind: text('trigger_kind').notNull().default('manual'),
+  errorMessage: text('error_message'),
+  metadataJson: jsonb('metadata_json').notNull().$type<Record<string, unknown>>().default({}),
+  nodeRunsJson: jsonb('node_runs_json').notNull().$type<Array<Record<string, unknown>>>().default([]),
+  pendingApprovalJson: jsonb('pending_approval_json').$type<Record<string, unknown>>(),
+  outputsJson: jsonb('outputs_json').notNull().$type<Record<string, unknown>>().default({}),
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+}, (table) => ({
+  workspaceStartedIdx: index('idx_workflow_runs_workspace_started').on(table.workspaceId, table.startedAt),
+  scheduledTaskStartedIdx: index('idx_workflow_runs_scheduled_task_started').on(table.scheduledTaskId, table.startedAt),
 }))

@@ -16,7 +16,7 @@ import type {
   ThreadMemoryDocument,
   TranscriptEntry,
 } from '../schemas/types.js'
-import type { PostgresPlatformStore } from '../store/platformStore.js'
+import type { ThreadContextStore } from '../store/runtimePorts.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 import { RuntimeFileStore } from '../store/fileStore.js'
 
@@ -73,7 +73,7 @@ export type ContextSummarizer = (prompt: string) => Promise<string>
 //
 // 只使用 canonical transcript 活动父链；run event、reasoning 和 UI progress 永不进入模型。
 export async function assembleThreadContext(
-  store: PostgresPlatformStore,
+  store: ThreadContextStore,
   threadId: string,
   config: AgentRuntimeConfig['context'],
   systemPrompt: string,
@@ -140,7 +140,7 @@ export async function assembleThreadContext(
 //
 // 压缩只追加 boundary/summary 和最近 turn 的重放副本；原始 transcript 永不改写或删除。
 export async function compactThreadIfNeeded(
-  store: PostgresPlatformStore,
+  store: ThreadContextStore,
   threadId: string,
   config: AgentRuntimeConfig['context'],
   summarize: ContextSummarizer,
@@ -159,22 +159,13 @@ export async function compactThreadIfNeeded(
   const compacted = visible.slice(0, preserveIndex)
   const preserved = visible.slice(preserveIndex)
   if (!compacted.some(entry => entry.kind === 'message')) return null
+  const firstCompacted = compacted[0]
+  if (!firstCompacted) return null
 
   const summaryPrompt = buildCompactionPrompt(compacted)
-  let summary: string
-  let strategy: CompactionRecord['strategy'] = 'model'
-  try {
-    summary = await summarize(summaryPrompt)
-    if (!summary.trim()) throw new Error('摘要模型返回空内容')
-  } catch {
-    try {
-      summary = await summarize(summaryPrompt)
-      if (!summary.trim()) throw new Error('摘要模型返回空内容')
-    } catch {
-      summary = buildExtractiveSummary(compacted)
-      strategy = 'extractive_fallback'
-    }
-  }
+  const summary = (await summarize(summaryPrompt)).trim()
+  if (!summary) throw new Error('摘要模型返回空内容')
+  const strategy: CompactionRecord['strategy'] = 'model'
 
   const compactionId = makeId('compact')
   const boundary = await store.appendTranscript({
@@ -182,7 +173,7 @@ export async function compactThreadIfNeeded(
     kind: 'compact_boundary',
     payload: {
       compactionId,
-      firstCompactedEntryId: compacted[0].entryId,
+      firstCompactedEntryId: firstCompacted.entryId,
       lastCompactedEntryId: compacted.at(-1)?.entryId,
       preservedFromEntryId: preserved[0]?.entryId ?? null,
     },
@@ -219,8 +210,8 @@ export async function compactThreadIfNeeded(
     threadId,
     boundaryEntryId: boundary.entryId,
     summaryEntryId: summaryEntry.entryId,
-    firstCompactedEntryId: compacted[0].entryId,
-    lastCompactedEntryId: compacted.at(-1)?.entryId ?? compacted[0].entryId,
+    firstCompactedEntryId: firstCompacted.entryId,
+    lastCompactedEntryId: compacted.at(-1)?.entryId ?? firstCompacted.entryId,
     preservedFromEntryId: preserved[0]?.entryId ?? null,
     summary,
     strategy,
@@ -236,7 +227,7 @@ export async function compactThreadIfNeeded(
 //
 // 自动区只由摘要模型维护；用户固定区逐字保留，并通过 optimistic version 避免覆盖并发编辑。
 export async function rebuildThreadMemory(
-  store: PostgresPlatformStore,
+  store: ThreadContextStore,
   threadId: string,
   config: AgentRuntimeConfig['context'],
   summarize: ContextSummarizer,
@@ -268,13 +259,8 @@ export async function rebuildThreadMemory(
     '',
     `新增对话：\n${sourceText}`,
   ].join('\n')
-  let generated: string
-  try {
-    generated = (await summarize(prompt)).trim()
-    if (!generated) throw new Error('memory 摘要为空')
-  } catch {
-    generated = buildExtractiveSummary(stripCompactionReplay(eligibleChain).slice(-24))
-  }
+  const generated = (await summarize(prompt)).trim()
+  if (!generated) throw new Error('memory 摘要为空')
   const content = renderMemory(generated, current.pinnedContent)
   return store.updateThreadMemory(
     threadId,
@@ -290,7 +276,7 @@ export function buildManualMemoryContent(generatedContent: string, pinnedContent
 }
 
 async function hydrateContentReferences(
-  store: PostgresPlatformStore,
+  store: ThreadContextStore,
   entries: TranscriptEntry[],
 ): Promise<TranscriptEntry[]> {
   return Promise.all(entries.map(async entry => {
@@ -304,7 +290,7 @@ async function hydrateContentReferences(
 
 // 资源索引只在用户明确要求继续或复用时进入模型上下文，避免把历史事实静默注入新任务。
 async function buildThreadResourceMessage(
-  store: PostgresPlatformStore,
+  store: ThreadContextStore,
   threadId: string,
   entries: TranscriptEntry[],
 ): Promise<string | null> {
@@ -449,6 +435,7 @@ function findPreserveStart(entries: TranscriptEntry[], turnCount: number): numbe
   let userTurns = 0
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index]
+    if (!entry) continue
     if (entry.kind === 'message' && entry.payload.role === 'user') {
       userTurns += 1
       if (userTurns >= turnCount) return index
@@ -501,27 +488,6 @@ function formatEntriesForSummary(entries: TranscriptEntry[]): string {
   }).join('\n')
 }
 
-function buildExtractiveSummary(entries: TranscriptEntry[]): string {
-  const messages = entries
-    .filter(entry => entry.kind === 'message')
-    .slice(-16)
-    .map(entry => `- ${String(entry.payload.role ?? 'message')}: ${truncate(String(entry.payload.content ?? ''), 500)}`)
-  const tools = entries
-    .filter(entry => entry.kind === 'tool_result')
-    .slice(-8)
-    .map(entry => `- ${String(entry.payload.name ?? 'tool')}: ${truncate(String(entry.payload.summary ?? entry.payload.content ?? ''), 300)}`)
-  return [
-    '## 当前目标', messages.at(-1) ?? '- 未识别',
-    '## 用户约束', '- 抽取式降级摘要未发现可结构化约束',
-    '## 已确认事实', ...messages,
-    '## 数据与产物引用', ...tools,
-    '## 未完成事项', '- 请结合压缩后的最近对话继续确认',
-    '## 关键术语', '- 无',
-    '',
-    '> 此内容由抽取式降级生成，未增加历史中不存在的事实。',
-  ].join('\n')
-}
-
 function renderMemory(generated: string, pinned: string): string {
   return `${generated.trim()}\n\n## 用户固定记忆\n${USER_NOTES_START}\n${pinned.trim()}\n${USER_NOTES_END}\n`
 }
@@ -538,19 +504,16 @@ function stringField(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
-function truncate(value: string, maxChars: number): string {
-  const normalized = value.replace(/\s+/gu, ' ').trim()
-  return normalized.length <= maxChars ? normalized : `${normalized.slice(0, maxChars - 3)}...`
-}
-
 function findLastIndex<T>(values: T[], predicate: (value: T) => boolean): number {
   for (let index = values.length - 1; index >= 0; index -= 1) {
-    if (predicate(values[index])) return index
+    const value = values[index]
+    if (value !== undefined && predicate(value)) return index
   }
   return -1
 }
 
 function findLastEntry<T>(values: T[], predicate: (value: T) => boolean): T | undefined {
   const index = findLastIndex(values, predicate)
-  return index >= 0 ? values[index] : undefined
+  if (index < 0) return undefined
+  return values[index]
 }

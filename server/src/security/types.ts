@@ -46,6 +46,8 @@ export type RbacObject =
   | 'runtime_config'
   | 'memory'
   | 'speech'
+  | 'workflow'
+  | 'scheduled_task'
   | 'admin'
   | 'system'
 

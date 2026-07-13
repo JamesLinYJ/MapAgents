@@ -24,8 +24,8 @@ describe('deriveEntriesFromItems', () => {
     ])
 
     expect(entries.map((entry) => entry.title)).toEqual(['用户', '思考', '回答'])
-    expect(entries[1].status).toBe('running')
-    expect(entries[2].body).toBe('杭州今天有雨。')
+    expect(entries.at(1)?.status).toBe('running')
+    expect(entries.at(2)?.body).toBe('杭州今天有雨。')
   })
 
   it('按 callId 配对工具调用和工具输出', () => {
@@ -65,12 +65,12 @@ describe('deriveEntriesFromItems', () => {
     ])
 
     expect(entries).toHaveLength(1)
-    expect(entries[0].kind).toBe('command_batch')
-    expect(entries[0].title).toBe('地点解析')
-    expect(entries[0].status).toBe('completed')
-    expect(entries[0].artifactId).toBe('artifact_1')
-    expect(entries[0].commands?.[0].details?.args).toEqual({ query: '杭州' })
-    expect(entries[0].commands?.[0].details?.resultId).toBe('res_1')
+    expect(entries.at(0)?.kind).toBe('command_batch')
+    expect(entries.at(0)?.title).toBe('地点解析')
+    expect(entries.at(0)?.status).toBe('completed')
+    expect(entries.at(0)?.artifactId).toBe('artifact_1')
+    expect(entries.at(0)?.commands?.at(0)?.details?.args).toEqual({ query: '杭州' })
+    expect(entries.at(0)?.commands?.at(0)?.details?.resultId).toBe('res_1')
   })
 
   it('把短时临近预报（短临）回答工具的结构化输出投影成标准纯文本', () => {
@@ -86,8 +86,8 @@ describe('deriveEntriesFromItems', () => {
     ])
 
     expect(entries).toHaveLength(1)
-    expect(entries[0].body).toBe('未来3小时不会下雨，您可以放心出门。')
-    expect(entries[0].commands?.[0].body).toBe('未来3小时不会下雨，您可以放心出门。')
+    expect(entries.at(0)?.body).toBe('未来3小时不会下雨，您可以放心出门。')
+    expect(entries.at(0)?.commands?.at(0)?.body).toBe('未来3小时不会下雨，您可以放心出门。')
   })
 
   it('不会把工具 envelope 的执行消息当成短临回答正文', () => {
@@ -103,9 +103,9 @@ describe('deriveEntriesFromItems', () => {
     ])
 
     expect(entries).toHaveLength(1)
-    expect(entries[0].body).toBe('5分钟后将下中雨，未来3小时持续下雨。')
-    expect(entries[0].body).not.toContain('answer_nowcast_question')
-    expect(entries[0].commands?.[0].body).toBe('5分钟后将下中雨，未来3小时持续下雨。')
+    expect(entries.at(0)?.body).toBe('5分钟后将下中雨，未来3小时持续下雨。')
+    expect(entries.at(0)?.body).not.toContain('answer_nowcast_question')
+    expect(entries.at(0)?.commands?.at(0)?.body).toBe('5分钟后将下中雨，未来3小时持续下雨。')
   })
 
   it('把工具调用前的普通 assistant 文本显示为过程说明而不是思考过程', () => {
@@ -120,14 +120,14 @@ describe('deriveEntriesFromItems', () => {
       item({ itemId: 'reasoning:run1', itemType: 'reasoning', body: '内部推理片段。' }),
     ])
 
-    expect(entries[0]).toMatchObject({
+    expect(entries.at(0)).toMatchObject({
       kind: 'message',
       role: 'assistant',
       title: '过程说明',
       body: '我先检查一下已上传的数据。',
       badge: 'commentary',
     })
-    expect(entries[1]).toMatchObject({ title: '思考', badge: 'thinking' })
+    expect(entries.at(1)).toMatchObject({ title: '思考', badge: 'thinking' })
   })
 
   it('不把成功 terminal result 重复渲染为最终回答', () => {
@@ -137,7 +137,7 @@ describe('deriveEntriesFromItems', () => {
     ])
 
     expect(entries).toHaveLength(1)
-    expect(entries[0].body).toBe('最终回答。')
+    expect(entries.at(0)?.body).toBe('最终回答。')
   })
 
   it('把 failed terminal result 渲染为错误条目', () => {
@@ -146,9 +146,9 @@ describe('deriveEntriesFromItems', () => {
     ])
 
     expect(entries).toHaveLength(1)
-    expect(entries[0].kind).toBe('error')
-    expect(entries[0].status).toBe('failed')
-    expect(entries[0].body).toBe('工具失败')
+    expect(entries.at(0)?.kind).toBe('error')
+    expect(entries.at(0)?.status).toBe('failed')
+    expect(entries.at(0)?.body).toBe('工具失败')
   })
 
   it('把等待审批的 plan result 投影为可操作审批条目', () => {
@@ -171,13 +171,13 @@ describe('deriveEntriesFromItems', () => {
     ])
 
     expect(entries).toHaveLength(1)
-    expect(entries[0]).toMatchObject({
+    expect(entries.at(0)).toMatchObject({
       kind: 'approval',
       approvalId: 'approval_1',
       title: '接受这个执行计划？',
       status: 'blocked',
     })
-    expect(entries[0].details?.args).toEqual({ plan })
+    expect(entries.at(0)?.details?.args).toEqual({ plan })
   })
 
   it('把旧运行里的 terminated 显示为可恢复的模型连接错误', () => {
@@ -185,7 +185,7 @@ describe('deriveEntriesFromItems', () => {
       item({ itemId: 'result:run1:failed', itemType: 'result', body: '', metadata: { resultType: 'failed', message: 'terminated' } }),
     ])
 
-    expect(entries[0].body).toContain('模型连接被上游中断')
+    expect(entries.at(0)?.body).toContain('模型连接被上游中断')
   })
 })
 

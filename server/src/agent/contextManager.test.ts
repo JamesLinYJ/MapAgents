@@ -8,15 +8,19 @@
 //   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import type { Database } from '../db/connection.js'
 import { PostgresPlatformStore } from '../store/platformStore.js'
+import { createTestPlatformStore } from '../../test-support/platformStoreHarness.js'
 import { RuntimeFileStore } from '../store/fileStore.js'
 import { defaultRuntimeConfig } from './defaultRuntimeConfig.js'
 import { assembleThreadContext, compactThreadIfNeeded, rebuildThreadMemory } from './contextManager.js'
+
+async function removeTempRoot(root: string): Promise<void> {
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+}
 
 describe('thread context management', () => {
   it('compacts complete turns while preserving recent messages and the immutable source history', async () => {
@@ -44,7 +48,7 @@ describe('thread context management', () => {
       expect(assembled.messages.some(message => message.content?.startsWith('问题 7'))).toBe(true)
       expect(assembled.messages.some(message => message.content?.startsWith('问题 1 '))).toBe(false)
     } finally {
-      await rm(root, { recursive: true, force: true })
+      await removeTempRoot(root)
     }
   })
 
@@ -68,7 +72,7 @@ describe('thread context management', () => {
       expect(rebuilt.content).toContain('必须使用杭州时区。')
       expect(rebuilt.generatedContent).toContain('生成降水分析')
     } finally {
-      await rm(root, { recursive: true, force: true })
+      await removeTempRoot(root)
     }
   })
 
@@ -96,7 +100,7 @@ describe('thread context management', () => {
         payload: { callId: 'call_large', name: 'inspect_dataset', arguments: {} },
       })
       const fullResult = JSON.stringify({ fact: '完整工具结果', values: Array.from({ length: 30 }, (_, index) => index) })
-      const contentRef = await store.conversationStore.putObject(fullResult, 'application/json')
+      const contentRef = await store.putConversationObject(fullResult, 'application/json')
       await store.appendTranscript({
         threadId: thread.id,
         runId: run.id,
@@ -111,10 +115,9 @@ describe('thread context management', () => {
       expect(resourceIndex).toBeLessThan(userIndex)
       expect(assembled.messages.some(message => message.role === 'tool' && message.content === fullResult)).toBe(true)
 
-      const agentTranscript = path.join(root, 'sessions', session.id, 'threads', thread.id, 'runs', run.id, 'agents', 'supervisor', 'transcript.jsonl')
-      expect((await readFile(agentTranscript, 'utf8')).trim().split('\n')).toHaveLength(3)
+      expect(await store.activeTranscript(thread.id)).toHaveLength(3)
     } finally {
-      await rm(root, { recursive: true, force: true })
+      await removeTempRoot(root)
     }
   })
 
@@ -190,7 +193,7 @@ describe('thread context management', () => {
       expect(assembled.messages[callBIndex + 1]).toMatchObject({ role: 'tool', tool_call_id: 'call_b' })
       expect(JSON.stringify(assembled.messages)).not.toContain('call_orphan')
     } finally {
-      await rm(root, { recursive: true, force: true })
+      await removeTempRoot(root)
     }
   })
 
@@ -218,13 +221,13 @@ describe('thread context management', () => {
       expect(summaryPrompt).not.toContain('本轮秘密输入')
       expect(memory.basedOnEntryId).toBe(previousAssistant.entryId)
     } finally {
-      await rm(root, { recursive: true, force: true })
+      await removeTempRoot(root)
     }
   })
 })
 
 async function createStore(root: string): Promise<PostgresPlatformStore> {
-  const store = new PostgresPlatformStore({ execute: async () => ({ rows: [] }) } as Database, root)
+  const store = createTestPlatformStore(root)
   await store.initialize()
   return store
 }

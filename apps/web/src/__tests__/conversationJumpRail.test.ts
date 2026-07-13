@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildConversationJumpItems,
   conversationJumpAnchorId,
-} from '../features/conversation/ConversationJumpRail'
+} from '../features/conversation/conversationJumpItems'
 import type { ConversationEntry } from '../features/conversation/items'
 
 describe('buildConversationJumpItems', () => {

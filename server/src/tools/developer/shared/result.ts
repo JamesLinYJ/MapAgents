@@ -30,7 +30,7 @@ export function developerResult(
     warnings: options.warnings ?? [],
     resultId: makeId('result'),
     source: `developer.${toolName}`,
-    valueRefs: options.valueRefs,
+    ...(options.valueRefs ? { valueRefs: options.valueRefs } : {}),
     provenance: {
       providerId: 'geo-platform-developer-tools',
       toolName,

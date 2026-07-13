@@ -8,7 +8,7 @@
 //   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   AlertTriangle,
   Brain,
@@ -45,6 +45,14 @@ interface SdkExtensionManagementProps {
   onSaveRuntimeConfig?: (config: AgentRuntimeConfig) => void | Promise<void>
 }
 
+interface RuntimeConfigDraftState {
+  source?: AgentRuntimeConfig
+  draft?: AgentRuntimeConfig
+  dirty: boolean
+  error?: string
+  selectedMcpIndex: number
+}
+
 export function SdkExtensionManagement({
   view,
   runtimeConfig,
@@ -55,17 +63,21 @@ export function SdkExtensionManagement({
   onRefreshMemories,
   onSaveRuntimeConfig,
 }: SdkExtensionManagementProps) {
-  const [draft, setDraft] = useState<AgentRuntimeConfig | undefined>(runtimeConfig)
-  const [dirty, setDirty] = useState(false)
-  const [error, setError] = useState<string>()
-  const [selectedMcpIndex, setSelectedMcpIndex] = useState(0)
-
-  useEffect(() => {
-    setDraft(runtimeConfig)
-    setDirty(false)
-    setError(undefined)
-    setSelectedMcpIndex(0)
-  }, [runtimeConfig])
+  const [draftState, setDraftState] = useState<RuntimeConfigDraftState>({
+    source: runtimeConfig,
+    draft: runtimeConfig,
+    dirty: false,
+    error: undefined,
+    selectedMcpIndex: 0,
+  })
+  const isDraftCurrent = draftState.source === runtimeConfig
+  const draft = isDraftCurrent ? draftState.draft : runtimeConfig
+  const dirty = isDraftCurrent ? draftState.dirty : false
+  const error = isDraftCurrent ? draftState.error : undefined
+  const selectedMcpIndex = Math.max(0, Math.min(
+    isDraftCurrent ? draftState.selectedMcpIndex : 0,
+    Math.max((draft?.sdk.mcp.servers.length ?? 1) - 1, 0),
+  ))
 
   const selectedServer = draft?.sdk.mcp.servers[selectedMcpIndex]
   const mcpSummary = useMemo(() => {
@@ -79,12 +91,41 @@ export function SdkExtensionManagement({
   }, [draft?.sdk.mcp.servers])
 
   const applyDraft = (updater: (config: AgentRuntimeConfig) => AgentRuntimeConfig) => {
-    setDraft(current => {
-      if (!current) return current
-      setDirty(true)
-      setError(undefined)
-      return updater(current)
+    setDraftState(current => {
+      const base = current.source === runtimeConfig ? current.draft : runtimeConfig
+      if (!base) return current
+      return {
+        source: runtimeConfig,
+        draft: updater(base),
+        dirty: true,
+        error: undefined,
+        selectedMcpIndex: current.source === runtimeConfig ? current.selectedMcpIndex : 0,
+      }
     })
+  }
+
+  const updateSelectedMcpIndex = (nextIndex: number | ((current: number) => number)) => {
+    setDraftState(current => {
+      const baseIndex = current.source === runtimeConfig ? current.selectedMcpIndex : 0
+      const resolvedIndex = typeof nextIndex === 'function' ? nextIndex(baseIndex) : nextIndex
+      return {
+        source: runtimeConfig,
+        draft,
+        dirty: current.source === runtimeConfig ? current.dirty : false,
+        error: current.source === runtimeConfig ? current.error : undefined,
+        selectedMcpIndex: Math.max(0, resolvedIndex),
+      }
+    })
+  }
+
+  const setDraftError = (message?: string) => {
+    setDraftState(current => ({
+      source: runtimeConfig,
+      draft,
+      dirty: current.source === runtimeConfig ? current.dirty : false,
+      error: message,
+      selectedMcpIndex: current.source === runtimeConfig ? current.selectedMcpIndex : selectedMcpIndex,
+    }))
   }
 
   const updateMcpServer = (index: number, fields: Partial<RuntimeMcpServerConfig>) => {
@@ -110,8 +151,13 @@ export function SdkExtensionManagement({
     try {
       updateMcpServer(index, { [field]: parseKeyValueLines(value) })
     } catch (recordError) {
-      setDirty(true)
-      setError(recordError instanceof Error ? recordError.message : '键值配置格式无效。')
+      setDraftState(current => ({
+        source: runtimeConfig,
+        draft,
+        dirty: true,
+        error: recordError instanceof Error ? recordError.message : '键值配置格式无效。',
+        selectedMcpIndex: current.source === runtimeConfig ? current.selectedMcpIndex : selectedMcpIndex,
+      }))
     }
   }
 
@@ -126,7 +172,7 @@ export function SdkExtensionManagement({
         },
       },
     }))
-    setSelectedMcpIndex(draft?.sdk.mcp.servers.length ?? 0)
+    updateSelectedMcpIndex(draft?.sdk.mcp.servers.length ?? 0)
   }
 
   const removeMcpServer = (index: number) => {
@@ -140,18 +186,24 @@ export function SdkExtensionManagement({
         },
       },
     }))
-    setSelectedMcpIndex(previous => Math.max(0, Math.min(previous, (draft?.sdk.mcp.servers.length ?? 1) - 2)))
+    updateSelectedMcpIndex(previous => Math.max(0, Math.min(previous, (draft?.sdk.mcp.servers.length ?? 1) - 2)))
   }
 
   const save = async () => {
     if (!draft || !onSaveRuntimeConfig) return
     const parsed = agentRuntimeConfigSchema.safeParse(draft)
     if (!parsed.success) {
-      setError(parsed.error.issues[0]?.message ?? '运行时配置校验失败。')
+      setDraftError(parsed.error.issues[0]?.message ?? '运行时配置校验失败。')
       return
     }
     await onSaveRuntimeConfig(parsed.data)
-    setDirty(false)
+    setDraftState(current => ({
+      ...current,
+      source: runtimeConfig,
+      draft: parsed.data,
+      dirty: false,
+      error: undefined,
+    }))
   }
 
   if (!draft) {
@@ -257,7 +309,7 @@ export function SdkExtensionManagement({
                     key={`${server.name}:${index}`}
                     type="button"
                     className={index === selectedMcpIndex ? 'sdk-mcp-card sdk-mcp-card--active' : 'sdk-mcp-card'}
-                    onClick={() => setSelectedMcpIndex(index)}
+                    onClick={() => updateSelectedMcpIndex(index)}
                   >
                     <span className="sdk-mcp-card__icon"><Server size={15} aria-hidden="true" /></span>
                     <span className="sdk-mcp-card__body">

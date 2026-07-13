@@ -1,0 +1,44 @@
+{
+  "workflowId": "meteorological_nowcast_monitor",
+  "name": "气象短临监测",
+  "description": "按确定性工具链建立文件序列、校验时次并分析降水趋势，最后生成中文结论。",
+  "version": "2.0.0",
+  "revision": 1,
+  "enabled": true,
+  "parametersSchema": {
+    "type": "object",
+    "properties": {
+      "horizonMinutes": { "type": "number", "minimum": 5, "maximum": 360 },
+      "regionId": { "type": "string" }
+    },
+    "required": ["horizonMinutes", "regionId"],
+    "additionalProperties": false
+  },
+  "defaultParameters": { "horizonMinutes": 180, "regionId": "" },
+  "requiredTools": ["create_nowcast_sequence", "inspect_nowcast_sequence", "list_meteorological_files", "meteorological_precipitation_nowcast"],
+  "requiresApproval": false,
+  "timeoutSeconds": 1200,
+  "outputType": "conversation",
+  "graph": {
+    "schemaVersion": 1,
+    "entryNodeId": "trigger",
+    "viewport": { "x": 0, "y": 0, "zoom": 0.85 },
+    "nodes": [
+      { "nodeId": "trigger", "type": "trigger", "label": "监测触发", "description": "接收短临监测目标。", "position": { "x": 20, "y": 120 }, "config": {} },
+      { "nodeId": "list_files", "type": "tool", "label": "列出气象文件", "description": "取得当前线程真实文件集合。", "position": { "x": 280, "y": 120 }, "config": { "toolName": "list_meteorological_files", "arguments": {}, "approvalMode": "auto", "retry": { "maxAttempts": 2, "backoffSeconds": 2 } } },
+      { "nodeId": "create_sequence", "type": "tool", "label": "创建短临序列", "description": "从文件集合建立连续时次序列。", "position": { "x": 560, "y": 120 }, "config": { "toolName": "create_nowcast_sequence", "arguments": { "file_collection_ref": { "source": "node", "nodeId": "list_files", "path": "valueRefs.0.refId" } }, "approvalMode": "auto", "retry": { "maxAttempts": 2, "backoffSeconds": 2 } } },
+      { "nodeId": "inspect_sequence", "type": "tool", "label": "校验短临序列", "description": "验证时次、变量和文件可读性。", "position": { "x": 850, "y": 120 }, "config": { "toolName": "inspect_nowcast_sequence", "arguments": { "sequence_ref": { "source": "node", "nodeId": "create_sequence", "path": "valueRefs.0.refId" } }, "approvalMode": "auto", "retry": { "maxAttempts": 1, "backoffSeconds": 0 } } },
+      { "nodeId": "nowcast", "type": "tool", "label": "降水短临分析", "description": "计算每个时次的降水统计事实。", "position": { "x": 1140, "y": 120 }, "config": { "toolName": "meteorological_precipitation_nowcast", "arguments": { "sequence_ref": { "source": "node", "nodeId": "create_sequence", "path": "valueRefs.0.refId" } }, "approvalMode": "auto", "retry": { "maxAttempts": 1, "backoffSeconds": 0 } } },
+      { "nodeId": "summarize", "type": "agent", "label": "解释监测结果", "description": "根据确定性分析生成业务结论。", "position": { "x": 1430, "y": 120 }, "config": { "promptTemplate": "用户目标：{{{input.prompt}}}\n预报窗口：{{input.parameters.horizonMinutes}} 分钟；区域：{{input.parameters.regionId}}\n序列校验：{{{nodes.inspect_sequence.json}}}\n短临分析：{{{nodes.nowcast.json}}}\n请只依据上述事实给出中文趋势、风险与数据局限。", "executionMode": "auto", "reasoning": true, "retry": { "maxAttempts": 1, "backoffSeconds": 0 } } },
+      { "nodeId": "output", "type": "output", "label": "监测结论", "description": "输出结论与短临事实。", "position": { "x": 1750, "y": 120 }, "config": { "outputs": { "answer": { "source": "node", "nodeId": "summarize", "path": "response" }, "analysis": { "source": "node", "nodeId": "nowcast", "path": "payload" } } } }
+    ],
+    "edges": [
+      { "edgeId": "trigger-list", "sourceNodeId": "trigger", "targetNodeId": "list_files", "sourcePort": "default" },
+      { "edgeId": "list-create", "sourceNodeId": "list_files", "targetNodeId": "create_sequence", "sourcePort": "success" },
+      { "edgeId": "create-inspect", "sourceNodeId": "create_sequence", "targetNodeId": "inspect_sequence", "sourcePort": "success" },
+      { "edgeId": "inspect-nowcast", "sourceNodeId": "inspect_sequence", "targetNodeId": "nowcast", "sourcePort": "success" },
+      { "edgeId": "nowcast-summary", "sourceNodeId": "nowcast", "targetNodeId": "summarize", "sourcePort": "success" },
+      { "edgeId": "summary-output", "sourceNodeId": "summarize", "targetNodeId": "output", "sourcePort": "success" }
+    ]
+  }
+}

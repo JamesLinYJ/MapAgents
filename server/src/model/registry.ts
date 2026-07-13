@@ -46,7 +46,7 @@ export class ModelAdapterRegistry {
       baseUrl: env.OPENAI_BASE_URL ?? '',
       apiKey: env.OPENAI_API_KEY ?? '',
       defaultModel: (env.OPENAI_MODEL ?? dmf('openai_compatible')),
-      subagentModel: env.OPENAI_SUBAGENT_MODEL ?? undefined,
+      ...(env.OPENAI_SUBAGENT_MODEL ? { subagentModel: env.OPENAI_SUBAGENT_MODEL } : {}),
     }))
     this.register(createAnthropicAdapter({
       baseUrl: env.ANTHROPIC_BASE_URL ?? '',

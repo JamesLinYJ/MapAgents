@@ -21,23 +21,28 @@ import developerProvider from '../tools/developer/index.js'
 import { createMeteorologyProvider } from '../tools/meteorology/index.js'
 import { createSpatialProvider } from '../tools/spatial/index.js'
 import { createRoutingProvider } from '../tools/routing/index.js'
+import { createScheduledWakeUpProvider } from '../tools/scheduledWakeUp/index.js'
 import { logger } from '../observability/logger.js'
+import type { ScheduledTaskService } from '../workflows/scheduledTaskService.js'
 
 const LEGACY_METEOROLOGY_PROVIDER_ID = ['wea', 'ther'].join('')
 
 // 安装到仓库并不等于启用；只有 ENABLED_TOOL_PROVIDERS 中的精确 ID 会进入运行时。
 export async function discoverAndLoad(
   postgis: PostGisRepository,
-  deps: { env: Env; registry: ToolRegistry },
+  deps: { env: Env; registry: ToolRegistry; scheduledTaskService?: ScheduledTaskService },
 ): Promise<void> {
   const { env, registry } = deps
   const spatialProvider = createSpatialProvider(postgis, { runtimeRoot: env.RUNTIME_ROOT })
   const routingProvider = createRoutingProvider({
-    valhallaBaseUrl: env.VALHALLA_BASE_URL,
+    ...(env.VALHALLA_BASE_URL ? { valhallaBaseUrl: env.VALHALLA_BASE_URL } : {}),
     timeoutMs: env.ROUTING_TIMEOUT_MS,
   })
   const mediaProvider = createMediaProvider(env)
   const meteorologyProvider = createMeteorologyProvider(env)
+  const scheduledWakeUpProvider = deps.scheduledTaskService
+    ? createScheduledWakeUpProvider(deps.scheduledTaskService)
+    : null
   const providers: ToolProvider[] = [
     chartProvider as ToolProvider,
     geocodeProvider as ToolProvider,
@@ -48,6 +53,7 @@ export async function discoverAndLoad(
     meteorologyProvider as ToolProvider,
     spatialProvider as ToolProvider,
     routingProvider as ToolProvider,
+    ...(scheduledWakeUpProvider ? [scheduledWakeUpProvider as ToolProvider] : []),
   ]
   const builtinProviders = new Map<string, ToolProvider>(
     providers.map(provider => [provider.manifest.id, provider]),

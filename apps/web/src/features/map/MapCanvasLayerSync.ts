@@ -34,7 +34,9 @@ export function pickLayerColor(metadata: Record<string, unknown> | undefined, in
   if (typeof color === 'string') {
     return color
   }
-  return LAYER_PALETTE[index % LAYER_PALETTE.length]
+  const paletteColor = LAYER_PALETTE[index % LAYER_PALETTE.length]
+  if (!paletteColor) throw new Error('图层调色板不能为空。')
+  return paletteColor
 }
 
 export function rasterPaintFromMetadata(metadata: Record<string, unknown> | undefined, opacity: number): Record<string, number> {

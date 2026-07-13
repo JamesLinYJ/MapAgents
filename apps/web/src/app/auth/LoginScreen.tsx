@@ -8,8 +8,23 @@
 //   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
-import { useState, type FormEvent } from 'react'
-import { KeyRound, Mail, ShieldCheck } from 'lucide-react'
+import { useState, type FormEvent, type ReactNode } from 'react'
+import { Link } from 'react-router-dom'
+import {
+  Activity,
+  ArrowRight,
+  Bot,
+  CheckCircle2,
+  CloudSun,
+  Database,
+  KeyRound,
+  LockKeyhole,
+  Mail,
+  Map,
+  ShieldCheck,
+  Sparkles,
+  UserRound,
+} from 'lucide-react'
 import { normalizeApiErrorMessage } from '../../api/errors'
 import { signInWithEmail, signUpWithEmail } from '../../api/authClient'
 import { canSubmitLoginStep, isValidEmail, type LoginFormState, type LoginStep } from './loginModel'
@@ -95,18 +110,67 @@ export function LoginScreen({
 
   return (
     <main className="digital-cartographer dc-auth-screen">
-      <div className="dc-auth-layout" aria-label="GeoForge 登录">
-        <section className="dc-auth-panel" aria-labelledby="geoforge-login-title">
-          <div className="dc-auth-brand">
-            <span className="dc-auth-brand__mark" aria-hidden="true">G</span>
-            <span>GeoForge</span>
+      <div className="dc-entry-shell" aria-label="GeoForge 启动入口">
+        <section className="dc-entry-hero" aria-labelledby="geoforge-entry-title">
+          <div className="dc-entry-brand">
+            <span className="dc-entry-brand__mark" aria-hidden="true">G</span>
+            <span>
+              <strong>GeoForge</strong>
+              <small>气象空间智能平台</small>
+            </span>
+          </div>
+
+          <div className="dc-entry-copy">
+            <h1 id="geoforge-entry-title">GeoForge 工作台</h1>
+            <p>统一气象数据、地图浏览、智能工具、Workflow 和安全管理，用可审计的方式完成从上传到结果交付的完整分析链路。</p>
+          </div>
+
+          <div className="dc-entry-command-grid" aria-label="平台核心能力">
+            <FeatureCard icon={<CloudSun size={20} />} title="气象分析" description="NetCDF、雷达、短临预报和报告输出" />
+            <FeatureCard icon={<Map size={20} />} title="地图浏览" description="图层管理、空间查询和结果制图" />
+            <FeatureCard icon={<Bot size={20} />} title="智能指令" description="审批、计划模式、工具调用和连续对话" />
+            <FeatureCard icon={<Database size={20} />} title="数据治理" description="用量统计、权限审计和可追踪 Artifact" />
+          </div>
+
+          <div className="dc-entry-preview" aria-label="启动预览">
+            <div className="dc-entry-preview__top">
+              <span><Activity size={15} aria-hidden="true" /> 实时工作区</span>
+              <strong>Ready</strong>
+            </div>
+            <div className="dc-entry-preview__canvas" aria-hidden="true">
+              <span className="dc-entry-preview__map-line dc-entry-preview__map-line--one" />
+              <span className="dc-entry-preview__map-line dc-entry-preview__map-line--two" />
+              <span className="dc-entry-preview__pulse dc-entry-preview__pulse--a" />
+              <span className="dc-entry-preview__pulse dc-entry-preview__pulse--b" />
+              <span className="dc-entry-preview__station">07:30</span>
+              <span className="dc-entry-preview__legend">57.6 dBZ</span>
+            </div>
+            <div className="dc-entry-preview__rail">
+              <span>上传气象数据</span>
+              <span>工具链执行</span>
+              <span>生成图层与报告</span>
+            </div>
+          </div>
+
+          <div className="dc-entry-links" aria-label="法律与隐私链接">
+            <Link to="/terms">服务协议</Link>
+            <Link to="/privacy">隐私政策</Link>
+          </div>
+        </section>
+
+        <section className="dc-auth-panel" aria-labelledby="geoforge-login-panel-title">
+          <div className="dc-auth-card-head">
+            <span className="dc-auth-card-head__icon" aria-hidden="true">
+              {step === 'signup' ? <UserRound size={21} /> : step === 'options' ? <KeyRound size={21} /> : <LockKeyhole size={21} />}
+            </span>
+            <span>
+              <strong>{step === 'options' ? '登录选项' : step === 'signup' ? '创建账户' : '安全登录'}</strong>
+              <small>Better Auth 会话保护 · Casbin 权限控制</small>
+            </span>
           </div>
 
           <div className="dc-auth-step">
-            <span className="dc-auth-step__eyebrow">
-              {step === 'options' ? '登录选项' : step === 'signup' ? '创建账户' : '安全登录'}
-            </span>
-            <h1 id="geoforge-login-title">{stepTitle(step)}</h1>
+            <h2 id="geoforge-login-panel-title">{stepTitle(step)}</h2>
             <p>{stepDescription(step)}</p>
           </div>
 
@@ -117,13 +181,15 @@ export function LoginScreen({
               <button type="button" onClick={goEmail}>
                 <Mail size={20} aria-hidden="true" />
                 <span><strong>邮箱密码登录</strong><small>使用 GeoForge 账号继续访问工作台。</small></span>
+                <ArrowRight size={17} aria-hidden="true" />
               </button>
               <button type="button" onClick={goSignup}>
                 <ShieldCheck size={20} aria-hidden="true" />
                 <span><strong>创建 GeoForge 账号</strong><small>注册后会自动创建个人工作区。</small></span>
+                <ArrowRight size={17} aria-hidden="true" />
               </button>
               <div className="dc-auth-options__note">
-                <KeyRound size={18} aria-hidden="true" />
+                <CheckCircle2 size={18} aria-hidden="true" />
                 <span>如果账号被禁用或缺少权限，请联系平台管理员处理。</span>
               </div>
             </div>
@@ -182,14 +248,38 @@ export function LoginScreen({
               </div>
             </form>
           )}
-        </section>
 
-        <button type="button" className="dc-auth-options-bar" onClick={step === 'options' ? goEmail : goOptions}>
-          <KeyRound size={24} aria-hidden="true" />
-          <span>{step === 'options' ? '返回邮箱登录' : '登录选项'}</span>
-        </button>
+          <aside className="dc-entry-status" aria-label="启动状态">
+            <div>
+              <Sparkles size={18} aria-hidden="true" />
+              <span>分析服务、地图和工具目录会在登录后按权限加载。</span>
+            </div>
+            <button type="button" className="dc-auth-options-bar" onClick={step === 'options' ? goEmail : goOptions}>
+              <KeyRound size={21} aria-hidden="true" />
+              <span>{step === 'options' ? '返回邮箱登录' : '登录选项'}</span>
+            </button>
+          </aside>
+        </section>
       </div>
     </main>
+  )
+}
+
+interface FeatureCardProps {
+  icon: ReactNode
+  title: string
+  description: string
+}
+
+function FeatureCard({ icon, title, description }: FeatureCardProps) {
+  return (
+    <div className="dc-entry-feature">
+      <span className="dc-entry-feature__icon" aria-hidden="true">{icon}</span>
+      <span>
+        <strong>{title}</strong>
+        <small>{description}</small>
+      </span>
+    </div>
   )
 }
 

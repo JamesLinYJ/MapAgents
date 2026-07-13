@@ -31,10 +31,16 @@ import {
 import type {
   AgentRuntimeConfig,
   ArtifactRef,
+  BackgroundTaskInfo,
   LayerDescriptor,
+  ScheduledTask,
   SystemComponentsStatus,
   ToolDescriptor,
   ToolValueRef,
+  TokenUsageSummary,
+  WorkflowDefinition,
+  WorkflowRunRecord,
+  WorkflowValidationResult,
 } from '@geo-agent-platform/shared-types'
 
 import { StatusPill } from '../../shared/components/StatusPill'
@@ -52,6 +58,15 @@ import { ToolMiniAppPanel } from './ToolMiniApp'
 import { isRecord } from '../../shared/utils/guards'
 import type { MemoryEntry } from '../conversation/types'
 import { SdkExtensionManagement, type SdkManagementView } from './SdkExtensionManagement'
+import type {
+  ScheduledTaskCreatePayload,
+  ScheduledTaskUpdatePayload,
+  StartWorkflowPayload,
+  WorkflowDraftPayload,
+  WorkflowUpdatePayload,
+} from '../../api/client'
+import { WorkflowManagementPanel } from './WorkflowManagementPanel'
+import { UsageManagementPanel } from './UsageManagementPanel'
 import {
   filterTools,
   findToolCatalogEntry,
@@ -72,17 +87,39 @@ export interface ToolManagementPageProps {
   toolRunResult?: Record<string, unknown> | null
   toolCatalogEntries: Array<Record<string, unknown>>
   systemComponents?: SystemComponentsStatus
+  tokenUsageSummary?: TokenUsageSummary
+  workflowDefinitions: WorkflowDefinition[]
+  workflowDiagnostics: Array<Record<string, unknown>>
+  workflowValidation: Record<string, WorkflowValidationResult>
+  scheduledTasks: ScheduledTask[]
+  workflowRuns: WorkflowRunRecord[]
+  backgroundTasks: BackgroundTaskInfo[]
   isToolSubmitting: boolean
+  isWorkflowSubmitting: boolean
   isToolCatalogSubmitting?: boolean
   isRuntimeConfigSubmitting?: boolean
   onRunTool: (tool: ToolDescriptor, args: Record<string, unknown>) => void
   onUpsertToolCatalogEntry: (tool: ToolDescriptor, payload: Record<string, unknown>, sortOrder?: number) => void
   onDeleteToolCatalogEntry: (tool: ToolDescriptor) => void
   onSaveRuntimeConfig?: (config: AgentRuntimeConfig) => void | Promise<void>
+  onStartWorkflow: (payload: StartWorkflowPayload) => void
+  onValidateWorkflow: (payload: WorkflowDraftPayload) => Promise<WorkflowValidationResult>
+  onCreateWorkflow: (payload: WorkflowDraftPayload) => Promise<WorkflowDefinition>
+  onUpdateWorkflow: (payload: WorkflowUpdatePayload) => Promise<WorkflowDefinition>
+  onPublishWorkflow: (workflowId: string, revision: number) => Promise<void>
+  onDisableWorkflow: (workflowId: string) => Promise<void>
+  onRespondWorkflowApproval: (workflowRunId: string, approvalId: string, decision: 'approved' | 'rejected') => Promise<void>
+  onCancelWorkflow: (workflowRunId: string) => void
+  onSaveScheduledTask: (payload: ScheduledTaskCreatePayload | ScheduledTaskUpdatePayload) => void
+  onDeleteScheduledTask: (taskId: string) => void
+  onCancelBackgroundTask: (taskId: string) => void
+  onPromoteBackgroundTask: (taskId: string) => void
   onRefreshMemories?: () => void
 }
 
-type ToolManagementView = 'tools' | SdkManagementView
+type WorkflowManagementView = 'workflows' | 'scheduled' | 'background'
+type UsageManagementView = 'usage'
+type ToolManagementView = 'tools' | SdkManagementView | WorkflowManagementView | UsageManagementView
 
 export function ToolManagementPage({
   tools,
@@ -96,13 +133,33 @@ export function ToolManagementPage({
   toolRunResult,
   toolCatalogEntries,
   systemComponents,
+  tokenUsageSummary,
+  workflowDefinitions,
+  workflowDiagnostics,
+  workflowValidation,
+  scheduledTasks,
+  workflowRuns,
+  backgroundTasks,
   isToolSubmitting,
+  isWorkflowSubmitting,
   isToolCatalogSubmitting,
   isRuntimeConfigSubmitting,
   onRunTool,
   onUpsertToolCatalogEntry,
   onDeleteToolCatalogEntry,
   onSaveRuntimeConfig,
+  onStartWorkflow,
+  onValidateWorkflow,
+  onCreateWorkflow,
+  onUpdateWorkflow,
+  onPublishWorkflow,
+  onDisableWorkflow,
+  onRespondWorkflowApproval,
+  onCancelWorkflow,
+  onSaveScheduledTask,
+  onDeleteScheduledTask,
+  onCancelBackgroundTask,
+  onPromoteBackgroundTask,
   onRefreshMemories,
 }: ToolManagementPageProps) {
   const [activeView, setActiveView] = useState<ToolManagementView>('tools')
@@ -128,6 +185,10 @@ export function ToolManagementPage({
   const skillCount = (runtimeConfig?.sdk.skills.skillPaths.length ?? 0) + (runtimeConfig?.sdk.skills.skillRoots.length ?? 0)
   const viewTabs: Array<{ id: ToolManagementView; label: string; count: number; description: string }> = [
     { id: 'tools', label: '内置工具', count: tools.length, description: 'Provider 工具与目录治理' },
+    { id: 'workflows', label: '工作流编排', count: workflowDefinitions.length, description: '可视化工具流、版本与运行审批' },
+    { id: 'scheduled', label: '定时任务', count: scheduledTasks.length, description: 'ScheduledWakeUp' },
+    { id: 'background', label: '后台任务', count: backgroundTasks.length, description: '运行中任务观察' },
+    { id: 'usage', label: '用量统计', count: tokenUsageSummary?.totals.runsWithUsage ?? 0, description: '输入 / 输出 / 缓存' },
     { id: 'mcp', label: 'MCP', count: mcpServerCount, description: '外部 MCP Server' },
     { id: 'skills', label: 'Skill', count: skillCount, description: 'SDK Skill 目录' },
     { id: 'memory', label: '记忆', count: memories.length, description: '长期与会话记忆' },
@@ -397,6 +458,32 @@ export function ToolManagementPage({
           </LiquidGlassSurface>
         </main>
         </div>
+      ) : activeView === 'workflows' || activeView === 'scheduled' || activeView === 'background' ? (
+        <WorkflowManagementPanel
+          view={activeView}
+          tools={tools}
+          workflows={workflowDefinitions}
+          workflowDiagnostics={workflowDiagnostics}
+          workflowValidation={workflowValidation}
+          scheduledTasks={scheduledTasks}
+          workflowRuns={workflowRuns}
+          backgroundTasks={backgroundTasks}
+          isSubmitting={isWorkflowSubmitting}
+          onStartWorkflow={onStartWorkflow}
+          onValidateWorkflow={onValidateWorkflow}
+          onCreateWorkflow={onCreateWorkflow}
+          onUpdateWorkflow={onUpdateWorkflow}
+          onPublishWorkflow={onPublishWorkflow}
+          onDisableWorkflow={onDisableWorkflow}
+          onRespondWorkflowApproval={onRespondWorkflowApproval}
+          onCancelWorkflow={onCancelWorkflow}
+          onSaveScheduledTask={onSaveScheduledTask}
+          onDeleteScheduledTask={onDeleteScheduledTask}
+          onCancelBackgroundTask={onCancelBackgroundTask}
+          onPromoteBackgroundTask={onPromoteBackgroundTask}
+        />
+      ) : activeView === 'usage' ? (
+        <UsageManagementPanel summary={tokenUsageSummary} />
       ) : (
         <SdkExtensionManagement
           view={activeView}

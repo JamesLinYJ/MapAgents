@@ -15,7 +15,7 @@ export class StoreNotFoundError extends Error {
   constructor(message: string) { super(message); this.name = 'StoreNotFoundError' }
 }
 
-// 文件型 conversation store 是事实源；本模块只维护启动后可重建的内存索引。
+// PostgreSQL conversation repository 是事实源；本模块只维护启动后可重建的内存索引。
 // PostgresPlatformStore 通过这里访问 session/thread/run，避免自身继续拥有 Map 细节。
 export class ConversationIndexStore {
   private readonly sessions = new Map<string, SessionRecord>()

@@ -14,7 +14,11 @@ import type { MeteorologyWorkerToolName } from './meteorologyWorkerClient.js'
 
 export interface MeteorologyToolDeps {
   runtimeRoot: string
-  callWorker(name: MeteorologyWorkerToolName, args: Record<string, unknown>): Promise<{ message: string; payload: Record<string, unknown> }>
+  callWorker(
+    name: MeteorologyWorkerToolName,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<{ message: string; payload: Record<string, unknown> }>
 }
 
 export type MeteorologyToolHandler = (

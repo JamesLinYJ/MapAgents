@@ -9,25 +9,68 @@
 // --------------------------------------------------------------------------
 
 import type { ComposerMode } from './types'
+import type { AgentExecutionMode } from '@geo-agent-platform/shared-types'
 
 export interface ComposerModeOption {
-  id: ComposerMode
+  id: ComposerMode | 'bypass'
   label: string
+  shortLabel: string
   description: string
   badge: string
+  executionMode: AgentExecutionMode | null
+  disabled?: boolean
+  disabledReason?: string
 }
 
-export const COMPOSER_MODES: readonly ComposerModeOption[] = [
+export const COMPOSER_MODES = [
+  {
+    id: 'approval',
+    label: '手动审批模式',
+    shortLabel: '审批',
+    description: '按 GeoForge 权限策略执行，写入、导出、删除和高风险工具会先请求确认。',
+    badge: '策略审批 · 风险动作确认',
+    executionMode: 'auto',
+  },
   {
     id: 'auto',
     label: '自动模式',
+    shortLabel: '自动',
     description: '自动规划、调用工具并推进结果。',
-    badge: 'Todo 跟踪 · 自动推进',
+    badge: '安全工具自动推进',
+    executionMode: 'auto',
   },
   {
     id: 'plan',
     label: '计划模式',
+    shortLabel: '计划',
     description: '先生成执行计划，确认后再继续。',
     badge: '先审阅 · 后执行',
+    executionMode: 'plan',
   },
-] as const
+  {
+    id: 'bypass',
+    label: '免审批权限',
+    shortLabel: '免审',
+    description: 'GeoForge 不允许前端直接跳过审批；需要管理员策略和服务端授权后才可启用。',
+    badge: '管理员策略控制',
+    executionMode: null,
+    disabled: true,
+    disabledReason: '当前工作区未授予免审批策略。',
+  },
+] as const satisfies readonly ComposerModeOption[]
+
+export function composerModeOption(mode: ComposerMode): ComposerModeOption {
+  const option = COMPOSER_MODES.find(item => item.id === mode)
+  if (!option) throw new Error(`未注册执行方式：${mode}`)
+  return option
+}
+
+export function isSelectableComposerMode(id: ComposerModeOption['id']): id is ComposerMode {
+  return id === 'approval' || id === 'auto' || id === 'plan'
+}
+
+export function executionModeForComposerMode(mode: ComposerMode): AgentExecutionMode {
+  const executionMode = composerModeOption(mode).executionMode
+  if (!executionMode) throw new Error(`执行方式 ${mode} 没有运行时映射。`)
+  return executionMode
+}

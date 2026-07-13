@@ -18,11 +18,12 @@ export const clientMsgType = z.enum([
   'thread:subscribe', 'thread:unsubscribe',
   'thread:memory:get', 'thread:memory:update', 'thread:memory:rebuild',
   'thread:trash:list', 'thread:trash:restore', 'thread:trash:purge',
-  'run:list', 'run:start', 'run:get', 'run:cancel', 'run:resume', 'run:respond-decision', 'run:subscribe', 'run:unsubscribe',
+  'run:list', 'run:start', 'run:get', 'run:cancel', 'run:resume', 'run:steer', 'run:respond-decision', 'run:subscribe', 'run:unsubscribe',
   'tool:list', 'tool:run',
   'tool-catalog:list', 'tool-catalog:upsert', 'tool-catalog:delete',
   'runtime-config:get', 'runtime-config:update',
   'provider:list', 'system:get',
+  'usage:summary',
   'speech:authorization',
   'memory:list', 'memory:read', 'memory:write', 'memory:delete', 'memory:search',
   'memory:extract', 'memory:dream',
@@ -30,13 +31,21 @@ export const clientMsgType = z.enum([
   'memory:instructions:list',
   'file:list', 'file:delete',
   'layer:list', 'layer:update', 'layer:delete',
+  'workflow:list', 'workflow:validate', 'workflow:create', 'workflow:update',
+  'workflow:publish', 'workflow:disable', 'workflow:history',
+  'workflow:start', 'workflow:cancel', 'workflow:run:get', 'workflow:respond-approval',
+  'scheduled-task:list', 'scheduled-task:create', 'scheduled-task:update', 'scheduled-task:delete',
+  'background-task:list', 'background-task:promote', 'background-task:cancel',
 ])
 
 export const clientMsgSchema = z.object({
   type: clientMsgType,
   id: z.string().min(1),
   payload: z.record(z.string(), z.unknown()).prefault({}),
-})
+  meta: z.object({
+    csrfToken: z.string().min(1).optional(),
+  }).strict().optional(),
+}).strict()
 
 export type ClientMsg = z.infer<typeof clientMsgSchema>
 

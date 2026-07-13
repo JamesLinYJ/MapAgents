@@ -1,0 +1,61 @@
+"""Python 科学计算 Worker 应用装配。"""
+
+from __future__ import annotations
+
+import logging
+
+from fastapi import FastAPI
+
+from worker_app.path_sandbox import WorkerPathSandbox
+from worker_app.routes import register_system_routes
+from worker_app.security_middleware import WorkerSecurityMiddleware
+from worker_app.settings import WorkerSettings
+from worker_app.tool_context import WorkerToolContext
+from worker_app.tool_registry import WorkerToolRegistry
+from worker_app.tool_routes import register_tool_routes
+from worker_app.tools import register_builtin_tools
+from worker_app.worker_auth import WorkerAuthConfig, WorkerAuthVerifier
+
+
+def create_worker_app(
+    settings: WorkerSettings,
+    *,
+    logger: logging.Logger | None = None,
+) -> FastAPI:
+    """创建依赖隔离的 Worker 应用实例。"""
+
+    app_logger = logger or logging.getLogger("worker")
+    tool_registry = WorkerToolRegistry()
+    register_builtin_tools(tool_registry)
+    tool_context = WorkerToolContext(WorkerPathSandbox(settings.runtime_root))
+    worker_auth = WorkerAuthVerifier(WorkerAuthConfig(
+        shared_secret=settings.shared_secret,
+        clock_skew_seconds=settings.clock_skew_seconds,
+        nonce_cache_max=settings.nonce_cache_max,
+    ))
+
+    app = FastAPI(title="geoforge-science-worker", version="0.3.0")
+    app.add_middleware(
+        WorkerSecurityMiddleware,
+        worker_auth=worker_auth,
+        max_body_bytes=settings.max_body_bytes,
+        max_concurrency=settings.max_concurrency,
+        logger=app_logger,
+    )
+    register_system_routes(
+        app,
+        worker_shared_secret=settings.shared_secret,
+        worker_auth=worker_auth,
+        nonce_cache_max=settings.nonce_cache_max,
+        tool_registry=tool_registry,
+    )
+    register_tool_routes(
+        app,
+        tool_timeout_seconds=settings.tool_timeout_seconds,
+        logger=app_logger,
+        tool_registry=tool_registry,
+        tool_context=tool_context,
+    )
+    app.state.tool_registry = tool_registry
+    app.state.tool_context = tool_context
+    return app

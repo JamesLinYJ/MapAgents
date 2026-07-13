@@ -29,7 +29,7 @@ export function projectTimeline(canonical: ConversationItem[], liveOverlay: Conv
   ]
   const latest = new Map<string, ConversationItem>()
   for (const item of combined) latest.set(item.itemId, item)
-  return [...latest.values()].sort(compareConversationItems)
+  return placeAssistantContentBeforeToolCalls([...latest.values()].sort(compareConversationItems))
 }
 
 export const mergeConversationItems = projectTimeline
@@ -65,4 +65,24 @@ function itemRank(item: ConversationItem): number {
   if (item.itemType === 'result') return 60
   if (item.itemType === 'error') return 70
   return 80
+}
+
+function placeAssistantContentBeforeToolCalls(items: ConversationItem[]): ConversationItem[] {
+  const ordered = [...items]
+  for (const item of [...ordered]) {
+    const callId = item.metadata?.assistantContentForCallId
+    if (item.itemType !== 'message' || typeof callId !== 'string') continue
+    const messageIndex = ordered.findIndex(candidate => candidate.itemId === item.itemId)
+    const toolIndex = ordered.findIndex(candidate => (
+      candidate.itemType === 'function_call' && candidate.callId === callId
+    ))
+    if (messageIndex < 0 || toolIndex < 0 || messageIndex < toolIndex) continue
+    const [message] = ordered.splice(messageIndex, 1)
+    if (!message) continue
+    const nextToolIndex = ordered.findIndex(candidate => (
+      candidate.itemType === 'function_call' && candidate.callId === callId
+    ))
+    ordered.splice(nextToolIndex, 0, message)
+  }
+  return ordered
 }

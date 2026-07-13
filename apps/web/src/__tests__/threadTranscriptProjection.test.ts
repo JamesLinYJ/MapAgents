@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ConversationItem, TranscriptEntry } from '@geo-agent-platform/shared-types'
 import { mergeConversationItems, transcriptEntriesToConversationItems } from '../app/bootstrap'
+import { requiredAt } from './testSupport'
 
 describe('thread transcript projection', () => {
   // 新 run 的 snapshot 只含当前 turn；合并后必须保留前一轮 canonical 消息且不重复当前输入。
@@ -21,7 +22,7 @@ describe('thread transcript projection', () => {
       entry(3, 'entry_user_2', 'run_2', 'user', '项目代号是什么？'),
     ])
     const current: ConversationItem[] = [{
-      ...canonical[2],
+      ...requiredAt(canonical, 2, 'canonical transcript'),
       itemId: 'item_live_user_2',
       metadata: { transcriptEntryId: 'entry_user_2', live: true },
     }]
@@ -39,7 +40,7 @@ describe('thread transcript projection', () => {
       entry(2, 'entry_assistant_1', 'run_1', 'assistant', '运行正常。'),
     ])
     const replayed: ConversationItem[] = [{
-      ...canonical[1],
+      ...requiredAt(canonical, 1, 'canonical transcript'),
       itemId: 'item_live_assistant_1',
       metadata: { transcriptEntryId: 'entry_assistant_1', live: true },
     }]
@@ -63,7 +64,7 @@ describe('thread transcript projection', () => {
       ['message', '我先查找当前线程里的气象文件。'],
       ['function_call', 'list_meteorological_files'],
     ])
-    expect(projected[1].metadata.assistantContentForCallId).toBe('call_1')
+    expect(projected.at(1)?.metadata.assistantContentForCallId).toBe('call_1')
   })
 
   // Agents SDK 有时在工具 ledger 落盘后才通过 Session 给出完整 assistant 消息；
@@ -80,8 +81,8 @@ describe('thread transcript projection', () => {
       ['message', '我先查找当前线程里的气象文件。'],
       ['function_call', 'list_meteorological_files'],
     ])
-    expect(projected[1].metadata.assistantContentForCallId).toBe('call_1')
-    expect(projected[1].metadata.transcriptEntryId).toBe('entry_checkpoint_1')
+    expect(projected.at(1)?.metadata.assistantContentForCallId).toBe('call_1')
+    expect(projected.at(1)?.metadata.transcriptEntryId).toBe('entry_checkpoint_1')
   })
 
   // checkpoint 正文和 live item 使用同一个 transcript 身份；
@@ -115,6 +116,24 @@ describe('thread transcript projection', () => {
 
     expect(merged.filter(item => item.body === '现在做 QPF 统计。')).toHaveLength(1)
     expect(merged.find(item => item.body === '现在做 QPF 统计。')?.metadata.live).toBe(true)
+  })
+
+  it('keeps late-arriving assistant tool content before its referenced tool card', () => {
+    const tool: ConversationItem = {
+      itemId: 'item_tool_1', itemType: 'function_call', runId: 'run_1', threadId: 'thread_1', turnId: 'turn_1',
+      callId: 'call_1', role: 'assistant', body: null, name: 'meteorological_stats', arguments: '{}', output: null,
+      isError: false, phase: null, status: 'completed', metadata: {}, timestamp: '2026-06-22T08:00:01.000Z',
+    }
+    const preamble: ConversationItem = {
+      itemId: 'item_preamble_1', itemType: 'message', runId: 'run_1', threadId: 'thread_1', turnId: 'turn_1',
+      callId: null, role: 'assistant', body: '现在统计降水。', name: null, arguments: null, output: null,
+      isError: false, phase: null, status: 'completed', metadata: { assistantContentForCallId: 'call_1' },
+      timestamp: '2026-06-22T08:00:02.000Z',
+    }
+
+    const merged = mergeConversationItems([], [tool, preamble])
+
+    expect(merged.map(item => item.itemId)).toEqual(['item_preamble_1', 'item_tool_1'])
   })
 
   // 文件型 transcript 的 seq 是协议顺序；同一毫秒落盘时，前端不能退回到不稳定字符串排序。

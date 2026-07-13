@@ -50,4 +50,13 @@ describe('GeoForge system prompt', () => {
     expect(prompt).toContain('SKILL.md')
     expect(prompt).not.toMatch(/Claude|Newmap|CLAUDE/u)
   })
+
+  it('keeps platform artifacts distinct from sandbox local files', () => {
+    const prompt = buildSystemPrompt(defaultRuntimeConfig(), null, '', '', '')
+
+    expect(prompt).toContain('平台 artifact URI')
+    expect(prompt).toContain('不是开发者沙箱本地文件路径')
+    expect(prompt).toContain('当前 run 的 Artifact 会按工具返回的「artifacts/<runId>/<filename>」相对路径只读挂载到沙箱')
+    expect(prompt).toContain('Artifact 已注册，但视觉内容尚未验证')
+  })
 })

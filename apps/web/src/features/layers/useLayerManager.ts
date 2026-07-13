@@ -287,6 +287,7 @@ export function useLayerManager({
       if (nextIndex === index) return current
       const next = [...base]
       const [item] = next.splice(index, 1)
+      if (!item) return current
       next.splice(nextIndex, 0, item)
       return { ...current, order: next }
     })

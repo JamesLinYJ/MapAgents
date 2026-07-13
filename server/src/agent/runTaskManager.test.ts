@@ -12,6 +12,7 @@ import type { AnalysisRun } from '../schemas/types.js'
 import type { PostgresPlatformStore } from '../store/platformStore.js'
 import type { OpenAIAgentsRuntime, RunOptions } from './runtime.js'
 import { RunTaskManager } from './runTaskManager.js'
+import { BackgroundTaskRegistry } from '../workflows/backgroundTaskRegistry.js'
 
 describe('RunTaskManager', () => {
   it('tracks a background run and calls completion callback after runtime finishes', async () => {
@@ -63,6 +64,28 @@ describe('RunTaskManager', () => {
 
     await expect(manager.cancel(run.id)).resolves.toBe(run)
     expect(cancel).toHaveBeenCalledWith(run.id)
+  })
+
+  it('propagates background cancellation into the runtime signal', async () => {
+    const run = testRun('run_4')
+    let receivedSignal: AbortSignal | undefined
+    const cancelledRun = { ...run, status: 'cancelled' as const }
+    const runtime = {
+      run: vi.fn((options: RunOptions) => new Promise<AnalysisRun>(resolve => {
+        receivedSignal = options.signal
+        options.signal?.addEventListener('abort', () => resolve(cancelledRun), { once: true })
+      })),
+      cancel: vi.fn(async () => cancelledRun),
+    } as unknown as OpenAIAgentsRuntime
+    const backgroundTasks = new BackgroundTaskRegistry()
+    const manager = new RunTaskManager(runtime, testStore(run), backgroundTasks)
+
+    const task = manager.start(testOptions(run.id))
+    await manager.cancel(run.id)
+
+    await expect(task).resolves.toEqual(cancelledRun)
+    expect(receivedSignal?.aborted).toBe(true)
+    expect(backgroundTasks.get(run.id)?.status).toBe('cancelled')
   })
 })
 

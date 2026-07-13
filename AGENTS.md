@@ -35,7 +35,7 @@
 
 GeoForge 的目标不是"能跑"，而是长期可演进、可审计、可测试的地理智能平台。新增或重构代码必须遵守以下优先级：
 
-1. **事实源唯一**：每类状态只能有一个权威事实源。文件型 conversation store 是会话历史事实源；Postgres 是平台索引和权限事实源；Zustand 是浏览器端实时业务状态事实源；TanStack Query 是 HTTP 查询缓存事实源。
+1. **事实源唯一**：每类状态只能有一个权威事实源。PostgreSQL 是结构化平台与会话事实源；内容寻址文件存储只保存大对象、Artifact 内容、SDK checkpoint 载荷和 Markdown 记忆正文；Zustand 是浏览器端实时业务状态事实源；TanStack Query 是 HTTP 查询缓存事实源。
 2. **边界显式**：HTTP、WS、Worker、文件系统、数据库、模型输出都是信任边界。跨边界必须有 schema、权限、错误模型和测试。
 3. **资源所有权清晰**：按 Session、Thread、Run、Artifact、Dataset、Layer、Tool、Config、Audit 等资源拆分模块。任何模块同时拥有三类以上资源的写路径，都需要重新设计。
 4. **通用基础设施优先成熟组件**：弹窗、下拉、表格、虚拟列表、表单、查询缓存、WebSocket 重连、日志、指标、队列、限速、文件锁等通用能力优先使用稳定组件，再用 GeoForge 风格封装。
@@ -323,7 +323,7 @@ GeoForge 前端使用分层状态，不用单一巨大 Context，也不把所有
 2. 禁用外部 Agent tracing
 3. 创建 DB 连接池 + PostGIS + Model Registry + 默认 Runtime Config
 4. 确保 DB schema（气象表 → 安全表）
-5. `store.initialize()` ——从文件系统恢复内存索引
+5. `store.initialize()` ——从 PostgreSQL 加载结构化会话索引，并初始化文件载荷存储
 6. 种子图层（如配置了 `SEED_LAYERS_DIR`）
 7. 发现并加载 ToolProvider（`discoverAndLoad`）
 8. 构建 Hono app + 注册路由 + 中间件
@@ -337,7 +337,7 @@ GeoForge 前端使用分层状态，不用单一巨大 Context，也不把所有
 1. 设置 `isShuttingDown = true`——除 `/health` 外全部请求返回 503
 2. 关闭所有 WebSocket 连接（code 1001）
 3. 并发关闭 HTTP Server + WebSocket Server
-4. Flush 文件存储（确保所有 JSONL 写入完成）
+4. Flush run mutation queue、事件 outbox 和待完成的文件载荷写入
 5. 关闭数据库连接池
 6. 超时 10s → force exit(1)
 
@@ -345,14 +345,15 @@ GeoForge 前端使用分层状态，不用单一巨大 Context，也不把所有
 
 ### 5.2 存储架构
 
-**双存储模式**：
-- **文件系统**（`runtime/conversations/`）：会话、线程、运行历史的**唯一事实源**。JSONL 追加写入，不原地修改
-- **PostgreSQL/PostGIS**（Drizzle ORM）：用户、工作区、权限、图层元数据、运行时配置、工具目录、Artifact 搜索索引——即**查询索引**，不含会话历史
+**结构化事实与文件载荷分离**：
+- **PostgreSQL/PostGIS**：用户、工作区、权限、Session、Thread、Run、Transcript Entry、Conversation Item、Run Event、Run Input、Tool Value、Artifact 元数据、图层、气象数据、运行时配置、工具目录和审计日志的唯一结构化事实源
+- **内容寻址文件存储**：只保存不适合进入关系表的大对象、上传内容、Artifact 二进制内容、SDK checkpoint 载荷和 Markdown 记忆正文；数据库保存其引用、摘要、所有权和生命周期状态
 
 **设计约束**：
-- Postgres 中不得存储 transcript entry、conversation item、run event——这些只在文件系统中
-- 文件型存储的 schema 变更必须通过 bump `STORE_SCHEMA_VERSION` 来标识，不兼容版本必须拒绝启动并给出明确的迁移指南
+- 禁止把 Session、Thread、Run、Transcript Entry、Conversation Item、Run Event 或 Tool Value 双写成 JSON/JSONL 在线事实。诊断导出可以生成文件，但不能被运行时重新扫描为事实
+- 旧 `runtime/conversations` 不做静默兼容。开发基线变化时使用显式 reset；生产数据迁移必须是单独、可审计、可回滚的离线任务
 - 内容寻址对象存储（`runtime/objects/sha256/`）使用 SHA256 哈希寻址，2 字符前缀分片。垃圾回收扫描所有引用后清理未引用对象
+- 平台单写实例边界使用 PostgreSQL session advisory lock；禁止用可残留的 lock 文件判断 API 实例所有权。进程连接断开后数据库必须自动释放实例锁
 - `PostgresPlatformStore` 是 facade，不是 God Object。它可以组合资源 Store，但不得直接承载所有 SQL、所有索引和所有资源生命周期
 - Postgres 资源按所有权拆分：`SessionStore`、`ThreadStore`、`RunStore`、`ArtifactStore`、`MeteorologicalDatasetStore`、`LayerStore`、`ToolCatalogStore`、`RuntimeConfigStore`、`AuditStore`
 - 普通 CRUD 默认使用 Drizzle schema/query builder。`db.execute(sql...)` 只允许用于 PostGIS、DDL、健康检查或 query builder 无法表达的明确特殊查询，并在代码注释中说明原因
@@ -407,10 +408,10 @@ WS 控制面必须使用命令注册表，而不是单个 `handleMessage()` 大�
 
 ### 6.1 核心原则
 
-- `AgentStateModel` 是单次 run 的执行快照
-- `runtime/conversations` 下按 `session/thread/run` 分片的 JSON、JSONL 和 Markdown 是运行历史的**唯一事实源**——Postgres 不保存这些
-- `event_msg` 是实时叙事和 UI/SSE 的重放日志
-- `context_entry` 和 `compacted` 记录是持久化的会话事实
+- `AgentStateModel` 是单次 run 的执行快照，其持久化版本保存在 PostgreSQL run 记录中
+- PostgreSQL Transcript Entry、Conversation Item、Run Event、Run Input 与 Tool Value 是运行历史事实；内存索引和前端状态都是可重建投影
+- 文件系统中的 SDK checkpoint 只保存恢复载荷；checkpoint 的 run 归属、版本、digest 和状态必须由 PostgreSQL 记录约束
+- `event_msg` 是实时叙事和 UI 重放日志；`context_entry` 和 `compacted` 是持久化会话事实，均不得依赖目录扫描恢复
 
 ### 6.2 上下文规则
 
@@ -610,7 +611,8 @@ third_party/
 - 禁止的 import 模式（跨层反向依赖）
 - 禁止的代码模式（`as any`、`finalResponse`、`subscribe_messages` 等已废弃的 API）
 - Transcript entry kind 的白名单验证
-- 文件型 conversation store 的可重放性验证
+- PostgreSQL conversation repository 的顺序、一致性、事务回滚与重放验证
+- 禁止 Session/Thread/Run/Item/Event/Value 回流到 JSONL 在线事实源
 - 禁止 `PostgresPlatformStore` 重新拥有所有资源写路径或直接维护 session/thread/run Map
 - 禁止 `server/src/ws/handler.ts` 出现新增大型 command switch；WS 命令必须通过 registry 注册
 - 禁止普通 Store CRUD 使用裸 `db.execute(sql...)`，除非文件位于 PostGIS/DDL/health 明确例外列表

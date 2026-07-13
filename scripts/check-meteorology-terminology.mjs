@@ -13,6 +13,8 @@ import path from 'node:path'
 import process from 'node:process'
 
 const root = process.cwd()
+const sourceRoots = ['apps', 'server', 'packages', 'scripts', 'infra']
+const rootSourceFiles = ['.env.example', 'package.json', 'dev.ps1', 'dev.sh']
 const legacyTerms = [
   ['wea', 'ther'].join(''),
   ['Wea', 'ther'].join(''),
@@ -63,7 +65,12 @@ const allowedSnapshot = [
 ]
 
 const violations = []
-await walk(root)
+for (const sourceRoot of sourceRoots) {
+  await walk(path.join(root, sourceRoot))
+}
+for (const fileName of rootSourceFiles) {
+  await checkFile(path.join(root, fileName))
+}
 
 if (violations.length) {
   console.error('气象术语检查失败：GeoForge 自有代码仍含旧命名。')
@@ -88,15 +95,21 @@ async function walk(directory) {
       await walk(fullPath)
       continue
     }
-    if (!entry.isFile()) continue
-    checkPath(relativePath)
-    if (ignoredExtensions.has(path.extname(entry.name).toLowerCase())) continue
-    const text = await readFile(fullPath, 'utf8').catch(() => null)
-    if (text === null) continue
-    for (const term of legacyTerms) {
-      if (text.includes(term)) {
-        violations.push(`${relativePath}: contains "${term}"`)
-      }
+    if (entry.isFile()) await checkFile(fullPath)
+  }
+}
+
+async function checkFile(fullPath) {
+  const relativePath = path.relative(root, fullPath)
+  const fileName = path.basename(fullPath)
+  if (shouldIgnore(relativePath, fileName)) return
+  checkPath(relativePath)
+  if (ignoredExtensions.has(path.extname(fileName).toLowerCase())) return
+  const text = await readFile(fullPath, 'utf8').catch(() => null)
+  if (text === null) return
+  for (const term of legacyTerms) {
+    if (text.includes(term)) {
+      violations.push(`${relativePath}: contains "${term}"`)
     }
   }
 }

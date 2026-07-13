@@ -11,7 +11,7 @@
 import type { SessionRecord } from '../schemas/types.js'
 import { makeId, makeShareToken, nowUtc } from '../utils/ids.js'
 import type { ConversationIndexStore } from './conversationIndexStore.js'
-import type { FileConversationStore } from './fileConversationStore.js'
+import type { ConversationRepository } from './postgres/conversationRepository.js'
 
 export interface ResourceOwner {
   workspaceId: string
@@ -25,7 +25,7 @@ export const DEFAULT_SESSION_ID = '__default__'
 export class SessionStore {
   constructor(
     private readonly index: ConversationIndexStore,
-    private readonly conversationStore: FileConversationStore,
+    private readonly repository: ConversationRepository,
   ) {}
 
   values(): IterableIterator<SessionRecord> {
@@ -63,14 +63,27 @@ export class SessionStore {
     return this.index.getSession(sessionId)
   }
 
+  getByShareToken(shareToken: string): SessionRecord | null {
+    const normalized = shareToken.trim()
+    if (!normalized) return null
+    for (const session of this.values()) {
+      if (session.shareToken === normalized) return session
+    }
+    return null
+  }
+
   async update(sessionId: string, fields: Partial<SessionRecord>): Promise<SessionRecord> {
     const next = { ...this.get(sessionId), ...fields }
     await this.persist(next)
     return next
   }
 
+  acceptPersisted(session: SessionRecord): void {
+    this.index.setSession(session)
+  }
+
   private async persist(session: SessionRecord): Promise<void> {
-    await this.conversationStore.saveSession(session)
+    await this.repository.saveSession(session)
     this.index.setSession(session)
   }
 
@@ -90,4 +103,3 @@ export class SessionStore {
     }
   }
 }
-

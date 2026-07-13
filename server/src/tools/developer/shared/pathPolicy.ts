@@ -75,6 +75,7 @@ export async function resolveDeveloperPath(
   if (!roots.length) throw new Error('开发工具没有配置允许访问的根目录')
 
   const defaultRoot = roots[0]
+  if (!defaultRoot) throw new Error('开发工具没有配置有效的允许访问根目录')
   const absolutePath = path.isAbsolute(requestedPath)
     ? path.resolve(requestedPath)
     : path.resolve(defaultRoot, requestedPath)

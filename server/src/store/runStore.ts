@@ -11,7 +11,6 @@
 import type {
   AgentRuntimeConfig,
   AgentState,
-  AgentThreadRecord,
   AnalysisRun,
   ConversationItem,
   RunCheckpoint,
@@ -20,18 +19,20 @@ import type {
   ToolValueRef,
 } from '../schemas/types.js'
 import { summarizeAssistantText } from '../conversation/items.js'
+import { errorLogPayload, logger } from '../observability/logger.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 import type { ConversationIndexStore } from './conversationIndexStore.js'
 import type { InMemoryEventBus } from './eventBus.js'
 import type { FileConversationStore } from './fileConversationStore.js'
 import {
   decodeRunCursor,
-  dedupeById,
+  compareRuns,
   encodeRunCursor,
   isRunAfterCursor,
   toRunSummary,
 } from './platformStoreUtils.js'
 import type { SessionStore } from './sessionStore.js'
+import type { ConversationRepository } from './postgres/conversationRepository.js'
 
 export interface RunStoreEvents {
   runBus: InMemoryEventBus<AnalysisRun>
@@ -42,10 +43,13 @@ export interface RunStoreEvents {
 // RunStore 拥有 run manifest、checkpoint、event 和 item 追加写入。
 // session/thread 上的 latest* 字段是 run 的投影，由这里同步维护。
 export class RunStore {
+  private readonly durableRunningItems = new Map<string, Set<string>>()
+
   constructor(
     private readonly index: ConversationIndexStore,
     private readonly conversationStore: FileConversationStore,
     private readonly sessionStore: SessionStore,
+    private readonly repository: ConversationRepository,
     private readonly events: RunStoreEvents,
   ) {}
 
@@ -55,6 +59,12 @@ export class RunStore {
 
   listForThread(threadId: string): AnalysisRun[] {
     return this.index.listRunsForThread(threadId)
+  }
+
+  listForWorkspace(workspaceId: string): AnalysisRun[] {
+    return [...this.index.runValues()]
+      .filter(run => run.workspaceId === workspaceId)
+      .sort(compareRuns)
   }
 
   listSummaries(options: {
@@ -80,10 +90,11 @@ export class RunStore {
     const page = eligible.slice(0, limit + 1)
     const hasMore = page.length > limit
     const selected = hasMore ? page.slice(0, limit) : page
+    const lastSelected = selected.at(-1)
 
     return {
       items: selected.map(toRunSummary),
-      nextCursor: hasMore && selected.length ? encodeRunCursor(selected[selected.length - 1]) : null,
+      nextCursor: hasMore && lastSelected ? encodeRunCursor(lastSelected) : null,
     }
   }
 
@@ -154,32 +165,19 @@ export class RunStore {
         failedTool: null,
       },
     }
-    await this.conversationStore.createRun(run)
-    await this.sessionStore.update(sessionId, {
-      latestRunId: run.id,
-      latestThreadId: thread?.id ?? session.latestThreadId,
-    })
-    if (thread) {
-      const nextThread: AgentThreadRecord = {
-        ...thread,
-        latestRunId: run.id,
-        latestUserQuery: query,
-        latestRunStatus: run.status,
-        runCount: thread.runCount + 1,
-        updatedAt: now,
-      }
-      await this.conversationStore.saveThread(nextThread)
-      this.index.setThread(nextThread)
-    }
-    this.index.setRun(run)
-    this.events.runBus.publish(run.id, structuredClone(run))
-    return run
+    const persisted = await this.repository.createRunLifecycle(run)
+    this.conversationStore.registerRun(persisted.run)
+    this.sessionStore.acceptPersisted(persisted.session)
+    if (persisted.thread) this.index.setThread(persisted.thread)
+    this.index.setRun(persisted.run)
+    this.events.runBus.publish(run.id, structuredClone(persisted.run))
+    return persisted.run
   }
 
   async updateState(runId: string, updates: Partial<AgentState>): Promise<AnalysisRun> {
     const run = this.get(runId)
     const next = { ...run, state: { ...run.state, ...updates }, updatedAt: nowUtc() }
-    await this.conversationStore.saveRun(next)
+    await this.repository.saveRun(next)
     this.index.setRun(next)
     this.events.runBus.publish(runId, structuredClone(next))
     return next
@@ -188,20 +186,19 @@ export class RunStore {
   async updateStatus(runId: string, status: AnalysisRun['status']): Promise<AnalysisRun> {
     const run = this.get(runId)
     const next = { ...run, status, updatedAt: nowUtc() }
-    await this.persistThreadRunStatus(run, status, next.updatedAt)
-    await this.conversationStore.saveRun(next, {
+    await this.repository.saveRunWithCheckpoint(next, {
       recoveryStatus: status === 'interrupted' ? 'interrupted' : status === 'requires_action' ? 'requires_action' : 'clean',
     })
     this.index.setRun(next)
     this.events.runBus.publish(runId, structuredClone(next))
+    await this.persistDerivedThreadRunStatusProjection(run, status, next.updatedAt)
     return next
   }
 
   async complete(runId: string, status: string): Promise<AnalysisRun> {
     const run = this.get(runId)
     const next = { ...run, status: status as AnalysisRun['status'], updatedAt: nowUtc() }
-    await this.persistThreadRunStatus(run, next.status, next.updatedAt)
-    await this.conversationStore.saveRun(next, {
+    await this.repository.saveRunWithCheckpoint(next, {
       recoveryStatus: next.status === 'waiting_approval' || next.status === 'requires_action'
         ? 'requires_action'
         : 'clean',
@@ -209,6 +206,8 @@ export class RunStore {
     await this.conversationStore.flush()
     this.index.setRun(next)
     this.events.runBus.publish(runId, structuredClone(next))
+    await this.persistDerivedThreadRunStatusProjection(run, next.status, next.updatedAt)
+    this.durableRunningItems.delete(runId)
     return next
   }
 
@@ -216,11 +215,13 @@ export class RunStore {
     runId: string,
     fields: Partial<Pick<RunCheckpoint, 'activeEntryId' | 'pendingToolCallIds' | 'recoveryStatus'>> = {},
   ): Promise<void> {
-    await this.conversationStore.saveRun(this.get(runId), fields)
+    this.get(runId)
+    await this.repository.saveRunCheckpoint(runId, fields)
   }
 
   async getCheckpoint(runId: string): Promise<RunCheckpoint> {
-    return this.conversationStore.getRunCheckpoint(runId)
+    this.get(runId)
+    return this.repository.getRunCheckpoint(runId)
   }
 
   async appendAgentTranscript(runId: string, agentId: string, record: Record<string, unknown>): Promise<void> {
@@ -234,47 +235,60 @@ export class RunStore {
     metadata: { agentsSdkVersion: string; runtimeConfigDigest: string },
   ): Promise<void> {
     this.get(runId)
-    await this.conversationStore.saveAgentsSdkState(runId, serializedState, metadata)
+    const reference = await this.conversationStore.putObject(
+      serializedState,
+      'application/vnd.geoforge.agents-state+json',
+    )
+    await this.repository.saveAgentsSdkCheckpoint(runId, {
+      contentHash: reference.hash,
+      agentsSdkVersion: metadata.agentsSdkVersion,
+      runtimeConfigDigest: metadata.runtimeConfigDigest,
+      sdkStateSchemaVersion: 2,
+    })
   }
 
   async readAgentsSdkState(runId: string): Promise<string> {
     this.get(runId)
-    return this.conversationStore.readAgentsSdkState(runId)
+    const checkpoint = await this.repository.getRunCheckpoint(runId)
+    const hash = checkpoint.sdkStateContentHash
+    if (!hash) throw new Error(`run '${runId}' 缺少 Agents SDK 状态，不能恢复`)
+    const bytes = await this.conversationStore.readObjectByHash(hash)
+    return Buffer.from(bytes).toString('utf8')
   }
 
   async appendToolValue(runId: string, value: ToolValueRef): Promise<void> {
     this.get(runId)
-    await this.conversationStore.appendValue(runId, value)
+    await this.repository.appendToolValue(runId, value)
   }
 
   async appendEvent(runId: string, event: RunEvent): Promise<void> {
     this.get(runId)
-    await this.conversationStore.appendEvent(event)
+    await this.repository.appendRunEvent(event)
     this.events.eventBus.publish(runId, event)
   }
 
   async listEvents(runId: string): Promise<RunEvent[]> {
     this.get(runId)
-    const persisted = await this.conversationStore.listEvents(runId)
-    const current = this.events.eventBus.list(runId)
-    return dedupeById([...persisted, ...current], event => event.eventId)
+    return this.repository.listRunEvents(runId)
   }
 
   async appendItem(item: ConversationItem): Promise<void> {
     this.get(item.runId)
-    await this.conversationStore.appendItem(item)
+    if (this.shouldPersistItem(item)) {
+      await this.repository.appendConversationItem(item)
+    }
     this.events.itemBus.publish(item.runId, item)
-    if (item.status !== 'running') await this.updateThreadProjectionFromItem(item)
+    if (item.status !== 'running') this.updateThreadProjectionFromItem(item)
   }
 
   async listItems(runId: string): Promise<ConversationItem[]> {
     this.get(runId)
-    const persisted = await this.conversationStore.listItems(runId)
+    const persisted = await this.repository.listConversationItems(runId)
     const byItemId = new Map<string, ConversationItem>()
-    for (const item of [...persisted, ...this.events.itemBus.list(runId)]) {
+    for (const item of persisted) {
       byItemId.set(item.itemId, item)
     }
-    return [...byItemId.values()].sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+    return orderConversationItems([...byItemId.values()])
   }
 
   private async persistThreadRunStatus(run: AnalysisRun, status: AnalysisRun['status'], updatedAt: string): Promise<void> {
@@ -282,11 +296,26 @@ export class RunStore {
     const thread = this.index.getThreadOrNull(run.threadId)
     if (!thread) return
     const nextThread = { ...thread, latestRunStatus: status, updatedAt }
-    await this.conversationStore.saveThread(nextThread)
+    await this.repository.saveThread(nextThread)
     this.index.setThread(nextThread)
   }
 
-  private async updateThreadProjectionFromItem(item: ConversationItem): Promise<void> {
+  // PostgreSQL run records are the durable fact source. Thread latest status is
+  // a derived navigation projection and must never replace the run fact.
+  private async persistDerivedThreadRunStatusProjection(run: AnalysisRun, status: AnalysisRun['status'], updatedAt: string): Promise<void> {
+    try {
+      await this.persistThreadRunStatus(run, status, updatedAt)
+    } catch (error) {
+      logger.warn({
+        error: errorLogPayload(error),
+        runId: run.id,
+        threadId: run.threadId,
+        status,
+      }, 'thread run-status projection failed')
+    }
+  }
+
+  private updateThreadProjectionFromItem(item: ConversationItem): void {
     if (!item.threadId) return
     const thread = this.index.getThreadOrNull(item.threadId)
     if (!thread) return
@@ -307,7 +336,46 @@ export class RunStore {
 
     if (next === thread) return
     next = { ...next, updatedAt: nowUtc() }
-    await this.conversationStore.saveThread(next)
     this.index.setThread(next)
   }
+
+  private shouldPersistItem(item: ConversationItem): boolean {
+    if (item.status !== 'running') {
+      this.durableRunningItems.get(item.runId)?.delete(item.itemId)
+      return true
+    }
+
+    let itemIds = this.durableRunningItems.get(item.runId)
+    if (!itemIds) {
+      itemIds = new Set<string>()
+      this.durableRunningItems.set(item.runId, itemIds)
+    }
+    if (itemIds.has(item.itemId)) return false
+    itemIds.add(item.itemId)
+    return true
+  }
+}
+
+function orderConversationItems(items: ConversationItem[]): ConversationItem[] {
+  const ordered = [...items].sort((left, right) => left.timestamp.localeCompare(right.timestamp))
+
+  // Chat Completions 的一条 assistant 输出可以同时包含可见正文和 tool_call。
+  // SDK 可能在工具已经执行后才投影完整正文；显式关系优先于到达时间。
+  for (const item of [...ordered]) {
+    const callId = item.metadata.assistantContentForCallId
+    if (item.itemType !== 'message' || typeof callId !== 'string') continue
+    const messageIndex = ordered.findIndex(candidate => candidate.itemId === item.itemId)
+    const toolIndex = ordered.findIndex(candidate => (
+      candidate.itemType === 'function_call' && candidate.callId === callId
+    ))
+    if (messageIndex < 0 || toolIndex < 0 || messageIndex < toolIndex) continue
+    const [message] = ordered.splice(messageIndex, 1)
+    if (!message) continue
+    const nextToolIndex = ordered.findIndex(candidate => (
+      candidate.itemType === 'function_call' && candidate.callId === callId
+    ))
+    ordered.splice(nextToolIndex, 0, message)
+  }
+
+  return ordered
 }

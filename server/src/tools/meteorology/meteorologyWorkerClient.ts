@@ -15,10 +15,15 @@
 // 调用时消费该 catalog，不维护第二份手写 Worker schema。
 
 import { createHash } from 'node:crypto'
-import { workerToolCatalogSchema, type WorkerToolCatalog, type WorkerToolSpec } from '@geo-agent-platform/shared-types'
+import {
+  workerToolCatalogSchema,
+  type WorkerToolCatalog,
+  type WorkerToolSpec,
+} from '@geo-agent-platform/shared-types/worker'
 import { parametersFromJsonSchema, stableJson } from '../../framework/schema.js'
 import { currentLogContext } from '../../observability/logger.js'
 import { signWorkerRequest } from './workerAuth.js'
+import { abortSignalWithTimeout } from '../../utils/abort.js'
 
 export const REQUIRED_METEOROLOGY_WORKER_TOOLS = [
   'meteorological_inspect',
@@ -55,6 +60,7 @@ export async function callMeteorologyWorker(
   config: MeteorologyWorkerClientConfig,
   name: MeteorologyWorkerToolName,
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ) {
   const url = config.workerUrl
   if (!url) throw new Error('WORKER_URL 未配置')
@@ -70,7 +76,7 @@ export async function callMeteorologyWorker(
       ...traceHeaders(),
     },
     body,
-    signal: AbortSignal.timeout(config.requestTimeoutMs),
+    signal: abortSignalWithTimeout(signal, config.requestTimeoutMs),
   })
   if (!response.ok) {
     const detail = await response.text()

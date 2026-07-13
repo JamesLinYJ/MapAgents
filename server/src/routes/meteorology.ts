@@ -61,7 +61,7 @@ export async function ensureMeteorologicalTables(db: Database): Promise<void> {
   await verifySchema(db, METEOROLOGICAL_TABLES)
 }
 
-export function meteorologyRoutes(db: Database, runtimeRoot: string, store: PostgresPlatformStore, security: SecurityServices, env?: Env) {
+export function meteorologyRoutes(runtimeRoot: string, store: PostgresPlatformStore, security: SecurityServices, env?: Env) {
   const files = new RuntimeFileStore(runtimeRoot)
   const app = new Hono()
 

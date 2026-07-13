@@ -10,7 +10,7 @@
 
 import { Hono } from 'hono'
 import type { Database } from '../db/connection.js'
-import { platformRoleSchema } from '../schemas/types.js'
+import { platformRoleSchema } from '@geo-agent-platform/shared-types/platform'
 import { BetterAuthService } from './authService.js'
 import { SecurityAdminStore } from './adminStore.js'
 import { AuthorizationError, AuthorizationService } from './authorizationService.js'

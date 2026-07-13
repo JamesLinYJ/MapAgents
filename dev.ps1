@@ -21,7 +21,8 @@ param(
     [int]$Tail = 80,
 
     [switch]$OpenBrowser,
-    [switch]$KeepPostgis
+    [switch]$KeepPostgis,
+    [switch]$FollowLogs
 )
 
 $ErrorActionPreference = 'Stop'
@@ -155,7 +156,7 @@ function Set-DefaultEnvironment {
     Set-ProcessDefault 'BETTER_AUTH_MIN_PASSWORD_LENGTH' '12'
     Set-ProcessDefault 'CSRF_HEADER_NAME' 'x-geoforge-csrf'
     Set-ProcessValue 'TRUSTED_ORIGINS' "http://127.0.0.1:$($env:WEB_DEV_PORT),http://localhost:$($env:WEB_DEV_PORT)"
-    $devToolProviders = 'geo-platform-chart,geo-platform-geocode,geo-platform-plan,geo-platform-developer-tools,geo-platform-spatial,geo-platform-routing,geo-platform-meteorology'
+    $devToolProviders = 'geo-platform-chart,geo-platform-geocode,geo-platform-plan,geo-platform-developer-tools,geo-platform-spatial,geo-platform-routing,geo-platform-meteorology,geo-platform-scheduled-wake-up'
     Set-ProcessDefault 'ENABLED_TOOL_PROVIDERS' $devToolProviders
     Ensure-ProcessCsvIncludes 'ENABLED_TOOL_PROVIDERS' $devToolProviders.Split(',')
     Set-ProcessDefault 'DEVELOPER_TOOL_ALLOWED_ROOTS' "$Root;$RuntimeRoot"
@@ -575,15 +576,62 @@ function Stop-AppService {
 
 function Show-LogTail {
     param([string]$Name, [int]$Lines = $Tail)
+    $printed = $false
     foreach ($suffix in @('out', 'err')) {
         $path = Join-Path $LogDir "$Name.$suffix.log"
         if (-not (Test-Path -LiteralPath $path)) { continue }
         Write-Host ''
         Write-Host "  $Name.$suffix.log" -ForegroundColor $Colors.Accent
-        Get-Content -LiteralPath $path -Tail $Lines | ForEach-Object {
+        $content = @(Get-Content -LiteralPath $path -Tail $Lines)
+        if (-not $content.Count) {
+            Write-Host "    暂无日志输出" -ForegroundColor $Colors.Muted
+        }
+        $content | ForEach-Object {
             Write-Host "    $_" -ForegroundColor $(if ($suffix -eq 'err') { $Colors.Warn } else { $Colors.Muted })
         }
+        $printed = $true
     }
+    if (-not $printed) {
+        Write-Host ''
+        Write-Host "  $Name 日志文件尚未创建" -ForegroundColor $Colors.Muted
+    }
+}
+
+function Get-SelectedAppServices {
+    if ($Service -eq 'all') {
+        return @('worker', 'api', 'web')
+    }
+    return @($Service)
+}
+
+function Show-SelectedLogs {
+    param([int]$Lines = $Tail)
+    Write-Rule 'Recent logs'
+    foreach ($name in Get-SelectedAppServices) {
+        Show-LogTail $name $Lines
+    }
+    Write-Footer
+}
+
+function Follow-SelectedLogs {
+    $paths = @()
+    foreach ($name in Get-SelectedAppServices) {
+        foreach ($suffix in @('out', 'err')) {
+            $path = Join-Path $LogDir "$name.$suffix.log"
+            if (Test-Path -LiteralPath $path) {
+                $paths += $path
+            }
+        }
+    }
+    if (-not $paths.Count) {
+        Write-Result '没有可追踪的日志文件。' 'warn'
+        return
+    }
+    Write-Host ''
+    Write-Rule 'Following logs'
+    Write-Host '  按 Ctrl+C 停止日志追踪；服务进程会继续运行。' -ForegroundColor $Colors.Muted
+    Write-Footer
+    Get-Content -LiteralPath $paths -Tail 0 -Wait
 }
 
 function Show-Dashboard {
@@ -640,8 +688,12 @@ function Start-Stack {
         Write-Result "$((Get-ServiceDefinition $Service).Label) 已就绪" 'ok'
     }
     Write-Host "  Logs      $LogDir" -ForegroundColor $Colors.Muted
+    Show-SelectedLogs ([Math]::Min($Tail, 80))
     if ($OpenBrowser -and $Service -in @('all', 'web')) {
         Start-Process "http://127.0.0.1:$($env:WEB_DEV_PORT)" | Out-Null
+    }
+    if ($FollowLogs) {
+        Follow-SelectedLogs
     }
 }
 
@@ -672,10 +724,9 @@ try {
         }
         'status' { Show-Dashboard }
         'logs' {
-            if ($Service -eq 'all') {
-                foreach ($name in @('worker', 'api', 'web')) { Show-LogTail $name }
-            } else {
-                Show-LogTail $Service
+            Show-SelectedLogs $Tail
+            if ($FollowLogs) {
+                Follow-SelectedLogs
             }
         }
     }

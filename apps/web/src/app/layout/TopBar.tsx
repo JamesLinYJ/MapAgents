@@ -15,7 +15,7 @@
 
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowLeft, ArrowRight, Database, LogOut, Menu, PanelLeft, PanelRight, Search, ShieldCheck, Sparkles, Zap } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Database, FileText, LogOut, Menu, PanelLeft, PanelRight, Search, ShieldCheck, Sparkles, UserRound, Zap } from 'lucide-react'
 import type { AuthMe } from '@geo-agent-platform/shared-types'
 import type { PrimaryNav } from '../types'
 
@@ -123,12 +123,24 @@ export function TopBar({
                 <span>{authMe.user.email}</span>
                 <small>{workspaceLabel || '未绑定工作区'}</small>
               </div>
+              <Link className="workbench-account__item" to="/account" role="menuitem" onClick={() => setAccountOpen(false)}>
+                <UserRound size={15} aria-hidden="true" />
+                <span>账号中心</span>
+              </Link>
               {canOpenSecurity ? (
                 <Link className="workbench-account__item" to="/security" role="menuitem" onClick={() => setAccountOpen(false)}>
                   <ShieldCheck size={15} aria-hidden="true" />
                   <span>安全管理</span>
                 </Link>
               ) : null}
+              <Link className="workbench-account__item" to="/terms" role="menuitem" onClick={() => setAccountOpen(false)}>
+                <FileText size={15} aria-hidden="true" />
+                <span>服务协议</span>
+              </Link>
+              <Link className="workbench-account__item" to="/privacy" role="menuitem" onClick={() => setAccountOpen(false)}>
+                <ShieldCheck size={15} aria-hidden="true" />
+                <span>隐私政策</span>
+              </Link>
               <button
                 className="workbench-account__item workbench-account__item--danger"
                 type="button"

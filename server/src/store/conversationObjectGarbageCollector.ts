@@ -26,8 +26,12 @@ export class ConversationObjectGarbageCollector {
     private readonly objectsRoot: string,
   ) {}
 
-  async collect(): Promise<{ removed: number; retained: number }> {
+  async collect(databaseReferences: Iterable<string> = []): Promise<{ removed: number; retained: number }> {
     const referenced = new Set<string>()
+    for (const hash of databaseReferences) {
+      if (!/^[a-f0-9]{64}$/u.test(hash)) throw new Error(`数据库对象引用不是有效的 SHA256：${hash}`)
+      referenced.add(hash)
+    }
     const runtimeRoot = path.dirname(this.sessionsRoot)
     const files = [
       ...await listFilesRecursively(this.sessionsRoot),
@@ -41,7 +45,8 @@ export class ConversationObjectGarbageCollector {
       if (!/\.(?:json|jsonl)$/u.test(filePath)) continue
       const content = await readFile(filePath, 'utf8')
       for (const match of content.matchAll(/(?:"hash"\s*:\s*"|objects\/sha256\/[a-f0-9]{2}\/)([a-f0-9]{64})/giu)) {
-        referenced.add(match[1].toLowerCase())
+        const hash = match[1]
+        if (hash) referenced.add(hash.toLowerCase())
       }
     }
 
@@ -50,7 +55,8 @@ export class ConversationObjectGarbageCollector {
     for (const prefix of await listDirectories(this.objectsRoot)) {
       const prefixRoot = path.join(this.objectsRoot, prefix)
       for (const objectName of await listFileNames(prefixRoot)) {
-        if (referenced.has(objectName.toLowerCase())) retained += 1
+        const objectHash = objectHashFromFileName(objectName)
+        if (objectHash && referenced.has(objectHash)) retained += 1
         else {
           await rm(path.join(prefixRoot, objectName), { force: true })
           removed += 1
@@ -77,4 +83,8 @@ export class ConversationObjectGarbageCollector {
       }
     }
   }
+}
+
+function objectHashFromFileName(fileName: string): string | null {
+  return /^([a-f0-9]{64})(?:\.[a-z0-9]{1,12})?$/iu.exec(fileName)?.[1]?.toLowerCase() ?? null
 }

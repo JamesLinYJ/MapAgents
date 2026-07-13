@@ -11,13 +11,9 @@
 import { errorLogPayload, logger } from '../observability/logger.js'
 
 type Listener<T> = (item: T) => void
-const DEFAULT_HISTORY_LIMIT = 500
 
 export class InMemoryEventBus<T> {
   private readonly subscribers = new Map<string, Set<Listener<T>>>()
-  private readonly history = new Map<string, T[]>()
-
-  constructor(private readonly historyLimit = DEFAULT_HISTORY_LIMIT) {}
 
   subscribe(key: string, listener: Listener<T>): () => void {
     if (!this.subscribers.has(key)) this.subscribers.set(key, new Set())
@@ -30,10 +26,6 @@ export class InMemoryEventBus<T> {
   }
 
   publish(key: string, item: T): void {
-    const items = this.history.get(key) ?? []
-    items.push(item)
-    if (items.length > this.historyLimit) items.splice(0, items.length - this.historyLimit)
-    this.history.set(key, items)
     this.subscribers.get(key)?.forEach(callback => {
       try {
         callback(item)
@@ -43,12 +35,7 @@ export class InMemoryEventBus<T> {
     })
   }
 
-  list(key: string): T[] {
-    return [...(this.history.get(key) ?? [])]
-  }
-
   clear(key: string): void {
     this.subscribers.delete(key)
-    this.history.delete(key)
   }
 }

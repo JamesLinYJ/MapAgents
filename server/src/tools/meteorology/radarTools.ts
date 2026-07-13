@@ -68,7 +68,7 @@ export function createRadarMeteorologyTools(deps: MeteorologyToolDeps): ToolDef[
 async function inspectRadarStationCollection(args: Record<string, unknown>, ctx: ToolContext, deps: MeteorologyToolDeps): Promise<ToolResult> {
   const collection = refObject(requiredRefKind(ctx, args, 'radar_collection_ref', ['radar_file_collection']).value)
   const files = collectionFiles(collection, 'radar_collection_ref')
-  const worker = await deps.callWorker('inspect_radar_station_collection', { files })
+  const worker = await deps.callWorker('inspect_radar_station_collection', { files }, ctx.signal)
   const refs: ValueRef[] = [{
     refId: makeId('ref'),
     kind: 'radar_station_collection',
@@ -93,11 +93,11 @@ async function inspectRadarStationCollection(args: Record<string, unknown>, ctx:
   }))
 }
 
-async function recommendRadarMosaicStrategy(args: Record<string, unknown>, _ctx: ToolContext, deps: MeteorologyToolDeps): Promise<ToolResult> {
+async function recommendRadarMosaicStrategy(args: Record<string, unknown>, ctx: ToolContext, deps: MeteorologyToolDeps): Promise<ToolResult> {
   const worker = await deps.callWorker('recommend_radar_mosaic_strategy', {
     goal_mode: typeof args.goal_mode === 'string' ? args.goal_mode : 'quicklook',
     time_strategy: typeof args.time_strategy === 'string' ? args.time_strategy : 'nearest',
-  })
+  }, ctx.signal)
   const strategy = typeof worker.payload.strategy === 'string' ? worker.payload.strategy : ''
   if (!strategy) throw new Error('雷达策略推荐未返回 strategy')
   const ref: ValueRef = {
@@ -134,7 +134,7 @@ async function renderRadarMosaic(args: Record<string, unknown>, ctx: ToolContext
     output_png_relative_path: png.relativePath,
     output_map_png_relative_path: mapPng.relativePath,
     output_npz_relative_path: npz.relativePath,
-  })
+  }, ctx.signal)
   mergeArtifactMetadata(png, {
     ...worker.payload,
     previewRole: 'radar_mosaic',
@@ -193,7 +193,7 @@ async function compareRadarMosaicReference(args: Record<string, unknown>, ctx: T
     min_display: typeof args.min_display === 'number' ? args.min_display : undefined,
     output_png_relative_path: comparison.relativePath,
     output_reference_png_relative_path: referencePng.relativePath,
-  })
+  }, ctx.signal)
   mergeArtifactMetadata(comparison, {
     ...worker.payload,
     previewRole: 'radar_reference_comparison',

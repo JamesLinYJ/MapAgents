@@ -14,6 +14,7 @@
 // Provider 或工具风险状态。
 
 import { describe, expect, it } from 'vitest'
+import { requiredAt } from './testSupport'
 import type { SystemComponentsStatus, ToolDescriptor } from '@geo-agent-platform/shared-types'
 
 import {
@@ -116,8 +117,8 @@ describe('tool management model', () => {
   it('finds provider label and catalog override by canonical key', () => {
     const entry = { toolKind: 'provider', toolName: 'delete_layer', payload: { label: '删除图层 Pro' } }
 
-    expect(providerLabel(tools[0])).toBe('geo-platform-meteorology')
-    expect(findToolCatalogEntry([entry], tools[1])).toBe(entry)
+    expect(providerLabel(requiredAt(tools, 0, '工具目录'))).toBe('geo-platform-meteorology')
+    expect(findToolCatalogEntry([entry], requiredAt(tools, 1, '工具目录'))).toBe(entry)
   })
 })
 

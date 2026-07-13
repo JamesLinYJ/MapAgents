@@ -112,7 +112,7 @@ export async function datasetFileFromArgs(
   return { name: dataset.filename, relativePath: dataset.fileRelativePath }
 }
 
-export function datasetValue(ctx: ToolContext, ref: ValueRef): { name: string; relativePath: string } {
+export function datasetValue(_ctx: ToolContext, ref: ValueRef): { name: string; relativePath: string } {
   const value = refObject(ref.value)
   const relativePath = typeof value.relativePath === 'string'
     ? value.relativePath
@@ -366,7 +366,9 @@ export function requiredText(args: Record<string, unknown>, key: string): string
 export function selectNowcastMapCandidate(analysis: Record<string, unknown>): Record<string, unknown> {
   const candidates = Array.isArray(analysis.mapCandidates) ? analysis.mapCandidates.filter(isRecord) : []
   if (!candidates.length) throw new Error('短时临近预报（短临）分析没有可渲染的地图候选时次')
-  return candidates.find(candidate => candidate.reason === '降雨峰值时次') ?? candidates[0]
+  const selected = candidates.find(candidate => candidate.reason === '降雨峰值时次') ?? candidates[0]
+  if (!selected) throw new Error('短时临近预报（短临）分析没有有效地图候选时次')
+  return selected
 }
 
 export function requiredCandidateText(candidate: Record<string, unknown>, key: string): string {

@@ -47,6 +47,7 @@ export function conversationMessagesToAgentItems(
   let skippedCurrentInput = false
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
+    if (!message) continue
     if (!skippedCurrentInput && message.role === 'user' && message.content?.trim() === currentQuery.trim()) {
       messages = [...messages.slice(0, index), ...messages.slice(index + 1)]
       skippedCurrentInput = true

@@ -13,6 +13,13 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 describe('frontend architecture guards', () => {
+  it('keeps unchecked indexed access enabled for production and test code', async () => {
+    const tsconfig = JSON.parse(await readFile(path.resolve(process.cwd(), 'tsconfig.json'), 'utf8')) as {
+      compilerOptions?: { noUncheckedIndexedAccess?: boolean }
+    }
+    expect(tsconfig.compilerOptions?.noUncheckedIndexedAccess).toBe(true)
+  })
+
   it('keeps WebSocket lifecycle behind PartySocket transport', async () => {
     const srcRoot = path.resolve(process.cwd(), 'src')
     const files = (await collectSourceFiles(srcRoot))
@@ -101,6 +108,59 @@ describe('frontend architecture guards', () => {
     }
   })
 
+  it('keeps session, thread, history cursor, and canonical transcript in one Zustand store', async () => {
+    const srcRoot = path.resolve(process.cwd(), 'src')
+    const appShellSource = await readFile(path.join(srcRoot, 'app/AppShell.tsx'), 'utf8')
+    const controllerSource = await readFile(path.join(srcRoot, 'app/controllers/sessionThreadController.ts'), 'utf8')
+    const storeSource = await readFile(path.join(srcRoot, 'app/stores/sessionStore.ts'), 'utf8')
+
+    expect(storeSource.includes("from 'zustand'")).toBe(true)
+    for (const field of [
+      'sessionRuns',
+      'sessionThreads',
+      'threadRuns',
+      'activeThreadId',
+      'runHistoryCursor',
+      'isRunHistoryLoading',
+      'canonicalThreadItems',
+    ]) {
+      expect(storeSource.includes(field), field).toBe(true)
+    }
+    expect(controllerSource.includes('useSessionStore')).toBe(true)
+    expect(controllerSource.includes('runHistoryCursorRef')).toBe(false)
+    expect(controllerSource.includes('runHistoryLoadingRef')).toBe(false)
+    expect(appShellSource.includes('useState<ConversationItem[]>')).toBe(false)
+  })
+
+  it('keeps the public API client as a resource-owned facade with schema-validated modules', async () => {
+    const srcRoot = path.resolve(process.cwd(), 'src')
+    const apiRoot = path.join(srcRoot, 'api')
+    const clientSource = await readFile(path.join(apiRoot, 'client.ts'), 'utf8')
+    const moduleNames = [
+      'authApi',
+      'conversationApi',
+      'memoryApi',
+      'resourceApi',
+      'runApi',
+      'toolApi',
+      'workflowApi',
+    ]
+
+    expect(clientSource.includes('requestControl(')).toBe(false)
+    expect(clientSource.includes('requestJson(')).toBe(false)
+    expect(clientSource.includes('requestFormJson(')).toBe(false)
+    for (const moduleName of moduleNames) {
+      expect(clientSource.includes(`export * from './${moduleName}'`), moduleName).toBe(true)
+      const source = await readFile(path.join(apiRoot, `${moduleName}.ts`), 'utf8')
+      expect(source.includes("from './client'"), moduleName).toBe(false)
+    }
+    const conversationSource = await readFile(path.join(apiRoot, 'conversationApi.ts'), 'utf8')
+    const runSource = await readFile(path.join(apiRoot, 'runApi.ts'), 'utf8')
+    expect(conversationSource.includes('workspaceBootstrapSnapshotSchema')).toBe(true)
+    expect(conversationSource.includes('threadDetailSnapshotSchema')).toBe(true)
+    expect(runSource.includes('runSnapshotSchema')).toBe(true)
+  })
+
   it('keeps layer facts and layer mutations in the Zustand layer store', async () => {
     const srcRoot = path.resolve(process.cwd(), 'src')
     const controllerSource = await readFile(path.join(srcRoot, 'app/controllers/resourceController.ts'), 'utf8')
@@ -135,6 +195,7 @@ describe('frontend architecture guards', () => {
     const srcRoot = path.resolve(process.cwd(), 'src')
     const appShellSource = await readFile(path.join(srcRoot, 'app/AppShell.tsx'), 'utf8')
     const mapPanelSource = await readFile(path.join(srcRoot, 'app/layout/WorkspaceMapPanel.tsx'), 'utf8')
+    const mapPreloadSource = await readFile(path.join(srcRoot, 'app/layout/workspaceMapPreload.ts'), 'utf8')
     const mapActivationSource = await readFile(path.join(srcRoot, 'app/layout/useWorkspaceMapActivation.ts'), 'utf8')
 
     expect(appShellSource.includes('WorkspaceMapPanel')).toBe(true)
@@ -142,7 +203,9 @@ describe('frontend architecture guards', () => {
     expect(appShellSource.includes('../features/map/MapCanvas')).toBe(false)
     expect(appShellSource.includes('../features/map/MapErrorBoundary')).toBe(false)
     expect(appShellSource.includes('requestIdleCallback')).toBe(false)
-    expect(mapPanelSource.includes("import('../../features/map/MapCanvas')")).toBe(true)
+    expect(mapPanelSource.includes("import('../../features/map/MapCanvas')")).toBe(false)
+    expect(mapPanelSource.includes('loadWorkspaceMapCanvas')).toBe(true)
+    expect(mapPreloadSource.includes("import('../../features/map/MapCanvas')")).toBe(true)
     expect(mapPanelSource.includes('MapErrorBoundary')).toBe(true)
     expect(mapActivationSource.includes('requestIdleCallback')).toBe(true)
     expect(mapActivationSource.includes('requestMapFocus')).toBe(true)

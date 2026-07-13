@@ -45,6 +45,7 @@ export async function respondDecision(
   if (decision.kind === 'approval') {
     const approved = selectedApprovalValue(decision, optionalString(payload.optionId))
     const approvalId = typeof decision.payload.approvalId === 'string' ? decision.payload.approvalId : decisionId
+    if (approved) dependencies.usageStats.assertWorkspaceCanStartModelRun(auth)
     return runtime.resolveApproval(runId, approvalId, approved, auth)
   }
 
@@ -60,6 +61,7 @@ export async function respondDecision(
     })
     const config = run.runtimeConfigSnapshot ?? await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
     const provider = requiredRunProvider(run.modelProvider)
+    dependencies.usageStats.assertWorkspaceCanStartModelRun(auth)
     const nextRun = await store.createRun(run.sessionId, answer, {
       threadId: run.threadId,
       modelProvider: provider,

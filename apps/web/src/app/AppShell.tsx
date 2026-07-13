@@ -12,15 +12,9 @@
 //
 // 负责装配路由、页面容器和六类控制器的 UI 投影。
 
-import { startTransition, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
+import { Suspense, useCallback, useDeferredValue, useEffect, useMemo } from 'react'
 import { domAnimation, LazyMotion, MotionConfig, useReducedMotion } from 'framer-motion'
 import { useLocation } from 'react-router-dom'
-
-import type {
-  AgentExecutionMode,
-  ConversationItem,
-  ToolDescriptor,
-} from '@geo-agent-platform/shared-types'
 
 import './AppShell.css'
 import './styles/glass.css'
@@ -30,7 +24,6 @@ import './styles/map.css'
 import './styles/layers.css'
 import './styles/layout.css'
 import './styles/tools-debug.css'
-import { pickPreferredArtifactId } from '../features/artifacts/artifactSelection'
 import { buildListItemVariants, buildListVariants } from '../shared/motion'
 import { pickConversationHeadline } from '../features/conversation/items'
 import { logout } from '../api/client'
@@ -41,13 +34,11 @@ import type { WorkspaceSidebarItem } from './layout/WorkspaceLayout'
 import { WorkspaceInspectorPanel } from './layout/WorkspaceInspectorPanel'
 import { WorkspaceMapPanel } from './layout/WorkspaceMapPanel'
 import { WorkspaceToolPanel } from './layout/WorkspaceToolPanel'
-import { WorkspaceRouteHost } from './layout/WorkspaceRouteHost'
+import { AccountCenterPage, LegalPolicyPage, PublicSharePage, WorkspaceRouteHost } from './layout/WorkspaceRouteHost'
 import { useWorkspaceMapActivation } from './layout/useWorkspaceMapActivation'
-import { supportsAgentSdkLiveSupervisor } from '../shared/providerCapabilities'
 import {
   formatUiError,
   reportNonBlockingError,
-  transcriptEntriesToConversationItems,
 } from './bootstrap'
 import { projectTimeline } from '../features/conversation/timelineProjector'
 import {
@@ -77,8 +68,11 @@ import {
   formatPrimaryNav,
   formatModelRunStatus,
   formatTopBarRunStatus,
-  mergeThreadRuns,
 } from './derivedState'
+import { useWorkspaceRunProjection } from './controllers/useWorkspaceRunProjection'
+import { useThreadLifecycleActions } from './controllers/useThreadLifecycleActions'
+import { useRunLifecycleActions } from './controllers/useRunLifecycleActions'
+import { useToolExecutionAction } from './controllers/useToolExecutionAction'
 
 const SIDEBAR_ITEMS: ReadonlyArray<WorkspaceSidebarItem & { id: SidebarItemId }> = [
   { id: 'assistant', icon: 'psychology', label: '智能指令', shortLabel: '助手' },
@@ -99,7 +93,9 @@ function AppShell() {
   // 装配会话、运行、资源、工具和导航控制器的页面投影。
   // 网络语义和实时订阅分别由控制器与 useRunState 所有。
   const location = useLocation()
-  const [canonicalThreadItems, setCanonicalThreadItems] = useState<ConversationItem[]>([])
+  const isPublicShareRoute = location.pathname.startsWith('/share/')
+  const isWorkspaceRoute = location.pathname === '/' || location.pathname.startsWith('/session/')
+  const publicShareId = isPublicShareRoute ? readPublicShareId(location.pathname) : null
   const {
     activateMap,
     isMapActivated,
@@ -120,11 +116,13 @@ function AppShell() {
     setError: setUiError,
     cancelRun,
     respondDecision,
+    steerRun,
     startAnalysis,
     startThreadRun,
   } = useRunController()
   const {
     activeThreadId,
+    canonicalThreadItems,
     ensureUploadThread: ensureSessionUploadThread,
     getThread,
     getThreadHistory,
@@ -143,6 +141,7 @@ function AppShell() {
     sessionRuns,
     sessionThreads,
     setActiveThreadId,
+    setCanonicalThreadItems,
     setSession,
     setThreadRuns,
     threadRuns,
@@ -190,23 +189,44 @@ function AppShell() {
     currentThreadId,
     runId: run?.id,
     sessionId: session?.id,
+    shareToken: session?.shareToken,
     setUiError,
   })
   const {
     availableTools,
+    backgroundTasks,
     isRuntimeConfigSubmitting,
     isToolCatalogSubmitting,
     isToolSubmitting,
+    isWorkflowSubmitting,
+    promoteTask: handlePromoteBackgroundTask,
     removeCatalogEntry: handleDeleteToolCatalogEntry,
+    removeScheduledTask: handleDeleteScheduledTask,
     runtimeConfig,
     runTool,
+    runWorkflow: handleStartWorkflow,
     saveCatalogEntry: handleUpsertToolCatalogEntry,
     saveRuntimeConfig: handleSaveRuntimeConfig,
+    saveScheduledTask: handleSaveScheduledTask,
     setIsToolSubmitting,
     setToolRunResult,
+    stopBackgroundTask: handleCancelBackgroundTask,
+    stopWorkflow: handleCancelWorkflow,
     systemComponents,
+    scheduledTasks,
     toolCatalogEntries,
     toolRunResult,
+    tokenUsageSummary,
+    workflowDefinitions,
+    workflowDiagnostics,
+    workflowValidation,
+    workflowRuns,
+    validateWorkflowDraft: handleValidateWorkflow,
+    createWorkflowDraft: handleCreateWorkflow,
+    updateWorkflowDraft: handleUpdateWorkflow,
+    publishWorkflowDraft: handlePublishWorkflow,
+    disableWorkflowDefinition: handleDisableWorkflow,
+    respondToWorkflowApproval: handleRespondWorkflowApproval,
   } = useToolingController({
     loadDiagnostics: location.pathname === '/debug' || panelMode === 'compute' || panelMode === 'config' || panelMode === 'tools',
     setUiError,
@@ -302,43 +322,19 @@ function AppShell() {
     requestMapFocus(artifactId)
   }, [requestMapFocus, setSelectedArtifactId])
 
-  const clearActiveRunState = useCallback(() => {
-    clearRun()
-    clearArtifacts()
-    setCanonicalThreadItems([])
-    setThreadRuns([])
-    setToolRunResult(null)
-    setActiveThreadId(undefined)
-  }, [clearArtifacts, clearRun, setActiveThreadId, setThreadRuns, setToolRunResult])
-
-  const hydrateRunState = useCallback(
-    async (runId: string) => {
-      const latestRun = await hydrateRun(runId)
-
-      startTransition(() => {
-        setActiveThreadId(latestRun.threadId ?? undefined)
-        setProvider(latestRun.modelProvider ?? 'openai_compatible')
-        setModel(latestRun.modelName ?? '')
-        const preferredArtifactId = pickPreferredArtifactId(latestRun.state.artifacts)
-        setSelectedArtifactId(preferredArtifactId)
-      })
-
-      startTransition(() => setThreadRuns(current => mergeThreadRuns(current, latestRun)))
-
-      syncUrl(latestRun.sessionId, latestRun.id, latestRun.threadId ?? undefined)
-
-      return latestRun
-    },
-    [
-      hydrateRun,
-      setActiveThreadId,
-      setModel,
-      setProvider,
-      setSelectedArtifactId,
-      setThreadRuns,
-      syncUrl,
-    ],
-  )
+  const { clearActiveRunState, hydrateRunState } = useWorkspaceRunProjection({
+    clearArtifacts,
+    clearRun,
+    hydrateRun,
+    setActiveThreadId,
+    setCanonicalThreadItems,
+    setModel,
+    setProvider,
+    setSelectedArtifactId,
+    setThreadRuns,
+    setToolRunResult,
+    syncUrl,
+  })
 
   const { authMe, authStatus, clearAuth, retryAuth } = useWorkspaceBootstrap({
     applyProviders,
@@ -351,6 +347,8 @@ function AppShell() {
     setCanonicalThreadItems,
     setUiError,
     syncUrl,
+    disabled: isPublicShareRoute,
+    syncWorkspaceUrl: isWorkspaceRoute,
   })
   const { memoryEntries, refreshMemoryEntries } = useMemoryEntries(
     authStatus === 'authenticated' && runtimeConfig?.context.memoryEnabled !== false,
@@ -378,383 +376,109 @@ function AppShell() {
     })
   }, [currentThreadId, loadBasemaps, refreshLayers, session?.id, shouldLoadWorkspaceResources])
 
-  const submitMessage = useCallback(
-    async ({
-      text,
-      forceNewThread = false,
-      executionMode = 'auto',
-    }: {
-      text?: string
-      forceNewThread?: boolean
-      executionMode?: AgentExecutionMode
-    } = {}) => {
-      // 连续对话提交入口
-      //
-      // 同一聊天面板里的普通输入默认复用当前 thread；
-      // 只有显式新建对话或当前没有 thread 时，才让后端创建新 thread。
-      if (!session) {
-        return
-      }
-      const submittedQuery = (text ?? query).trim()
-      if (!submittedQuery) {
-        return
-      }
-
-      const targetThreadId = forceNewThread ? undefined : currentThreadId
-
-      try {
-        const selectedProvider = providers.find((item) => item.provider === provider)
-        if (selectedProvider && !selectedProvider.configured) {
-          setUiError(`${selectedProvider.displayName} 还没配置好，暂时没法提交分析。`)
-          return
-        }
-        if (selectedProvider && !supportsAgentSdkLiveSupervisor(selectedProvider)) {
-          setUiError(`${selectedProvider.displayName} 当前不是 Agent SDK 主路径，不能提交分析。`)
-          return
-        }
-        setUiError(undefined)
-        // 提交被前端接受后立即清空编辑态，行为与常见 Agent 对话一致。
-        // 请求失败只显示错误状态，不把旧文本重新塞回用户编辑态。
-        setQuery('')
-        startRun()
-        setActiveNav('analysis')
-        setPanelMode('summary')
-        setActiveSidebarItem('assistant')
-        if (forceNewThread) {
-          clearArtifacts()
-          setToolRunResult(null)
-          setCanonicalThreadItems([])
-        } else if (targetThreadId) {
-          // 新 run 的首个 snapshot 会替换当前 run items，先把已完成协议项固化到 thread 投影。
-          setCanonicalThreadItems(current => projectTimeline(
-            current,
-            items.filter(item => item.status !== 'running' && [
-              'message', 'function_call', 'function_call_output',
-            ].includes(item.itemType)),
-          ))
-        }
-
-        const createdRun = targetThreadId
-          ? await startThreadRun(targetThreadId, submittedQuery, provider, model || undefined, executionMode)
-          : await startAnalysis(session.id, submittedQuery, provider, model || undefined, executionMode)
-        const nextThreadId = createdRun.threadId ?? targetThreadId
-        startTransition(() => {
-          acceptRun(createdRun)
-          setProvider(createdRun.modelProvider ?? provider)
-          setModel(createdRun.modelName ?? model)
-          setActiveThreadId(nextThreadId)
-          setThreadRuns((current) => (nextThreadId && !forceNewThread ? mergeThreadRuns(current, createdRun) : [createdRun]))
-        })
-        void refreshSessionHistory(session.id).catch((error) => reportNonBlockingError('refreshSessionHistory:submitMessage', error))
-        syncUrl(session.id, createdRun.id, nextThreadId)
-      } catch (error) {
-        setUiError(formatUiError(error, '任务提交失败，请重试。'))
-        stopSubmitting()
-      }
-    },
-    [
-      acceptRun,
-      clearArtifacts,
-      currentThreadId,
-      model,
-      provider,
-      providers,
-      query,
-      items,
-      refreshSessionHistory,
-      session,
-      setActiveNav,
-      setActiveThreadId,
-      setActiveSidebarItem,
-      setModel,
-      setPanelMode,
-      setProvider,
-      setQuery,
-      setCanonicalThreadItems,
-      setToolRunResult,
-      setThreadRuns,
-      setUiError,
-      startAnalysis,
-      startRun,
-      startThreadRun,
-      stopSubmitting,
-      syncUrl,
-    ],
-  )
-
-  const handleSubmit = useCallback(async (executionMode: AgentExecutionMode = 'auto') => {
-    if (!query.trim()) {
-      return
-    }
-    await submitMessage({ executionMode })
-  }, [query, submitMessage])
-
-  const handleInterruptRun = useCallback(async () => {
-    if (!run?.id) {
-      stopSubmitting()
-      return
-    }
-    try {
-      setUiError(undefined)
-      const cancelledRun = await cancelRun(run.id)
-      acceptRun(cancelledRun)
-      if (cancelledRun.sessionId) {
-        void refreshSessionHistory(cancelledRun.sessionId).catch((error) => reportNonBlockingError('refreshSessionHistory:cancelRun', error))
-      }
-    } catch (error) {
-      setUiError(formatUiError(error, '中断运行失败，请稍后再试。'))
-    } finally {
-      stopSubmitting()
-    }
-  }, [acceptRun, cancelRun, refreshSessionHistory, run?.id, setUiError, stopSubmitting])
-
-  const handleRespondDecision = useCallback(
-    async (decisionId: string, optionId?: string | null, text?: string | null) => {
-      if (!run?.id) return
-      try {
-        setUiError(undefined)
-        startRun()
-        const nextRun = await respondDecision(run.id, decisionId, optionId, text)
-        const nextThreadId = nextRun.threadId ?? currentThreadId
-        startTransition(() => {
-          acceptRun(nextRun)
-          setProvider(nextRun.modelProvider ?? provider)
-          setModel(nextRun.modelName ?? model)
-          setActiveThreadId(nextThreadId)
-          setThreadRuns((current) => (nextThreadId ? mergeThreadRuns(current, nextRun) : current))
-        })
-        if (nextRun.sessionId) {
-          void refreshSessionHistory(nextRun.sessionId).catch((error) => reportNonBlockingError('refreshSessionHistory:respondDecision', error))
-        }
-        syncUrl(nextRun.sessionId, nextRun.id, nextThreadId)
-        await hydrateRunState(nextRun.id)
-      } catch (error) {
-        setUiError(formatUiError(error, '决策提交失败，请重试。'))
-        stopSubmitting()
-      }
-    },
-    [
-      acceptRun,
-      currentThreadId,
-      hydrateRunState,
-      model,
-      provider,
-      refreshSessionHistory,
-      respondDecision,
-      run?.id,
-      setActiveThreadId,
-      setModel,
-      setProvider,
-      setThreadRuns,
-      setUiError,
-      startRun,
-      stopSubmitting,
-      syncUrl,
-    ],
-  )
-
-  const handleNewConversation = useCallback(() => {
-    // 显式新建对话只重置前端 active thread，不提前创建数据库记录。
-    //
-    // 下一次发送消息时因为没有 activeThreadId，会自然走 startAnalysis 创建新 thread。
-    // 同时清理上一轮的上传数据显示，保证新 thread 看到干净的工作区。
-    setQuery('')
-    clearActiveRunState()
-    clearUploads()
-    setThreadRuns([])
-    setCanonicalThreadItems([])
-    setActiveThreadId(undefined)
-    setActiveNav('analysis')
-    setPanelMode('summary')
-    setActiveSidebarItem('assistant')
-    if (session?.id) {
-      syncUrl(session.id)
-    }
-    focusQueryInput()
-  }, [
-    clearActiveRunState,
-    clearUploads,
-    focusQueryInput,
-    session?.id,
+  const { handleInterruptRun, handleRespondDecision, handleSubmit } = useRunLifecycleActions({
+    session,
+    currentThreadId,
+    query,
+    items,
+    providers,
+    provider,
+    model,
+    run,
+    acceptRun,
+    cancelRun,
+    clearArtifacts,
+    hydrateRunState,
+    refreshSessionHistory,
+    respondDecision,
+    steerRun,
     setActiveNav,
     setActiveThreadId,
     setActiveSidebarItem,
+    setCanonicalThreadItems,
+    setModel,
+    setPanelMode,
+    setProvider,
+    setQuery,
+    setThreadRuns,
+    setToolRunResult,
+    setUiError,
+    startAnalysis,
+    startRun,
+    startThreadRun,
+    stopSubmitting,
+    syncUrl,
+  })
+
+  const {
+    handleDeleteThread,
+    handleForkMessage,
+    handleLoadMoreHistory,
+    handleNewConversation,
+    handlePurgeThread,
+    handleRefreshMemories,
+    handleRefreshTrash,
+    handleRenameThread,
+    handleRestoreThread,
+    handleSelectThread,
+  } = useThreadLifecycleActions({
+    session,
+    currentThreadId,
+    clearActiveRunState,
+    clearUploads,
+    focusQueryInput,
+    forkFromMessage,
+    getThread,
+    getThreadHistory,
+    hasMoreRunHistory,
+    hydrateRunState,
+    isRunHistoryLoading,
+    loadRunHistory,
+    purgeTrashedThread,
+    refreshMemoryEntries,
+    refreshTrash,
+    removeThread,
+    renameThread,
+    restoreTrashedThread,
+    setActiveNav,
+    setActiveSidebarItem,
+    setActiveThreadId,
+    setCanonicalThreadItems,
     setPanelMode,
     setQuery,
     setThreadRuns,
+    setUiError,
     syncUrl,
-  ])
+  })
 
-  const handleSelectThread = useCallback(
-    async (threadId: string) => {
-      // 主聊天面板按 thread 打开 canonical transcript；当前 run 项由订阅层另行合并。
-      try {
-        setUiError(undefined)
-        const [threadPayload, historyPage] = await Promise.all([
-          getThread(threadId),
-          getThreadHistory(threadId, null, 200),
-        ])
-        const canonicalItems = transcriptEntriesToConversationItems(historyPage.entries)
-        const runs = threadPayload.runs ?? []
-        setActiveThreadId(threadPayload.thread.id)
-        setThreadRuns(runs)
-        if (threadPayload.latestRun?.id) {
-          await hydrateRunState(threadPayload.latestRun.id)
-          setCanonicalThreadItems(canonicalItems)
-          if (session?.id) {
-            syncUrl(session.id, threadPayload.latestRun.id, threadPayload.thread.id)
-          }
-          return
-        }
-
-        clearActiveRunState()
-        setThreadRuns(runs)
-        setActiveThreadId(threadPayload.thread.id)
-        setCanonicalThreadItems(canonicalItems)
-        if (session?.id) {
-          syncUrl(session.id, undefined, threadPayload.thread.id)
-        }
-      } catch (error) {
-        setUiError(formatUiError(error, '历史记录加载失败，请稍后重试。'))
-      }
-    },
-    [clearActiveRunState, getThread, getThreadHistory, hydrateRunState, session?.id, setActiveThreadId, setThreadRuns, setUiError, syncUrl],
-  )
-
-  const handleRenameThread = useCallback(
-    async (threadId: string, title: string) => {
-      const nextTitle = title.trim()
-      if (!nextTitle) {
-        setUiError('任务标题不能为空。')
-        return
-      }
-
-      try {
-        setUiError(undefined)
-        await renameThread(threadId, nextTitle)
-      } catch (error) {
-        setUiError(formatUiError(error, '标题更新失败，请再试一次。'))
-      }
-    },
-    [renameThread, setUiError],
-  )
-
-  const handleDeleteThread = useCallback(
-    async (threadId: string) => {
-      if (!session?.id) {
-        return
-      }
-
-      try {
-        setUiError(undefined)
-        await removeThread(threadId)
-
-        if (currentThreadId === threadId) {
-          clearActiveRunState()
-          syncUrl(session.id)
-        }
-      } catch (error) {
-        setUiError(formatUiError(error, '任务删除失败，请再试一次。'))
-      }
-    },
-    [clearActiveRunState, currentThreadId, removeThread, session?.id, setUiError, syncUrl],
-  )
-
-  const handleRefreshMemories = useCallback(async () => {
-    try {
-      setUiError(undefined)
-      await refreshMemoryEntries()
-    } catch (error) {
-      setUiError(formatUiError(error, '记忆索引刷新失败。'))
-    }
-  }, [refreshMemoryEntries, setUiError])
-
-  const handleForkMessage = useCallback(async (entryId: string) => {
-    if (!currentThreadId || !session?.id) return
-    try {
-      setUiError(undefined)
-      const forked = await forkFromMessage(currentThreadId, entryId)
-      const history = await getThreadHistory(forked.id, null, 200)
-      clearActiveRunState()
-      setActiveThreadId(forked.id)
-      setThreadRuns([])
-      setCanonicalThreadItems(transcriptEntriesToConversationItems(history.entries))
-      syncUrl(session.id, undefined, forked.id)
-    } catch (error) {
-      setUiError(formatUiError(error, '消息分支创建失败。'))
-    }
-  }, [clearActiveRunState, currentThreadId, forkFromMessage, getThreadHistory, session?.id, setActiveThreadId, setThreadRuns, setUiError, syncUrl])
-
-  const handleRestoreThread = useCallback(async (threadId: string) => {
-    try {
-      await restoreTrashedThread(threadId)
-    } catch (error) {
-      setUiError(formatUiError(error, '线程恢复失败。'))
-    }
-  }, [restoreTrashedThread, setUiError])
-
-  const handlePurgeThread = useCallback(async (threadId: string) => {
-    try {
-      await purgeTrashedThread(threadId)
-    } catch (error) {
-      setUiError(formatUiError(error, '线程永久删除失败。'))
-    }
-  }, [purgeTrashedThread, setUiError])
-
-  const onSubmitAction = useVoidCallback(handleSubmit)
   const onRespondDecisionAction = useVoidCallback(handleRespondDecision)
   const onSelectTaskAction = useVoidCallback(handleSelectThread)
   const onRenameTaskAction = useVoidCallback(handleRenameThread)
   const onDeleteTaskAction = useVoidCallback(handleDeleteThread)
   const onForkMessageAction = useVoidCallback(handleForkMessage)
   const onRefreshMemoriesAction = useVoidCallback(handleRefreshMemories)
-  const handleRefreshTrash = useCallback(async () => { await refreshTrash() }, [refreshTrash])
   const onRefreshTrashAction = useVoidCallback(handleRefreshTrash)
   const onRestoreThreadAction = useVoidCallback(handleRestoreThread)
   const onPurgeThreadAction = useVoidCallback(handlePurgeThread)
-  const handleLoadMoreHistory = useCallback(() => {
-    if (!session?.id || !hasMoreRunHistory || isRunHistoryLoading) return
-    void loadRunHistory(session.id, true).catch(error => {
-      setUiError(formatUiError(error, '更多运行历史加载失败。'))
-    })
-  }, [hasMoreRunHistory, isRunHistoryLoading, loadRunHistory, session?.id, setUiError])
+  const handleRunTool = useToolExecutionAction({
+    sessionId: session?.id,
+    threadId: currentThreadId,
+    runId: run?.id,
+    hydrateRunState,
+    runTool,
+    setIsToolSubmitting,
+    setToolRunResult,
+    setUiError,
+    syncUrl,
+  })
 
-  const handleRunTool = useCallback(
-    async (tool: ToolDescriptor, args: Record<string, unknown>) => {
-      // 调试页工具工作台统一入口
-      //
-      // 工具执行统一调度，再把返回的 run 重新 hydrate 到主状态树。
-      if (!session?.id) {
-        return
-      }
-
-      try {
-        setUiError(undefined)
-        setIsToolSubmitting(true)
-        const result = await runTool({
-          sessionId: session.id,
-          threadId: currentThreadId,
-          runId: run?.id,
-          toolName: tool.name,
-          toolKind: tool.toolKind,
-          args,
-        })
-        setToolRunResult(result)
-        const nextRunId = typeof result.run === 'object' && result.run && 'id' in result.run ? String(result.run.id) : run?.id
-        if (nextRunId) {
-          await hydrateRunState(nextRunId)
-          if (session.id) {
-            syncUrl(session.id, nextRunId, currentThreadId)
-          }
-        }
-      } catch (error) {
-        setUiError(formatUiError(error, `${tool.label} 执行失败。`))
-      } finally {
-        setIsToolSubmitting(false)
-      }
-    },
-    [currentThreadId, hydrateRunState, run?.id, runTool, session?.id, setIsToolSubmitting, setToolRunResult, setUiError, syncUrl],
-  )
+  if (isPublicShareRoute) {
+    return (
+      <Suspense fallback={<div className="dc-route-loading">正在加载分享页面…</div>}>
+        <PublicSharePage shareId={publicShareId} />
+      </Suspense>
+    )
+  }
 
   if (authStatus === 'checking') {
     return <div className="dc-route-loading">正在校验登录状态…</div>
@@ -783,6 +507,9 @@ function AppShell() {
       <LazyMotion features={domAnimation}>
         <MotionConfig reducedMotion="user">
           <WorkspaceRouteHost
+            account={<AccountCenterPage authMe={authMe} onLogout={handleLogout} />}
+            terms={<LegalPolicyPage kind="terms" />}
+            privacy={<LegalPolicyPage kind="privacy" />}
             renderWorkspace={(Workspace) => (
               <Workspace
                 topBar={
@@ -848,7 +575,15 @@ function AppShell() {
                     toolRunResult={toolRunResult}
                     toolCatalogEntries={toolCatalogEntries}
                     systemComponents={systemComponents}
+                    tokenUsageSummary={tokenUsageSummary}
+                    workflowDefinitions={workflowDefinitions}
+                    workflowDiagnostics={workflowDiagnostics}
+                    workflowValidation={workflowValidation}
+                    scheduledTasks={scheduledTasks}
+                    workflowRuns={workflowRuns}
+                    backgroundTasks={backgroundTasks}
                     isToolSubmitting={isToolSubmitting}
+                    isWorkflowSubmitting={isWorkflowSubmitting}
                     isToolCatalogSubmitting={isToolCatalogSubmitting}
                     isRuntimeConfigSubmitting={isRuntimeConfigSubmitting}
                     onRunTool={(tool, args) => {
@@ -862,6 +597,35 @@ function AppShell() {
                     }}
                     onSaveRuntimeConfig={(nextConfig) => {
                       void handleSaveRuntimeConfig(nextConfig)
+                    }}
+                    onStartWorkflow={(payload) => {
+                      void handleStartWorkflow(payload)
+                    }}
+                    onValidateWorkflow={handleValidateWorkflow}
+                    onCreateWorkflow={handleCreateWorkflow}
+                    onUpdateWorkflow={handleUpdateWorkflow}
+                    onPublishWorkflow={handlePublishWorkflow}
+                    onDisableWorkflow={handleDisableWorkflow}
+                    onRespondWorkflowApproval={handleRespondWorkflowApproval}
+                    onCancelWorkflow={(workflowRunId) => {
+                      void handleCancelWorkflow(workflowRunId)
+                    }}
+                    onSaveScheduledTask={(payload) => {
+                      void handleSaveScheduledTask(payload)
+                    }}
+                    onDeleteScheduledTask={(taskId) => {
+                      void handleDeleteScheduledTask(taskId)
+                    }}
+                    onCancelBackgroundTask={(taskId) => {
+                      void handleCancelBackgroundTask(taskId)
+                    }}
+                    onPromoteBackgroundTask={(taskId) => {
+                      void handlePromoteBackgroundTask(taskId).then((task) => {
+                        if (!task) return
+                        const sessionId = typeof task.metadata.sessionId === 'string' ? task.metadata.sessionId : null
+                        const threadId = typeof task.metadata.threadId === 'string' ? task.metadata.threadId : null
+                        if (sessionId && task.runId) syncUrl(sessionId, task.runId, threadId ?? undefined)
+                      })
                     }}
                     onRefreshMemories={onRefreshMemoriesAction}
                   />
@@ -886,7 +650,7 @@ function AppShell() {
                     runtimeConfig={runtimeConfig}
                     availableTools={availableTools}
                     onQueryChange={setQuery}
-                    onSubmit={onSubmitAction}
+                    onSubmit={handleSubmit}
                     onInterrupt={handleInterruptRun}
                     onNewConversation={handleNewConversation}
                     onFillSample={handleSampleSelect}
@@ -1085,6 +849,11 @@ function AppShell() {
       </LazyMotion>
     </Suspense>
   )
+}
+
+function readPublicShareId(pathname: string): string | null {
+  const match = /^\/share\/([^/?#]+)/u.exec(pathname)
+  return match?.[1] ? decodeURIComponent(match[1]) : null
 }
 
 export default AppShell

@@ -48,6 +48,8 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().optional(),
   OPENAI_SUBAGENT_MODEL: z.string().optional(),
+  USAGE_DAILY_TOTAL_TOKEN_LIMIT: z.coerce.number().int().nonnegative().default(0),
+  USAGE_MONTHLY_TOTAL_TOKEN_LIMIT: z.coerce.number().int().nonnegative().default(0),
 
   ANTHROPIC_BASE_URL: z.string().optional(),
   ANTHROPIC_API_KEY: z.string().optional(),

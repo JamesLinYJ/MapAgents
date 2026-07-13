@@ -9,18 +9,38 @@
 // --------------------------------------------------------------------------
 
 import { renderToStaticMarkup } from 'react-dom/server'
+import type { ReactElement } from 'react'
+import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
+import { BootScreen } from '../app/AppLoader'
 import { LoginScreen } from '../app/auth/LoginScreen'
 import { canSubmitLoginStep } from '../app/auth/loginModel'
 
 const noop = () => undefined
 
+function renderLogin(element: ReactElement) {
+  return renderToStaticMarkup(<MemoryRouter>{element}</MemoryRouter>)
+}
+
 describe('LoginScreen', () => {
+  it('renders the lightweight boot screen with the same entry language', () => {
+    const html = renderToStaticMarkup(<BootScreen />)
+
+    expect(html).toContain('正在准备工作台')
+    expect(html).toContain('连接认证、工具目录、地图引擎和会话运行时')
+    expect(html).toContain('启动阶段只加载轻量壳层')
+  })
+
   it('renders the email-first Microsoft-style flow without tabs', () => {
-    const html = renderToStaticMarkup(<LoginScreen onAuthenticated={noop} />)
+    const html = renderLogin(<LoginScreen onAuthenticated={noop} />)
 
     expect(html).toContain('GeoForge')
-    expect(html).toContain('<h1 id="geoforge-login-title">登录</h1>')
+    expect(html).toContain('<h1 id="geoforge-entry-title">GeoForge 工作台</h1>')
+    expect(html).toContain('<h2 id="geoforge-login-panel-title">登录</h2>')
+    expect(html).toContain('气象分析')
+    expect(html).toContain('地图浏览')
+    expect(html).toContain('服务协议')
+    expect(html).toContain('隐私政策')
     expect(html).toContain('placeholder="you@example.com"')
     expect(html).toContain('下一步')
     expect(html).toContain('创建一个')
@@ -29,11 +49,11 @@ describe('LoginScreen', () => {
   })
 
   it('renders password, signup and options as real states', () => {
-    const passwordHtml = renderToStaticMarkup(
+    const passwordHtml = renderLogin(
       <LoginScreen onAuthenticated={noop} initialStep="password" initialEmail="user@example.com" />,
     )
-    const signupHtml = renderToStaticMarkup(<LoginScreen onAuthenticated={noop} initialStep="signup" />)
-    const optionsHtml = renderToStaticMarkup(<LoginScreen onAuthenticated={noop} initialStep="options" />)
+    const signupHtml = renderLogin(<LoginScreen onAuthenticated={noop} initialStep="signup" />)
+    const optionsHtml = renderLogin(<LoginScreen onAuthenticated={noop} initialStep="options" />)
 
     expect(passwordHtml).toContain('输入密码')
     expect(passwordHtml).toContain('后退')
@@ -54,7 +74,7 @@ describe('LoginScreen', () => {
   })
 
   it('normalizes proxy failures before rendering auth errors', () => {
-    const html = renderToStaticMarkup(
+    const html = renderLogin(
       <LoginScreen onAuthenticated={noop} errorMessage="Bad Gateway" />,
     )
 

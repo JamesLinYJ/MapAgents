@@ -10,13 +10,14 @@
 
 import { eq } from 'drizzle-orm'
 import type { Database } from '../../db/connection.js'
-import { platformArtifacts } from '../../db/schema.js'
+import { platformArtifacts, platformThreads } from '../../db/schema.js'
 import type { ArtifactRef } from '../../schemas/types.js'
 
 export interface ArtifactOwnerProjection {
   workspaceId: string | null
   createdByUserId: string | null
   visibility: string
+  threadId: string | null
 }
 
 export interface ArtifactIndexRecord {
@@ -32,18 +33,23 @@ export interface ArtifactIndexRecord {
   relativePath: string
 }
 
-// Artifact 正文仍在文件型 conversation store 中；Postgres 只保存可授权、
-// 可下载和可检索的查询索引。索引写入硬失败，避免 UI 看到不存在的下载项。
-export class ArtifactIndexStore {
+export interface ArtifactRepository {
+  persistArtifact(artifact: ArtifactRef, owner: ArtifactOwnerProjection): Promise<void>
+  deleteRunArtifacts(runId: string): Promise<void>
+  getArtifact(artifactId: string): Promise<ArtifactIndexRecord | null>
+}
+
+// PostgreSQL 是 Artifact 元数据与归属的事实源，文件系统只保存由
+// contentRelativePath 指向的二进制内容。Artifact 与线程导航投影原子提交。
+export class ArtifactIndexStore implements ArtifactRepository {
   constructor(private readonly db: Database) {}
 
-  async indexArtifact(artifact: ArtifactRef, owner: ArtifactOwnerProjection): Promise<void> {
+  async persistArtifact(artifact: ArtifactRef, owner: ArtifactOwnerProjection): Promise<void> {
     const relativePath = typeof artifact.metadata.relativePath === 'string' ? artifact.metadata.relativePath : ''
     if (!relativePath) throw new Error(`Artifact "${artifact.artifactId}" 缺少 relativePath`)
 
-    await this.db
-      .insert(platformArtifacts)
-      .values({
+    await this.db.transaction(async tx => {
+      await tx.insert(platformArtifacts).values({
         artifactId: artifact.artifactId,
         runId: artifact.runId,
         workspaceId: owner.workspaceId,
@@ -53,21 +59,29 @@ export class ArtifactIndexStore {
         name: artifact.name,
         uri: artifact.uri,
         metadataJson: artifact.metadata,
-        geojsonRelativePath: relativePath,
+        contentRelativePath: relativePath,
         createdAt: new Date(),
-      })
-      .onConflictDoUpdate({
+      }).onConflictDoUpdate({
         target: platformArtifacts.artifactId,
         set: {
           name: artifact.name,
           uri: artifact.uri,
           metadataJson: artifact.metadata,
-          geojsonRelativePath: relativePath,
+          contentRelativePath: relativePath,
           workspaceId: owner.workspaceId,
           createdByUserId: owner.createdByUserId,
           visibility: owner.visibility,
         },
       })
+      if (!artifact.isIntermediate && owner.threadId) {
+        const updated = await tx.update(platformThreads).set({
+          latestArtifactId: artifact.artifactId,
+          latestArtifactName: artifact.name,
+          updatedAt: new Date(),
+        }).where(eq(platformThreads.threadId, owner.threadId)).returning({ threadId: platformThreads.threadId })
+        if (!updated[0]) throw new Error(`Artifact 所属线程 '${owner.threadId}' 不存在`)
+      }
+    })
   }
 
   async deleteRunArtifacts(runId: string): Promise<void> {
@@ -95,7 +109,7 @@ function mapArtifactRow(row: typeof platformArtifacts.$inferSelect): ArtifactInd
     name: row.name,
     uri: row.uri,
     metadata: isRecord(row.metadataJson) ? row.metadataJson : {},
-    relativePath: row.geojsonRelativePath,
+    relativePath: row.contentRelativePath,
   }
 }
 

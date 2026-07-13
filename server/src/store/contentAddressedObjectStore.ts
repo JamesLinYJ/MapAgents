@@ -33,13 +33,18 @@ export class ContentAddressedObjectStore {
   }
 
   async read(reference: ContentRef): Promise<Uint8Array> {
-    if (reference.algorithm !== 'sha256' || !/^[a-f0-9]{64}$/u.test(reference.hash)) {
+    if (reference.algorithm !== 'sha256') {
       throw new Error('contentRef 哈希格式无效')
     }
-    const target = path.join(this.objectsRoot, reference.hash.slice(0, 2), reference.hash)
+    return this.readByHash(reference.hash)
+  }
+
+  async readByHash(hash: string): Promise<Uint8Array> {
+    if (!/^[a-f0-9]{64}$/u.test(hash)) throw new Error('contentRef 哈希格式无效')
+    const target = path.join(this.objectsRoot, hash.slice(0, 2), hash)
     const bytes = await readFile(target)
     const actualHash = createHash('sha256').update(bytes).digest('hex')
-    if (actualHash !== reference.hash) throw new Error(`contentRef 校验失败：${reference.hash}`)
+    if (actualHash !== hash) throw new Error(`contentRef 校验失败：${hash}`)
     return bytes
   }
 }

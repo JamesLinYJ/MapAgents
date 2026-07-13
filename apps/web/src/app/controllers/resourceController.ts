@@ -8,7 +8,8 @@
 //   作者:       JamesLinYJ
 // --------------------------------------------------------------------------
 
-import { startTransition, useCallback, useEffect, useMemo } from 'react'
+import { startTransition, useCallback, useEffect, useMemo, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import type {
   AnalysisRun,
   ArtifactRef,
@@ -30,6 +31,7 @@ import { useLayerManager } from '../../features/layers/useLayerManager'
 import { artifactHasDisplaySurface } from '../../features/artifacts/artifactDisplay'
 import { DEFAULT_BASEMAP } from '../../shared/constants'
 import { formatUiError, reportNonBlockingError, retryAsync } from '../bootstrap'
+import { isRecord } from '../../shared/utils/guards'
 import { useLayerStore } from '../stores/layerStore'
 import { useResourceStore } from '../stores/resourceStore'
 import {
@@ -59,6 +61,12 @@ interface ResourceControllerOptions {
   setUiError: (error?: string) => void
 }
 
+interface HydratedArtifactPayload {
+  artifactId: string
+  data?: GeoJSON.FeatureCollection
+  metadata: Record<string, unknown>
+}
+
 // 资源控制器持有文件、图层、artifact 水合结果和地图显示偏好。
 //
 // 上传 API 只写数据面；目录状态刷新仍通过 WebSocket 命令获取事实投影。
@@ -73,6 +81,9 @@ export function useResourceController({
   session,
   setUiError,
 }: ResourceControllerOptions) {
+  const queryClient = useQueryClient()
+  const hydrationScopeRef = useRef<string | null>(currentThreadId ?? null)
+  const pendingArtifactHydrationsRef = useRef(new Set<string>())
   const layers = useLayerStore(state => state.layers)
   const refreshLayerStore = useLayerStore(state => state.refreshLayers)
   const importLayerStore = useLayerStore(state => state.importLayer)
@@ -83,6 +94,7 @@ export function useResourceController({
   const selectedBasemapKey = useResourceStore(state => state.selectedBasemapKey)
   const artifactData = useResourceStore(state => state.artifactData)
   const artifactMetadata = useResourceStore(state => state.artifactMetadata)
+  const artifactHydrationErrors = useResourceStore(state => state.artifactHydrationErrors)
   const mapLayerPreferences = useResourceStore(state => state.mapLayerPreferences)
   const selectedArtifactId = useResourceStore(state => state.selectedArtifactId)
   const uploadedLayerName = useResourceStore(state => state.uploadedLayerName)
@@ -93,6 +105,7 @@ export function useResourceController({
   const setSelectedBasemapKey = useResourceStore(state => state.setSelectedBasemapKey)
   const mergeArtifactData = useResourceStore(state => state.mergeArtifactData)
   const mergeArtifactMetadata = useResourceStore(state => state.mergeArtifactMetadata)
+  const setArtifactHydrationErrors = useResourceStore(state => state.setArtifactHydrationErrors)
   const setMapLayerPreferences = useResourceStore(state => state.setMapLayerPreferences)
   const setSelectedArtifactId = useResourceStore(state => state.setSelectedArtifactId)
   const setUploadedLayerName = useResourceStore(state => state.setUploadedLayerName)
@@ -107,42 +120,34 @@ export function useResourceController({
     [basemaps, selectedBasemapKey],
   )
 
-  const applyArtifactPayload = useCallback(async (artifactList: ArtifactRef[]) => {
-    // ArtifactRef 是运行快照事实；地图需要的内容按 artifact 类型从 HTTP 数据面水合。
-    const geojsonArtifacts = artifactList.filter(artifact => artifact.artifactType === 'geojson')
-    const rasterArtifacts = artifactList.filter(artifact => artifact.artifactType !== 'geojson')
-    const bundles = await Promise.all(
-      geojsonArtifacts.map(async artifact => {
-        const [data, metadataPayload] = await Promise.all([
-          getArtifactGeoJson(artifact.artifactId),
-          getArtifactMetadata(artifact.artifactId),
-        ])
-        return {
-          artifactId: artifact.artifactId,
-          data,
-          metadata: (metadataPayload.metadata as Record<string, unknown>) ?? {},
+  const hydrateArtifact = useCallback(async (artifact: ArtifactRef): Promise<HydratedArtifactPayload> => {
+    return queryClient.fetchQuery({
+      queryKey: ['artifact', 'hydration', artifact.artifactId],
+      staleTime: Number.POSITIVE_INFINITY,
+      queryFn: async () => {
+        if (artifact.artifactType === 'geojson') {
+          const [data, metadataPayload] = await Promise.all([
+            getArtifactGeoJson(artifact.artifactId),
+            getArtifactMetadata(artifact.artifactId),
+          ])
+          return {
+            artifactId: artifact.artifactId,
+            data,
+            metadata: isRecord(metadataPayload.metadata)
+              ? metadataPayload.metadata
+              : {},
+          }
         }
-      }),
-    )
-    const rasterMetadata = await Promise.all(
-      rasterArtifacts.map(async artifact => {
         const metadataPayload = await getArtifactMetadata(artifact.artifactId)
         return {
           artifactId: artifact.artifactId,
-          metadata: (metadataPayload.metadata as Record<string, unknown>) ?? {},
+          metadata: isRecord(metadataPayload.metadata)
+            ? metadataPayload.metadata
+            : {},
         }
-      }),
-    )
-
-    startTransition(() => {
-      if (bundles.length) {
-        mergeArtifactData(bundles)
-      }
-      if (bundles.length || rasterMetadata.length) {
-        mergeArtifactMetadata([...bundles, ...rasterMetadata])
       }
     })
-  }, [mergeArtifactData, mergeArtifactMetadata])
+  }, [queryClient])
 
   const refreshLayers = useCallback(async (sessionId?: string | null, threadId?: string | null) => {
     await refreshLayerStore(sessionId, threadId)
@@ -153,6 +158,7 @@ export function useResourceController({
     if (!available.length) return
     setBasemaps(available)
     const defaultBasemap = available.find(item => item.isDefault) ?? available[0]
+    if (!defaultBasemap) throw new Error('底图目录没有可用条目。')
     const currentBasemapKey = useResourceStore.getState().selectedBasemapKey
     setSelectedBasemapKey(available.some(item => item.basemapKey === currentBasemapKey) ? currentBasemapKey : defaultBasemap.basemapKey)
   }, [setBasemaps, setSelectedBasemapKey])
@@ -166,16 +172,73 @@ export function useResourceController({
   }, [clearUploadState])
 
   useEffect(() => {
+    const scope = currentThreadId ?? null
+    if (hydrationScopeRef.current !== scope) {
+      hydrationScopeRef.current = scope
+      pendingArtifactHydrationsRef.current.clear()
+    }
+    const activeArtifactIds = new Set(artifacts.map(artifact => artifact.artifactId))
+    setArtifactHydrationErrors(current => {
+      const retained = Object.entries(current).filter(([artifactId]) => activeArtifactIds.has(artifactId))
+      return retained.length === Object.keys(current).length ? current : Object.fromEntries(retained)
+    })
     const missing = artifacts.filter(artifact => (
-      artifact.artifactType === 'geojson'
+      !pendingArtifactHydrationsRef.current.has(artifact.artifactId)
+      && !artifactHydrationErrors[artifact.artifactId] && (artifact.artifactType === 'geojson'
         ? !artifactData[artifact.artifactId]
-        : !artifactMetadata[artifact.artifactId]
+        : !artifactMetadata[artifact.artifactId])
     ))
     if (!missing.length) return
-    void applyArtifactPayload(missing).then(() => {
-      if (missing.length === 1) setSelectedArtifactId(missing[0].artifactId)
+    for (const artifact of missing) pendingArtifactHydrationsRef.current.add(artifact.artifactId)
+    void Promise.allSettled(missing.map(hydrateArtifact)).then(results => {
+      if (hydrationScopeRef.current !== scope) return
+      const hydrated = results.flatMap(result => result.status === 'fulfilled' ? [result.value] : [])
+      const rejected = results.flatMap((result, index) => result.status === 'rejected'
+        ? [{ artifactId: missing[index]?.artifactId, error: result.reason }]
+        : [])
+      startTransition(() => {
+        const dataEntries = hydrated.flatMap(entry => entry.data
+          ? [{ artifactId: entry.artifactId, data: entry.data }]
+          : [])
+        if (dataEntries.length) mergeArtifactData(dataEntries)
+        if (hydrated.length) mergeArtifactMetadata(hydrated)
+        const onlyHydrated = hydrated.length === 1 ? hydrated[0] : undefined
+        if (missing.length === 1 && onlyHydrated) setSelectedArtifactId(onlyHydrated.artifactId)
+        setArtifactHydrationErrors(current => {
+          const next = { ...current }
+          for (const entry of hydrated) delete next[entry.artifactId]
+          for (const entry of rejected) {
+            if (entry.artifactId) next[entry.artifactId] = formatUiError(entry.error, '结果数据加载失败。')
+          }
+          return next
+        })
+      })
+      for (const entry of rejected) reportNonBlockingError('artifactHydration', entry.error)
+    }).finally(() => {
+      if (hydrationScopeRef.current !== scope) return
+      for (const artifact of missing) pendingArtifactHydrationsRef.current.delete(artifact.artifactId)
     })
-  }, [applyArtifactPayload, artifactData, artifactMetadata, artifacts])
+  }, [
+    artifactData,
+    artifactHydrationErrors,
+    artifactMetadata,
+    artifacts,
+    currentThreadId,
+    hydrateArtifact,
+    mergeArtifactData,
+    mergeArtifactMetadata,
+    setSelectedArtifactId,
+    setArtifactHydrationErrors,
+  ])
+
+  const retryArtifactHydration = useCallback((artifactId: string) => {
+    setArtifactHydrationErrors(current => {
+      if (!(artifactId in current)) return current
+      const next = { ...current }
+      delete next[artifactId]
+      return next
+    })
+  }, [setArtifactHydrationErrors])
 
   const uploadOneFile = useCallback(async (file: File, explicitThreadId?: string | null) => {
     if (!session) throw new Error('当前会话还没有初始化，暂时不能上传文件。')
@@ -257,7 +320,7 @@ export function useResourceController({
       }))
       throw error
     }
-  }, [currentThreadId, session])
+  }, [currentThreadId, session, setUploadReferences, setUploadedLayerName])
 
   const uploadFiles = useCallback(async (files: File[]) => {
     if (!session) return
@@ -332,7 +395,7 @@ export function useResourceController({
     } else if (skippedCount > 0) {
       setUiError(`已上传 ${uploadable.length} 个文件，跳过 ${skippedCount} 个不支持的文件。`)
     }
-  }, [ensureUploadThread, onSessionRecord, onShowSources, session, setUiError, uploadOneFile])
+  }, [ensureUploadThread, onSessionRecord, onShowSources, refreshLayerStore, session, setUiError, setUploadReferences, uploadOneFile])
 
   const importLayer = useCallback(async (file: File) => {
     try {
@@ -379,7 +442,7 @@ export function useResourceController({
     } catch (error) {
       reportNonBlockingError('refreshAllFiles', error)
     }
-  }, [currentThreadId])
+  }, [currentThreadId, setAllFiles])
 
   const uploadFile = useCallback(async (file: File) => {
     setIsFileSubmitting(true)
@@ -392,7 +455,7 @@ export function useResourceController({
     } finally {
       setIsFileSubmitting(false)
     }
-  }, [ensureUploadThread, refreshAllFiles, setUiError])
+  }, [ensureUploadThread, refreshAllFiles, setIsFileSubmitting, setUiError])
 
   const removeFile = useCallback(async (fileId: string) => {
     try {
@@ -419,7 +482,7 @@ export function useResourceController({
         },
       }
     })
-  }, [])
+  }, [setMapLayerPreferences])
 
   const setArtifactVisibility = useCallback((artifactId: string, visible: boolean) => {
     setMapLayerPreferences(current => ({
@@ -429,7 +492,7 @@ export function useResourceController({
         opacity: current[artifactId]?.opacity ?? 0.9,
       },
     }))
-  }, [])
+  }, [setMapLayerPreferences])
 
   const changeArtifactOpacity = useCallback((artifactId: string, opacity: number) => {
     setMapLayerPreferences(current => ({
@@ -439,7 +502,7 @@ export function useResourceController({
         opacity,
       },
     }))
-  }, [])
+  }, [setMapLayerPreferences])
 
   const baseMapLayers = useMemo(() => artifacts
     .filter(artifact => runStatus === 'running' || !artifact.isIntermediate)
@@ -494,8 +557,8 @@ export function useResourceController({
 
   return {
     allFiles,
-    applyArtifactPayload,
     artifactData,
+    artifactHydrationErrors,
     artifactMetadata,
     basemaps,
     changeArtifactOpacity,
@@ -509,6 +572,7 @@ export function useResourceController({
     loadBasemaps,
     mapLayers,
     refreshLayers,
+    retryArtifactHydration,
     removeFile,
     removeLayer,
     replaceLayer,
@@ -530,7 +594,9 @@ export function useResourceController({
 function buildUploadBatchReference(files: File[]): UploadReference | null {
   if (files.length <= 1) return null
   const totalBytes = files.reduce((sum, file) => sum + file.size, 0)
-  const firstKind = classifyUploadFile(files[0]) ?? 'file'
+  const firstFile = files[0]
+  if (!firstFile) return null
+  const firstKind = classifyUploadFile(firstFile) ?? 'file'
   const name = uploadBatchName(files)
   return {
     id: `batch:${files.length}:${files.map(file => `${getUploadRelativePath(file)}:${file.size}`).join('|')}`,

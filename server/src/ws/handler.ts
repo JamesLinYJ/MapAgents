@@ -11,10 +11,9 @@
 import type { Server, IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer } from 'ws'
-import { OpenAIAgentsRuntime } from '../agent/runtime.js'
-import { RunTaskManager } from '../agent/runTaskManager.js'
 import { RuntimeFileStore } from '../store/fileStore.js'
 import { StoreNotFoundError } from '../store/platformStore.js'
+import { AuthorizationError } from '../security/authorizationService.js'
 import { makeId } from '../utils/ids.js'
 import { failure, parseMessage, push, success, type ClientMsg } from './protocol.js'
 import { sendWs } from './subscriptions.js'
@@ -22,18 +21,15 @@ import type { SecurityServices } from '../security/routes.js'
 import { WsMessageRateLimiter } from '../security/rateLimiter.js'
 import type { AuthContext } from '../security/types.js'
 import type { WsDependencies } from './dependencies.js'
-import { WsCommandRegistry, type WsCommandDefinition } from './commandRegistry.js'
+import type { WsCommandDefinition } from './commandRegistry.js'
 import { createDefaultCommandRegistry } from './defaultCommandRegistry.js'
 import { formatError } from './payload.js'
 import { errorLogPayload, logger, traceId, withLogContext } from '../observability/logger.js'
 import { wsConnectionsActive, wsMessagesTotal } from '../observability/metrics.js'
 
 export function createWsHandler(server: Server, dependencies: WsDependencies) {
-  const { store } = dependencies
-  const runtime = new OpenAIAgentsRuntime(store, dependencies.toolRegistry, dependencies.modelRegistry, {
-    createSandboxSession: dependencies.createSandboxSession,
-  })
-  const runTasks = new RunTaskManager(runtime, store)
+  const runtime = dependencies.runtime
+  const runTasks = dependencies.runTasks
   const files = new RuntimeFileStore(dependencies.runtimeRoot)
   const commandRegistry = createDefaultCommandRegistry()
   const wss = new WebSocketServer({ noServer: true })
@@ -86,7 +82,9 @@ export function createWsHandler(server: Server, dependencies: WsDependencies) {
               sendWs(ws, success(msg.id, result))
               wsMessagesTotal.inc({ type: msg.type, direction: 'outbound' })
             } catch (error) {
-              const code = error instanceof StoreNotFoundError ? 'not_found' : 'command_failed'
+              const code = error instanceof StoreNotFoundError ? 'not_found'
+                : error instanceof AuthorizationError ? 'forbidden'
+                : 'command_failed'
               logger.warn({ error: errorLogPayload(error), code }, 'ws command failed')
               sendWs(ws, failure(msg.id, code, formatError(error)))
               wsMessagesTotal.inc({ type: msg.type, direction: 'outbound' })
@@ -114,7 +112,7 @@ function assertRegisteredCommandCsrf(
   command: WsCommandDefinition,
 ): void {
   if (!command.csrf || !auth) return
-  if (msg.payload.csrfToken !== auth.csrfToken) throw new Error('CSRF 校验失败。')
+  if (msg.meta?.csrfToken !== auth.csrfToken) throw new Error('CSRF 校验失败。')
 }
 
 function isWsPath(request: IncomingMessage): boolean {

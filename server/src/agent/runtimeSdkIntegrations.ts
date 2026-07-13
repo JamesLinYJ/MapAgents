@@ -182,14 +182,18 @@ function emptyToolIntegration(): RuntimeSdkToolIntegration {
 }
 
 function createMcpServer(config: RuntimeMcpServerConfig): MCPServer {
+  const filterConfig = {
+    ...(config.allowedTools.length ? { allowed: config.allowedTools } : {}),
+    ...(config.blockedTools.length ? { blocked: config.blockedTools } : {}),
+  }
+  const toolFilter = Object.keys(filterConfig).length
+    ? createMCPToolStaticFilter(filterConfig)
+    : undefined
   const common = {
     name: config.name,
     cacheToolsList: config.cacheToolsList,
     timeout: config.timeoutMs,
-    toolFilter: createMCPToolStaticFilter({
-      allowed: config.allowedTools.length ? config.allowedTools : undefined,
-      blocked: config.blockedTools.length ? config.blockedTools : undefined,
-    }),
+    ...(toolFilter ? { toolFilter } : {}),
     useStructuredContent: config.useStructuredContent,
     errorFunction: null,
   }
@@ -211,7 +215,7 @@ function createMcpServer(config: RuntimeMcpServerConfig): MCPServer {
     ...common,
     command: requireNonEmpty(config.command, `MCP server '${config.name}' 缺少 command。`),
     args: config.args,
-    cwd: config.cwd ?? undefined,
+    ...(config.cwd ? { cwd: config.cwd } : {}),
     env: config.env,
   })
 }
@@ -219,25 +223,28 @@ function createMcpServer(config: RuntimeMcpServerConfig): MCPServer {
 function createHostedMcpTool(config: RuntimeMcpServerConfig): Tool {
   const headers = resolveMcpHeaders(config)
   const allowedTools = config.allowedTools.length ? { toolNames: config.allowedTools } : undefined
+  const authorization = resolveMcpAuthorization(config)
+  const description = config.description || undefined
+  const optionalConfig = {
+    ...(authorization ? { authorization } : {}),
+    ...(allowedTools ? { allowedTools } : {}),
+    ...(description ? { serverDescription: description } : {}),
+  }
   if (config.connectorId?.trim()) {
     if (config.approval === 'never') {
       return hostedMcpTool({
         serverLabel: config.name,
         connectorId: config.connectorId.trim(),
-        authorization: resolveMcpAuthorization(config),
         headers,
-        allowedTools,
-        serverDescription: config.description || undefined,
+        ...optionalConfig,
         requireApproval: 'never',
       })
     }
     return hostedMcpTool({
       serverLabel: config.name,
       connectorId: config.connectorId.trim(),
-      authorization: resolveMcpAuthorization(config),
       headers,
-      allowedTools,
-      serverDescription: config.description || undefined,
+      ...optionalConfig,
       requireApproval: 'always',
     })
   }
@@ -245,20 +252,16 @@ function createHostedMcpTool(config: RuntimeMcpServerConfig): Tool {
     return hostedMcpTool({
       serverLabel: config.name,
       serverUrl: requireHttpUrl(config),
-      authorization: resolveMcpAuthorization(config),
       headers,
-      allowedTools,
-      serverDescription: config.description || undefined,
+      ...optionalConfig,
       requireApproval: 'never',
     })
   }
   return hostedMcpTool({
     serverLabel: config.name,
     serverUrl: requireHttpUrl(config),
-    authorization: resolveMcpAuthorization(config),
     headers,
-    allowedTools,
-    serverDescription: config.description || undefined,
+    ...optionalConfig,
     requireApproval: 'always',
   })
 }

@@ -12,11 +12,29 @@ import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import type { Database } from './db/connection.js'
 import type { ConversationItem } from './schemas/types.js'
 import { PostgresPlatformStore } from './store/platformStore.js'
+import { PlatformStoreTestHarness } from '../test-support/platformStoreHarness.js'
 
 describe('conversation architecture', () => {
+  it('keeps shared protocol schemas modular and server parsing on the shared contract', async () => {
+    const repositoryRoot = path.resolve(process.cwd(), '..')
+    const sharedRoot = path.join(repositoryRoot, 'packages/shared-types/src-ts')
+    const serverEntry = await readFile(path.join(process.cwd(), 'src/schemas/types.ts'), 'utf8')
+    const sharedEntry = await readFile(path.join(sharedRoot, 'index.ts'), 'utf8')
+    const serverTsconfig = JSON.parse(await readFile(path.join(process.cwd(), 'tsconfig.json'), 'utf8')) as {
+      compilerOptions?: { noUncheckedIndexedAccess?: boolean }
+    }
+
+    for (const domain of ['core', 'conversation', 'runtime', 'platform', 'resources', 'transport', 'worker']) {
+      await expect(stat(path.join(sharedRoot, `${domain}.ts`))).resolves.toBeDefined()
+      expect(sharedEntry.includes(`export * from './${domain}.js'`), domain).toBe(true)
+    }
+    expect(serverEntry.trimEnd().endsWith("export * from '@geo-agent-platform/shared-types'")).toBe(true)
+    expect(serverEntry.includes("from 'zod'")).toBe(false)
+    expect(serverTsconfig.compilerOptions?.noUncheckedIndexedAccess).toBe(true)
+  })
+
   it('keeps removed response/message-frame models out of runtime source', async () => {
     const root = path.resolve(process.cwd(), '..')
     const files = await collectSourceFiles([
@@ -103,42 +121,88 @@ describe('conversation architecture', () => {
     for (const delegate of requiredDelegates) {
       expect(source.includes(delegate), delegate).toBe(true)
     }
+    expect(source).toMatch(/private readonly conversationStore: FileConversationStore/u)
+    expect(source).not.toMatch(/^\s*readonly conversationStore: FileConversationStore/mu)
     for (const forbidden of forbiddenWritePaths) {
       expect(source.includes(forbidden), forbidden).toBe(false)
+    }
+  })
+
+  it('keeps cross-resource conversation lifecycle writes inside repository transactions', async () => {
+    const threadSource = await readFile(path.join(process.cwd(), 'src/store/threadStore.ts'), 'utf8')
+    const runSource = await readFile(path.join(process.cwd(), 'src/store/runStore.ts'), 'utf8')
+    const repositorySource = await readFile(
+      path.join(process.cwd(), 'src/store/postgres/conversationRepository.ts'),
+      'utf8',
+    )
+
+    expect(threadSource.includes('this.repository.createThreadLifecycle(thread)')).toBe(true)
+    expect(threadSource.includes('this.repository.trashThread(')).toBe(true)
+    expect(threadSource.includes('this.sessionStore.update(')).toBe(false)
+    expect(runSource.includes('this.repository.createRunLifecycle(run)')).toBe(true)
+    expect(runSource.includes('this.repository.saveRunWithCheckpoint(')).toBe(true)
+    expect(runSource.includes('this.sessionStore.update(')).toBe(false)
+
+    for (const method of [
+      'createThreadLifecycle',
+      'trashThread',
+      'restoreThread',
+      'purgeThread',
+      'createRunLifecycle',
+    ]) {
+      const methodStart = repositorySource.indexOf(`async ${method}(`, repositorySource.indexOf('export class'))
+      expect(methodStart, `${method} implementation`).toBeGreaterThanOrEqual(0)
+      const transactionStart = repositorySource.indexOf('this.db.transaction(', methodStart)
+      const nextMethodStart = repositorySource.indexOf('\n  async ', methodStart + 1)
+      expect(transactionStart, `${method} transaction`).toBeGreaterThan(methodStart)
+      expect(transactionStart, `${method} transaction boundary`).toBeLessThan(nextMethodStart)
     }
   })
 
   it('keeps FileConversationStore compiled against the ConversationStorage port', async () => {
     const source = await readFile(path.join(process.cwd(), 'src/store/fileConversationStore.ts'), 'utf8')
     const portSource = await readFile(path.join(process.cwd(), 'src/store/ConversationStorage.ts'), 'utf8')
+    const repositorySource = await readFile(path.join(process.cwd(), 'src/store/postgres/conversationRepository.ts'), 'utf8')
 
     expect(source.includes('export class FileConversationStore implements ConversationStorage')).toBe(true)
     expect(source.includes('隐式满足 ConversationStorage')).toBe(false)
-    expect(portSource.includes('saveRun(')).toBe(true)
-    expect(portSource.includes('saveMemory(')).toBe(true)
-    expect(portSource.includes('appendValue(runId: string, value: ToolValueRef)')).toBe(true)
+    expect(portSource.includes('saveRun(')).toBe(false)
+    expect(portSource.includes('saveAgentsSdkState(')).toBe(false)
+    expect(portSource.includes('saveMemory(')).toBe(false)
+    expect(portSource.includes('appendTranscript(')).toBe(false)
+    expect(portSource.includes('appendCompaction(')).toBe(false)
+    expect(portSource.includes('registerThread(')).toBe(true)
+    expect(portSource.includes('readObjectByHash(')).toBe(true)
+    expect(portSource.includes('appendValue(runId: string, value: ToolValueRef)')).toBe(false)
+    expect(repositorySource.includes('saveRunCheckpoint(')).toBe(true)
+    expect(repositorySource.includes('saveAgentsSdkCheckpoint(')).toBe(true)
+    expect(repositorySource.includes('saveThreadMemoryVersion(')).toBe(true)
+    expect(repositorySource.includes('appendCompaction(')).toBe(true)
   })
 
-  it('keeps JSONL queue and recovery outside FileConversationStore', async () => {
+  it('hydrates file payload locations from PostgreSQL without recovering legacy conversation JSONL', async () => {
     const source = await readFile(path.join(process.cwd(), 'src/store/fileConversationStore.ts'), 'utf8')
+    const facadeSource = await readFile(path.join(process.cwd(), 'src/store/platformStore.ts'), 'utf8')
     const jsonlSource = await readFile(path.join(process.cwd(), 'src/store/durableJsonlStore.ts'), 'utf8')
-    const journalSource = await readFile(path.join(process.cwd(), 'src/store/threadJournalStore.ts'), 'utf8')
-    const memorySource = await readFile(path.join(process.cwd(), 'src/store/threadMemoryFileStore.ts'), 'utf8')
+    const threadSource = await readFile(path.join(process.cwd(), 'src/store/threadStore.ts'), 'utf8')
 
+    expect(source.includes('async initialize(snapshot: ConversationStorageSnapshot)')).toBe(true)
+    expect(source.includes('for (const thread of snapshot.threads)')).toBe(true)
+    expect(source.includes('for (const deleted of snapshot.deletedThreads)')).toBe(true)
+    expect(source.includes('for (const run of snapshot.runs)')).toBe(true)
+    expect(facadeSource.indexOf('this.conversationRepository.loadSnapshot()'))
+      .toBeLessThan(facadeSource.indexOf('this.conversationStore.initialize(snapshot)'))
     expect(source.includes('new DurableJsonlStore()')).toBe(true)
-    expect(source.includes('new ThreadJournalStore()')).toBe(true)
-    expect(source.includes('new ThreadMemoryFileStore(this.jsonlStore)')).toBe(true)
     expect(source.includes('this.jsonlStore.append')).toBe(true)
-    expect(source.includes('this.jsonlStore.read')).toBe(true)
-    expect(source.includes('this.threadJournalStore.writeAndApply')).toBe(true)
-    expect(source.includes('this.threadJournalStore.recover')).toBe(true)
-    expect(source.includes('this.threadMemoryStore.get')).toBe(true)
-    expect(source.includes('this.threadMemoryStore.save')).toBe(true)
+    expect(source.includes('this.jsonlStore.read')).toBe(false)
+    expect(source.includes('ThreadJournalStore')).toBe(false)
+    expect(source.includes('ThreadMemoryFileStore')).toBe(false)
+    expect(source.includes('thread.json')).toBe(false)
+    expect(threadSource.includes('this.repository.saveThreadMemoryVersion')).toBe(true)
+    expect(threadSource.includes('this.repository.appendCompaction')).toBe(true)
+    expect(threadSource.includes('this.conversationStore.putObject')).toBe(true)
+    expect(threadSource.includes('this.conversationStore.readObjectByHash')).toBe(true)
     expect(jsonlSource.includes('private readonly writeQueues')).toBe(true)
-    expect(journalSource.includes('threadJournalSchema')).toBe(true)
-    expect(journalSource.includes('writeAndApply')).toBe(true)
-    expect(memorySource.includes('memory/versions.jsonl')).toBe(true)
-    expect(memorySource.includes('memory 版本冲突')).toBe(true)
     for (const token of [
       'private writeQueues',
       'private enqueueAppend',
@@ -150,10 +214,22 @@ describe('conversation architecture', () => {
       'recordJsonLineCorruption(',
       'memory 版本冲突',
       'versions.jsonl',
+      'compactions.jsonl',
       'previous append failed',
     ]) {
       expect(source.includes(token), token).toBe(false)
     }
+  })
+
+  it('uses PostgreSQL advisory locking for the single API writer boundary', async () => {
+    const lockSource = await readFile(path.join(process.cwd(), 'src/db/applicationInstanceLock.ts'), 'utf8')
+    const containerSource = await readFile(path.join(process.cwd(), 'src/app/container.ts'), 'utf8')
+    const packageSource = await readFile(path.join(process.cwd(), 'package.json'), 'utf8')
+
+    expect(lockSource.includes('pg_advisory_lock')).toBe(true)
+    expect(lockSource.includes('pg_advisory_unlock')).toBe(true)
+    expect(containerSource.includes('await instanceLock.acquire()')).toBe(true)
+    expect(packageSource.includes('proper-lockfile')).toBe(false)
   })
 
   it('keeps content-addressed object IO outside FileConversationStore', async () => {
@@ -165,7 +241,9 @@ describe('conversation architecture', () => {
     expect(source.includes('new ConversationObjectGarbageCollector(this.sessionsRoot, this.objectsRoot)')).toBe(true)
     expect(source.includes('return this.objectStore.put(content, mediaType)')).toBe(true)
     expect(source.includes('return this.objectStore.read(reference)')).toBe(true)
-    expect(source.includes('return this.objectGarbageCollector.collect()')).toBe(true)
+    expect(source.includes('return this.objectStore.readByHash(hash)')).toBe(true)
+    expect(source.includes('return this.objectGarbageCollector.collect(databaseReferences)')).toBe(true)
+    expect(gcSource.includes('databaseReferences: Iterable<string>')).toBe(true)
     expect(objectSource.includes("createHash('sha256')")).toBe(true)
     expect(gcSource.includes('collectAttachmentReferences')).toBe(true)
     for (const token of [
@@ -229,7 +307,7 @@ describe('conversation architecture', () => {
     expect(registrySource.includes('export const toolRegistry = new ToolRegistry')).toBe(false)
     expect(loaderSource.includes("import { getEnv } from './env.js'")).toBe(false)
     expect(loaderSource.includes("import { toolRegistry } from './registry.js'")).toBe(false)
-    expect(loaderSource.includes('deps: { env: Env; registry: ToolRegistry }')).toBe(true)
+    expect(loaderSource.includes('deps: { env: Env; registry: ToolRegistry; scheduledTaskService?: ScheduledTaskService }')).toBe(true)
     expect(containerSource.includes('const toolRegistry = new ToolRegistry()')).toBe(true)
   })
 
@@ -481,18 +559,26 @@ describe('conversation architecture', () => {
     const root = path.resolve(process.cwd(), '..')
     const sidecarPath = path.join(root, 'apps/worker/src/worker_app/sidecar.py')
     const sidecarSource = await readFile(sidecarPath, 'utf8')
+    const appFactorySource = await readFile(path.join(root, 'apps/worker/src/worker_app/app_factory.py'), 'utf8')
+    const registrySource = await readFile(path.join(root, 'apps/worker/src/worker_app/tool_registry.py'), 'utf8')
+    const builtinToolsSource = await readFile(path.join(root, 'apps/worker/src/worker_app/tools/__init__.py'), 'utf8')
+    const inspectToolSource = await readFile(path.join(root, 'apps/worker/src/worker_app/tools/meteorological_inspect.py'), 'utf8')
     const pathSandboxSource = await readFile(path.join(root, 'apps/worker/src/worker_app/path_sandbox.py'), 'utf8')
     const authSource = await readFile(path.join(root, 'apps/worker/src/worker_app/worker_auth.py'), 'utf8')
     const requestArgsSource = await readFile(path.join(root, 'apps/worker/src/worker_app/request_args.py'), 'utf8')
     const nowcastBridgeSource = await readFile(path.join(root, 'apps/worker/src/worker_app/nowcast_bridge.py'), 'utf8')
 
-    expect(sidecarSource.includes('WorkerPathSandbox')).toBe(true)
-    expect(sidecarSource.includes('WorkerAuthVerifier')).toBe(true)
-    expect(sidecarSource.includes('from worker_app.request_args import')).toBe(true)
-    expect(sidecarSource.includes('from worker_app.nowcast_bridge import')).toBe(true)
-    expect(sidecarSource.includes('register_system_routes(')).toBe(true)
-    expect(sidecarSource.includes('register_tool_routes(')).toBe(true)
+    expect(sidecarSource.includes('create_worker_app(WorkerSettings.from_env())')).toBe(true)
+    expect(appFactorySource.includes('WorkerPathSandbox')).toBe(true)
+    expect(appFactorySource.includes('WorkerAuthVerifier')).toBe(true)
+    expect(appFactorySource.includes('register_system_routes(')).toBe(true)
+    expect(appFactorySource.includes('register_tool_routes(')).toBe(true)
+    expect(appFactorySource.includes('register_builtin_tools(tool_registry)')).toBe(true)
+    expect(registrySource.includes('class WorkerToolRegistry')).toBe(true)
+    expect(builtinToolsSource.includes('_BUILTIN_TOOL_REGISTRARS')).toBe(true)
+    expect(inspectToolSource.includes('from worker_app.sidecar import')).toBe(false)
     for (const token of [
+      '@worker_tool',
       '@app.get("/health")',
       '@app.get("/tools/catalog")',
       '@app.post("/tools/{tool_name}")',
@@ -513,11 +599,34 @@ describe('conversation architecture', () => {
     expect(nowcastBridgeSource.includes('def nowcast_sequence_from_reference')).toBe(true)
   })
 
-  it('replays completed conversation items from per-run files', async () => {
+  it('keeps Agent runtime services behind narrow persistence ports', async () => {
+    const root = path.resolve(process.cwd(), '..')
+    const runtimePortSource = await readFile(path.join(root, 'server/src/store/runtimePorts.ts'), 'utf8')
+    const productionFiles = [
+      'server/src/agent/runtime.ts',
+      'server/src/agent/contextManager.ts',
+      'server/src/agent/deterministicNowcastRunner.ts',
+      'server/src/agent/toolExecutionCoordinator.ts',
+      'server/src/agent/runTaskManager.ts',
+      'server/src/memory/service.ts',
+      'server/src/tools/resultPersistence.ts',
+    ]
+
+    expect(runtimePortSource.includes('interface AgentRuntimeStore')).toBe(true)
+    expect(runtimePortSource.includes('type ToolExecutionStore')).toBe(true)
+    expect(runtimePortSource.includes('type ThreadContextStore')).toBe(true)
+    for (const relativePath of productionFiles) {
+      const source = await readFile(path.join(root, relativePath), 'utf8')
+      expect(source.includes("from '../store/platformStore.js'"), relativePath).toBe(false)
+      expect(source.includes("from '../store/runtimePorts.js'"), relativePath).toBe(true)
+    }
+  })
+
+  it('replays completed conversation items from the PostgreSQL repository', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'geo-items-'))
     try {
-      const db = noOpDb()
-      const store = new PostgresPlatformStore(db, dir)
+      const harness = new PlatformStoreTestHarness()
+      const store = harness.create(dir)
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '测试')
@@ -526,9 +635,9 @@ describe('conversation architecture', () => {
       await store.appendItem(item({ runId: run.id, threadId: thread.id, role: 'user', body: '查询杭州' }))
       await store.appendItem(item({ runId: run.id, threadId: thread.id, role: 'assistant', body: '杭州有雨。' }))
       await store.appendItem(item({ runId: run.id, threadId: thread.id, itemType: 'result', role: null, body: null, metadata: { resultType: 'success' } }))
-      await store.conversationStore.flush()
+      await store.flushConversationStore()
 
-      const restored = new PostgresPlatformStore(db, dir)
+      const restored = harness.create(dir)
       await restored.initialize()
       const restoredItems = await restored.listItems(run.id)
 
@@ -537,37 +646,37 @@ describe('conversation architecture', () => {
       expect(restoredItems[2].body).toBeNull()
       expect(restored.getThread(thread.id).latestAssistantSummary).toBe('杭州有雨。')
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await removeTempDirectory(dir)
     }
   })
 
   it('replays the latest thread projection and keeps deleted threads removed', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'geo-threads-'))
     try {
-      const db = noOpDb()
-      const store = new PostgresPlatformStore(db, dir)
+      const harness = new PlatformStoreTestHarness()
+      const store = harness.create(dir)
       await store.initialize()
       const session = await store.createSession()
       const first = await store.createThread(session.id, '保留线程')
       const deleted = await store.createThread(session.id, '删除线程')
       await store.deleteThread(deleted.id)
-      await store.conversationStore.flush()
+      await store.flushConversationStore()
 
-      const restored = new PostgresPlatformStore(db, dir)
+      const restored = harness.create(dir)
       await restored.initialize()
 
       expect(restored.getSession(session.id).latestThreadId).toBe(first.id)
       expect(restored.listThreadsForSession(session.id).map(thread => thread.id)).toEqual([first.id])
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await removeTempDirectory(dir)
     }
   })
 
   it('rebuilds derived indexes and pages run summaries without thread fan-out', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'geo-run-index-'))
     try {
-      const db = noOpDb()
-      const store = new PostgresPlatformStore(db, dir)
+      const harness = new PlatformStoreTestHarness()
+      const store = harness.create(dir)
       await store.initialize()
       const session = await store.createSession()
       const threadIds: string[] = []
@@ -587,14 +696,14 @@ describe('conversation architecture', () => {
 
       await store.deleteThread(threadIds[0])
       expect(store.listRunSummaries({ sessionId: session.id, limit: 100 }).items).toHaveLength(27)
-      await store.conversationStore.flush()
+      await store.flushConversationStore()
 
-      const restored = new PostgresPlatformStore(db, dir)
+      const restored = harness.create(dir)
       await restored.initialize()
       expect(restored.listThreadsForSession(session.id)).toHaveLength(27)
       expect(restored.listRunSummaries({ sessionId: session.id, limit: 100 }).items).toHaveLength(27)
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await removeTempDirectory(dir)
     }
   })
 })
@@ -605,6 +714,12 @@ async function collectSourceFiles(roots: string[]): Promise<string[]> {
     await collect(root, files)
   }
   return files.filter((file) => /\.(ts|tsx)$/u.test(file))
+}
+
+async function removeTempDirectory(directory: string): Promise<void> {
+  // Windows 杀毒和文件索引可能短暂持有刚关闭的 JSONL 句柄。
+  // 重试只属于测试清理，不改变生产存储或关闭语义。
+  await rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 40 })
 }
 
 async function collectProductionFiles(roots: string[]): Promise<string[]> {
@@ -637,12 +752,6 @@ async function collect(dir: string, files: string[]): Promise<void> {
       files.push(fullPath)
     }
   }
-}
-
-function noOpDb(): Database {
-  return {
-    execute: async () => ({ rows: [] }),
-  } as Database
 }
 
 function item(overrides: Partial<ConversationItem>): ConversationItem {

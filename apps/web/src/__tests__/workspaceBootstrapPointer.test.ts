@@ -12,11 +12,15 @@ import { describe, expect, it } from 'vitest'
 import type { WorkspaceBootstrapSnapshot } from '@geo-agent-platform/shared-types'
 
 import { loadBootstrapFromWorkspacePointer } from '../app/useWorkspaceBootstrap'
+import { GeoForgeTransportError } from '../api/errors'
 
 describe('loadBootstrapFromWorkspacePointer', () => {
   it('优先使用可访问的分享 session', async () => {
     const calls: Array<string | undefined> = []
-    const result = await loadBootstrapFromWorkspacePointer('session_shared', async sessionId => {
+    const result = await loadBootstrapFromWorkspacePointer({
+      activeSessionId: 'session_shared',
+      sessionSource: 'route',
+    }, async sessionId => {
       calls.push(sessionId)
       return snapshot(sessionId ?? 'session_default')
     })
@@ -26,17 +30,40 @@ describe('loadBootstrapFromWorkspacePointer', () => {
     expect(calls).toEqual(['session_shared'])
   })
 
-  it('分享 session 不可访问时回到当前用户默认 session', async () => {
+  it('失效的本地 session 选中提示会被显式清理', async () => {
     const calls: Array<string | undefined> = []
-    const result = await loadBootstrapFromWorkspacePointer('session_foreign', async sessionId => {
+    const result = await loadBootstrapFromWorkspacePointer({
+      activeSessionId: 'session_foreign',
+      sessionSource: 'persisted',
+    }, async sessionId => {
       calls.push(sessionId)
-      if (sessionId === 'session_foreign') throw new Error("无权限对 session 'session_foreign' 执行 read。")
+      if (sessionId === 'session_foreign') {
+        throw new GeoForgeTransportError('无权访问该会话。', {
+          transport: 'websocket',
+          code: 'forbidden',
+        })
+      }
       return snapshot(sessionId ?? 'session_default')
     })
 
     expect(result.pointerRejected).toBe(true)
     expect(result.snapshot.session.id).toBe('session_default')
     expect(calls).toEqual(['session_foreign', undefined])
+  })
+
+  it('显式 URL session 不可访问时保留权限错误', async () => {
+    const calls: Array<string | undefined> = []
+    await expect(loadBootstrapFromWorkspacePointer({
+      activeSessionId: 'session_foreign',
+      sessionSource: 'route',
+    }, async sessionId => {
+      calls.push(sessionId)
+      throw new GeoForgeTransportError('无权访问该会话。', {
+        transport: 'websocket',
+        code: 'forbidden',
+      })
+    })).rejects.toMatchObject({ code: 'forbidden' })
+    expect(calls).toEqual(['session_foreign'])
   })
 })
 

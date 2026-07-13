@@ -25,13 +25,14 @@ import {
 import { wsClient } from '../../ws/client'
 import { projectTimeline } from '../conversation/timelineProjector'
 import { isRecord } from '../../shared/utils/guards'
+import { reportClientDiagnostic } from '../../shared/utils/clientDiagnostics'
 
 // 运行状态所有权
 //
 // 这个 hook 只持有服务端 run 的 UI 投影：完成态通过 hydrate 获取事实快照，
 // 聊天态通过 ConversationItem 追加；切换 run 时必须清理旧 item，避免历史串台。
 
-interface RunState {
+export interface RunState {
   run?: AnalysisRun
   agentState?: AgentState
   intent?: UserIntent
@@ -78,7 +79,7 @@ function mergeConversationItems(current: ConversationItem[], incoming: Conversat
 // 网络订阅、hydrate 和提交态收敛都在 hook 层完成，避免 render 期间写 ref
 // 或由 effect 同步派生 React 本身已经能表达的状态。
 
-type RunAction =
+export type RunAction =
   | { type: 'SET_RUN'; run: AnalysisRun; agentState: AgentState; intent?: UserIntent; plan?: ExecutionPlan; artifacts: ArtifactRef[] }
   | { type: 'CLEAR_RUN' }
   | { type: 'APPEND_EVENT'; event: RunEvent }
@@ -106,12 +107,12 @@ export function runReducer(state: RunState, action: RunAction): RunState {
         intent: action.intent,
         executionPlan: action.plan,
         artifacts: action.artifacts ?? [],
-        placeResolution: action.agentState?.placeResolution ?? state.placeResolution,
+        placeResolution: action.agentState.placeResolution ?? null,
         isSubmitting: isDifferentRun ? isRunning : isRunning ? state.isSubmitting : false,
         uiError: isDifferentRun ? undefined : state.uiError,
-        events: state.events,
-        seenEventIds: state.seenEventIds,
-        items: (isDifferentRun && state.run?.threadId !== action.run.threadId) ? [] : state.items,
+        events: isDifferentRun ? [] : state.events,
+        seenEventIds: isDifferentRun ? new Set<string>() : state.seenEventIds,
+        items: isDifferentRun ? [] : state.items,
       }
     }
     case 'SET_ITEMS':
@@ -280,7 +281,9 @@ export function useRunState() {
       disposed = true
       unsubscribeMessages()
       if (subscribedRunIdRef.current === runId) subscribedRunIdRef.current = null
-      void unsubscribeRun(runId).catch(() => undefined)
+      void unsubscribeRun(runId).catch(error => {
+        reportClientDiagnostic('warn', { scope: 'unsubscribeRun', error, detail: { runId } })
+      })
     }
   }, [absorbSnapshot, runId])
 

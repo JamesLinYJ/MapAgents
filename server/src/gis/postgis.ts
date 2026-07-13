@@ -312,7 +312,9 @@ export class PostGisRepository {
     `);
         if (result.rows.length === 0)
             return null;
-        return mapRowToLayerRecord(result.rows[0]);
+        const row = result.rows[0];
+        if (!row) return null;
+        return mapRowToLayerRecord(row);
     }
 }
 function mapRowToFeature(row: QueryRow): StoredFeature {
@@ -480,9 +482,11 @@ function parseBounds(value: unknown): BBox | null {
     if (!Array.isArray(value) || value.length !== 4)
         return null;
     const bounds = value.map(Number);
-    return bounds.every(item => Number.isFinite(item))
-        ? [bounds[0], bounds[1], bounds[2], bounds[3]]
-        : null;
+    if (!bounds.every(item => Number.isFinite(item))) return null;
+    const [minX, minY, maxX, maxY] = bounds;
+    return minX === undefined || minY === undefined || maxX === undefined || maxY === undefined
+        ? null
+        : [minX, minY, maxX, maxY];
 }
 
 function toStringArray(value: unknown): string[] {

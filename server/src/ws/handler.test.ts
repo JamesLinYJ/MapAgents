@@ -33,8 +33,12 @@ import type { ConversationItem, RunEvent } from '../schemas/types.js'
 import { PostgresPlatformStore } from '../store/platformStore.js'
 import type { ToolProvider } from '../framework/types.js'
 import { defaultRuntimeConfig } from '../agent/defaultRuntimeConfig.js'
+import { createTestPlatformStore } from '../../test-support/platformStoreHarness.js'
 import { OpenAIAgentsRuntime, type SandboxSessionFactory } from '../agent/runtime.js'
-import { createWsHandler } from './handler.js'
+import { RunTaskManager } from '../agent/runTaskManager.js'
+import { UsageStatsService } from '../usage/usageStatsService.js'
+import { createWsHandler as createWsHandlerBase } from './handler.js'
+import type { WsDependencies } from './dependencies.js'
 import type { SecurityServices } from '../security/routes.js'
 import type { AuthContext } from '../security/types.js'
 
@@ -50,6 +54,33 @@ const TEST_AUTH: AuthContext = {
   csrfToken: TEST_CSRF,
   defaultWorkspaceId: 'workspace_test',
   roles: [{ workspaceId: 'workspace_test', role: 'platform_admin' }],
+}
+
+type TestWsDependencies = Omit<WsDependencies, 'env' | 'runtime' | 'runTasks' | 'scheduledTaskService' | 'backgroundTasks' | 'usageStats'> & Partial<Pick<
+  WsDependencies,
+  'env' | 'runtime' | 'runTasks' | 'scheduledTaskService' | 'backgroundTasks' | 'usageStats'
+>>
+
+async function removeTempRoot(root: string): Promise<void> {
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+}
+
+function createWsHandler(server: Parameters<typeof createWsHandlerBase>[0], dependencies: TestWsDependencies) {
+  const runtime = dependencies.runtime ?? new OpenAIAgentsRuntime(
+    dependencies.store,
+    dependencies.toolRegistry,
+    dependencies.modelRegistry,
+    { createSandboxSession: dependencies.createSandboxSession },
+  )
+  return createWsHandlerBase(server, {
+    ...dependencies,
+    env: dependencies.env ?? testEnv(),
+    runtime,
+    runTasks: dependencies.runTasks ?? new RunTaskManager(runtime, dependencies.store),
+    scheduledTaskService: dependencies.scheduledTaskService ?? ({} as WsDependencies['scheduledTaskService']),
+    backgroundTasks: dependencies.backgroundTasks ?? ({} as WsDependencies['backgroundTasks']),
+    usageStats: dependencies.usageStats ?? new UsageStatsService(dependencies.store, dependencies.env ?? testEnv()),
+  })
 }
 
 const testSandboxSessionFactory: SandboxSessionFactory = async manifest => ({
@@ -72,7 +103,7 @@ afterEach(async () => {
 describe('WebSocket run subscriptions', () => {
   it('returns workspace summaries and paged runs without per-thread requests', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-bootstrap-'))
-    const store = new PostgresPlatformStore(noOpDb(), root)
+    const store = createTestPlatformStore(root, noOpDb())
     await store.initialize()
     const session = await store.createSession()
     for (let index = 0; index < 4; index += 1) {
@@ -95,8 +126,8 @@ describe('WebSocket run subscriptions', () => {
     cleanups.push(async () => {
       await new Promise<void>(resolve => wss.close(() => resolve()))
       await new Promise<void>(resolve => server.close(() => resolve()))
-      await store.conversationStore.flush()
-      await rm(root, { recursive: true, force: true })
+      await store.flushConversationStore()
+      await removeTempRoot(root)
     })
 
     const ws = await connect(`ws://127.0.0.1:${address.port}/ws`)
@@ -114,7 +145,7 @@ describe('WebSocket run subscriptions', () => {
 
   it('replays a full snapshot after reconnect and resubscribe', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-'))
-    const store = new PostgresPlatformStore(noOpDb(), root)
+    const store = createTestPlatformStore(root, noOpDb())
     await store.initialize()
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '订阅测试')
@@ -136,8 +167,8 @@ describe('WebSocket run subscriptions', () => {
     cleanups.push(async () => {
       await new Promise<void>(resolve => wss.close(() => resolve()))
       await new Promise<void>(resolve => server.close(() => resolve()))
-      await store.conversationStore.flush()
-      await rm(root, { recursive: true, force: true })
+      await store.flushConversationStore()
+      await removeTempRoot(root)
     })
 
     const first = await connect(url)
@@ -160,7 +191,7 @@ describe('WebSocket run subscriptions', () => {
 
   it('responds to clarification decisions through the unified decision command', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-decision-'))
-    const store = new PostgresPlatformStore(noOpDb(), root)
+    const store = createTestPlatformStore(root, noOpDb())
     await store.initialize()
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '决策测试')
@@ -228,8 +259,8 @@ describe('WebSocket run subscriptions', () => {
     cleanups.push(async () => {
       await new Promise<void>(resolve => wss.close(() => resolve()))
       await new Promise<void>(resolve => server.close(() => resolve()))
-      await store.conversationStore.flush()
-      await rm(root, { recursive: true, force: true })
+      await store.flushConversationStore()
+      await removeTempRoot(root)
     })
 
     const ws = await connect(`ws://127.0.0.1:${address.port}/ws`)
@@ -254,13 +285,13 @@ describe('WebSocket run subscriptions', () => {
     })
     await waitForRunSettled(store, nextRunId)
     await backgroundSnapshot
-    await store.conversationStore.flush()
+    await store.flushConversationStore()
     await close(ws)
   })
 
   it('responds to approval decisions through the unified decision command', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-approval-decision-'))
-    const store = new PostgresPlatformStore(noOpDb(), root)
+    const store = createTestPlatformStore(root, noOpDb())
     await store.initialize()
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '审批决策测试')
@@ -292,7 +323,7 @@ describe('WebSocket run subscriptions', () => {
     const decision = waiting.state.decisions.find(item => item.kind === 'approval' && item.status === 'pending')
     expect(decision?.decisionId).toBe(waiting.state.approvals[0].approvalId)
     if (!decision) throw new Error('测试未生成 pending approval decision')
-    await store.conversationStore.flush()
+    await store.flushConversationStore()
 
     const server = createServer((_request, response) => response.end())
     const wss = createWsHandler(server, {
@@ -310,8 +341,8 @@ describe('WebSocket run subscriptions', () => {
     cleanups.push(async () => {
       await new Promise<void>(resolve => wss.close(() => resolve()))
       await new Promise<void>(resolve => server.close(() => resolve()))
-      await store.conversationStore.flush()
-      await rm(root, { recursive: true, force: true })
+      await store.flushConversationStore()
+      await removeTempRoot(root)
     })
 
     const ws = await connect(`ws://127.0.0.1:${address.port}/ws`)
@@ -336,7 +367,7 @@ describe('WebSocket run subscriptions', () => {
 
   it('publishes direct tool:run calls as replayable tool output items with artifacts', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-tool-items-'))
-    const store = new PostgresPlatformStore(noOpDb(), root)
+    const store = createTestPlatformStore(root, noOpDb())
     await store.initialize()
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '工具 mini app 回放')
@@ -358,8 +389,8 @@ describe('WebSocket run subscriptions', () => {
     cleanups.push(async () => {
       await new Promise<void>(resolve => wss.close(() => resolve()))
       await new Promise<void>(resolve => server.close(() => resolve()))
-      await store.conversationStore.flush()
-      await rm(root, { recursive: true, force: true })
+      await store.flushConversationStore()
+      await removeTempRoot(root)
     })
 
     const ws = await connect(`ws://127.0.0.1:${address.port}/ws`)
@@ -391,7 +422,7 @@ describe('WebSocket run subscriptions', () => {
 
   it('serves thread history, context, memory, fork and trash commands with correlated envelopes', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-thread-kernel-'))
-    const store = new PostgresPlatformStore(noOpDb(), root)
+    const store = createTestPlatformStore(root, noOpDb())
     await store.initialize()
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '连续上下文契约')
@@ -413,8 +444,8 @@ describe('WebSocket run subscriptions', () => {
     cleanups.push(async () => {
       await new Promise<void>(resolve => wss.close(() => resolve()))
       await new Promise<void>(resolve => server.close(() => resolve()))
-      await store.conversationStore.flush()
-      await rm(root, { recursive: true, force: true })
+      await store.flushConversationStore()
+      await removeTempRoot(root)
     })
 
     const ws = await connect(`ws://127.0.0.1:${address.port}/ws`)
@@ -450,7 +481,7 @@ describe('WebSocket run subscriptions', () => {
 
   it('serves long-term memory control commands over WebSocket', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-memory-'))
-    const store = new PostgresPlatformStore(noOpDb(), root)
+    const store = createTestPlatformStore(root, noOpDb())
     await store.initialize()
     const config = defaultRuntimeConfig()
     config.context.privateMemoryDir = path.join(root, 'private-memory')
@@ -482,8 +513,8 @@ describe('WebSocket run subscriptions', () => {
     cleanups.push(async () => {
       await new Promise<void>(resolve => wss.close(() => resolve()))
       await new Promise<void>(resolve => server.close(() => resolve()))
-      await store.conversationStore.flush()
-      await rm(root, { recursive: true, force: true })
+      await store.flushConversationStore()
+      await removeTempRoot(root)
     })
 
     const ws = await connect(`ws://127.0.0.1:${address.port}/ws`)
@@ -529,7 +560,7 @@ describe('WebSocket run subscriptions', () => {
 
   it('rejects speech:authorization when CSRF token is missing', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-csrf-'))
-    const store = new PostgresPlatformStore(noOpDb(), root)
+    const store = createTestPlatformStore(root, noOpDb())
     await store.initialize()
 
     const server = createServer((_request, response) => response.end())
@@ -547,8 +578,8 @@ describe('WebSocket run subscriptions', () => {
     cleanups.push(async () => {
       await new Promise<void>(resolve => wss.close(() => resolve()))
       await new Promise<void>(resolve => server.close(() => resolve()))
-      await store.conversationStore.flush()
-      await rm(root, { recursive: true, force: true })
+      await store.flushConversationStore()
+      await removeTempRoot(root)
     })
 
     const ws = await connect(`ws://127.0.0.1:${address.port}/ws`)
@@ -560,7 +591,7 @@ describe('WebSocket run subscriptions', () => {
 
   it('rejects read-type WS commands when auth context is inactive', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-inactive-'))
-    const store = new PostgresPlatformStore(noOpDb(), root)
+    const store = createTestPlatformStore(root, noOpDb())
     await store.initialize()
 
     const inactiveSecurity = {
@@ -586,8 +617,8 @@ describe('WebSocket run subscriptions', () => {
     cleanups.push(async () => {
       await new Promise<void>(resolve => wss.close(() => resolve()))
       await new Promise<void>(resolve => server.close(() => resolve()))
-      await store.conversationStore.flush()
-      await rm(root, { recursive: true, force: true })
+      await store.flushConversationStore()
+      await removeTempRoot(root)
     })
 
     const ws = await connect(`ws://127.0.0.1:${address.port}/ws`)
@@ -624,7 +655,7 @@ function request(ws: WebSocket, type: string, payload: Record<string, unknown>, 
         resolve(parsed.payload)
       }
     })
-    ws.send(JSON.stringify({ type, id, payload: { csrfToken: TEST_CSRF, ...payload } }) + '\n')
+    ws.send(JSON.stringify({ type, id, payload, meta: { csrfToken: TEST_CSRF } }) + '\n')
   })
 }
 

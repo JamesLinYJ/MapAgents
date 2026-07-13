@@ -105,6 +105,202 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_memberships_member_role_unique
 CREATE INDEX IF NOT EXISTS idx_platform_memberships_workspace ON platform_memberships (workspace_id);
 CREATE INDEX IF NOT EXISTS idx_platform_memberships_user ON platform_memberships (user_id);
 
+-- ==========================================================================
+-- 会话事实源 / 运行记录 / 事务 outbox
+-- ==========================================================================
+
+CREATE TABLE IF NOT EXISTS platform_sessions (
+  session_id                     TEXT PRIMARY KEY,
+  workspace_id                   TEXT REFERENCES platform_workspaces(workspace_id) ON DELETE CASCADE,
+  created_by_user_id             TEXT REFERENCES platform_users(user_id) ON DELETE SET NULL,
+  visibility                     TEXT NOT NULL DEFAULT 'workspace',
+  status                         TEXT NOT NULL DEFAULT 'active',
+  share_token                    TEXT NOT NULL,
+  latest_thread_id               TEXT,
+  latest_run_id                  TEXT,
+  latest_uploaded_layer_key      TEXT,
+  latest_meteorological_dataset_id TEXT,
+  created_at                     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at                     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_sessions_share_token_unique
+  ON platform_sessions (share_token);
+CREATE INDEX IF NOT EXISTS idx_platform_sessions_workspace_updated
+  ON platform_sessions (workspace_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_platform_sessions_owner_updated
+  ON platform_sessions (created_by_user_id, updated_at);
+
+CREATE TABLE IF NOT EXISTS platform_threads (
+  thread_id                TEXT PRIMARY KEY,
+  session_id               TEXT NOT NULL REFERENCES platform_sessions(session_id) ON DELETE CASCADE,
+  workspace_id             TEXT REFERENCES platform_workspaces(workspace_id) ON DELETE CASCADE,
+  created_by_user_id       TEXT REFERENCES platform_users(user_id) ON DELETE SET NULL,
+  visibility               TEXT NOT NULL DEFAULT 'workspace',
+  title                    TEXT NOT NULL,
+  status                   TEXT NOT NULL DEFAULT 'active',
+  latest_run_id            TEXT,
+  latest_user_query        TEXT,
+  latest_assistant_summary TEXT,
+  latest_run_status        TEXT,
+  latest_artifact_id       TEXT,
+  latest_artifact_name     TEXT,
+  history_preview          TEXT,
+  run_count                INTEGER NOT NULL DEFAULT 0,
+  next_entry_sequence      INTEGER NOT NULL DEFAULT 1 CHECK (next_entry_sequence > 0),
+  active_leaf_entry_id     TEXT,
+  transcript_entry_count   INTEGER NOT NULL DEFAULT 0,
+  estimated_context_tokens INTEGER NOT NULL DEFAULT 0,
+  latest_compaction_id     TEXT,
+  memory_version           INTEGER NOT NULL DEFAULT 0,
+  memory_based_on_tokens   INTEGER NOT NULL DEFAULT 0,
+  forked_from_thread_id    TEXT,
+  forked_from_entry_id     TEXT,
+  quarantined              BOOLEAN NOT NULL DEFAULT FALSE,
+  quarantine_reason        TEXT,
+  deleted_at               TIMESTAMPTZ,
+  purge_after              TIMESTAMPTZ,
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_platform_threads_session_updated
+  ON platform_threads (session_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_platform_threads_workspace_updated
+  ON platform_threads (workspace_id, updated_at);
+
+CREATE TABLE IF NOT EXISTS platform_runs (
+  run_id                  TEXT PRIMARY KEY,
+  session_id              TEXT NOT NULL REFERENCES platform_sessions(session_id) ON DELETE CASCADE,
+  thread_id               TEXT REFERENCES platform_threads(thread_id) ON DELETE CASCADE,
+  workspace_id            TEXT REFERENCES platform_workspaces(workspace_id) ON DELETE CASCADE,
+  created_by_user_id      TEXT REFERENCES platform_users(user_id) ON DELETE SET NULL,
+  visibility              TEXT NOT NULL DEFAULT 'workspace',
+  user_query              TEXT NOT NULL,
+  model_provider          TEXT,
+  model_name              TEXT,
+  status                  TEXT NOT NULL DEFAULT 'queued',
+  state_json              JSONB NOT NULL,
+  runtime_config_json     JSONB,
+  active_entry_id         TEXT,
+  pending_tool_call_ids   JSONB NOT NULL DEFAULT '[]'::jsonb,
+  recovery_status         TEXT NOT NULL DEFAULT 'clean',
+  orchestration_engine    TEXT,
+  sdk_state_content_hash  TEXT,
+  sdk_version             TEXT,
+  runtime_config_digest   TEXT,
+  sdk_state_schema_version INTEGER,
+  sdk_state_updated_at    TIMESTAMPTZ,
+  next_record_sequence    INTEGER NOT NULL DEFAULT 1 CHECK (next_record_sequence > 0),
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_platform_runs_thread_updated
+  ON platform_runs (thread_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_platform_runs_session_updated
+  ON platform_runs (session_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_platform_runs_workspace_updated
+  ON platform_runs (workspace_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_platform_runs_status_updated
+  ON platform_runs (status, updated_at);
+
+CREATE TABLE IF NOT EXISTS platform_conversation_entries (
+  entry_id               TEXT PRIMARY KEY,
+  session_id             TEXT NOT NULL REFERENCES platform_sessions(session_id) ON DELETE CASCADE,
+  thread_id              TEXT NOT NULL REFERENCES platform_threads(thread_id) ON DELETE CASCADE,
+  run_id                 TEXT REFERENCES platform_runs(run_id) ON DELETE SET NULL,
+  turn_id                TEXT,
+  sequence               INTEGER NOT NULL CHECK (sequence > 0),
+  parent_entry_id        TEXT REFERENCES platform_conversation_entries(entry_id) ON DELETE SET NULL,
+  logical_parent_entry_id TEXT REFERENCES platform_conversation_entries(entry_id) ON DELETE SET NULL,
+  kind                   TEXT NOT NULL,
+  payload_json           JSONB NOT NULL,
+  trace_id               TEXT,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_entries_thread_sequence_unique
+  ON platform_conversation_entries (thread_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_conversation_entries_run_created
+  ON platform_conversation_entries (run_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_conversation_entries_parent
+  ON platform_conversation_entries (parent_entry_id);
+
+CREATE TABLE IF NOT EXISTS platform_thread_memory_versions (
+  thread_id         TEXT NOT NULL REFERENCES platform_threads(thread_id) ON DELETE CASCADE,
+  version           INTEGER NOT NULL CHECK (version > 0),
+  content_hash      TEXT NOT NULL CHECK (content_hash ~ '^[a-f0-9]{64}$'),
+  source            TEXT NOT NULL,
+  based_on_entry_id TEXT,
+  estimated_tokens  INTEGER NOT NULL CHECK (estimated_tokens >= 0),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (thread_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_thread_memory_versions_thread_created
+  ON platform_thread_memory_versions (thread_id, created_at);
+
+CREATE TABLE IF NOT EXISTS platform_thread_compactions (
+  compaction_id           TEXT PRIMARY KEY,
+  thread_id               TEXT NOT NULL REFERENCES platform_threads(thread_id) ON DELETE CASCADE,
+  boundary_entry_id       TEXT NOT NULL,
+  summary_entry_id        TEXT NOT NULL,
+  first_compacted_entry_id TEXT NOT NULL,
+  last_compacted_entry_id TEXT NOT NULL,
+  preserved_from_entry_id TEXT,
+  summary                 TEXT NOT NULL,
+  strategy                TEXT NOT NULL,
+  pre_tokens              INTEGER NOT NULL CHECK (pre_tokens >= 0),
+  post_tokens             INTEGER NOT NULL CHECK (post_tokens >= 0),
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_thread_compactions_thread_created
+  ON platform_thread_compactions (thread_id, created_at);
+
+CREATE TABLE IF NOT EXISTS platform_run_records (
+  record_id    TEXT PRIMARY KEY,
+  run_id       TEXT NOT NULL REFERENCES platform_runs(run_id) ON DELETE CASCADE,
+  thread_id    TEXT REFERENCES platform_threads(thread_id) ON DELETE CASCADE,
+  sequence     INTEGER NOT NULL CHECK (sequence > 0),
+  record_type  TEXT NOT NULL,
+  payload_json JSONB NOT NULL,
+  trace_id     TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (run_id, sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_run_records_run_type_created
+  ON platform_run_records (run_id, record_type, created_at);
+CREATE INDEX IF NOT EXISTS idx_run_records_trace
+  ON platform_run_records (trace_id);
+
+CREATE TABLE IF NOT EXISTS platform_run_inputs (
+  input_id     TEXT PRIMARY KEY,
+  run_id       TEXT NOT NULL REFERENCES platform_runs(run_id) ON DELETE CASCADE,
+  thread_id    TEXT NOT NULL REFERENCES platform_threads(thread_id) ON DELETE CASCADE,
+  entry_id     TEXT NOT NULL REFERENCES platform_conversation_entries(entry_id) ON DELETE CASCADE,
+  item_id      TEXT NOT NULL,
+  kind         TEXT NOT NULL DEFAULT 'steering',
+  content      TEXT NOT NULL CHECK (length(btrim(content)) > 0),
+  status       TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'consumed', 'rejected')),
+  queued_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  consumed_at  TIMESTAMPTZ,
+  UNIQUE (entry_id)
+);
+CREATE INDEX IF NOT EXISTS idx_run_inputs_run_status_queued
+  ON platform_run_inputs (run_id, status, queued_at);
+
+CREATE TABLE IF NOT EXISTS platform_event_outbox (
+  outbox_id       TEXT PRIMARY KEY,
+  aggregate_type  TEXT NOT NULL,
+  aggregate_id    TEXT NOT NULL,
+  event_type      TEXT NOT NULL,
+  payload_json    JSONB NOT NULL,
+  trace_id        TEXT,
+  attempt_count   INTEGER NOT NULL DEFAULT 0,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  published_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_event_outbox_unpublished
+  ON platform_event_outbox (published_at, created_at);
+CREATE INDEX IF NOT EXISTS idx_event_outbox_aggregate
+  ON platform_event_outbox (aggregate_type, aggregate_id, created_at);
+
 CREATE TABLE IF NOT EXISTS platform_rbac_policies (
   policy_id TEXT PRIMARY KEY,
   ptype     TEXT NOT NULL,
@@ -138,15 +334,15 @@ CREATE INDEX IF NOT EXISTS idx_platform_audit_actor_created ON platform_audit_ev
 
 CREATE TABLE IF NOT EXISTS platform_artifacts (
   artifact_id           TEXT PRIMARY KEY,
-  run_id                TEXT NOT NULL,
-  workspace_id          TEXT,
-  created_by_user_id    TEXT,
+  run_id                TEXT NOT NULL REFERENCES platform_runs(run_id) ON DELETE CASCADE,
+  workspace_id          TEXT REFERENCES platform_workspaces(workspace_id) ON DELETE CASCADE,
+  created_by_user_id    TEXT REFERENCES platform_users(user_id) ON DELETE SET NULL,
   visibility            TEXT NOT NULL DEFAULT 'workspace',
   artifact_type         TEXT NOT NULL,
   name                  TEXT NOT NULL,
   uri                   TEXT NOT NULL,
   metadata_json         JSONB NOT NULL DEFAULT '{}'::jsonb,
-  geojson_relative_path TEXT NOT NULL,
+  content_relative_path TEXT NOT NULL,
   created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_platform_artifacts_run_id ON platform_artifacts (run_id);
@@ -227,3 +423,99 @@ CREATE INDEX IF NOT EXISTS idx_meteorological_jobs_dataset_updated
   ON platform_meteorological_jobs (dataset_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_meteorological_jobs_session_updated
   ON platform_meteorological_jobs (session_id, updated_at);
+
+-- ==========================================================================
+-- Workflow / 定时任务 / 后台运行索引
+-- ==========================================================================
+
+CREATE TABLE IF NOT EXISTS platform_workflow_definitions (
+  workflow_id             TEXT PRIMARY KEY,
+  workspace_id            TEXT REFERENCES platform_workspaces(workspace_id) ON DELETE CASCADE,
+  created_by_user_id      TEXT REFERENCES platform_users(user_id) ON DELETE SET NULL,
+  name                    TEXT NOT NULL,
+  description             TEXT NOT NULL DEFAULT '',
+  version                 TEXT NOT NULL,
+  revision                INTEGER NOT NULL DEFAULT 1,
+  published_revision      INTEGER,
+  source                  TEXT NOT NULL DEFAULT 'builtin',
+  lifecycle               TEXT NOT NULL DEFAULT 'published',
+  enabled                 BOOLEAN NOT NULL DEFAULT TRUE,
+  parameters_schema_json  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  default_parameters_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  required_tools_json     JSONB NOT NULL DEFAULT '[]'::jsonb,
+  requires_approval       BOOLEAN NOT NULL DEFAULT FALSE,
+  timeout_seconds         INTEGER NOT NULL DEFAULT 900,
+  output_type             TEXT NOT NULL DEFAULT 'conversation',
+  definition_json         JSONB NOT NULL,
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_definitions_workspace_updated
+  ON platform_workflow_definitions (workspace_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_workflow_definitions_source_lifecycle
+  ON platform_workflow_definitions (source, lifecycle);
+
+CREATE TABLE IF NOT EXISTS platform_workflow_versions (
+  workflow_id        TEXT NOT NULL REFERENCES platform_workflow_definitions(workflow_id) ON DELETE CASCADE,
+  revision           INTEGER NOT NULL,
+  lifecycle          TEXT NOT NULL,
+  definition_json    JSONB NOT NULL,
+  created_by_user_id TEXT REFERENCES platform_users(user_id) ON DELETE SET NULL,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  published_at       TIMESTAMPTZ,
+  PRIMARY KEY (workflow_id, revision)
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_versions_lifecycle
+  ON platform_workflow_versions (workflow_id, lifecycle);
+
+CREATE TABLE IF NOT EXISTS platform_scheduled_tasks (
+  task_id            TEXT PRIMARY KEY,
+  target_kind        TEXT NOT NULL,
+  target_id          TEXT NOT NULL,
+  workspace_id       TEXT NOT NULL REFERENCES platform_workspaces(workspace_id) ON DELETE CASCADE,
+  created_by_user_id TEXT NOT NULL REFERENCES platform_users(user_id) ON DELETE RESTRICT,
+  title              TEXT NOT NULL,
+  prompt             TEXT NOT NULL,
+  parameters_json    JSONB NOT NULL DEFAULT '{}'::jsonb,
+  cron               TEXT NOT NULL,
+  timezone           TEXT NOT NULL,
+  recurring          BOOLEAN NOT NULL DEFAULT TRUE,
+  enabled            BOOLEAN NOT NULL DEFAULT TRUE,
+  status             TEXT NOT NULL DEFAULT 'active',
+  last_fired_at      TIMESTAMPTZ,
+  next_fire_at       TIMESTAMPTZ,
+  last_run_id        TEXT,
+  queue_job_id       TEXT,
+  failure_count      INTEGER NOT NULL DEFAULT 0,
+  last_error_message TEXT,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_workspace_next
+  ON platform_scheduled_tasks (workspace_id, next_fire_at);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_target
+  ON platform_scheduled_tasks (target_kind, target_id);
+
+CREATE TABLE IF NOT EXISTS platform_workflow_runs (
+  workflow_run_id    TEXT PRIMARY KEY,
+  workflow_id        TEXT NOT NULL REFERENCES platform_workflow_definitions(workflow_id) ON DELETE RESTRICT,
+  workflow_revision  INTEGER NOT NULL,
+  scheduled_task_id  TEXT REFERENCES platform_scheduled_tasks(task_id) ON DELETE SET NULL,
+  workspace_id       TEXT NOT NULL REFERENCES platform_workspaces(workspace_id) ON DELETE CASCADE,
+  created_by_user_id TEXT NOT NULL REFERENCES platform_users(user_id) ON DELETE RESTRICT,
+  run_id             TEXT,
+  status             TEXT NOT NULL DEFAULT 'queued',
+  current_step       TEXT,
+  trigger_kind       TEXT NOT NULL DEFAULT 'manual',
+  error_message      TEXT,
+  metadata_json      JSONB NOT NULL DEFAULT '{}'::jsonb,
+  node_runs_json     JSONB NOT NULL DEFAULT '[]'::jsonb,
+  pending_approval_json JSONB,
+  outputs_json       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  started_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  completed_at       TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_workspace_started
+  ON platform_workflow_runs (workspace_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_scheduled_task_started
+  ON platform_workflow_runs (scheduled_task_id, started_at);

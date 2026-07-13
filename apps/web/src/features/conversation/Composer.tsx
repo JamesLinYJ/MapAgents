@@ -9,11 +9,11 @@
 // --------------------------------------------------------------------------
 
 import { useEffect, useMemo, useRef, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
-import { Check, ChevronDown, ClipboardList, FolderUp, LoaderCircle, Mic, MicOff, Sparkles, Square, Upload, X, Zap } from 'lucide-react'
+import { Check, ChevronDown, ClipboardList, FolderUp, Hand, LoaderCircle, Mic, MicOff, ShieldOff, Sparkles, Square, Upload, X, Zap } from 'lucide-react'
 import type { SpeechLanguageOption } from '@geo-agent-platform/shared-types'
 import { AppIcon } from '../../shared/components/AppIcon'
 import type { UploadReference } from '../../app/types'
-import { COMPOSER_MODES } from './composerModes'
+import { COMPOSER_MODES, composerModeOption, isSelectableComposerMode } from './composerModes'
 import type { ChatPanelProps, ComposerMode } from './types'
 import type { SpeechRecognitionStatus } from './useSpeechRecognition'
 
@@ -21,6 +21,7 @@ interface ComposerProps {
   query: string
   providerLabel: string
   isSubmitting: boolean
+  canSteerActiveRun: boolean
   composerMode: ComposerMode
   tokenBudget?: ChatPanelProps['tokenBudget']
   activeSkills?: string[]
@@ -60,6 +61,7 @@ export function Composer({
   query,
   providerLabel,
   isSubmitting,
+  canSteerActiveRun,
   composerMode,
   tokenBudget,
   activeSkills,
@@ -91,10 +93,9 @@ export function Composer({
   onCompositionEnd,
   onInputKeyDown,
 }: ComposerProps) {
-  const mode = COMPOSER_MODES.find(item => item.id === composerMode) ?? COMPOSER_MODES[0]
-  const modeShortLabel = mode.id === 'auto' ? '自动' : '计划'
-  const ModeTriggerIcon = mode.id === 'plan' ? ClipboardList : Zap
-  const canSubmit = Boolean(query.trim()) && !isSubmitting
+  const mode = composerModeOption(composerMode)
+  const modeShortLabel = mode.shortLabel
+  const canSubmit = Boolean(query.trim()) && (!isSubmitting || canSteerActiveRun)
   const speechEnabled = Boolean(onStartSpeechRecognition && onStopSpeechRecognition)
   const speechBusy = speechStatus === 'authorizing' || speechStatus === 'stopping'
   const speechActive = speechStatus === 'recognizing' || speechBusy
@@ -150,7 +151,7 @@ export function Composer({
         onKeyDown={onInputKeyDown}
         onCompositionStart={onCompositionStart}
         onCompositionEnd={onCompositionEnd}
-        disabled={isSubmitting}
+        disabled={isSubmitting && !canSteerActiveRun}
       />
 
       <div className={`cc-composer-mode-note cc-composer-mode-note--${composerMode}`}>
@@ -159,106 +160,115 @@ export function Composer({
       </div>
 
       <div className="cc-composer-toolbar">
-        <FileUploadButton onUploadFiles={onUploadFiles} disabled={isSubmitting} />
-        {speechEnabled ? (
-          <SpeechInputControl
-            status={speechStatus}
-            error={speechError}
-            language={speechLanguage}
-            languages={speechLanguages}
-            disabled={isSubmitting}
-            onLanguageChange={onSpeechLanguageChange}
-            onStart={onStartSpeechRecognition}
-            onStop={onStopSpeechRecognition}
-          />
-        ) : null}
-        <button
-          className="cc-composer-tool cc-composer-tool--template"
-          type="button"
-          onClick={onUseTemplate}
-          disabled={isSubmitting}
-          title="填入示例问题"
-          aria-label="填入示例问题"
-        >
-          <Sparkles size={16} />
-        </button>
-        {onInterrupt && isSubmitting ? (
-          <button className="cc-composer-tool cc-composer-tool--interrupt" type="button" onClick={onInterrupt} title="中断运行" aria-label="中断运行">
-            <Square size={16} />
-          </button>
-        ) : null}
-
-        <span className="cc-composer-spacer" />
-
-        <span className="cc-composer-provider" title={providerLabel}>
-          {providerLabel}
-        </span>
-
-        <div className="cc-mode-picker" ref={modePickerRef}>
+        <div className="cc-composer-toolbar__primary" aria-label="输入附件与辅助工具">
+          <FileUploadButton onUploadFiles={onUploadFiles} disabled={isSubmitting} />
+          {speechEnabled ? (
+            <SpeechInputControl
+              status={speechStatus}
+              error={speechError}
+              language={speechLanguage}
+              languages={speechLanguages}
+              disabled={isSubmitting}
+              onLanguageChange={onSpeechLanguageChange}
+              onStart={onStartSpeechRecognition}
+              onStop={onStopSpeechRecognition}
+            />
+          ) : null}
           <button
-            className={`cc-mode-trigger cc-mode-trigger--${composerMode}`}
+            className="cc-composer-tool cc-composer-tool--template"
             type="button"
-            aria-haspopup="menu"
-            aria-expanded={modeMenuOpen}
-            aria-label={`切换执行方式，当前为${mode.label}`}
-            onClick={() => onModeMenuOpenChange(!modeMenuOpen)}
+            onClick={onUseTemplate}
+            disabled={isSubmitting}
+            title="填入示例问题"
+            aria-label="填入示例问题"
           >
-            <ModeTriggerIcon className="cc-mode-trigger__icon" size={14} />
-            <span className="cc-mode-trigger__label">{modeShortLabel}</span>
-            <ChevronDown size={13} />
+            <Sparkles size={16} />
           </button>
-          {modeMenuOpen ? (
-            <div className="cc-mode-menu" role="menu" aria-label="切换执行方式">
-              <div className="cc-mode-menu__head">
-                <span>Modes</span>
-                <span className="cc-mode-menu__shortcut" aria-hidden="true">
-                  <kbd>Shift</kbd>
-                  <span>+</span>
-                  <kbd>Tab</kbd>
-                  <span>切换</span>
-                </span>
-              </div>
-              <div className="cc-mode-list">
-                {COMPOSER_MODES.map((item) => {
-                  const selected = item.id === composerMode
-                  const Icon = item.id === 'plan' ? ClipboardList : Zap
-                  return (
-                    <button
-                      key={item.id}
-                      className={`cc-mode-option${selected ? ' cc-mode-option--selected' : ''}`}
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={selected}
-                      onClick={() => {
-                        onComposerModeChange(item.id)
-                        onModeMenuOpenChange(false)
-                      }}
-                    >
-                      <span className="cc-mode-option__icon"><Icon size={18} /></span>
-                      <span className="cc-mode-option__copy">
-                        <strong>{item.label}</strong>
-                        <small>{item.description}</small>
-                      </span>
-                      <span className="cc-mode-option__check" aria-hidden="true">
-                        {selected ? <Check size={18} /> : null}
-                      </span>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
+          {onInterrupt && isSubmitting ? (
+            <button className="cc-composer-tool cc-composer-tool--interrupt" type="button" onClick={onInterrupt} title="中断运行" aria-label="中断运行">
+              <Square size={16} />
+            </button>
           ) : null}
         </div>
 
-        <button
-          className="cc-composer-tool cc-composer-tool--send"
-          type="submit"
-          disabled={!canSubmit}
-          title={isSubmitting ? '运行中' : '发送'}
-          aria-label={isSubmitting ? '运行中' : '发送'}
-        >
-          <AppIcon name="send" size={17} />
-        </button>
+        <div className="cc-composer-toolbar__secondary" aria-label="执行方式与发送">
+          <span className="cc-composer-provider" title={providerLabel}>
+            {providerLabel}
+          </span>
+
+          <div className="cc-mode-picker" ref={modePickerRef}>
+            <button
+              className={`cc-mode-trigger cc-mode-trigger--${composerMode}`}
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={modeMenuOpen}
+              aria-label={`切换执行方式，当前为${mode.label}`}
+              onClick={() => onModeMenuOpenChange(!modeMenuOpen)}
+            >
+              <ComposerModeIcon mode={mode.id} className="cc-mode-trigger__icon" size={14} />
+              <span className="cc-mode-trigger__label">{modeShortLabel}</span>
+              <ChevronDown size={13} />
+            </button>
+            {modeMenuOpen ? (
+              <div className="cc-mode-menu" role="menu" aria-label="切换执行方式">
+                <div className="cc-mode-menu__head">
+                  <span>执行方式</span>
+                  <span className="cc-mode-menu__shortcut" aria-hidden="true">
+                    <kbd>Shift</kbd>
+                    <span>+</span>
+                    <kbd>Tab</kbd>
+                    <span>切换</span>
+                  </span>
+                </div>
+                <div className="cc-mode-list">
+                  {COMPOSER_MODES.map((item) => {
+                    const selected = item.id === composerMode
+                    const disabled = 'disabled' in item && item.disabled
+                    const disabledReason = 'disabledReason' in item ? item.disabledReason : undefined
+                    return (
+                      <button
+                        key={item.id}
+                        className={`cc-mode-option${selected ? ' cc-mode-option--selected' : ''}${disabled ? ' cc-mode-option--disabled' : ''}`}
+                        type="button"
+                        data-mode={item.id}
+                        role="menuitemradio"
+                        aria-checked={selected}
+                        aria-disabled={disabled || undefined}
+                        disabled={disabled}
+                        title={disabledReason}
+                        onClick={() => {
+                          if (!isSelectableComposerMode(item.id)) return
+                          onComposerModeChange(item.id)
+                          onModeMenuOpenChange(false)
+                        }}
+                      >
+                        <span className="cc-mode-option__icon"><ComposerModeIcon mode={item.id} size={18} /></span>
+                        <span className="cc-mode-option__copy">
+                          <strong>{item.label}</strong>
+                          <small>{item.description}</small>
+                          {disabledReason ? <em>{disabledReason}</em> : null}
+                        </span>
+                        <span className="cc-mode-option__check" aria-hidden="true">
+                          {selected ? <Check size={18} /> : null}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <button
+            className="cc-composer-tool cc-composer-tool--send"
+            type="submit"
+            disabled={!canSubmit}
+            title={canSteerActiveRun ? '发送引导消息' : isSubmitting ? '运行中' : '发送'}
+            aria-label={canSteerActiveRun ? '发送引导消息' : isSubmitting ? '运行中' : '发送'}
+          >
+            <AppIcon name="send" size={17} />
+          </button>
+        </div>
       </div>
 
       {speechEnabled && (speechActive || speechInterimText || speechError) ? (
@@ -282,6 +292,21 @@ export function Composer({
       />
     </form>
   )
+}
+
+function ComposerModeIcon({
+  mode,
+  className,
+  size,
+}: {
+  mode: ComposerMode | 'bypass'
+  className?: string
+  size: number
+}) {
+  if (mode === 'approval') return <Hand className={className} size={size} />
+  if (mode === 'plan') return <ClipboardList className={className} size={size} />
+  if (mode === 'bypass') return <ShieldOff className={className} size={size} />
+  return <Zap className={className} size={size} />
 }
 
 function SpeechInputControl({

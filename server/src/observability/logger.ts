@@ -139,16 +139,17 @@ export function sanitizeLogValue(value: unknown, depth = 0): unknown {
 export function errorLogPayload(error: unknown): { message: string; stack?: string; name?: string; code?: string; status?: number } {
   if (error instanceof Error) {
     const record = error as Error & { code?: unknown; status?: unknown; statusCode?: unknown }
+    const status = typeof record.status === 'number'
+      ? record.status
+      : typeof record.statusCode === 'number'
+        ? record.statusCode
+        : undefined
     return {
       message: sanitizeString(error.message),
-      stack: error.stack ? sanitizeString(error.stack) : undefined,
       name: error.name,
-      code: typeof record.code === 'string' ? sanitizeString(record.code) : undefined,
-      status: typeof record.status === 'number'
-        ? record.status
-        : typeof record.statusCode === 'number'
-          ? record.statusCode
-          : undefined,
+      ...(error.stack ? { stack: sanitizeString(error.stack) } : {}),
+      ...(typeof record.code === 'string' ? { code: sanitizeString(record.code) } : {}),
+      ...(status !== undefined ? { status } : {}),
     }
   }
   return { message: sanitizeString(String(error)) }

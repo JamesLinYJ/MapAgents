@@ -72,14 +72,17 @@ export function createApiRateLimiter(): SlidingWindowRateLimiter {
 /** 从 Request 提取客户端 IP */
 export function clientIp(request: Request): string {
   const forwarded = request.headers.get('x-forwarded-for')
-  if (forwarded) return forwarded.split(',')[0].trim()
+  if (forwarded) {
+    const [first] = forwarded.split(',')
+    if (first?.trim()) return first.trim()
+  }
   const realIp = request.headers.get('x-real-ip')
   if (realIp) return realIp.trim()
   try {
     const url = new URL(request.url)
     return url.hostname
   } catch {
-    return '127.0.0.1'
+    return 'unknown'
   }
 }
 
@@ -89,7 +92,7 @@ export class WsMessageRateLimiter {
   private commandLimiters = new Map<string, SlidingWindowRateLimiter>()
 
   constructor(
-    private readonly maxPerConnectionPerWindow: number = 60,
+    maxPerConnectionPerWindow: number = 60,
     private readonly windowMs: number = 60_000,
     private readonly maxPerCommandTypePerWindow: number = 20,
   ) {

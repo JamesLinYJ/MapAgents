@@ -97,8 +97,10 @@ export async function recoverJournal(
 
   for (let i = 0; i < lines.length; i++) {
     report.totalEntries++
+    const line = lines[i]
+    if (line === undefined) continue
     try {
-      const parsed: unknown = JSON.parse(lines[i])
+      const parsed: unknown = JSON.parse(line)
       if (!isJournalEntry(parsed)) {
         throw new Error(`schema version 不匹配或缺少必需字段`)
       }
@@ -113,7 +115,7 @@ export async function recoverJournal(
     } catch {
       report.corruptedEntries++
       jsonlCorruptionTotal.inc({ scope: threadName })
-      await appendCorruptionRecord(rootDir, threadId, i + 1, lines[i])
+      await appendCorruptionRecord(rootDir, threadId, i + 1, line)
     }
   }
 

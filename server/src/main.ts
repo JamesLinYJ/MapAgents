@@ -29,6 +29,7 @@ import { fileRoutes } from './routes/files.js'
 import { layerRoutes } from './routes/layers.js'
 import { mapRoutes } from './routes/map.js'
 import { meteorologyRoutes } from './routes/meteorology.js'
+import { shareRoutes } from './routes/share.js'
 import { createWsHandler } from './ws/handler.js'
 import { AuthorizationError } from './security/authorizationService.js'
 import { requireHttpAuth, securityRoutes } from './security/routes.js'
@@ -92,9 +93,11 @@ app.get('/health', async c => {
   const health = await container.checkReadiness()
   return c.json(health, health.status === 'ok' ? 200 : 503)
 })
-app.get('/metrics', async c => {
+app.get('/metrics', async () => {
   return metricsResponse()
 })
+app.use('/api/share/*', apiRateLimitMiddleware(container.security))
+app.route('/', shareRoutes(container.store))
 app.on(['GET', 'POST'], '/api/auth/*', authRateLimitMiddleware, c => container.security.auth.handler(c.req.raw))
 app.use('/api/v1/*', apiRateLimitMiddleware(container.security), (c, next) => requireHttpAuth(container.security, c, next))
 app.route('/', securityRoutes(container.security))
@@ -102,7 +105,7 @@ app.route('/', fileRoutes(container.runtimeRoot, container.store, container.secu
 app.route('/', layerRoutes(container.postgis, container.store, container.security, env))
 app.route('/', artifactRoutes(container.artifactIndexStore, container.runtimeRoot, container.security))
 app.route('/', mapRoutes)
-app.route('/', meteorologyRoutes(container.db, container.runtimeRoot, container.store, container.security, env))
+app.route('/', meteorologyRoutes(container.runtimeRoot, container.store, container.security, env))
 app.onError((error, c) => {
   if (error instanceof AuthorizationError) return c.json({ detail: error.message }, 403)
   if (error.message === '未登录。') return c.json({ detail: '未登录' }, 401)
@@ -120,6 +123,12 @@ const wsServer = createWsHandler(server, {
   postgis: container.postgis,
   runtimeRoot: container.runtimeRoot,
   defaultRuntimeConfig: container.defaultRuntimeConfig,
+  runtime: container.runtime,
+  runTasks: container.runTasks,
+  scheduledTaskService: container.scheduledTaskService,
+  workflowDefinitionService: container.workflowDefinitionService,
+  backgroundTasks: container.backgroundTasks,
+  usageStats: container.usageStats,
   security: container.security,
 })
 installLifecycleManager({
@@ -127,7 +136,9 @@ installLifecycleManager({
   wsServer,
   store: container.store,
   db: container.db,
+  instanceLock: container.instanceLock,
   onShutdownStart: () => { isShuttingDown = true },
+  beforeDrain: () => container.shutdown(),
 })
 
 server.listen(env.API_PORT, env.API_HOST, () => {

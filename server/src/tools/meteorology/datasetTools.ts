@@ -108,7 +108,7 @@ function workerDatasetTool(
       artifact = artifactTarget(ctx, 'png', `${file.name} 栅格图`)
       workerArgs.output_relative_path = artifact.relativePath
     }
-    const worker = await deps.callWorker(name, workerArgs)
+    const worker = await deps.callWorker(name, workerArgs, ctx.signal)
     if (artifactType === 'png' && artifact) {
       mergeArtifactMetadata(artifact, {
         ...worker.payload,
@@ -127,7 +127,11 @@ function workerDatasetTool(
 
 async function inspectDataset(args: Record<string, unknown>, ctx: ToolContext, deps: MeteorologyToolDeps): Promise<ToolResult> {
   const file = await datasetFileFromArgs(ctx, args, 'dataset_ref', ['meteorological_file', 'meteorological_dataset'])
-  const worker = await deps.callWorker('meteorological_inspect', { file_relative_path: file.relativePath, file_name: file.name })
+  const worker = await deps.callWorker(
+    'meteorological_inspect',
+    { file_relative_path: file.relativePath, file_name: file.name },
+    ctx.signal,
+  )
   const variables = Array.isArray(worker.payload.variables) ? worker.payload.variables.filter(isRecord) : []
   const refs: ValueRef[] = [{
     refId: makeId('ref'), kind: 'meteorological_dataset', label: file.name,
@@ -183,7 +187,7 @@ async function generateReport(args: Record<string, unknown>, ctx: ToolContext, d
     file_name: dataset.name,
     interpretation_text: text,
     output_relative_path: artifact.relativePath,
-  })
+  }, ctx.signal)
   mergeArtifactMetadata(artifact, {
     ...worker.payload,
     displaySurfaces: ['download'],

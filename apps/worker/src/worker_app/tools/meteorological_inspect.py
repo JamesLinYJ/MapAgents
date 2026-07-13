@@ -1,39 +1,26 @@
-# +-------------------------------------------------------------------------
-#
-#   地理智能平台 - 气象数据检查工具
-#
-#   文件:       meteorological_inspect.py
-#
-#   日期:       2026年07月07日
-#   作者:       OpenAI Codex
-# --------------------------------------------------------------------------
-
-"""独立 Worker 工具模块——含 Pydantic request/response model + 单元测试入口。
-
-每个 @worker_tool 对应一个模块，sidecar.py 通过 import 自动注册。
-"""
+"""气象数据元数据检查工具。"""
 
 from __future__ import annotations
 
 from typing import Any
 
 from worker_app import tool_contracts as contracts
-from worker_app.tool_registry import worker_tool
+from worker_app.tool_context import WorkerToolContext
+from worker_app.tool_io import input_filename, input_path
+from worker_app.tool_registry import WorkerToolRegistry
 
 
-@worker_tool(
-    "meteorological_inspect",
-    request_model=contracts.MeteorologicalInspectRequest,
-    value_ref_outputs=("meteorological_dataset", "meteorological_variable"),
-)
-def meteorological_inspect(args: dict[str, Any]) -> dict[str, Any]:
-    """检查 NetCDF/GRIB/GeoTIFF 数据集元数据。"""
-    from pathlib import Path
+def execute(args: dict[str, Any], context: WorkerToolContext) -> dict[str, Any]:
     from gis_meteorology.service import MeteorologicalDataService
-    from worker_app.sidecar import resolve_runtime_path
 
-    request = contracts.MeteorologicalInspectRequest.model_validate(args)
-    source = resolve_runtime_path(request.file_relative_path, must_exist=True)
-    filename = request.filename or Path(request.file_relative_path).name
+    source = input_path(args, context)
+    return MeteorologicalDataService().inspect(source, filename=input_filename(args, source))
 
-    return MeteorologicalDataService().inspect(source, filename=filename)
+
+def register(registry: WorkerToolRegistry) -> None:
+    registry.register(
+        "meteorological_inspect",
+        execute,
+        request_model=contracts.MeteorologicalInspectRequest,
+        value_ref_outputs=("meteorological_dataset", "meteorological_variable"),
+    )

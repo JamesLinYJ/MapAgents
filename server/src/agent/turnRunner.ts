@@ -10,12 +10,13 @@
 
 import type { RunEvent } from '../schemas/types.js'
 import type { ItemSink } from '../conversation/itemSink.js'
+import { OrderedWriteBuffer } from '../conversation/orderedWriteBuffer.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 
 type AppendEvent = (event: RunEvent) => void | Promise<void>
 
 export class RunEventSink {
-  private pendingWrites: Promise<void>[] = []
+  private readonly writes = new OrderedWriteBuffer()
 
   constructor(
     private appendEvent: AppendEvent,
@@ -33,16 +34,12 @@ export class RunEventSink {
       timestamp: nowUtc(),
       payload,
     }
-    const persisted = this.appendEvent(event)
-    if (persisted && typeof persisted.then === 'function') this.pendingWrites.push(persisted)
+    this.writes.enqueue(() => this.appendEvent(event))
     return event
   }
 
   async flush(): Promise<void> {
-    while (this.pendingWrites.length) {
-      const pending = this.pendingWrites.splice(0)
-      await Promise.all(pending)
-    }
+    await this.writes.flush()
   }
 }
 

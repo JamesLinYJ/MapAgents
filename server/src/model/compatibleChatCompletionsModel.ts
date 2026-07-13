@@ -163,10 +163,10 @@ export class CompatibleChatCompletionsModel implements Model {
           if (started) yield { type: 'model', event: chunk, providerData: { source: 'openai_chat_completions' } }
           continue
         }
-        if (choices.length !== 1 || (choices[0].index ?? 0) !== 0) {
+        const [choice] = choices
+        if (choices.length !== 1 || !choice || (choice.index ?? 0) !== 0) {
           throw new Error('Chat Completions 流必须只包含 index=0 的 choice')
         }
-        const choice = choices[0]
         const delta = choice.delta
         const reasoningDelta = delta?.reasoning ?? delta?.reasoning_content
         const hasSemanticOutput = Boolean(delta?.content || reasoningDelta || delta?.tool_calls?.length)

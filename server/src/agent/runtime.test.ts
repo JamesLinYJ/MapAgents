@@ -20,16 +20,20 @@ import {
   type ResponseStreamEvent,
 } from '@openai/agents'
 import { describe, expect, it } from 'vitest'
-import type { Database } from '../db/connection.js'
 import type { Env } from '../framework/env.js'
 import { ToolRegistry } from '../framework/registry.js'
 import type { ToolDef, ToolProvider, ToolResult, ValueRef } from '../framework/types.js'
 import { ModelAdapterRegistry, type ModelAdapter } from '../model/registry.js'
 import { RuntimeFileStore } from '../store/fileStore.js'
 import { PostgresPlatformStore } from '../store/platformStore.js'
+import { createTestPlatformStore, PlatformStoreTestHarness } from '../../test-support/platformStoreHarness.js'
 import planProvider from '../tools/plan/index.js'
 import { defaultRuntimeConfig } from './defaultRuntimeConfig.js'
 import { OpenAIAgentsRuntime, type SandboxSessionFactory } from './runtime.js'
+
+async function removeTempRoot(root: string): Promise<void> {
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+}
 
 const testSandboxSessionFactory: SandboxSessionFactory = async manifest => ({
   state: { manifest, workspaceReady: true },
@@ -65,7 +69,8 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         return { text: responseNumber === 1 ? '项目代号是西湖。' : '我记得，项目代号是西湖。' }
       })
       const models = registryWith(fakeAdapter(model))
-      const firstStore = new PostgresPlatformStore(noOpDb(), root)
+      const harness = new PlatformStoreTestHarness()
+      const firstStore = harness.create(root)
       await firstStore.initialize()
       const session = await firstStore.createSession()
       const thread = await firstStore.createThread(session.id, '连续对话')
@@ -75,9 +80,9 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         runtimeConfigSnapshot: testRuntimeConfig(),
       })
       await testRuntime(firstStore, new ToolRegistry(), models).run(runOptions(firstRun, thread.id))
-      await firstStore.conversationStore.flush()
+      await firstStore.flushConversationStore()
 
-      const restoredStore = new PostgresPlatformStore(noOpDb(), root)
+      const restoredStore = harness.create(root)
       await restoredStore.initialize()
       const secondRun = await restoredStore.createRun(session.id, '刚才的项目代号是什么？', {
         threadId: thread.id,
@@ -102,14 +107,15 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       expect(secondItems.find(item => item.body === '我记得，项目代号是西湖。')?.metadata.transcriptEntryId)
         .toBe(assistantEntries[1].entryId)
     } finally {
-      await rm(root, { recursive: true, force: true })
+      await removeTempRoot(root)
     }
   })
 
   it('persists an SDK approval interruption and resumes it once after restart', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-approval-'))
     try {
-      const store = new PostgresPlatformStore(noOpDb(), root)
+      const harness = new PlatformStoreTestHarness()
+      const store = harness.create(root)
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '审批测试')
@@ -141,9 +147,9 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         status: 'pending',
         title: '批准执行：sensitive_tool',
       }))
-      await store.conversationStore.flush()
+      await store.flushConversationStore()
 
-      const restoredStore = new PostgresPlatformStore(noOpDb(), root)
+      const restoredStore = harness.create(root)
       await restoredStore.initialize()
       const completed = await testRuntime(restoredStore, tools, models)
         .resolveApproval(run.id, waiting.state.approvals[0].approvalId, true)
@@ -162,14 +168,14 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       expect(transcript.filter(entry => entry.kind === 'tool_call')).toHaveLength(1)
       expect(transcript.filter(entry => entry.kind === 'tool_result')).toHaveLength(1)
     } finally {
-      await rm(root, { recursive: true, force: true })
+      await removeTempRoot(root)
     }
   })
 
   it('starts explicit plan mode as a hard read-only boundary', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-boundary-'))
     try {
-      const store = new PostgresPlatformStore(noOpDb(), root)
+      const store = createTestPlatformStore(root)
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '计划模式写入边界')
@@ -202,14 +208,14 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       expect(failed.state.planMode).toBe(true)
       expect(failed.state.errors.at(-1)).toContain('计划模式禁止执行写入或副作用工具')
     } finally {
-      await rm(root, { recursive: true, force: true })
+      await removeTempRoot(root)
     }
   })
 
   it('rejects text-only completion while the run is still in plan mode', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-text-only-'))
     try {
-      const store = new PostgresPlatformStore(noOpDb(), root)
+      const store = createTestPlatformStore(root)
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '文字计划禁止假成功')
@@ -229,14 +235,14 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       expect(failed.state.planMode).toBe(true)
       expect(failed.state.errors.at(-1)).toContain('计划模式必须通过 request_clarification 或 exit_plan_mode')
     } finally {
-      await rm(root, { recursive: true, force: true })
+      await removeTempRoot(root)
     }
   })
 
   it('asks for clarification instead of completing a greeting in explicit plan mode', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-greeting-'))
     try {
-      const store = new PostgresPlatformStore(noOpDb(), root)
+      const store = createTestPlatformStore(root)
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '计划模式寒暄')
@@ -285,14 +291,14 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const items = await store.listItems(run.id)
       expect(items.some(item => item.itemType === 'result' && item.metadata?.resultType === 'clarification_needed')).toBe(true)
     } finally {
-      await rm(root, { recursive: true, force: true })
+      await removeTempRoot(root)
     }
   })
 
   it('requires the clarification tool when the planning goal is underspecified', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-clarify-'))
     try {
-      const store = new PostgresPlatformStore(noOpDb(), root)
+      const store = createTestPlatformStore(root)
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '计划模式澄清')
@@ -336,14 +342,15 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       }))
       expect(waiting.state.errors).toEqual([])
     } finally {
-      await rm(root, { recursive: true, force: true })
+      await removeTempRoot(root)
     }
   })
 
   it('reviews exit_plan_mode through approval and persists the approved execution plan', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-approval-'))
     try {
-      const store = new PostgresPlatformStore(noOpDb(), root)
+      const harness = new PlatformStoreTestHarness()
+      const store = harness.create(root)
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '计划审批')
@@ -396,9 +403,9 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         title: '接受这个执行计划？',
       }))
       expect(waiting.state.approvals[0].payload.args).toMatchObject({ plan })
-      await store.conversationStore.flush()
+      await store.flushConversationStore()
 
-      const restoredStore = new PostgresPlatformStore(noOpDb(), root)
+      const restoredStore = harness.create(root)
       await restoredStore.initialize()
       const completed = await testRuntime(restoredStore, tools, registryWith(fakeAdapter(model)))
         .resolveApproval(run.id, waiting.state.approvals[0].approvalId, true)
@@ -416,14 +423,14 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const items = await restoredStore.listItems(run.id)
       expect(items.some(item => item.itemType === 'result' && item.metadata?.resultType === 'waiting_approval')).toBe(true)
     } finally {
-      await rm(root, { recursive: true, force: true })
+      await removeTempRoot(root)
     }
   })
 
   it('executes SDK tool calls that omit nullable optional arguments', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-optional-tool-'))
     try {
-      const store = new PostgresPlatformStore(noOpDb(), root)
+      const store = createTestPlatformStore(root)
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '可选参数工具')
@@ -467,10 +474,10 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       expect(completed.status).toBe('completed')
       expect(completed.state.errors).toEqual([])
       expect(executedArgs).toEqual({ query: '杭州', limit: 20 })
-      const checkpoint = await store.conversationStore.getRunCheckpoint(run.id)
+      const checkpoint = await store.getRunCheckpoint(run.id)
       expect(checkpoint.pendingToolCallIds).toEqual([])
     } finally {
-      await rm(root, { recursive: true, force: true })
+      await removeTempRoot(root)
     }
   })
 
@@ -566,7 +573,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
   it('runs configured subagents as Agent tools with inherited model and persisted transcript', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-subagent-'))
     try {
-      const store = new PostgresPlatformStore(noOpDb(), root)
+      const store = createTestPlatformStore(root)
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '子 Agent 测试')
@@ -602,7 +609,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const completed = await testRuntime(store, tools, registryWith(fakeAdapter(model))).run({
         ...runOptions(run, thread.id), runtimeConfig: config,
       })
-      await store.conversationStore.flush()
+      await store.flushConversationStore()
 
       expect(completed.status).toBe('completed')
       expect(subAgentCalls).toBe(1)
@@ -618,14 +625,14 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       ), 'utf8')
       expect(agentLog).toContain('completed_item')
     } finally {
-      await rm(root, { recursive: true, force: true })
+      await removeTempRoot(root)
     }
   })
 
   it('restores previous run valueRefs for continuous thread tool calls', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-thread-values-'))
     try {
-      const store = new PostgresPlatformStore(noOpDb(), root)
+      const store = createTestPlatformStore(root)
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '连续 valueRef 测试')
@@ -689,14 +696,14 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         status: 'completed',
       })
     } finally {
-      await rm(root, { recursive: true, force: true })
+      await removeTempRoot(root)
     }
   })
 
   it('routes uploaded meteorological files through the deterministic nowcast chain', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-nowcast-'))
     try {
-      const store = new PostgresPlatformStore(noOpDb(), root)
+      const store = createTestPlatformStore(root)
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '短时临近预报（短临）确定性路由')
@@ -728,7 +735,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       ])
       expect(completed.state.toolValueRefs.some(ref => ref.kind === 'nowcast_answer')).toBe(true)
     } finally {
-      await rm(root, { recursive: true, force: true })
+      await removeTempRoot(root)
     }
   })
 })
@@ -800,7 +807,7 @@ function outputItems(response: ScriptedResponse, responseId: string): AgentOutpu
 async function executeTextRun(model: Model, tools = new ToolRegistry()) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-stream-'))
   try {
-    const store = new PostgresPlatformStore(noOpDb(), root)
+    const store = createTestPlatformStore(root)
     await store.initialize()
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '模型流测试')
@@ -810,14 +817,14 @@ async function executeTextRun(model: Model, tools = new ToolRegistry()) {
       runtimeConfigSnapshot: testRuntimeConfig(),
     })
     const completed = await testRuntime(store, tools, registryWith(fakeAdapter(model))).run(runOptions(run, thread.id))
-    await store.conversationStore.flush()
+    await store.flushConversationStore()
     return {
       run: structuredClone(completed),
       items: structuredClone(await store.listItems(run.id)),
       transcript: structuredClone(await store.activeTranscript(thread.id)),
     }
   } finally {
-    await rm(root, { recursive: true, force: true })
+    await removeTempRoot(root)
   }
 }
 
@@ -942,10 +949,6 @@ function result(name: string, valueRefs: ValueRef[], payload: Record<string, unk
   return {
     message: `${name} completed`, payload, warnings: [], resultId: `result_${name}`, source: 'test', valueRefs,
   }
-}
-
-function noOpDb(): Database {
-  return { execute: async () => ({ rows: [] }) } as unknown as Database
 }
 
 function testEnv(): Env {

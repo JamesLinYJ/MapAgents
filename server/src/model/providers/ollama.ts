@@ -1,5 +1,6 @@
 // Ollama 模型适配器
 import type { ModelAdapter } from '../registry.js'
+import { abortSignalWithTimeout } from '../../utils/abort.js'
 
 export interface OllamaOptions { baseUrl: string; defaultModel: string; displayName?: string }
 
@@ -19,7 +20,7 @@ export function createOllamaAdapter(opts: OllamaOptions): ModelAdapter {
       const res = await fetch(`${baseUrl}/api/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model, stream: false, messages, options: { temperature } }),
-        signal: AbortSignal.timeout(60_000),
+        signal: abortSignalWithTimeout(kwargs?.signal, 60_000),
       })
       if (!res.ok) throw new Error(`Ollama API error: ${res.status}`)
       const payload = (await res.json()) as Record<string, unknown>

@@ -1,5 +1,6 @@
 // Gemini 模型适配器
 import type { ModelAdapter } from '../registry.js'
+import { abortSignalWithTimeout } from '../../utils/abort.js'
 
 export interface GeminiOptions { baseUrl: string; apiKey: string; defaultModel: string; displayName?: string }
 
@@ -25,7 +26,7 @@ export function createGeminiAdapter(opts: GeminiOptions): ModelAdapter {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': opts.apiKey },
         body: JSON.stringify({ contents, generationConfig: { temperature } }),
-        signal: AbortSignal.timeout(30_000),
+        signal: abortSignalWithTimeout(kwargs?.signal, 30_000),
       })
       if (!res.ok) throw new Error(`Gemini API error: ${res.status}`)
       const payload = (await res.json()) as Record<string, unknown>

@@ -12,7 +12,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
 import type { AgentRuntimeConfig, ThreadMemoryDocument, TranscriptEntry } from '../schemas/types.js'
-import type { PostgresPlatformStore } from '../store/platformStore.js'
+import type { MemoryConversationStore } from '../store/runtimePorts.js'
 import { makeId } from '../utils/ids.js'
 import { buildManualMemoryContent } from '../agent/contextManager.js'
 import { createMemoryPathConfig, memoryDirectoryForScope, resolveMemoryFilePath, type MemoryPathConfig } from './paths.js'
@@ -41,7 +41,7 @@ export interface WriteMemoryInput {
   name: string
   description: string
   content: string
-  relativePath?: string | null
+  relativePath?: string | null | undefined
 }
 
 export interface MemoryRuntime {
@@ -199,7 +199,7 @@ export async function buildMemoryPrompt(runtime: MemoryRuntime, toolsAvailable =
 }
 
 export async function rebuildSessionMemory(
-  store: PostgresPlatformStore,
+  store: MemoryConversationStore,
   threadId: string,
   config: AgentRuntimeConfig['context'],
   summarize: (prompt: string) => Promise<string>,
@@ -232,7 +232,7 @@ export async function rebuildSessionMemory(
 
 export async function extractMemoriesFromThread(
   runtime: MemoryRuntime,
-  store: PostgresPlatformStore,
+  store: MemoryConversationStore,
   threadId: string,
   runId: string,
   selector: StructuredSelector,
@@ -676,9 +676,9 @@ async function readDreamState(runtime: MemoryRuntime): Promise<{ lastCompletedAt
   const parsed: unknown = JSON.parse(raw)
   if (!isRecord(parsed)) return {}
   return {
-    lastCompletedAt: typeof parsed.lastCompletedAt === 'string' ? parsed.lastCompletedAt : undefined,
-    lastSummary: typeof parsed.lastSummary === 'string' ? parsed.lastSummary : undefined,
-    recordCount: typeof parsed.recordCount === 'number' ? parsed.recordCount : undefined,
+    ...(typeof parsed.lastCompletedAt === 'string' ? { lastCompletedAt: parsed.lastCompletedAt } : {}),
+    ...(typeof parsed.lastSummary === 'string' ? { lastSummary: parsed.lastSummary } : {}),
+    ...(typeof parsed.recordCount === 'number' ? { recordCount: parsed.recordCount } : {}),
   }
 }
 

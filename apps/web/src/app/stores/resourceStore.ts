@@ -19,6 +19,7 @@ interface ResourceState {
   selectedBasemapKey: string
   artifactData: Record<string, GeoJSON.FeatureCollection>
   artifactMetadata: Record<string, Record<string, unknown>>
+  artifactHydrationErrors: Record<string, string>
   mapLayerPreferences: Record<string, MapLayerPreference>
   selectedArtifactId?: string
   uploadedLayerName?: string
@@ -29,6 +30,7 @@ interface ResourceState {
   setSelectedBasemapKey: (selectedBasemapKey: string) => void
   mergeArtifactData: (entries: Array<{ artifactId: string; data: GeoJSON.FeatureCollection }>) => void
   mergeArtifactMetadata: (entries: Array<{ artifactId: string; metadata: Record<string, unknown> }>) => void
+  setArtifactHydrationErrors: (updater: (current: Record<string, string>) => Record<string, string>) => void
   setMapLayerPreferences: (updater: (current: Record<string, MapLayerPreference>) => Record<string, MapLayerPreference>) => void
   setSelectedArtifactId: (selectedArtifactId?: string) => void
   setUploadedLayerName: (uploadedLayerName?: string) => void
@@ -44,6 +46,7 @@ export const useResourceStore = create<ResourceState>((set) => ({
   selectedBasemapKey: 'osm',
   artifactData: {},
   artifactMetadata: {},
+  artifactHydrationErrors: {},
   mapLayerPreferences: {},
   selectedArtifactId: undefined,
   uploadedLayerName: undefined,
@@ -64,6 +67,9 @@ export const useResourceStore = create<ResourceState>((set) => ({
       ...Object.fromEntries(entries.map(entry => [entry.artifactId, entry.metadata])),
     },
   })),
+  setArtifactHydrationErrors: updater => set(state => ({
+    artifactHydrationErrors: updater(state.artifactHydrationErrors),
+  })),
   setMapLayerPreferences: updater => set(state => ({ mapLayerPreferences: updater(state.mapLayerPreferences) })),
   setSelectedArtifactId: selectedArtifactId => set({ selectedArtifactId }),
   setUploadedLayerName: uploadedLayerName => set({ uploadedLayerName }),
@@ -73,6 +79,7 @@ export const useResourceStore = create<ResourceState>((set) => ({
   clearArtifacts: () => set({
     artifactData: {},
     artifactMetadata: {},
+    artifactHydrationErrors: {},
     mapLayerPreferences: {},
     selectedArtifactId: undefined,
   }),

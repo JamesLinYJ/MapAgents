@@ -13,10 +13,15 @@
 // 统一承载 HTTP、FormData、WebSocket 控制命令、CSRF 和协议校验。
 // 业务 API 函数只描述资源语义，不直接拼装传输层错误和 envelope。
 
-import type { AuthMe, WsControlCommand } from '@geo-agent-platform/shared-types'
+import type { AuthMe, WsControlCommand, WsControlResponse } from '@geo-agent-platform/shared-types'
 
 import { wsClient } from '../ws/client'
-import { API_UNAVAILABLE_MESSAGE, formatApiError, isApiUnavailableMessage } from './errors'
+import {
+  API_UNAVAILABLE_MESSAGE,
+  formatApiError,
+  GeoForgeTransportError,
+  isApiUnavailableMessage,
+} from './errors'
 
 export interface SchemaParseError {
   issues: Array<{ path: PropertyKey[]; message: string }>
@@ -93,15 +98,21 @@ export async function requestJson<T>(
   } catch (error) {
     const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error(formatApiErrorMessage(`请求超时（${path}），请检查 API 服务是否响应正常。`, detail))
+      throw new GeoForgeTransportError(
+        formatApiErrorMessage(`请求超时（${path}），请检查 API 服务是否响应正常。`, detail),
+        { transport: 'http', code: 'timeout', cause: error },
+      )
     }
-    throw new Error(formatApiErrorMessage(`暂时无法连接分析服务，请确认本地 API 或部署代理已经启动（接口：${path}，当前地址：${API_BASE_LABEL}）`, detail))
+    throw new GeoForgeTransportError(
+      formatApiErrorMessage(`暂时无法连接分析服务，请确认本地 API 或部署代理已经启动（接口：${path}，当前地址：${API_BASE_LABEL}）`, detail),
+      { transport: 'http', code: 'unavailable', cause: error },
+    )
   } finally {
     clearTimeout(timer)
   }
 
   if (!response.ok) {
-    throw new Error(formatHttpError(response, await extractErrorDetail(response)))
+    throw await httpResponseError(response)
   }
 
   const data = await response.json()
@@ -122,6 +133,7 @@ export async function requestFormJson<T>(
   body: FormData,
   failurePrefix: string,
   timeoutMs = 120_000,
+  schema?: ResponseSchema<T>,
 ): Promise<T> {
   // FormData 请求同样走统一超时和错误提取。
   //
@@ -141,18 +153,32 @@ export async function requestFormJson<T>(
   } catch (error) {
     const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error(formatApiErrorMessage(`${failurePrefix}超时（接口：${path}）。`, detail))
+      throw new GeoForgeTransportError(
+        formatApiErrorMessage(`${failurePrefix}超时（接口：${path}）。`, detail),
+        { transport: 'http', code: 'timeout', cause: error },
+      )
     }
-    throw new Error(formatApiErrorMessage(`${failurePrefix}，请确认本地 API 或部署代理已经启动（接口：${path}，当前地址：${API_BASE_LABEL}）`, detail))
+    throw new GeoForgeTransportError(
+      formatApiErrorMessage(`${failurePrefix}，请确认本地 API 或部署代理已经启动（接口：${path}，当前地址：${API_BASE_LABEL}）`, detail),
+      { transport: 'http', code: 'unavailable', cause: error },
+    )
   } finally {
     clearTimeout(timer)
   }
 
   if (!response.ok) {
-    throw new Error(formatHttpError(response, await extractErrorDetail(response)))
+    throw await httpResponseError(response)
   }
 
-  return (await response.json()) as T
+  const data: unknown = await response.json()
+  if (schema) {
+    const parsed = schema.safeParse(data)
+    if (!parsed.success) {
+      throw new Error(formatSchemaValidationError(`HTTP ${path}`, parsed.error.issues))
+    }
+    return parsed.data
+  }
+  return data as T
 }
 
 // 业务控制命令统一走 /ws；响应必须是具有关联请求 ID 的成功/错误 envelope。
@@ -164,11 +190,21 @@ export async function requestControl<T>(
   payload: Record<string, unknown> = {},
   schema?: ResponseSchema<T>,
 ): Promise<T> {
-  const message = await wsClient.send(type, payload)
+  let message: WsControlResponse
+  try {
+    message = await wsClient.send(type, payload)
+  } catch (error) {
+    if (error instanceof GeoForgeTransportError) throw error
+    throw new GeoForgeTransportError(
+      formatApiErrorMessage(`WebSocket 命令 ${type} 发送失败。`, error instanceof Error ? error.message : String(error)),
+      { transport: 'websocket', code: 'unavailable', cause: error },
+    )
+  }
   if (message.payload.ok !== true) {
     const error = message.payload.error
     const detail = typeof error === 'object' && error && 'message' in error ? String(error.message) : 'WebSocket 命令失败'
-    throw new Error(detail)
+    const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : 'command_failed'
+    throw new GeoForgeTransportError(detail, { transport: 'websocket', code })
   }
 
   const data = message.payload.data
@@ -212,9 +248,29 @@ async function extractErrorDetail(response: Response): Promise<string> {
   return text.trim() || response.statusText || `HTTP ${response.status}`
 }
 
+async function httpResponseError(response: Response): Promise<GeoForgeTransportError> {
+  const detail = await extractErrorDetail(response)
+  const message = formatHttpError(response, detail)
+  return new GeoForgeTransportError(message, {
+    transport: 'http',
+    code: httpStatusCode(response.status),
+    status: response.status,
+  })
+}
+
 function formatHttpError(response: Response, detail: string): string {
   if (response.status === 502 || response.status === 503 || isApiUnavailableMessage(detail)) {
     return API_UNAVAILABLE_MESSAGE
   }
   return detail
+}
+
+function httpStatusCode(status: number): string {
+  if (status === 401) return 'unauthorized'
+  if (status === 403) return 'forbidden'
+  if (status === 404) return 'not_found'
+  if (status === 409) return 'conflict'
+  if (status === 429) return 'rate_limited'
+  if (status === 502 || status === 503) return 'unavailable'
+  return status >= 500 ? 'internal_error' : 'invalid_request'
 }

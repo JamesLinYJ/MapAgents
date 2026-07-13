@@ -34,8 +34,13 @@ if (!process.env.GEOFORGE_MEMORY_BASE_DIR) {
   process.env.GEOFORGE_MEMORY_BASE_DIR = path.resolve(__dirname, '..', '.tmp-test-memory')
 }
 const vitestEntrypoint = path.resolve(__dirname, '..', '..', 'node_modules', 'vitest', 'vitest.mjs')
+const vitestArgs = process.argv.slice(2)
+if (!vitestArgs.some(argument => argument === '--maxWorkers' || argument.startsWith('--maxWorkers='))) {
+  // 文件事实源测试会执行真实 fsync/rename；限制并发可避免大量 worker 同时争用 Windows I/O。
+  vitestArgs.push(`--maxWorkers=${process.env.GEOFORGE_TEST_WORKERS ?? '4'}`)
+}
 
-const child = spawn(process.execPath, [vitestEntrypoint, ...process.argv.slice(2)], {
+const child = spawn(process.execPath, [vitestEntrypoint, ...vitestArgs], {
   stdio: 'inherit',
   env: process.env,
 })

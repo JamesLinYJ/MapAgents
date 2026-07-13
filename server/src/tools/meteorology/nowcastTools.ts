@@ -71,7 +71,7 @@ async function createNowcastSequence(args: Record<string, unknown>, ctx: ToolCon
   const collection = refObject(requiredRefKind(ctx, args, 'file_collection_ref', ['meteorological_file_collection']).value)
   if (!Array.isArray(collection.files) || collection.files.length < 2) throw new Error('短时临近预报序列至少需要两个气象文件')
   const variable = optionalRefValue(ctx, args, 'variable_ref', 'name')
-  const worker = await deps.callWorker('create_nowcast_sequence', { files: collection.files, variable })
+  const worker = await deps.callWorker('create_nowcast_sequence', { files: collection.files, variable }, ctx.signal)
   const ref: ValueRef = {
     refId: makeId('ref'), kind: 'nowcast_sequence', label: '短时临近预报（短临）气象序列',
     value: worker.payload,
@@ -81,7 +81,7 @@ async function createNowcastSequence(args: Record<string, unknown>, ctx: ToolCon
 
 async function inspectNowcastSequence(args: Record<string, unknown>, ctx: ToolContext, deps: MeteorologyToolDeps): Promise<ToolResult> {
   const sequence = refObject(requiredRefKind(ctx, args, 'sequence_ref', ['nowcast_sequence']).value)
-  const worker = await deps.callWorker('inspect_nowcast_sequence', { sequence })
+  const worker = await deps.callWorker('inspect_nowcast_sequence', { sequence }, ctx.signal)
   const ref: ValueRef = { refId: makeId('ref'), kind: 'nowcast_sequence_inspection', label: '短时临近预报序列检查', value: worker.payload }
   return result('inspect_nowcast_sequence', worker.message, worker.payload, [ref])
 }
@@ -149,7 +149,7 @@ async function analyzeNowcast(args: Record<string, unknown>, ctx: ToolContext, d
     sequence,
     variable: optionalRefValue(ctx, args, 'variable_ref', 'name') ?? sequence.variable,
     ...scope,
-  })
+  }, ctx.signal)
   const refs: ValueRef[] = [{
     refId: makeId('ref'), kind: 'nowcast_analysis', label: '短时临近预报（短临）降水分析', value: worker.payload,
   }]
@@ -197,7 +197,11 @@ function optionalScope(ctx: ToolContext, args: Record<string, unknown>): Record<
 
 async function answerNowcast(args: Record<string, unknown>, ctx: ToolContext, deps: MeteorologyToolDeps): Promise<ToolResult> {
   const analysis = refObject(requiredRefKind(ctx, args, 'nowcast_analysis_ref', ['nowcast_analysis']).value)
-  const worker = await deps.callWorker('answer_nowcast_question', { analysis, question: requiredText(args, 'question') })
+  const worker = await deps.callWorker(
+    'answer_nowcast_question',
+    { analysis, question: requiredText(args, 'question') },
+    ctx.signal,
+  )
   const ref: ValueRef = { refId: makeId('ref'), kind: 'nowcast_answer', label: '短时临近预报（短临）问题回答事实', value: worker.payload }
   const candidate = selectNowcastMapCandidate(analysis)
   const artifact = artifactTarget(ctx, 'png', `${String(candidate.label ?? '代表时次')} 短时临近预报（短临）降水`)
@@ -208,7 +212,7 @@ async function answerNowcast(args: Record<string, unknown>, ctx: ToolContext, de
     variable: requiredCandidateText(candidate, 'variable'),
     bbox: nowcastRenderBbox(analysis),
     output_relative_path: artifact.relativePath,
-  })
+  }, ctx.signal)
   mergeArtifactMetadata(artifact, {
     ...raster.payload,
     nowcastCandidate: candidate,
@@ -230,7 +234,7 @@ async function answerNowcast(args: Record<string, unknown>, ctx: ToolContext, de
 
 async function generateNowcastText(args: Record<string, unknown>, ctx: ToolContext, deps: MeteorologyToolDeps): Promise<ToolResult> {
   const analysis = requiredRefKind(ctx, args, 'nowcast_analysis_ref', ['nowcast_analysis']).value
-  const facts = await deps.callWorker('generate_nowcast_forecast_text', { analysis })
+  const facts = await deps.callWorker('generate_nowcast_forecast_text', { analysis }, ctx.signal)
   const draft = typeof facts.payload.answer === 'string' ? facts.payload.answer.trim() : ''
   if (!draft) throw new Error('短时临近预报（短临）领域服务未生成可用预报事实文本')
   const structured = await ctx.invokeStructuredModel(
@@ -250,7 +254,7 @@ async function renderNowcastRaster(args: Record<string, unknown>, ctx: ToolConte
     file_name: typeof candidate.filename === 'string' ? candidate.filename : undefined,
     variable: candidate.variable,
     output_relative_path: artifact.relativePath,
-  })
+  }, ctx.signal)
   mergeArtifactMetadata(artifact, {
     ...worker.payload,
     displaySurfaces: ['map', 'download'],

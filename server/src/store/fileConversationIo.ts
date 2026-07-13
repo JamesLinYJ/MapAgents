@@ -10,8 +10,8 @@
 
 // 模块职责
 //
-// 提供文件型会话事实源需要的原子写、durable JSONL append、目录扫描和 ID 校验。
-// 这些函数不持有会话状态，只处理可恢复文件 IO 的基础规则。
+// 提供 runtime 内容对象、附件审计和诊断日志需要的原子写、durable JSONL、
+// 目录扫描和 ID 校验。这些函数不持有结构化会话事实。
 
 import { randomUUID } from 'node:crypto'
 import {
@@ -20,9 +20,15 @@ import {
   readFile,
   readdir,
   rename,
+  rm,
 } from 'node:fs/promises'
+import { setTimeout as delay } from 'node:timers/promises'
 import path from 'node:path'
 import { nowUtc } from '../utils/ids.js'
+
+const ATOMIC_REPLACE_RETRY_CODES = new Set(['EPERM', 'EACCES', 'EBUSY'])
+const ATOMIC_REPLACE_MAX_ATTEMPTS = 6
+const ATOMIC_REPLACE_BASE_DELAY_MS = 12
 
 export async function atomicWriteJson(filePath: string, value: unknown): Promise<void> {
   await atomicWriteText(filePath, `${JSON.stringify(value, null, 2)}\n`)
@@ -84,7 +90,29 @@ export async function atomicWriteText(filePath: string, value: string): Promise<
   } finally {
     await handle.close()
   }
-  await rename(temporary, filePath)
+  try {
+    await renameWithRetry(temporary, filePath)
+  } catch (error) {
+    await rm(temporary, { force: true })
+    throw error
+  }
+}
+
+async function renameWithRetry(source: string, target: string): Promise<void> {
+  for (let attempt = 1; attempt <= ATOMIC_REPLACE_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      await rename(source, target)
+      return
+    } catch (error) {
+      if (!shouldRetryAtomicReplace(error) || attempt === ATOMIC_REPLACE_MAX_ATTEMPTS) throw error
+      await delay(ATOMIC_REPLACE_BASE_DELAY_MS * attempt)
+    }
+  }
+}
+
+function shouldRetryAtomicReplace(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code
+  return typeof code === 'string' && ATOMIC_REPLACE_RETRY_CODES.has(code)
 }
 
 export async function readJson<T>(filePath: string, schema: { parse(value: unknown): T }): Promise<T | null> {
@@ -152,13 +180,28 @@ export function encodeCursor(sequence: number): string {
   return Buffer.from(JSON.stringify({ sequence }), 'utf8').toString('base64url')
 }
 
+export class InvalidHistoryCursorError extends Error {
+  constructor() {
+    super('历史记录分页游标无效。')
+    this.name = 'InvalidHistoryCursorError'
+  }
+}
+
 export function decodeCursor(cursor: string): number {
   try {
     const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))
-    if (!isRecord(parsed) || typeof parsed.sequence !== 'number') throw new Error('invalid cursor')
+    if (
+      !isRecord(parsed)
+      || typeof parsed.sequence !== 'number'
+      || !Number.isSafeInteger(parsed.sequence)
+      || parsed.sequence < 1
+    ) {
+      throw new InvalidHistoryCursorError()
+    }
     return parsed.sequence
-  } catch {
-    throw new Error('history cursor 无效')
+  } catch (error) {
+    if (error instanceof InvalidHistoryCursorError) throw error
+    throw new InvalidHistoryCursorError()
   }
 }
 

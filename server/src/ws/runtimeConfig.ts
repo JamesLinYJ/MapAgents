@@ -13,8 +13,7 @@
 // WebSocket 命令和后台工具执行共享同一个运行时配置读取边界。数据库配置是事实源；
 // 未写入配置时才使用进程启动时注入的默认配置。
 
-import type { AgentRuntimeConfig } from '../schemas/types.js'
-import { agentRuntimeConfigSchema } from '../schemas/types.js'
+import { agentRuntimeConfigSchema, type AgentRuntimeConfig } from '@geo-agent-platform/shared-types/runtime'
 import { defaultRuntimeConfig } from '../agent/defaultRuntimeConfig.js'
 import type { PostgresPlatformStore } from '../store/platformStore.js'
 

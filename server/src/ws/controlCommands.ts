@@ -11,7 +11,7 @@
 import { z } from 'zod'
 
 import { AzureSpeechService } from '../speech/azureSpeechService.js'
-import { agentRuntimeConfigSchema } from '../schemas/types.js'
+import { agentRuntimeConfigSchema } from '@geo-agent-platform/shared-types/runtime'
 import { StoreNotFoundError } from '../store/platformStore.js'
 import type { WsCommandRegistry } from './commandRegistry.js'
 

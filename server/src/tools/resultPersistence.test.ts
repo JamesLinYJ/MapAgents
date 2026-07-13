@@ -11,11 +11,9 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { drizzle } from 'drizzle-orm/node-postgres'
 import { describe, expect, it } from 'vitest'
-import type { Database } from '../db/connection.js'
-import * as schema from '../db/schema.js'
 import { PostgresPlatformStore } from '../store/platformStore.js'
+import { createTestPlatformStore } from '../../test-support/platformStoreHarness.js'
 import { persistToolExecutionResult } from './resultPersistence.js'
 
 describe('tool result persistence', () => {
@@ -23,7 +21,7 @@ describe('tool result persistence', () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-result-'))
     let store: PostgresPlatformStore | undefined
     try {
-      store = new PostgresPlatformStore(noOpDb(), path.join(root, 'sessions'))
+      store = createTestPlatformStore(path.join(root, 'sessions'))
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '结果测试')
@@ -43,7 +41,7 @@ describe('tool result persistence', () => {
       const relativePath = String(latest.state.artifacts[0].metadata.relativePath)
       expect(JSON.parse(await readFile(path.join(root, relativePath), 'utf8'))).toEqual(line())
     } finally {
-      await store?.conversationStore.flush()
+      await store?.flushConversationStore()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -52,7 +50,7 @@ describe('tool result persistence', () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-result-'))
     let store: PostgresPlatformStore | undefined
     try {
-      store = new PostgresPlatformStore(noOpDb(), path.join(root, 'sessions'))
+      store = createTestPlatformStore(path.join(root, 'sessions'))
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, 'Todo 测试')
@@ -75,7 +73,7 @@ describe('tool result persistence', () => {
         expect.objectContaining({ todoId: 'todo_2', title: '执行 Playwright 验收', status: 'pending' }),
       ])
     } finally {
-      await store?.conversationStore.flush()
+      await store?.flushConversationStore()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -84,7 +82,7 @@ describe('tool result persistence', () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-result-clarification-'))
     let store: PostgresPlatformStore | undefined
     try {
-      store = new PostgresPlatformStore(noOpDb(), path.join(root, 'sessions'))
+      store = createTestPlatformStore(path.join(root, 'sessions'))
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '澄清测试')
@@ -124,7 +122,7 @@ describe('tool result persistence', () => {
         payload: expect.objectContaining({ clarificationKind: 'platform' }),
       }))
     } finally {
-      await store?.conversationStore.flush()
+      await store?.flushConversationStore()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -132,10 +130,4 @@ describe('tool result persistence', () => {
 
 function line() {
   return { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[120, 30], [121, 31]] } }
-}
-
-function noOpDb(): Database {
-  const client = { query: async () => ({ rows: [] }) }
-  const db = drizzle(client as never, { schema }) as unknown as Database
-  return Object.assign(db, { pool: {}, close: async () => {} }) as Database
 }
