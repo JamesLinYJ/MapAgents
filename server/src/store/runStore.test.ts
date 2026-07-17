@@ -1,15 +1,24 @@
+// +-------------------------------------------------------------------------
+//
+//   GeoForge 地理智能平台 - 运行资源存储测试
+//
+//   文件:       runStore.test.ts
+//   日期:       2026年07月13日
+//   作者:       JamesLinYJ
+// --------------------------------------------------------------------------
+
 import { describe, expect, it, vi } from 'vitest'
 
 import type { AgentThreadRecord, AnalysisRun, ConversationItem, SessionRecord } from '../schemas/types.js'
-import { ConversationIndexStore } from './conversationIndexStore.js'
+import { ConversationProjectionIndex } from './conversationProjectionIndex.js'
 import { InMemoryEventBus } from './eventBus.js'
-import type { FileConversationStore } from './fileConversationStore.js'
+import type { ConversationPayloadStore } from './conversationPayloadStore.js'
 import { RunStore } from './runStore.js'
 import type { SessionStore } from './sessionStore.js'
-import type { ConversationRepository } from './postgres/conversationRepository.js'
+import type { ConversationPersistence } from './postgres/conversationPersistencePorts.js'
 
-function createRunStore(overrides: Partial<FileConversationStore> = {}) {
-  const index = new ConversationIndexStore()
+function createRunStore(overrides: Partial<ConversationPayloadStore> = {}) {
+  const index = new ConversationProjectionIndex()
   const session: SessionRecord = {
     id: 'session_1',
     title: '测试会话',
@@ -94,22 +103,23 @@ function createRunStore(overrides: Partial<FileConversationStore> = {}) {
     },
   } as AnalysisRun
   index.load({ sessions: [session], threads: [thread], runs: [run] })
-  const conversationStore = {
+  const payloadStore = {
     flush: vi.fn().mockResolvedValue(undefined),
     ...overrides,
-  } as unknown as FileConversationStore
+  } as unknown as ConversationPayloadStore
   const repository = {
     saveRun: vi.fn().mockResolvedValue(undefined),
     saveRunWithCheckpoint: vi.fn().mockResolvedValue(undefined),
     saveRunCheckpoint: vi.fn().mockResolvedValue(undefined),
     saveThread: vi.fn().mockRejectedValue(new Error('projection unavailable')),
     appendConversationItem: vi.fn().mockResolvedValue(undefined),
-  } as unknown as ConversationRepository
+  } as unknown as ConversationPersistence
   const itemBus = new InMemoryEventBus<ConversationItem>()
   const store = new RunStore(
     index,
-    conversationStore,
+    payloadStore,
     {} as SessionStore,
+    repository,
     repository,
     {
       runBus: new InMemoryEventBus<AnalysisRun>(),
@@ -117,12 +127,12 @@ function createRunStore(overrides: Partial<FileConversationStore> = {}) {
       itemBus,
     },
   )
-  return { store, index, conversationStore, repository, itemBus }
+  return { store, index, payloadStore, repository, itemBus }
 }
 
 describe('RunStore projections', () => {
   it('persists terminal run status even when thread status projection fails', async () => {
-    const { store, index, conversationStore, repository } = createRunStore()
+    const { store, index, payloadStore, repository } = createRunStore()
 
     const completed = await store.complete('run_1', 'completed')
 

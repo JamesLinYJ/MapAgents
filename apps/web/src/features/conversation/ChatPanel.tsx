@@ -78,8 +78,6 @@ export function ChatPanel(props: ChatPanelProps) {
     onLoadTrash,
     onRestoreThread,
     onPurgeThread,
-    memories,
-    onRefreshMemories,
     tokenBudget,
     activeSkills,
     activeMcpServers,
@@ -301,8 +299,6 @@ export function ChatPanel(props: ChatPanelProps) {
                     runStatus={runStatus}
                     executionPlan={executionPlan}
                     progressTasks={progressTasks}
-                    memories={memories}
-                    onRefreshMemories={onRefreshMemories}
                     onSelectArtifact={onSelectArtifact}
                     onForkMessage={onForkMessage}
                     onRetry={() => onSubmit(executionModeForComposerMode(composerMode))}

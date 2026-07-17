@@ -2,6 +2,7 @@
 import { z } from 'zod'
 import type { AgentRuntimeConfig } from './runtime.js'
 import { agentStateSchema, runStatusSchema, toolValueRefSchema } from './core.js'
+import { artifactDisplaySchema } from './map.js'
 
 // --- Session / Thread / Run ---
 
@@ -57,6 +58,45 @@ export const auditEventSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).prefault({}),
   createdAt: z.string(),
 })
+
+export const adminMembershipSchema = platformMembershipSchema.extend({
+  email: z.string().email(),
+  displayName: z.string(),
+})
+
+export const rbacPolicyRowSchema = z.object({
+  ptype: z.string(),
+  v0: z.string(),
+  v1: z.string(),
+  v2: z.string(),
+  v3: z.string(),
+  v4: z.string(),
+  v5: z.string(),
+})
+
+export const adminUserPatchSchema = z.object({
+  displayName: z.string().trim().min(1, '显示名称不能为空').max(120).optional(),
+  status: z.enum(['active', 'disabled']).optional(),
+}).strict().refine(value => Object.keys(value).length > 0, {
+  message: '至少提供一个要更新的用户字段',
+})
+
+export const adminWorkspaceCreateSchema = z.object({
+  name: z.string().trim().min(1, '工作区名称不能为空').max(120),
+  description: z.string().trim().max(1_000).default(''),
+}).strict()
+
+export const adminMembershipCreateSchema = z.object({
+  workspaceId: z.string().min(1),
+  userId: z.string().min(1),
+  role: platformRoleSchema,
+}).strict()
+
+export const adminMutationResultSchema = z.object({
+  updated: z.boolean().optional(),
+  created: z.boolean().optional(),
+  deleted: z.boolean().optional(),
+}).strict()
 
 export const sessionRecordSchema = z.object({
   id: z.string(),
@@ -159,6 +199,7 @@ export const directToolResultSchema = z.object({
     artifactType: z.string(),
     name: z.string(),
     uri: z.string(),
+    display: artifactDisplaySchema,
     relativePath: z.string().nullable().optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
   })).optional(),
@@ -196,6 +237,11 @@ export type PlatformWorkspace = z.infer<typeof platformWorkspaceSchema>
 export type PlatformMembership = z.infer<typeof platformMembershipSchema>
 export type AuthMe = z.infer<typeof authMeSchema>
 export type AuditEvent = z.infer<typeof auditEventSchema>
+export type AdminMembership = z.infer<typeof adminMembershipSchema>
+export type RbacPolicyRow = z.infer<typeof rbacPolicyRowSchema>
+export type AdminUserPatch = z.infer<typeof adminUserPatchSchema>
+export type AdminWorkspaceCreate = z.infer<typeof adminWorkspaceCreateSchema>
+export type AdminMembershipCreate = z.infer<typeof adminMembershipCreateSchema>
 export type SessionRecord = z.infer<typeof sessionRecordSchema>
 export type MeteorologicalDatasetRecord = z.infer<typeof meteorologicalDatasetRecordSchema>
 export type MeteorologicalJobRecord = z.infer<typeof meteorologicalJobRecordSchema>

@@ -48,6 +48,7 @@ interface LayerPanelProps {
   activeView: LayerPanelView
   visibilityFilter: LayerVisibilityFilter
   referenceLayers: LayerDescriptor[]
+  errorMessage?: string | null
   onSelectLayer: (id: string | null) => void
   onToggleVisibility: (id: string) => void
   onToggleAllVisibility: () => void
@@ -71,6 +72,9 @@ interface LayerPanelProps {
   onToggleReferenceLayerStatus: (layerKey: string, nextStatus: string) => void
   onDeleteReferenceLayer: (layerKey: string) => void
   onRefreshReferenceLayers: () => void
+  sceneManagedLayerKeys: string[]
+  onAddReferenceLayer: (layerKey: string) => void
+  onRemoveReferenceLayer: (layerKey: string) => void
   onClose: () => void
 }
 
@@ -97,6 +101,7 @@ export function LayerPanel({
   activeView,
   visibilityFilter,
   referenceLayers,
+  errorMessage,
   onSelectLayer,
   onToggleVisibility,
   onToggleAllVisibility,
@@ -120,6 +125,9 @@ export function LayerPanel({
   onToggleReferenceLayerStatus,
   onDeleteReferenceLayer,
   onRefreshReferenceLayers,
+  sceneManagedLayerKeys,
+  onAddReferenceLayer,
+  onRemoveReferenceLayer,
   onClose,
 }: LayerPanelProps) {
   const [groupName, setGroupName] = useState('')
@@ -138,7 +146,7 @@ export function LayerPanel({
       <header className="arcgis-layer-panel__titlebar">
         <div>
           <h3>图层管理</h3>
-          <span>{visibleCount}/{totalCount} 个结果图层正在显示 · {referenceLayers.length} 个数据源</span>
+          <span>{visibleCount}/{totalCount} 个地图图层正在显示 · {referenceLayers.length} 个数据源</span>
         </div>
         <div className="arcgis-layer-panel__window-actions">
           <button type="button" aria-label={collapsed ? '展开图层管理面板' : '折叠图层管理面板'} title={collapsed ? '展开' : '折叠'} onClick={() => setCollapsed(current => !current)}>
@@ -155,6 +163,7 @@ export function LayerPanel({
 
       {!collapsed ? (
         <>
+          {errorMessage ? <p className="arcgis-layer-panel__error" role="alert">{errorMessage}</p> : null}
           <div className="arcgis-layer-panel__search-row">
             <button type="button" className="arcgis-layer-panel__filter-button" aria-label="打开图层过滤" onClick={() => setFilterOpen(current => !current)}>
               <Filter size={18} aria-hidden="true" />
@@ -238,6 +247,9 @@ export function LayerPanel({
               onToggleReferenceLayerStatus={onToggleReferenceLayerStatus}
               onDeleteReferenceLayer={onDeleteReferenceLayer}
               onRefreshReferenceLayers={onRefreshReferenceLayers}
+              sceneManagedLayerKeys={sceneManagedLayerKeys}
+              onAddReferenceLayer={onAddReferenceLayer}
+              onRemoveReferenceLayer={onRemoveReferenceLayer}
             />
           ) : null}
 

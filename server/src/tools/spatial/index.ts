@@ -10,23 +10,26 @@
 
 import manifest from './manifest.json' with { type: 'json' }
 import type { ToolProvider } from '../../framework/types.js'
-import type { PostGisRepository } from '../../gis/postgis.js'
+import type { ManagedLayerService } from '../../gis/managedLayers/managedLayerService.js'
 import { createLayerListTool } from '../layerList/layerList.js'
 import { createLayerQueryTool } from '../layerQuery/layerQuery.js'
 import { createSpatialAnalysisTool } from '../spatialAnalysis/spatialAnalysis.js'
 import { createMapExportTool } from '../mapExport/mapExport.js'
 import { createLayerCreateTool } from '../layerCreate/layerCreate.js'
 
-export function createSpatialProvider(postgis: PostGisRepository, deps: { runtimeRoot: string }): ToolProvider {
+export function createSpatialProvider(
+  managedLayers: ManagedLayerService,
+  deps: { runtimeRoot: string },
+): ToolProvider {
   const runtimeRoot = deps.runtimeRoot
   return {
     manifest,
     tools: () => [
-      createLayerListTool(postgis),
-      createLayerQueryTool(postgis),
+      createLayerListTool(managedLayers),
+      createLayerQueryTool(managedLayers),
       createSpatialAnalysisTool(),
       createMapExportTool(runtimeRoot),
-      createLayerCreateTool(postgis),
+      createLayerCreateTool(managedLayers),
     ],
   }
 }

@@ -10,7 +10,7 @@
 
 import { z } from 'zod'
 
-import { PostgresPlatformStore } from '../store/platformStore.js'
+import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import type { AuthContext } from '../security/types.js'
 import type { SecurityServices } from '../security/routes.js'
 import type { WsCommandRegistry } from './commandRegistry.js'
@@ -44,12 +44,12 @@ export function registerWorkspaceCommands(registry: WsCommandRegistry): void {
 }
 
 async function resolveBootstrapSession(
-  store: PostgresPlatformStore,
+  store: PlatformPersistenceFacade,
   auth: AuthContext,
   security: SecurityServices,
   requestedSessionId: string | null,
 ) {
-  if (!requestedSessionId || requestedSessionId === PostgresPlatformStore.DEFAULT_SESSION_ID) {
+  if (!requestedSessionId || requestedSessionId === PlatformPersistenceFacade.DEFAULT_SESSION_ID) {
     return store.getOrCreateUserDefaultSession({ workspaceId: auth.defaultWorkspaceId, userId: auth.userId })
   }
   const session = store.getSession(requestedSessionId)

@@ -31,6 +31,7 @@ export const clientMsgType = z.enum([
   'memory:instructions:list',
   'file:list', 'file:delete',
   'layer:list', 'layer:update', 'layer:delete',
+  'map-scene:update',
   'workflow:list', 'workflow:validate', 'workflow:create', 'workflow:update',
   'workflow:publish', 'workflow:disable', 'workflow:history',
   'workflow:start', 'workflow:cancel', 'workflow:run:get', 'workflow:respond-approval',
@@ -64,6 +65,7 @@ export function failure(id: string | null, code: string, message: string): strin
 export function push(
   type: 'run.item' | 'run.event' | 'run.snapshot'
     | 'thread.entry' | 'thread.updated' | 'thread.compacted' | 'thread.memory.updated'
+    | 'map.scene.updated'
     | 'keepalive',
   data: unknown,
 ): string {

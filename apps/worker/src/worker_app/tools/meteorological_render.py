@@ -16,16 +16,22 @@ def execute(args: dict[str, Any], context: WorkerToolContext) -> dict[str, Any]:
 
     source = input_path(args, context)
     output = output_path(args, context)
+    cog_output = output_path(args, context, key="output_cog_relative_path")
     result = MeteorologicalDataService().render_heatmap(
         source,
         output_path=output,
+        cog_output_path=cog_output,
         filename=input_filename(args, source),
         variable=optional_text(args, "variable"),
         time_index=optional_int(args, "time_index"),
         level_index=optional_int(args, "level_index"),
         bbox=optional_number_list(args, "bbox"),
     )
-    return {**result, "outputRelativePath": relative_runtime_path(output, context)}
+    return {
+        **result,
+        "outputRelativePath": relative_runtime_path(output, context),
+        "outputCogRelativePath": relative_runtime_path(cog_output, context),
+    }
 
 
 def register(registry: WorkerToolRegistry) -> None:

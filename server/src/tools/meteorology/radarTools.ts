@@ -24,10 +24,13 @@ import {
   assertSuffix,
   collectionFiles,
   datasetValue,
+  downloadDisplay,
   isRecord,
   mergeArtifactMetadata,
+  miniAppDisplay,
   NETCDF_SUFFIXES,
   RADAR_PRODUCTS,
+  rasterImageDisplay,
   refObject,
   requiredRefKind,
   result,
@@ -138,22 +141,16 @@ async function renderRadarMosaic(args: Record<string, unknown>, ctx: ToolContext
   mergeArtifactMetadata(png, {
     ...worker.payload,
     previewRole: 'radar_mosaic',
-    displaySurfaces: ['mini_app', 'download'],
-    primarySurface: 'mini_app',
-  })
+  }, miniAppDisplay())
   mergeArtifactMetadata(mapPng, {
     ...worker.payload,
     previewRole: 'radar_mosaic_overlay',
     previewArtifactId: png.artifactId,
-    displaySurfaces: ['map', 'download'],
-    primarySurface: 'map',
-  })
+  }, rasterImageDisplay(mapPng, worker.payload))
   mergeArtifactMetadata(npz, {
     ...worker.payload,
     dataRole: 'radar_mosaic_npz',
-    displaySurfaces: ['download'],
-    primarySurface: 'download',
-  })
+  }, downloadDisplay())
   const ref: ValueRef = {
     refId: makeId('ref'),
     kind: 'radar_mosaic_result',
@@ -199,17 +196,13 @@ async function compareRadarMosaicReference(args: Record<string, unknown>, ctx: T
     previewRole: 'radar_reference_comparison',
     baseImageArtifactId: referencePng.artifactId,
     overlayImageArtifactId: comparison.artifactId,
-    displaySurfaces: ['mini_app', 'download'],
-    primarySurface: 'mini_app',
-  })
+  }, miniAppDisplay())
   mergeArtifactMetadata(referencePng, {
     ...worker.payload,
     previewRole: 'radar_reference_image',
     baseImageArtifactId: referencePng.artifactId,
     overlayImageArtifactId: comparison.artifactId,
-    displaySurfaces: ['mini_app', 'download'],
-    primarySurface: 'mini_app',
-  })
+  }, miniAppDisplay())
   const ref: ValueRef = {
     refId: makeId('ref'),
     kind: 'radar_mosaic_comparison',

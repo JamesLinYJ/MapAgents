@@ -227,8 +227,8 @@ export function DetailConfigPanel({
             </strong>
           </div>
           <div className="dc-keyvalue-row">
-            <span>会话日志</span>
-            <strong>{systemComponents?.conversationStoreRoot ? '已启用' : '载入中'}</strong>
+            <span>诊断载荷</span>
+            <strong>{systemComponents?.payloadStoreRoot ? '已启用' : '载入中'}</strong>
           </div>
         </div>
       </section>

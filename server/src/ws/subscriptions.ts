@@ -15,13 +15,13 @@
 
 import { WebSocket } from 'ws'
 
-import type { PostgresPlatformStore } from '../store/platformStore.js'
+import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import { push } from './protocol.js'
 
 export function subscribeToRun(
   ws: WebSocket,
   runId: string,
-  store: PostgresPlatformStore,
+  store: PlatformPersistenceFacade,
   subscriptions: Map<string, () => void>,
 ): void {
   store.getRun(runId)
@@ -39,7 +39,7 @@ export function subscribeToRun(
 export function subscribeToThread(
   ws: WebSocket,
   threadId: string,
-  store: PostgresPlatformStore,
+  store: PlatformPersistenceFacade,
   subscriptions: Map<string, () => void>,
 ): void {
   store.getThread(threadId)
@@ -49,20 +49,22 @@ export function subscribeToThread(
   const unsubscribeUpdate = store.threadUpdateBus.subscribe(threadId, update => sendWs(ws, push('thread.updated', update)))
   const unsubscribeCompact = store.threadCompactionBus.subscribe(threadId, record => sendWs(ws, push('thread.compacted', record)))
   const unsubscribeMemory = store.threadMemoryBus.subscribe(threadId, memory => sendWs(ws, push('thread.memory.updated', memory)))
+  const unsubscribeMapScene = store.mapSceneBus.subscribe(threadId, scene => sendWs(ws, push('map.scene.updated', scene)))
   subscriptions.set(key, () => {
     unsubscribeEntry()
     unsubscribeUpdate()
     unsubscribeCompact()
     unsubscribeMemory()
+    unsubscribeMapScene()
   })
 }
 
-export async function snapshotRun(runId: string, store: PostgresPlatformStore) {
+export async function snapshotRun(runId: string, store: PlatformPersistenceFacade) {
   const [items, events] = await Promise.all([store.listItems(runId), store.listEvents(runId)])
   return { run: store.getRun(runId), items, events }
 }
 
-export async function sendRunSnapshot(ws: WebSocket, runId: string, store: PostgresPlatformStore): Promise<void> {
+export async function sendRunSnapshot(ws: WebSocket, runId: string, store: PlatformPersistenceFacade): Promise<void> {
   sendWs(ws, push('run.snapshot', await snapshotRun(runId, store)))
 }
 

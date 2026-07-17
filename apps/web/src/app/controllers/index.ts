@@ -10,7 +10,7 @@
 
 export * from './connectionController'
 export * from './navigationController'
-export * from './resourceController'
+export * from './workspaceResourceComposition'
 export * from './runController'
 export * from './sessionThreadController'
 export * from './toolingController'

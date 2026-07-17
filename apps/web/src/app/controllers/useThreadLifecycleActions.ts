@@ -42,7 +42,7 @@ export interface ThreadLifecycleOptions {
   setActiveNav: (nav: PrimaryNav) => void
   setActiveSidebarItem: (item: SidebarItemId) => void
   setActiveThreadId: (threadId?: string) => void
-  setCanonicalThreadItems: (value: ListUpdater<ConversationItem>) => void
+  setCanonicalThreadItems: (threadId: string, value: ListUpdater<ConversationItem>) => void
   setPanelMode: (mode: PanelMode) => void
   setQuery: (query: string) => void
   setThreadRuns: (value: ListUpdater<AnalysisRun>) => void
@@ -116,7 +116,7 @@ export function useThreadLifecycleActions(options: ThreadLifecycleOptions) {
       setThreadRuns(runs)
       if (threadPayload.latestRun?.id) {
         await hydrateRunState(threadPayload.latestRun.id)
-        setCanonicalThreadItems(canonicalItems)
+        setCanonicalThreadItems(threadPayload.thread.id, canonicalItems)
         if (sessionId) {
           syncUrl(sessionId, threadPayload.latestRun.id, threadPayload.thread.id)
         }
@@ -125,7 +125,7 @@ export function useThreadLifecycleActions(options: ThreadLifecycleOptions) {
       clearActiveRunState()
       setThreadRuns(runs)
       setActiveThreadId(threadPayload.thread.id)
-      setCanonicalThreadItems(canonicalItems)
+      setCanonicalThreadItems(threadPayload.thread.id, canonicalItems)
       if (sessionId) syncUrl(sessionId, undefined, threadPayload.thread.id)
     } catch (error) {
       setUiError(formatUiError(error, '历史记录加载失败，请稍后重试。'))
@@ -189,7 +189,7 @@ export function useThreadLifecycleActions(options: ThreadLifecycleOptions) {
       clearActiveRunState()
       setActiveThreadId(forked.id)
       setThreadRuns([])
-      setCanonicalThreadItems(transcriptEntriesToConversationItems(history.entries))
+      setCanonicalThreadItems(forked.id, transcriptEntriesToConversationItems(history.entries))
       syncUrl(sessionId, undefined, forked.id)
     } catch (error) {
       setUiError(formatUiError(error, '消息分支创建失败。'))

@@ -1,0 +1,39 @@
+// +-------------------------------------------------------------------------
+//
+//   GeoForge 地理智能平台 - 托管图层导入服务
+//
+//   文件:       managedLayerImportService.ts
+//   日期:       2026年07月16日
+//   作者:       OpenAI Codex
+// --------------------------------------------------------------------------
+
+import type { Database } from '../../db/connection.js'
+import type { LayerDescriptor } from '../../schemas/types.js'
+import { ManagedFeatureRepository } from './managedFeatureRepository.js'
+import { prepareManagedLayerImport } from './managedLayerGeometry.js'
+import { ManagedLayerRepository } from './managedLayerRepository.js'
+import { ManagedLayerSceneProjection } from './managedLayerSceneProjection.js'
+import type { ImportGeoJsonLayerInput } from './managedLayerTypes.js'
+
+/** 图层元数据、空间要素和场景挂载的原子导入用例。 */
+export class ManagedLayerImportService {
+  constructor(
+    private readonly db: Database,
+    private readonly layers: ManagedLayerRepository,
+    private readonly features: ManagedFeatureRepository,
+    private readonly scenes: ManagedLayerSceneProjection,
+  ) {}
+
+  async importGeoJsonLayer(input: ImportGeoJsonLayerInput): Promise<LayerDescriptor> {
+    const prepared = prepareManagedLayerImport(input)
+    const now = new Date()
+    await this.db.transaction(async tx => {
+      await this.layers.upsertImportedLayer(tx, prepared, now)
+      await this.features.replaceFeatures(tx, prepared.mapLayerId, prepared.features, now)
+      await this.scenes.attach(tx, prepared, now)
+    })
+    const layer = await this.layers.getLayer(prepared.layerKey)
+    if (!layer) throw new Error(`图层 '${prepared.layerKey}' 导入后无法读取`)
+    return layer
+  }
+}

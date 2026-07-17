@@ -14,7 +14,7 @@ import type { ToolContext, ToolProvider } from './types.js'
 import { parametersForAgentsSdk, parametersFromJsonSchema, stripNullObjectValues } from './schema.js'
 import { validateToolProvider } from './validation.js'
 import { parseEnv } from './env.js'
-import type { PostGisRepository } from '../gis/postgis.js'
+import type { ManagedLayerService } from '../gis/managedLayers/managedLayerService.js'
 import chartProvider from '../tools/chart/index.js'
 import geocodeProvider from '../tools/geocode/index.js'
 import { createMediaProvider } from '../tools/media/index.js'
@@ -90,13 +90,23 @@ describe('ToolRegistry contract', () => {
     await expect(registry.execute('example', {}, context())).rejects.toThrow('真实失败')
   })
 
-  it('requires every builtin tool to expose a Chinese tool prompt contract', () => {
-    // 工具 prompt 是 Agent 运行时可见的工具级契约；这里覆盖所有内置 Provider，
-    // 防止新增工具绕过中文说明、valueRef 边界和 approval 规则。
+  it('rejects tool definitions without a Chinese display label', () => {
+    const registry = new ToolRegistry()
+    const invalidProvider = provider()
+    const manifestTool = invalidProvider.manifest.tools[0]
+    if (!manifestTool) throw new Error('测试 Provider 缺少工具定义')
+    manifestTool.label = 'Example Tool'
+
+    expect(() => registry.register(invalidProvider)).toThrow('必须包含中文展示名称')
+  })
+
+  it('requires every builtin tool to expose Chinese display and prompt contracts', () => {
+    // 工具 label 面向用户，prompt 面向 Agent；两者都是工具注册边界的一部分。
     const providers = builtinProviders()
     for (const currentProvider of providers) {
       expect(() => validateToolProvider(currentProvider)).not.toThrow()
       for (const tool of currentProvider.tools()) {
+        expect(tool.label, `${tool.name} label`).toMatch(/[\u3400-\u9fff]/u)
         expect(tool.prompt.trim(), `${tool.name} prompt`).toBeTruthy()
         expect(tool.prompt, `${tool.name} prompt`).toMatch(/[\u4e00-\u9fff]/)
       }
@@ -106,7 +116,7 @@ describe('ToolRegistry contract', () => {
   it('rejects unsupported artifact display surfaces at execution boundary', async () => {
     const registry = new ToolRegistry()
     registry.register(artifactProvider({ displaySurfaces: ['miniapp'] }))
-    await expect(registry.execute('artifact_example', {}, context())).rejects.toThrow('不支持的展示面')
+    await expect(registry.execute('artifact_example', {}, context())).rejects.toThrow('展示契约无效')
   })
 
   it('hard-fails unknown value references', () => {
@@ -166,7 +176,7 @@ function builtinProviders(): ToolProvider[] {
     BETTER_AUTH_SECRET: 'test-secret-test-secret-test-secret-1234',
     ENABLED_TOOL_PROVIDERS: 'geo-platform-spatial',
   })
-  const fakePostgis = {} as unknown as PostGisRepository
+  const managedLayers = {} as unknown as ManagedLayerService
   return [
     chartProvider as ToolProvider,
     geocodeProvider as ToolProvider,
@@ -175,7 +185,7 @@ function builtinProviders(): ToolProvider[] {
     planProvider as ToolProvider,
     developerProvider as ToolProvider,
     createMeteorologyProvider(env),
-    createSpatialProvider(fakePostgis, { runtimeRoot: env.RUNTIME_ROOT }),
+    createSpatialProvider(managedLayers, { runtimeRoot: env.RUNTIME_ROOT }),
     createRoutingProvider({
       valhallaBaseUrl: env.VALHALLA_BASE_URL,
       timeoutMs: env.ROUTING_TIMEOUT_MS,
@@ -235,7 +245,8 @@ function artifactProvider(metadata: Record<string, unknown>): ToolProvider {
           name: '预览图',
           uri: '/api/v1/results/artifact_1/file',
           relativePath: 'artifacts/run_1/artifact_1.png',
-          metadata,
+          display: metadata,
+          metadata: { relativePath: 'artifacts/run_1/artifact_1.png' },
         }],
       }),
     }],

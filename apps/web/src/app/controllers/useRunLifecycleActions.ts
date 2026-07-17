@@ -34,7 +34,9 @@ export interface RunLifecycleOptions {
   acceptRun: (run: AnalysisRun) => void
   cancelRun: (runId: string) => Promise<AnalysisRun>
   clearArtifacts: () => void
+  clearCanonicalThreadItems: () => void
   hydrateRunState: (runId: string) => Promise<AnalysisRun>
+  refreshCanonicalThreadHistory: (threadId: string) => Promise<unknown>
   refreshSessionHistory: (sessionId: string) => Promise<unknown>
   respondDecision: (
     runId: string,
@@ -46,7 +48,7 @@ export interface RunLifecycleOptions {
   setActiveNav: (nav: PrimaryNav) => void
   setActiveThreadId: (threadId?: string) => void
   setActiveSidebarItem: (item: SidebarItemId) => void
-  setCanonicalThreadItems: (value: ListUpdater<ConversationItem>) => void
+  setCanonicalThreadItems: (threadId: string, value: ListUpdater<ConversationItem>) => void
   setModel: (model: string) => void
   setPanelMode: (mode: PanelMode) => void
   setProvider: (provider: string) => void
@@ -86,7 +88,9 @@ export function useRunLifecycleActions(options: RunLifecycleOptions) {
     acceptRun,
     cancelRun,
     clearArtifacts,
+    clearCanonicalThreadItems,
     hydrateRunState,
+    refreshCanonicalThreadHistory,
     refreshSessionHistory,
     respondDecision,
     steerRun,
@@ -152,9 +156,9 @@ export function useRunLifecycleActions(options: RunLifecycleOptions) {
       if (forceNewThread) {
         clearArtifacts()
         setToolRunResult(null)
-        setCanonicalThreadItems([])
+        clearCanonicalThreadItems()
       } else if (targetThreadId) {
-        setCanonicalThreadItems(current => projectTimeline(
+        setCanonicalThreadItems(targetThreadId, current => projectTimeline(
           current,
           items.filter(item => item.status !== 'running' && [
             'message', 'function_call', 'function_call_output',
@@ -187,6 +191,7 @@ export function useRunLifecycleActions(options: RunLifecycleOptions) {
   }, [
     acceptRun,
     clearArtifacts,
+    clearCanonicalThreadItems,
     currentThreadId,
     items,
     model,
@@ -248,11 +253,14 @@ export function useRunLifecycleActions(options: RunLifecycleOptions) {
     text?: string | null,
   ) => {
     if (!run?.id) return
+    let decisionSubmitted = false
     try {
       setUiError(undefined)
       startRun()
       const nextRun = await respondDecision(run.id, decisionId, optionId, text)
+      decisionSubmitted = true
       const nextThreadId = nextRun.threadId ?? currentThreadId
+      if (nextThreadId) await refreshCanonicalThreadHistory(nextThreadId)
       startTransition(() => {
         acceptRun(nextRun)
         setProvider(nextRun.modelProvider ?? provider)
@@ -268,7 +276,12 @@ export function useRunLifecycleActions(options: RunLifecycleOptions) {
       syncUrl(nextRun.sessionId, nextRun.id, nextThreadId ?? undefined)
       await hydrateRunState(nextRun.id)
     } catch (error) {
-      setUiError(formatUiError(error, '决策提交失败，请重试。'))
+      if (decisionSubmitted) {
+        reportNonBlockingError('hydrateConversation:respondDecision', error)
+        setUiError('决策已经提交，但完整对话历史恢复失败。请刷新页面重新加载记录，不要重复提交决策。')
+      } else {
+        setUiError(formatUiError(error, '决策提交失败，请重试。'))
+      }
       stopSubmitting()
     }
   }, [
@@ -277,6 +290,7 @@ export function useRunLifecycleActions(options: RunLifecycleOptions) {
     hydrateRunState,
     model,
     provider,
+    refreshCanonicalThreadHistory,
     refreshSessionHistory,
     respondDecision,
     run?.id,

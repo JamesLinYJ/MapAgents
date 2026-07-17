@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 export interface MapFocusRequest {
-  artifactId?: string
+  mapLayerId?: string
   nonce: number
 }
 
@@ -23,9 +23,9 @@ export function useWorkspaceMapActivation(pathname: string) {
     setIsMapActivated(true)
   }, [])
 
-  const requestMapFocus = useCallback((artifactId?: string) => {
+  const requestMapFocus = useCallback((mapLayerId?: string) => {
     setIsMapActivated(true)
-    setMapFocusRequest(current => ({ artifactId, nonce: (current?.nonce ?? 0) + 1 }))
+    setMapFocusRequest(current => ({ mapLayerId, nonce: (current?.nonce ?? 0) + 1 }))
   }, [])
 
   useEffect(() => {

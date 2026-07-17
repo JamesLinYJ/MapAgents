@@ -96,6 +96,17 @@
   color: #475467;
 }
 
+.arcgis-layer-panel__error {
+  margin: 10px 16px 0;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--danger, #b42318) 30%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger, #b42318) 7%, white);
+  color: var(--danger, #8f1d16);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .arcgis-layer-panel__search {
   display: flex;
   min-width: 0;
@@ -407,6 +418,12 @@
   position: relative;
   cursor: pointer;
   overflow: hidden;
+}
+
+.arcgis-layer-panel__file-action.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
+  pointer-events: none;
 }
 
 .arcgis-layer-panel__file-action input,

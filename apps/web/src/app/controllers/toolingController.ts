@@ -94,10 +94,13 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
     setBackgroundTasks(background.tasks)
   }, [])
 
+  const refreshToolDescriptors = useCallback(async () => {
+    setAvailableTools(await listTools())
+  }, [])
+
   const refresh = useCallback(async () => {
-    const [components, tools, catalogEntries, loadedRuntimeConfig, workflows, scheduled, background, usage] = await Promise.allSettled([
+    const [components, catalogEntries, loadedRuntimeConfig, workflows, scheduled, background, usage] = await Promise.allSettled([
       getSystemComponents(),
-      listTools(),
       listToolCatalogEntries(),
       getRuntimeConfig(),
       listWorkflows(),
@@ -107,7 +110,6 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
     ])
     startTransition(() => {
       if (components.status === 'fulfilled') setSystemComponents(components.value)
-      if (tools.status === 'fulfilled') setAvailableTools(tools.value ?? [])
       if (catalogEntries.status === 'fulfilled') setToolCatalogEntries(catalogEntries.value ?? [])
       if (loadedRuntimeConfig.status === 'fulfilled') setRuntimeConfig(loadedRuntimeConfig.value)
       if (workflows.status === 'fulfilled') {
@@ -122,12 +124,17 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
       if (background.status === 'fulfilled') setBackgroundTasks(background.value.tasks)
       if (usage.status === 'fulfilled') setTokenUsageSummary(usage.value)
     })
-    const rejected = [components, tools, catalogEntries, loadedRuntimeConfig, workflows, scheduled, background, usage].find(result => result.status === 'rejected')
+    const rejected = [components, catalogEntries, loadedRuntimeConfig, workflows, scheduled, background, usage].find(result => result.status === 'rejected')
     if (rejected?.status === 'rejected') throw rejected.reason
   }, [])
 
   useEffect(() => {
-    // 工具、配置和系统状态只在对应控制面可见时加载，不能占用首页关键路径。
+    // 对话时间线始终需要轻量工具描述来显示中文名称；完整诊断数据仍按需加载。
+    void refreshToolDescriptors().catch(error => setUiError(formatUiError(error, '工具名称加载失败。')))
+  }, [refreshToolDescriptors, setUiError])
+
+  useEffect(() => {
+    // 配置、Workflow 和系统状态只在对应控制面可见时加载，不能占用首页关键路径。
     if (!loadDiagnostics) return
     void refresh().catch(error => setUiError(formatUiError(error, '部分系统状态加载失败。')))
   }, [loadDiagnostics, refresh, setUiError])

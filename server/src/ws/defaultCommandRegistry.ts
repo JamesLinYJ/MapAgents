@@ -12,6 +12,7 @@ import { WsCommandRegistry } from './commandRegistry.js'
 import { registerControlCommands } from './controlCommands.js'
 import { registerCoreCommands } from './coreCommands.js'
 import { registerMemoryCommands } from './memoryCommand.js'
+import { registerMapCommands } from './mapCommands.js'
 import { registerRunCommands } from './runCommands.js'
 import { registerWsAuthorizationPolicies } from './security.js'
 import { registerThreadCommands } from './threadCommands.js'
@@ -32,6 +33,7 @@ export function createDefaultCommandRegistry(): WsCommandRegistry {
   registerControlCommands(registry)
   registerRunCommands(registry)
   registerMemoryCommands(registry)
+  registerMapCommands(registry)
   registerToolCommands(registry)
   registerUsageCommands(registry)
   registerWorkflowCommands(registry)

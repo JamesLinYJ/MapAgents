@@ -264,7 +264,7 @@ function WorkflowStudioInner({
             <div className="workflow-tool-list">
               {filteredTools.map(tool => (
                 <button type="button" draggable={!readOnly} disabled={readOnly} key={tool.name} onDragStart={event => { event.dataTransfer.setData('application/geoforge-tool', tool.name); event.dataTransfer.effectAllowed = 'copy' }} onClick={() => addNode('tool', tool)}>
-                  <Wrench size={14} /><span><strong>{tool.label}</strong><small>{tool.group} · {tool.name}</small></span>
+                  <Wrench size={14} /><span><strong>{tool.label}</strong><small>{tool.group} · {tool.description}</small></span>
                 </button>
               ))}
             </div>

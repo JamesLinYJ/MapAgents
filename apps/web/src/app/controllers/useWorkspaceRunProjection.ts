@@ -6,7 +6,7 @@
 // --------------------------------------------------------------------------
 
 import { startTransition, useCallback } from 'react'
-import type { AnalysisRun, ConversationItem } from '@geo-agent-platform/shared-types'
+import type { AnalysisRun } from '@geo-agent-platform/shared-types'
 
 import { pickPreferredArtifactId } from '../../features/artifacts/artifactSelection'
 import { mergeThreadRuns } from '../derivedState'
@@ -15,10 +15,10 @@ type ListUpdater<T> = T[] | ((current: T[]) => T[])
 
 export interface WorkspaceRunProjectionOptions {
   clearArtifacts: () => void
+  clearCanonicalThreadItems: () => void
   clearRun: () => void
   hydrateRun: (runId: string) => Promise<AnalysisRun>
   setActiveThreadId: (threadId?: string) => void
-  setCanonicalThreadItems: (value: ListUpdater<ConversationItem>) => void
   setModel: (model: string) => void
   setProvider: (provider: string) => void
   setSelectedArtifactId: (artifactId?: string) => void
@@ -29,10 +29,10 @@ export interface WorkspaceRunProjectionOptions {
 
 export function useWorkspaceRunProjection({
   clearArtifacts,
+  clearCanonicalThreadItems,
   clearRun,
   hydrateRun,
   setActiveThreadId,
-  setCanonicalThreadItems,
   setModel,
   setProvider,
   setSelectedArtifactId,
@@ -43,15 +43,15 @@ export function useWorkspaceRunProjection({
   const clearActiveRunState = useCallback(() => {
     clearRun()
     clearArtifacts()
-    setCanonicalThreadItems([])
+    clearCanonicalThreadItems()
     setThreadRuns([])
     setToolRunResult(null)
     setActiveThreadId(undefined)
   }, [
     clearArtifacts,
+    clearCanonicalThreadItems,
     clearRun,
     setActiveThreadId,
-    setCanonicalThreadItems,
     setThreadRuns,
     setToolRunResult,
   ])

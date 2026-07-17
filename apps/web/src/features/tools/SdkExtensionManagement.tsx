@@ -30,7 +30,7 @@ import {
 } from '@geo-agent-platform/shared-types'
 
 import { StatusPill } from '../../shared/components/StatusPill'
-import type { MemoryEntry } from '../conversation/types'
+import type { MemoryEntry } from '../memory/types'
 
 export type SdkManagementView = 'mcp' | 'skills' | 'memory'
 
@@ -465,7 +465,9 @@ export function SdkExtensionManagement({
             <div className="panel__section sdk-memory-list">
               {memories.length ? memories.map(memory => (
                 <article key={`${memory.type}:${memory.name}`} className="sdk-memory-card">
-                  <span className={`cc-memory-item__type cc-memory-item__type--${memory.type}`}>{memory.type}</span>
+                  <span className={`sdk-memory-card__type sdk-memory-card__type--${memory.type}`}>
+                    {memoryTypeLabel(memory.type)}
+                  </span>
                   <div>
                     <strong>{memory.name}</strong>
                     <p>{memory.description}</p>
@@ -481,6 +483,15 @@ export function SdkExtensionManagement({
       ) : null}
     </main>
   )
+}
+
+function memoryTypeLabel(type: MemoryEntry['type']): string {
+  return {
+    user: '用户',
+    feedback: '反馈',
+    project: '项目',
+    reference: '参考',
+  }[type]
 }
 
 function CapabilityStat({

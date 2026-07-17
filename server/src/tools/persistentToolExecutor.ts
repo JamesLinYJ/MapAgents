@@ -7,7 +7,7 @@ import type { ToolContext, ToolResult } from '../framework/types.js'
 import type { ModelAdapterRegistry } from '../model/registry.js'
 import type { AgentRuntimeConfig } from '../schemas/types.js'
 import type { AuthContext } from '../security/types.js'
-import type { PostgresPlatformStore } from '../store/platformStore.js'
+import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 import { persistToolExecutionResult, resolveRuntimeValueRef } from './resultPersistence.js'
 import { resolveRuntimeConfig } from '../ws/runtimeConfig.js'
@@ -23,7 +23,7 @@ export interface PersistedToolExecutionInput {
 export async function executePersistedTool(
   input: PersistedToolExecutionInput,
   deps: {
-    store: PostgresPlatformStore
+    store: PlatformPersistenceFacade
     registry: ToolRegistry
     modelRegistry: ModelAdapterRegistry
     defaultRuntimeConfig?: AgentRuntimeConfig | undefined
@@ -77,32 +77,36 @@ export async function executePersistedTool(
   }
 
   const callId = makeId('call')
+  const tool = deps.registry.get(input.toolName)
+  if (!tool) throw new Error(`工具 '${input.toolName}' 未注册`)
   const itemSink = new ItemSink(item => deps.store.appendItem(item), run.id, run.threadId)
   const callItem = itemSink.startItem('function_call', {
     name: input.toolName,
     callId,
     arguments: JSON.stringify(input.args),
+    metadata: { toolLabel: tool.label },
   })
   try {
     const result = await deps.registry.execute(input.toolName, input.args, context)
-    await persistToolExecutionResult(deps.store, run.id, input.toolName, input.args, result)
+    await persistToolExecutionResult(deps.store, run.id, input.toolName, tool.label, input.args, result)
     itemSink.completeItem(callItem.itemId, {
       callId,
       name: input.toolName,
       output: JSON.stringify(result.payload),
-      metadata: { resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [] },
+      metadata: { toolLabel: tool.label, resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [] },
     })
     const outputItem = itemSink.startItem('function_call_output', {
       callId,
       name: input.toolName,
       role: 'tool',
-      metadata: { resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [] },
+      metadata: { toolLabel: tool.label, resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [] },
     })
     itemSink.completeItem(outputItem.itemId, {
       callId,
       name: input.toolName,
       output: JSON.stringify(result.payload),
       metadata: {
+        toolLabel: tool.label,
         resultId: result.resultId,
         source: result.source,
         valueRefs: result.valueRefs ?? [],
@@ -118,6 +122,7 @@ export async function executePersistedTool(
       name: input.toolName,
       body: error instanceof Error ? error.message : '工具执行失败。',
       isError: true,
+      metadata: { toolLabel: tool.label },
     })
     await Promise.allSettled(pendingLogWrites)
     await itemSink.flush()

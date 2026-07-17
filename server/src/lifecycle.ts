@@ -12,13 +12,13 @@ import type { Server } from 'node:http'
 import type { WebSocketServer } from 'ws'
 import type { Database } from './db/connection.js'
 import type { ApplicationInstanceLock } from './db/applicationInstanceLock.js'
-import type { PostgresPlatformStore } from './store/platformStore.js'
+import type { PlatformPersistenceFacade } from './store/platformPersistenceFacade.js'
 import { errorLogPayload, logger } from './observability/logger.js'
 
 interface LifecycleOptions {
   server: Server
   wsServer: WebSocketServer
-  store: PostgresPlatformStore
+  store: PlatformPersistenceFacade
   db: Database
   instanceLock: ApplicationInstanceLock
   onShutdownStart: () => void

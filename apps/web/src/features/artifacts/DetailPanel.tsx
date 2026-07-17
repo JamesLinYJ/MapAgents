@@ -91,6 +91,7 @@ export interface DetailPanelProps {
   layerSelectedNode?: LayerTreeNode | undefined
   layerActiveView: LayerPanelView
   layerVisibilityFilter: LayerVisibilityFilter
+  layerOperationError?: string | null
   onLayerSelect: (id: string | null) => void
   onLayerToggleVisibility: (id: string) => void
   onLayerToggleAllVisibility: () => void
@@ -109,6 +110,9 @@ export interface DetailPanelProps {
   onLayerSetVisibilityFilter: (filter: LayerVisibilityFilter) => void
   onLayerSetLabelEnabled: (id: string, enabled: boolean) => void
   onLayerSetLabelField: (id: string, fieldName: string) => void
+  layerSceneManagedLayerKeys: string[]
+  onLayerAddReference: (layerKey: string) => void
+  onLayerRemoveReference: (layerKey: string) => void
   // 统一文件管理
   allFiles?: import('../../api/client').FileEntry[]
   onUploadFile?: (file: File) => void
@@ -161,6 +165,7 @@ export const DetailPanel = memo(function DetailPanel({
   layerSelectedNode,
   layerActiveView,
   layerVisibilityFilter,
+  layerOperationError,
   onLayerSelect,
   onLayerToggleVisibility,
   onLayerToggleAllVisibility,
@@ -179,6 +184,9 @@ export const DetailPanel = memo(function DetailPanel({
   onLayerSetVisibilityFilter,
   onLayerSetLabelEnabled,
   onLayerSetLabelField,
+  layerSceneManagedLayerKeys,
+  onLayerAddReference,
+  onLayerRemoveReference,
   // 统一文件管理
   allFiles,
   onUploadFile,
@@ -321,6 +329,7 @@ export const DetailPanel = memo(function DetailPanel({
           activeView={layerActiveView}
           visibilityFilter={layerVisibilityFilter}
           referenceLayers={layers}
+          errorMessage={layerOperationError}
           onSelectLayer={onLayerSelect}
           onToggleVisibility={onLayerToggleVisibility}
           onToggleAllVisibility={onLayerToggleAllVisibility}
@@ -344,6 +353,9 @@ export const DetailPanel = memo(function DetailPanel({
           onToggleReferenceLayerStatus={onToggleLayerStatus}
           onDeleteReferenceLayer={onDeleteLayer}
           onRefreshReferenceLayers={onRefreshManagedLayers}
+          sceneManagedLayerKeys={layerSceneManagedLayerKeys}
+          onAddReferenceLayer={onLayerAddReference}
+          onRemoveReferenceLayer={onLayerRemoveReference}
           onClose={onCloseLayerManager}
         />
       ) : null}

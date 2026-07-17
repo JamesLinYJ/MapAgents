@@ -569,7 +569,10 @@ def diagnose_movement(centroids: list[dict[str, float | int]]) -> dict[str, Any]
     return {"available": True, "direction": direction, "distanceKm": round(distance_km, 2), "from": first, "to": last}
 
 
-def build_nowcast_map_candidates(sequence: MeteorologicalSequence, region_summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_nowcast_map_candidates(
+    sequence: MeteorologicalSequence,
+    region_summaries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     latest = sequence.datasets[-1]
     candidates.append(_map_candidate(sequence, latest, "最新时次"))
@@ -606,7 +609,11 @@ def select_region_for_question(regions: list[dict[str, Any]], question: str) -> 
     return None
 
 
-def format_diagnosis_answer(label: str, diagnosis: dict[str, Any], movement: dict[str, Any]) -> str:
+def format_diagnosis_answer(
+    label: str,
+    diagnosis: dict[str, Any],
+    movement: dict[str, Any],
+) -> str:
     if not diagnosis.get("hasRain"):
         return "未来3小时不会下雨，您可以放心出门。"
     onset = diagnosis.get("onsetLeadMinutes")

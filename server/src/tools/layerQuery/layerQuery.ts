@@ -9,13 +9,13 @@
 // --------------------------------------------------------------------------
 import { makeId } from '../../utils/ids.js';
 import type { ToolDef } from '../../framework/types.js';
-import type { PostGisRepository } from '../../gis/postgis.js';
+import type { ManagedLayerService } from '../../gis/managedLayers/managedLayerService.js';
 import type { GeoJsonFeatureCollection } from '../../gis/geojson.js';
 import { QUERY_LAYER_PROMPT } from '../spatial/prompts.js';
 
 type BBox = [number, number, number, number];
 
-export function createLayerQueryTool(postgis: PostGisRepository): ToolDef {
+export function createLayerQueryTool(managedLayers: ManagedLayerService): ToolDef {
     return {
         name: 'query_layer',
         label: '查询图层',
@@ -40,8 +40,8 @@ export function createLayerQueryTool(postgis: PostGisRepository): ToolDef {
             const bbox = parseBbox(args.bbox);
             const limit = typeof args.limit === 'number' ? args.limit : 100;
             const selectedProperties = Array.isArray(args.properties) ? new Set(args.properties.map(String)) : null;
-            const rows = await postgis.queryFeatures(layerKey, bbox, limit);
-            const totalCount = await postgis.featureCount(layerKey);
+            const rows = await managedLayers.queryFeatures(layerKey, bbox, limit);
+            const totalCount = await managedLayers.featureCount(layerKey);
             const featureCollection: GeoJsonFeatureCollection = {
                 type: 'FeatureCollection',
                 features: rows.map(row => ({

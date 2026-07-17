@@ -12,8 +12,8 @@ import { lazy, Suspense } from 'react'
 import { m } from 'framer-motion'
 import type { BasemapDescriptor } from '@geo-agent-platform/shared-types'
 import { MapErrorBoundary } from '../../features/map/MapErrorBoundary'
+import type { MapSceneController } from '../../features/map/useMapScene'
 import { motionSpring } from '../../shared/motion'
-import type { MapRenderLayer } from '../types'
 import { loadWorkspaceMapCanvas, preloadWorkspaceMap } from './workspaceMapPreload'
 
 const MapCanvas = lazy(() => loadWorkspaceMapCanvas().then((module) => ({ default: module.MapCanvas })))
@@ -21,13 +21,13 @@ const MapCanvas = lazy(() => loadWorkspaceMapCanvas().then((module) => ({ defaul
 interface WorkspaceMapPanelProps {
   artifactCount: number
   basemaps: BasemapDescriptor[]
+  mapScene: MapSceneController
   isMapActivated: boolean
   runStatus?: string
   selectedBasemapKey: string
   selectedArtifactId?: string
   selectedArtifactName?: string
-  focusRequest?: { artifactId?: string; nonce: number }
-  layers: MapRenderLayer[]
+  focusRequest?: { mapLayerId?: string; nonce: number }
   placeResolution?: { status: string; selected?: { latitude?: number | null; longitude?: number | null } | null } | null
   agentState?: { placeResolution?: { status: string; selected?: { latitude?: number | null; longitude?: number | null } | null } | null } | null
   onActivateMap: () => void
@@ -39,13 +39,13 @@ interface WorkspaceMapPanelProps {
 export function WorkspaceMapPanel({
   artifactCount,
   basemaps,
+  mapScene,
   isMapActivated,
   runStatus,
   selectedBasemapKey,
   selectedArtifactId,
   selectedArtifactName,
   focusRequest,
-  layers,
   placeResolution,
   agentState,
   onActivateMap,
@@ -75,7 +75,10 @@ export function WorkspaceMapPanel({
                 runStatus={runStatus}
                 selectedBasemapKey={selectedBasemapKey}
                 onSelectBasemap={onSelectBasemap}
-                layers={layers}
+                layers={mapScene.layers}
+                sceneError={mapScene.error}
+                sceneLoading={mapScene.isLoading}
+                onUpdateLayer={mapScene.updateLayer}
                 selectedArtifactId={selectedArtifactId}
                 selectedArtifactName={selectedArtifactName}
                 focusRequest={focusRequest}

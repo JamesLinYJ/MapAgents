@@ -1,5 +1,5 @@
 import type { z } from 'zod'
-import type { AgentRuntimeConfig, MeteorologicalDatasetRecord } from '../schemas/types.js'
+import type { AgentRuntimeConfig, ArtifactDisplay, MeteorologicalDatasetRecord } from '../schemas/types.js'
 import type { AuthContext } from '../security/types.js'
 
 export interface ToolManifest {
@@ -81,6 +81,7 @@ export interface ToolArtifact {
     artifactType: string;
     name: string;
     uri: string;
+    display: ArtifactDisplay;
     relativePath?: string | null;
     metadata?: Record<string, unknown>;
 }

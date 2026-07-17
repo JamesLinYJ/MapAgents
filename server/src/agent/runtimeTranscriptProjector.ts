@@ -97,6 +97,7 @@ export class RuntimeTranscriptProjector {
             payload: {
               callId: raw.callId,
               name: raw.name,
+              label: '子智能体任务',
               arguments: parsedArgs,
               ledgerStatus: 'started',
             },
@@ -105,11 +106,20 @@ export class RuntimeTranscriptProjector {
             name: raw.name,
             callId: raw.callId,
             arguments: raw.arguments,
+            metadata: { toolLabel: '子智能体任务' },
           })
-          itemSink.completeItem(item.itemId, { name: raw.name, callId: raw.callId, body: '子 Agent 已启动' })
+          itemSink.completeItem(item.itemId, {
+            name: raw.name,
+            callId: raw.callId,
+            body: '子智能体已启动',
+            metadata: { toolLabel: '子智能体任务' },
+          })
         }
       }
-      eventSink.emit('tool.started', event.item.type, { sdkItemType: event.item.type })
+      const eventLabel = raw.type === 'function_call' && assembly.subAgentNames.has(raw.name)
+        ? '子智能体任务'
+        : '工具调用'
+      eventSink.emit('tool.started', eventLabel, { sdkItemType: event.item.type })
       return
     }
     if (event.name === 'tool_approval_requested') {
@@ -181,6 +191,7 @@ export class RuntimeTranscriptProjector {
       payload: {
         callId: item.callId,
         name: item.name,
+        label: '沙箱工具调用',
         arguments: args,
         ledgerStatus: sdkNativeLedgerStatus(sdkStatus),
         source: 'openai_agents_sandbox',
@@ -190,14 +201,14 @@ export class RuntimeTranscriptProjector {
       name: item.name,
       callId: item.callId,
       arguments: item.arguments,
-      metadata: { source: 'openai_agents_sandbox' },
+      metadata: { toolLabel: '沙箱工具调用', source: 'openai_agents_sandbox' },
     })
     itemSink.completeItem(callItem.itemId, {
       name: item.name,
       callId: item.callId,
       body: sdkStatus === 'incomplete' ? 'SDK 沙箱工具执行未完成' : 'SDK 沙箱工具已执行',
       isError: item.status === 'incomplete',
-      metadata: { source: 'openai_agents_sandbox' },
+      metadata: { toolLabel: '沙箱工具调用', source: 'openai_agents_sandbox' },
     })
   }
 

@@ -13,8 +13,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { ConversationItem } from './schemas/types.js'
-import { PostgresPlatformStore } from './store/platformStore.js'
-import { PlatformStoreTestHarness } from '../test-support/platformStoreHarness.js'
+import { PlatformPersistenceFacade } from './store/platformPersistenceFacade.js'
+import { PersistenceFacadeTestHarness } from '../test-support/persistenceFacadeHarness.js'
 
 describe('conversation architecture', () => {
   it('keeps shared protocol schemas modular and server parsing on the shared contract', async () => {
@@ -33,6 +33,53 @@ describe('conversation architecture', () => {
     expect(serverEntry.trimEnd().endsWith("export * from '@geo-agent-platform/shared-types'")).toBe(true)
     expect(serverEntry.includes("from 'zod'")).toBe(false)
     expect(serverTsconfig.compilerOptions?.noUncheckedIndexedAccess).toBe(true)
+  })
+
+  it('keeps the Drizzle schema and fresh database baseline aligned on ownership foreign keys', async () => {
+    const repositoryRoot = path.resolve(process.cwd(), '..')
+    const schemaSource = await readFile(path.join(process.cwd(), 'src/db/schema.ts'), 'utf8')
+    const baselineSource = await readFile(
+      path.join(repositoryRoot, 'infra/migrations/001_init_postgis.sql'),
+      'utf8',
+    )
+    const securityDatabaseSource = await readFile(
+      path.join(process.cwd(), 'src/security/database.ts'),
+      'utf8',
+    )
+
+    const drizzleForeignKeys = [
+      "references(() => authUser.id, { onDelete: 'cascade' })",
+      "references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' })",
+      "references(() => platformUsers.userId, { onDelete: 'restrict' })",
+      "references(() => platformUsers.userId, { onDelete: 'set null' })",
+      "references(() => platformSessions.sessionId, { onDelete: 'cascade' })",
+      "references(() => platformThreads.threadId, { onDelete: 'set null' })",
+      "references(() => platformConversationEntries.entryId, { onDelete: 'set null' })",
+      "references(() => platformConversationEntries.entryId, { onDelete: 'cascade' })",
+      "references(() => platformMeteorologicalDatasets.datasetId, { onDelete: 'cascade' })",
+      "references(() => platformRuns.runId, { onDelete: 'set null' })",
+    ]
+    const baselineForeignKeys = [
+      'user_id      TEXT NOT NULL REFERENCES auth_user(id) ON DELETE CASCADE',
+      'created_by_user_id TEXT NOT NULL REFERENCES platform_users(user_id) ON DELETE RESTRICT',
+      'workspace_id  TEXT NOT NULL REFERENCES platform_workspaces(workspace_id) ON DELETE CASCADE',
+      'actor_user_id  TEXT REFERENCES platform_users(user_id) ON DELETE SET NULL',
+      'session_id          TEXT REFERENCES platform_sessions(session_id) ON DELETE CASCADE',
+      'thread_id           TEXT REFERENCES platform_threads(thread_id) ON DELETE SET NULL',
+      'based_on_entry_id TEXT REFERENCES platform_conversation_entries(entry_id) ON DELETE SET NULL',
+      'boundary_entry_id       TEXT NOT NULL REFERENCES platform_conversation_entries(entry_id) ON DELETE CASCADE',
+      'dataset_id         TEXT NOT NULL REFERENCES platform_meteorological_datasets(dataset_id) ON DELETE CASCADE',
+      'last_run_id        TEXT REFERENCES platform_runs(run_id) ON DELETE SET NULL',
+      'run_id             TEXT REFERENCES platform_runs(run_id) ON DELETE SET NULL',
+    ]
+
+    for (const foreignKey of drizzleForeignKeys) {
+      expect(schemaSource.includes(foreignKey), foreignKey).toBe(true)
+    }
+    for (const foreignKey of baselineForeignKeys) {
+      expect(baselineSource.includes(foreignKey), foreignKey).toBe(true)
+    }
+    expect(securityDatabaseSource).not.toMatch(/db\.execute\(sql`\s*(?:CREATE|ALTER|DROP)\b/iu)
   })
 
   it('keeps removed response/message-frame models out of runtime source', async () => {
@@ -81,16 +128,26 @@ describe('conversation architecture', () => {
     }
   })
 
-  it('keeps PostgresPlatformStore as a resource facade instead of a writer god object', async () => {
-    const source = await readFile(path.join(process.cwd(), 'src/store/platformStore.ts'), 'utf8')
+  it('keeps the Windows development stack bound to loopback explicitly', async () => {
+    const repositoryRoot = path.resolve(process.cwd(), '..')
+    const source = await readFile(path.join(repositoryRoot, 'dev.ps1'), 'utf8')
+
+    expect(source.includes("Set-ProcessValue 'API_HOST' '127.0.0.1'")).toBe(true)
+    expect(source.includes("Set-ProcessValue 'WEB_DEV_HOST' '127.0.0.1'")).toBe(true)
+    expect(source.includes("Set-ProcessDefault 'API_HOST' '127.0.0.1'")).toBe(false)
+    expect(source.includes("Set-ProcessDefault 'WEB_DEV_HOST' '127.0.0.1'")).toBe(false)
+  })
+
+  it('keeps PlatformPersistenceFacade as a resource facade instead of a writer god object', async () => {
+    const source = await readFile(path.join(process.cwd(), 'src/store/platformPersistenceFacade.ts'), 'utf8')
     const requiredDelegates = [
       'new SessionStore',
       'new ThreadStore',
       'new RunStore',
       'new ArtifactStore',
-      'new ConversationObjectStore',
-      'new ArtifactIndexStore',
-      'new MeteorologicalDatasetStore',
+      'new ContentObjectGateway',
+      'new ArtifactPublicationRepository',
+      'new MeteorologicalStore',
       'new RuntimeConfigStore',
       'new ToolCatalogStore',
     ]
@@ -98,31 +155,31 @@ describe('conversation architecture', () => {
       'db.execute',
       'sql`',
       'platform_',
-      'conversationStore.saveSession',
-      'conversationStore.createThread',
-      'conversationStore.saveThread',
-      'conversationStore.moveThreadToTrash',
-      'conversationStore.createRun',
-      'conversationStore.saveRun',
-      'conversationStore.appendEvent',
-      'conversationStore.appendItem',
-      'conversationStore.appendTranscript',
-      'conversationStore.saveMemory',
-      'conversationStore.appendCompaction',
-      'conversationStore.appendArtifact',
-      'conversationStore.putObject',
-      'conversationStore.readObject',
-      'conversationStore.appendValue',
-      'conversationStore.appendAgentTranscript',
-      'conversationStore.saveAgentsSdkState',
-      'conversationStore.readAgentsSdkState',
+      'payloadStore.saveSession',
+      'payloadStore.createThread',
+      'payloadStore.saveThread',
+      'payloadStore.moveThreadToTrash',
+      'payloadStore.createRun',
+      'payloadStore.saveRun',
+      'payloadStore.appendEvent',
+      'payloadStore.appendItem',
+      'payloadStore.appendTranscript',
+      'payloadStore.saveMemory',
+      'payloadStore.appendCompaction',
+      'payloadStore.appendArtifact',
+      'payloadStore.putObject',
+      'payloadStore.readObject',
+      'payloadStore.appendValue',
+      'payloadStore.appendAgentTranscript',
+      'payloadStore.saveAgentsSdkState',
+      'payloadStore.readAgentsSdkState',
     ]
 
     for (const delegate of requiredDelegates) {
       expect(source.includes(delegate), delegate).toBe(true)
     }
-    expect(source).toMatch(/private readonly conversationStore: FileConversationStore/u)
-    expect(source).not.toMatch(/^\s*readonly conversationStore: FileConversationStore/mu)
+    expect(source).toMatch(/private readonly payloadStore: ConversationPayloadStore/u)
+    expect(source).not.toMatch(/^\s*readonly payloadStore: ConversationPayloadStore/mu)
     for (const forbidden of forbiddenWritePaths) {
       expect(source.includes(forbidden), forbidden).toBe(false)
     }
@@ -131,13 +188,21 @@ describe('conversation architecture', () => {
   it('keeps cross-resource conversation lifecycle writes inside repository transactions', async () => {
     const threadSource = await readFile(path.join(process.cwd(), 'src/store/threadStore.ts'), 'utf8')
     const runSource = await readFile(path.join(process.cwd(), 'src/store/runStore.ts'), 'utf8')
-    const repositorySource = await readFile(
-      path.join(process.cwd(), 'src/store/postgres/conversationRepository.ts'),
+    const persistenceSource = await readFile(
+      path.join(process.cwd(), 'src/store/postgres/conversationPersistence.ts'),
+      'utf8',
+    )
+    const threadPersistenceSource = await readFile(
+      path.join(process.cwd(), 'src/store/postgres/threadLifecycleRepository.ts'),
+      'utf8',
+    )
+    const runPersistenceSource = await readFile(
+      path.join(process.cwd(), 'src/store/postgres/runStateRepository.ts'),
       'utf8',
     )
 
-    expect(threadSource.includes('this.repository.createThreadLifecycle(thread)')).toBe(true)
-    expect(threadSource.includes('this.repository.trashThread(')).toBe(true)
+    expect(threadSource.includes('this.repositories.lifecycle.createThreadLifecycle(thread)')).toBe(true)
+    expect(threadSource.includes('this.repositories.lifecycle.trashThread(')).toBe(true)
     expect(threadSource.includes('this.sessionStore.update(')).toBe(false)
     expect(runSource.includes('this.repository.createRunLifecycle(run)')).toBe(true)
     expect(runSource.includes('this.repository.saveRunWithCheckpoint(')).toBe(true)
@@ -148,24 +213,324 @@ describe('conversation architecture', () => {
       'trashThread',
       'restoreThread',
       'purgeThread',
-      'createRunLifecycle',
     ]) {
-      const methodStart = repositorySource.indexOf(`async ${method}(`, repositorySource.indexOf('export class'))
+      const methodStart = threadPersistenceSource.indexOf(
+        `async ${method}(`,
+        threadPersistenceSource.indexOf('export class'),
+      )
       expect(methodStart, `${method} implementation`).toBeGreaterThanOrEqual(0)
-      const transactionStart = repositorySource.indexOf('this.db.transaction(', methodStart)
-      const nextMethodStart = repositorySource.indexOf('\n  async ', methodStart + 1)
+      const transactionStart = threadPersistenceSource.indexOf('this.db.transaction(', methodStart)
+      const nextMethodStart = threadPersistenceSource.indexOf('\n  async ', methodStart + 1)
       expect(transactionStart, `${method} transaction`).toBeGreaterThan(methodStart)
       expect(transactionStart, `${method} transaction boundary`).toBeLessThan(nextMethodStart)
     }
+
+    const runMethodStart = runPersistenceSource.indexOf(
+      'async createRunLifecycle(',
+      runPersistenceSource.indexOf('export class'),
+    )
+    const runTransactionStart = runPersistenceSource.indexOf('this.db.transaction(', runMethodStart)
+    const nextRunMethodStart = runPersistenceSource.indexOf('\n  async ', runMethodStart + 1)
+    expect(runTransactionStart, 'createRunLifecycle transaction').toBeGreaterThan(runMethodStart)
+    expect(runTransactionStart, 'createRunLifecycle transaction boundary').toBeLessThan(nextRunMethodStart)
   })
 
-  it('keeps FileConversationStore compiled against the ConversationStorage port', async () => {
-    const source = await readFile(path.join(process.cwd(), 'src/store/fileConversationStore.ts'), 'utf8')
-    const portSource = await readFile(path.join(process.cwd(), 'src/store/ConversationStorage.ts'), 'utf8')
-    const repositorySource = await readFile(path.join(process.cwd(), 'src/store/postgres/conversationRepository.ts'), 'utf8')
+  it('injects narrow persistence ports into session, thread, and run stores', async () => {
+    const storeRoot = path.join(process.cwd(), 'src/store')
+    const portsSource = await readFile(
+      path.join(storeRoot, 'postgres/conversationPersistencePorts.ts'),
+      'utf8',
+    )
+    const sessionSource = await readFile(path.join(storeRoot, 'sessionStore.ts'), 'utf8')
+    const threadSource = await readFile(path.join(storeRoot, 'threadStore.ts'), 'utf8')
+    const runSource = await readFile(path.join(storeRoot, 'runStore.ts'), 'utf8')
+    const facadeSource = await readFile(path.join(storeRoot, 'platformPersistenceFacade.ts'), 'utf8')
 
-    expect(source.includes('export class FileConversationStore implements ConversationStorage')).toBe(true)
-    expect(source.includes('隐式满足 ConversationStorage')).toBe(false)
+    for (const port of [
+      'ConversationSnapshotRepository',
+      'SessionRepository',
+      'ThreadLifecycleRepository',
+      'ThreadMemoryRepository',
+      'ThreadCompactionRepository',
+      'ConversationTranscriptRepository',
+      'ThreadRepository',
+      'RunStateRepository',
+      'RunCheckpointRepository',
+      'RunRecordRepository',
+      'RunRepository',
+      'ObjectReferenceRepository',
+      'RunInputRepository',
+    ]) {
+      expect(portsSource.includes(`interface ${port}`), port).toBe(true)
+    }
+    expect(sessionSource.includes('private readonly repository: SessionRepository')).toBe(true)
+    expect(threadSource.includes('private readonly repositories: ThreadPersistencePorts')).toBe(true)
+    expect(threadSource.includes('lifecycle: ThreadLifecycleRepository')).toBe(true)
+    expect(threadSource.includes('transcript: ConversationTranscriptRepository')).toBe(true)
+    expect(threadSource.includes('memory: ThreadMemoryRepository')).toBe(true)
+    expect(threadSource.includes('compactions: ThreadCompactionRepository')).toBe(true)
+    expect(threadSource.includes("Pick<RunRepository, 'listRunsForThread'>")).toBe(true)
+    expect(runSource.includes('private readonly repository: RunRepository')).toBe(true)
+    expect(runSource.includes("Pick<ThreadLifecycleRepository, 'saveThread'>")).toBe(true)
+    expect(facadeSource.includes('private readonly conversationPersistence: ConversationPersistence')).toBe(false)
+    expect(facadeSource.includes('private readonly snapshotRepository: ConversationSnapshotRepository')).toBe(true)
+    expect(facadeSource.includes('private readonly runInputRepository: RunInputRepository')).toBe(true)
+  })
+
+  it('keeps conversation persistence split by resource ownership without legacy utility facades', async () => {
+    const storeRoot = path.join(process.cwd(), 'src/store')
+    const persistenceSource = await readFile(
+      path.join(storeRoot, 'postgres/conversationPersistence.ts'),
+      'utf8',
+    )
+    const snapshotSource = await readFile(
+      path.join(storeRoot, 'postgres/conversationSnapshotRepository.ts'),
+      'utf8',
+    )
+    const sessionSource = await readFile(
+      path.join(storeRoot, 'postgres/sessionRepository.ts'),
+      'utf8',
+    )
+    const mapperSource = await readFile(
+      path.join(storeRoot, 'postgres/conversationRowMappers.ts'),
+      'utf8',
+    )
+    const threadFacadeSource = await readFile(
+      path.join(storeRoot, 'postgres/threadRepository.ts'),
+      'utf8',
+    )
+    const threadLifecycleSource = await readFile(
+      path.join(storeRoot, 'postgres/threadLifecycleRepository.ts'),
+      'utf8',
+    )
+    const threadMemorySource = await readFile(
+      path.join(storeRoot, 'postgres/threadMemoryRepository.ts'),
+      'utf8',
+    )
+    const threadCompactionSource = await readFile(
+      path.join(storeRoot, 'postgres/threadCompactionRepository.ts'),
+      'utf8',
+    )
+    const transcriptSource = await readFile(
+      path.join(storeRoot, 'postgres/conversationTranscriptRepository.ts'),
+      'utf8',
+    )
+    const runFacadeSource = await readFile(
+      path.join(storeRoot, 'postgres/runRepository.ts'),
+      'utf8',
+    )
+    const runStateSource = await readFile(
+      path.join(storeRoot, 'postgres/runStateRepository.ts'),
+      'utf8',
+    )
+    const runCheckpointSource = await readFile(
+      path.join(storeRoot, 'postgres/runCheckpointRepository.ts'),
+      'utf8',
+    )
+    const runRecordSource = await readFile(
+      path.join(storeRoot, 'postgres/runRecordRepository.ts'),
+      'utf8',
+    )
+
+    expect(persistenceSource.includes('new PostgresConversationSnapshotRepository(db)')).toBe(true)
+    expect(persistenceSource.includes('new PostgresSessionRepository(db)')).toBe(true)
+    expect(persistenceSource.includes('new PostgresThreadRepository(db, this.runMutations)')).toBe(true)
+    expect(persistenceSource.includes('new PostgresRunRepository(db, this.runMutations, this.runRecords)')).toBe(true)
+    expect(persistenceSource.includes('new PostgresObjectReferenceRepository(db)')).toBe(true)
+    expect(persistenceSource.includes('return this.snapshots.loadSnapshot()')).toBe(true)
+    expect(persistenceSource.includes('await this.sessions.saveSession(session)')).toBe(true)
+    expect(snapshotSource.includes('implements ConversationSnapshotRepository')).toBe(true)
+    expect(sessionSource.includes('implements SessionRepository')).toBe(true)
+    expect(threadFacadeSource).toContain('implements ThreadRepository')
+    expect(threadFacadeSource).toContain('new PostgresThreadLifecycleRepository')
+    expect(threadFacadeSource).toContain('new PostgresThreadMemoryRepository')
+    expect(threadFacadeSource).toContain('new PostgresThreadCompactionRepository')
+    expect(threadFacadeSource).toContain('new PostgresConversationTranscriptRepository')
+    expect(threadFacadeSource.includes("from '../../db/schema.js'")).toBe(false)
+    expect(threadFacadeSource.includes('this.db.')).toBe(false)
+    expect(threadLifecycleSource.includes('platformSessions')).toBe(true)
+    expect(threadLifecycleSource.includes('platformThreadMemoryVersions')).toBe(false)
+    expect(threadLifecycleSource.includes('platformConversationEntries')).toBe(false)
+    expect(threadMemorySource.includes('platformThreadMemoryVersions')).toBe(true)
+    expect(threadMemorySource.includes('platformConversationEntries')).toBe(false)
+    expect(threadCompactionSource.includes('platformThreadCompactions')).toBe(true)
+    expect(threadCompactionSource.includes('platformConversationEntries')).toBe(false)
+    expect(transcriptSource.includes('platformConversationEntries')).toBe(true)
+    expect(transcriptSource.includes('platformThreadMemoryVersions')).toBe(false)
+    expect(runFacadeSource).toContain('implements RunRepository')
+    expect(runFacadeSource).toContain('new PostgresRunStateRepository')
+    expect(runFacadeSource).toContain('new PostgresRunCheckpointRepository')
+    expect(runFacadeSource).toContain('new PostgresRunRecordRepository')
+    expect(runFacadeSource.includes("from '../../db/schema.js'")).toBe(false)
+    expect(runFacadeSource.includes('this.db.')).toBe(false)
+    expect(runStateSource.includes('platformSessions')).toBe(true)
+    expect(runStateSource.includes('platformEventOutbox')).toBe(false)
+    expect(runCheckpointSource.includes('platformRuns')).toBe(true)
+    expect(runCheckpointSource.includes('platformEventOutbox')).toBe(false)
+    expect(runRecordSource.includes('platformRunRecords')).toBe(true)
+    expect(runRecordSource.includes('platformEventOutbox')).toBe(true)
+    expect(await readFile(path.join(storeRoot, 'postgres/objectReferenceRepository.ts'), 'utf8'))
+      .toContain('implements ObjectReferenceRepository')
+    expect(persistenceSource.includes('this.db.')).toBe(false)
+    expect(persistenceSource.includes("from '../../db/schema.js'")).toBe(false)
+    expect(mapperSource.includes('export function mapAnalysisRunRow')).toBe(true)
+    expect(mapperSource.includes('export function mapThreadRow')).toBe(true)
+
+    await expect(stat(path.join(storeRoot, 'platformStoreUtils.ts'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(stat(path.join(storeRoot, 'fileConversationIo.ts'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('keeps map persistence split by scene, layer, and feature ownership', async () => {
+    const postgresRoot = path.join(process.cwd(), 'src/store/postgres')
+    const facadeSource = await readFile(path.join(postgresRoot, 'mapStore.ts'), 'utf8')
+    const sceneSource = await readFile(path.join(postgresRoot, 'mapSceneRepository.ts'), 'utf8')
+    const layerSource = await readFile(path.join(postgresRoot, 'mapLayerRepository.ts'), 'utf8')
+    const featureSource = await readFile(path.join(postgresRoot, 'mapFeatureRepository.ts'), 'utf8')
+
+    expect(facadeSource.includes('new MapSceneRepository')).toBe(true)
+    expect(facadeSource.includes('new MapLayerRepository')).toBe(true)
+    expect(facadeSource.includes('new MapFeatureRepository')).toBe(true)
+    expect(facadeSource.includes("from '../../db/schema.js'")).toBe(false)
+    expect(facadeSource.includes('this.db.')).toBe(false)
+    expect(sceneSource.includes('platformMapScenes')).toBe(true)
+    expect(sceneSource.includes('platformMapSceneLayers')).toBe(true)
+    expect(layerSource.includes('platformMapLayers')).toBe(true)
+    expect(featureSource.includes('platformLayerFeatures')).toBe(true)
+    expect(featureSource.includes('ST_AsGeoJSON')).toBe(true)
+    expect(featureSource.includes('Drizzle query builder 无对应表达式')).toBe(true)
+  })
+
+  it('keeps managed layers split into metadata, feature, scene, import, and health boundaries', async () => {
+    const managedRoot = path.join(process.cwd(), 'src/gis/managedLayers')
+    const facadeSource = await readFile(path.join(managedRoot, 'managedLayerService.ts'), 'utf8')
+    const layerSource = await readFile(path.join(managedRoot, 'managedLayerRepository.ts'), 'utf8')
+    const featureSource = await readFile(path.join(managedRoot, 'managedFeatureRepository.ts'), 'utf8')
+    const sceneSource = await readFile(path.join(managedRoot, 'managedLayerSceneProjection.ts'), 'utf8')
+    const importSource = await readFile(path.join(managedRoot, 'managedLayerImportService.ts'), 'utf8')
+    const healthSource = await readFile(path.join(managedRoot, 'postGisHealthProbe.ts'), 'utf8')
+
+    expect(facadeSource.includes('new ManagedLayerRepository')).toBe(true)
+    expect(facadeSource.includes('new ManagedFeatureRepository')).toBe(true)
+    expect(facadeSource.includes('new ManagedLayerImportService')).toBe(true)
+    expect(facadeSource.includes('new PostGisHealthProbe')).toBe(true)
+    expect(facadeSource.includes("from '../../db/schema.js'")).toBe(false)
+    expect(facadeSource.includes('sql`')).toBe(false)
+
+    expect(layerSource.includes('platformMapLayers')).toBe(true)
+    expect(layerSource.includes('platformLayerFeatures')).toBe(false)
+    expect(featureSource.includes('platformLayerFeatures')).toBe(true)
+    expect(featureSource.includes('platformMapLayers')).toBe(false)
+    expect(sceneSource.includes('platformMapScenes')).toBe(true)
+    expect(sceneSource.includes('platformMapSceneLayers')).toBe(true)
+
+    expect(importSource.includes('this.db.transaction')).toBe(true)
+    expect(importSource.includes('this.layers.upsertImportedLayer')).toBe(true)
+    expect(importSource.includes('this.features.replaceFeatures')).toBe(true)
+    expect(importSource.includes('this.scenes.attach')).toBe(true)
+    expect(featureSource.includes('PostGIS 专用能力')).toBe(true)
+    expect(healthSource.includes('PostGIS 扩展不可用')).toBe(true)
+    await expect(stat(path.join(process.cwd(), 'src/gis/postgis.ts')))
+      .rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('keeps workflow persistence split by definition, schedule, and run ownership', async () => {
+    const postgresRoot = path.join(process.cwd(), 'src/store/postgres')
+    const facadeSource = await readFile(path.join(postgresRoot, 'workflowStore.ts'), 'utf8')
+    const definitionSource = await readFile(path.join(postgresRoot, 'workflowDefinitionRepository.ts'), 'utf8')
+    const scheduleSource = await readFile(path.join(postgresRoot, 'scheduledTaskRepository.ts'), 'utf8')
+    const runSource = await readFile(path.join(postgresRoot, 'workflowRunRepository.ts'), 'utf8')
+
+    expect(facadeSource.includes('new WorkflowDefinitionRepository')).toBe(true)
+    expect(facadeSource.includes('new ScheduledTaskRepository')).toBe(true)
+    expect(facadeSource.includes('new WorkflowRunRepository')).toBe(true)
+    expect(facadeSource.includes("from '../../db/schema.js'")).toBe(false)
+    expect(facadeSource.includes('this.db.')).toBe(false)
+    expect(definitionSource.includes('platformWorkflowDefinitions')).toBe(true)
+    expect(definitionSource.includes('platformWorkflowVersions')).toBe(true)
+    expect(scheduleSource.includes('platformScheduledTasks')).toBe(true)
+    expect(runSource.includes('platformWorkflowRuns')).toBe(true)
+  })
+
+  it('models artifact publication as an explicit cross-resource transaction', async () => {
+    const postgresRoot = path.join(process.cwd(), 'src/store/postgres')
+    const publicationSource = await readFile(
+      path.join(postgresRoot, 'artifactPublicationRepository.ts'),
+      'utf8',
+    )
+    const metadataSource = await readFile(
+      path.join(postgresRoot, 'artifactMetadataRepository.ts'),
+      'utf8',
+    )
+    const mapProjectionSource = await readFile(
+      path.join(postgresRoot, 'artifactMapProjectionRepository.ts'),
+      'utf8',
+    )
+
+    expect(publicationSource.includes('this.db.transaction')).toBe(true)
+    expect(publicationSource.includes('this.metadata.upsert')).toBe(true)
+    expect(publicationSource.includes('this.mapProjection.publish')).toBe(true)
+    expect(publicationSource.includes('platformThreads')).toBe(true)
+    expect(metadataSource.includes('platformArtifacts')).toBe(true)
+    expect(metadataSource.includes('platformMapLayers')).toBe(false)
+    expect(mapProjectionSource.includes('platformMapLayers')).toBe(true)
+    expect(mapProjectionSource.includes('platformArtifacts')).toBe(false)
+    await expect(stat(path.join(postgresRoot, 'artifactIndexStore.ts')))
+      .rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('keeps meteorological datasets and processing jobs in separate repositories', async () => {
+    const postgresRoot = path.join(process.cwd(), 'src/store/postgres')
+    const facadeSource = await readFile(path.join(postgresRoot, 'meteorologicalStore.ts'), 'utf8')
+    const datasetSource = await readFile(
+      path.join(postgresRoot, 'meteorologicalDatasetRepository.ts'),
+      'utf8',
+    )
+    const jobSource = await readFile(
+      path.join(postgresRoot, 'meteorologicalJobRepository.ts'),
+      'utf8',
+    )
+
+    expect(facadeSource.includes('new MeteorologicalDatasetRepository')).toBe(true)
+    expect(facadeSource.includes('new MeteorologicalJobRepository')).toBe(true)
+    expect(facadeSource.includes("from '../../db/schema.js'")).toBe(false)
+    expect(datasetSource.includes('platformMeteorologicalDatasets')).toBe(true)
+    expect(datasetSource.includes('platformMeteorologicalJobs')).toBe(false)
+    expect(jobSource.includes('platformMeteorologicalJobs')).toBe(true)
+    expect(jobSource.includes('platformMeteorologicalDatasets')).toBe(false)
+    expect(datasetSource.includes('decodeRequiredRecord')).toBe(true)
+    expect(jobSource.includes('decodeRequiredRecord')).toBe(true)
+    expect(datasetSource.includes("return value === 'private'")).toBe(false)
+    await expect(stat(path.join(postgresRoot, 'meteorologicalDatasetStore.ts')))
+      .rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('removes obsolete JSONL session facts and unused journal implementations', async () => {
+    const storeRoot = path.join(process.cwd(), 'src/store')
+    await expect(stat(path.join(storeRoot, 'sessionLog.ts'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(stat(path.join(storeRoot, 'journal.ts'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('treats the in-memory conversation index as a rebuildable projection, not a store fact source', async () => {
+    const storeRoot = path.join(process.cwd(), 'src/store')
+    const projectionSource = await readFile(path.join(storeRoot, 'conversationProjectionIndex.ts'), 'utf8')
+    const errorsSource = await readFile(path.join(storeRoot, 'storeErrors.ts'), 'utf8')
+
+    expect(projectionSource.includes('export class ConversationProjectionIndex')).toBe(true)
+    expect(projectionSource.includes('PostgreSQL 会话仓储是事实源')).toBe(true)
+    expect(projectionSource.includes('export class StoreNotFoundError')).toBe(false)
+    expect(errorsSource.includes('export class StoreNotFoundError')).toBe(true)
+    await expect(stat(path.join(storeRoot, 'conversationIndexStore.ts'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(stat(path.join(storeRoot, 'fileConversationStore.ts'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(stat(path.join(storeRoot, 'ConversationStorage.ts'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('keeps ConversationPayloadStore compiled against the ConversationPayloadStorage port', async () => {
+    const source = await readFile(path.join(process.cwd(), 'src/store/conversationPayloadStore.ts'), 'utf8')
+    const portSource = await readFile(path.join(process.cwd(), 'src/store/conversationPayloadStorage.ts'), 'utf8')
+    const persistenceSource = await readFile(path.join(process.cwd(), 'src/store/postgres/conversationPersistence.ts'), 'utf8')
+
+    expect(source.includes('export class ConversationPayloadStore implements ConversationPayloadStorage')).toBe(true)
+    expect(source.includes('隐式满足 ConversationPayloadStorage')).toBe(false)
     expect(portSource.includes('saveRun(')).toBe(false)
     expect(portSource.includes('saveAgentsSdkState(')).toBe(false)
     expect(portSource.includes('saveMemory(')).toBe(false)
@@ -174,34 +539,34 @@ describe('conversation architecture', () => {
     expect(portSource.includes('registerThread(')).toBe(true)
     expect(portSource.includes('readObjectByHash(')).toBe(true)
     expect(portSource.includes('appendValue(runId: string, value: ToolValueRef)')).toBe(false)
-    expect(repositorySource.includes('saveRunCheckpoint(')).toBe(true)
-    expect(repositorySource.includes('saveAgentsSdkCheckpoint(')).toBe(true)
-    expect(repositorySource.includes('saveThreadMemoryVersion(')).toBe(true)
-    expect(repositorySource.includes('appendCompaction(')).toBe(true)
+    expect(persistenceSource.includes('saveRunCheckpoint(')).toBe(true)
+    expect(persistenceSource.includes('saveAgentsSdkCheckpoint(')).toBe(true)
+    expect(persistenceSource.includes('saveThreadMemoryVersion(')).toBe(true)
+    expect(persistenceSource.includes('appendCompaction(')).toBe(true)
   })
 
   it('hydrates file payload locations from PostgreSQL without recovering legacy conversation JSONL', async () => {
-    const source = await readFile(path.join(process.cwd(), 'src/store/fileConversationStore.ts'), 'utf8')
-    const facadeSource = await readFile(path.join(process.cwd(), 'src/store/platformStore.ts'), 'utf8')
+    const source = await readFile(path.join(process.cwd(), 'src/store/conversationPayloadStore.ts'), 'utf8')
+    const facadeSource = await readFile(path.join(process.cwd(), 'src/store/platformPersistenceFacade.ts'), 'utf8')
     const jsonlSource = await readFile(path.join(process.cwd(), 'src/store/durableJsonlStore.ts'), 'utf8')
     const threadSource = await readFile(path.join(process.cwd(), 'src/store/threadStore.ts'), 'utf8')
 
-    expect(source.includes('async initialize(snapshot: ConversationStorageSnapshot)')).toBe(true)
+    expect(source.includes('async initialize(snapshot: ConversationPayloadIndex)')).toBe(true)
     expect(source.includes('for (const thread of snapshot.threads)')).toBe(true)
     expect(source.includes('for (const deleted of snapshot.deletedThreads)')).toBe(true)
     expect(source.includes('for (const run of snapshot.runs)')).toBe(true)
-    expect(facadeSource.indexOf('this.conversationRepository.loadSnapshot()'))
-      .toBeLessThan(facadeSource.indexOf('this.conversationStore.initialize(snapshot)'))
+    expect(facadeSource.indexOf('this.snapshotRepository.loadSnapshot()'))
+      .toBeLessThan(facadeSource.indexOf('this.payloadStore.initialize(snapshot)'))
     expect(source.includes('new DurableJsonlStore()')).toBe(true)
     expect(source.includes('this.jsonlStore.append')).toBe(true)
     expect(source.includes('this.jsonlStore.read')).toBe(false)
     expect(source.includes('ThreadJournalStore')).toBe(false)
     expect(source.includes('ThreadMemoryFileStore')).toBe(false)
     expect(source.includes('thread.json')).toBe(false)
-    expect(threadSource.includes('this.repository.saveThreadMemoryVersion')).toBe(true)
-    expect(threadSource.includes('this.repository.appendCompaction')).toBe(true)
-    expect(threadSource.includes('this.conversationStore.putObject')).toBe(true)
-    expect(threadSource.includes('this.conversationStore.readObjectByHash')).toBe(true)
+    expect(threadSource.includes('this.repositories.memory.saveThreadMemoryVersion')).toBe(true)
+    expect(threadSource.includes('this.repositories.compactions.appendCompaction')).toBe(true)
+    expect(threadSource.includes('this.payloadStore.putObject')).toBe(true)
+    expect(threadSource.includes('this.payloadStore.readObjectByHash')).toBe(true)
     expect(jsonlSource.includes('private readonly writeQueues')).toBe(true)
     for (const token of [
       'private writeQueues',
@@ -232,8 +597,8 @@ describe('conversation architecture', () => {
     expect(packageSource.includes('proper-lockfile')).toBe(false)
   })
 
-  it('keeps content-addressed object IO outside FileConversationStore', async () => {
-    const source = await readFile(path.join(process.cwd(), 'src/store/fileConversationStore.ts'), 'utf8')
+  it('keeps content-addressed object IO outside ConversationPayloadStore', async () => {
+    const source = await readFile(path.join(process.cwd(), 'src/store/conversationPayloadStore.ts'), 'utf8')
     const objectSource = await readFile(path.join(process.cwd(), 'src/store/contentAddressedObjectStore.ts'), 'utf8')
     const gcSource = await readFile(path.join(process.cwd(), 'src/store/conversationObjectGarbageCollector.ts'), 'utf8')
 
@@ -315,9 +680,9 @@ describe('conversation architecture', () => {
     const mainSource = await readFile(path.join(process.cwd(), 'src/main.ts'), 'utf8')
     const containerSource = await readFile(path.join(process.cwd(), 'src/app/container.ts'), 'utf8')
     const forbiddenMainTokens = [
-      'new PostgresPlatformStore',
-      'new PostGisRepository',
-      'new ArtifactIndexStore',
+      'new PlatformPersistenceFacade',
+      'new ManagedLayerService',
+      'new ArtifactPublicationRepository',
       'new AuditStore',
       'new BetterAuthService',
       'new AuthorizationService',
@@ -446,10 +811,17 @@ describe('conversation architecture', () => {
     expect(runtimeSource.includes('export function artifactTarget')).toBe(true)
   })
 
-  it('keeps security admin routes delegated to SecurityAdminStore instead of raw CRUD SQL', async () => {
+  it('keeps security admin resources split behind an injected application service', async () => {
     const source = await readFile(path.join(process.cwd(), 'src/security/routes.ts'), 'utf8')
+    const serviceSource = await readFile(path.join(process.cwd(), 'src/security/adminService.ts'), 'utf8')
+    const containerSource = await readFile(path.join(process.cwd(), 'src/app/container.ts'), 'utf8')
+    const userSource = await readFile(path.join(process.cwd(), 'src/store/postgres/platformUserRepository.ts'), 'utf8')
+    const workspaceSource = await readFile(path.join(process.cwd(), 'src/store/postgres/workspaceRepository.ts'), 'utf8')
+    const membershipSource = await readFile(path.join(process.cwd(), 'src/store/postgres/membershipRepository.ts'), 'utf8')
+    const policySource = await readFile(path.join(process.cwd(), 'src/store/postgres/rbacPolicyReader.ts'), 'utf8')
     const forbidden = [
       'services.db.execute',
+      'new SecurityAdminStore',
       'db.execute(sql`',
       'SELECT * FROM platform_workspaces',
       'INSERT INTO platform_workspaces',
@@ -457,14 +829,34 @@ describe('conversation architecture', () => {
       'DELETE FROM platform_memberships',
     ]
 
-    expect(source.includes('new SecurityAdminStore(services.db)')).toBe(true)
+    expect(source.includes('services.admin.listUsers()')).toBe(true)
+    expect(source.includes("zValidator('json', adminUserPatchSchema")).toBe(true)
+    expect(source.includes("zValidator('json', adminWorkspaceCreateSchema")).toBe(true)
+    expect(source.includes("zValidator('json', adminMembershipCreateSchema")).toBe(true)
+    expect(serviceSource.includes('this.dependencies.db.transaction')).toBe(true)
+    expect(serviceSource.includes('this.dependencies.workspaces.insert')).toBe(true)
+    expect(serviceSource.includes('this.dependencies.memberships.insert')).toBe(true)
+    expect(serviceSource.includes('platformUsers')).toBe(false)
+    expect(userSource.includes('platformUsers')).toBe(true)
+    expect(userSource.includes('platformWorkspaces')).toBe(false)
+    expect(workspaceSource.includes('platformWorkspaces')).toBe(true)
+    expect(membershipSource.includes('platformMemberships')).toBe(true)
+    expect(policySource.includes('platformRbacPolicies')).toBe(true)
+    expect(containerSource.includes('new SecurityAdminService')).toBe(true)
+    await expect(stat(path.join(process.cwd(), 'src/security/adminStore.ts')))
+      .rejects.toMatchObject({ code: 'ENOENT' })
     for (const token of forbidden) {
       expect(source.includes(token), token).toBe(false)
     }
   })
 
-  it('keeps BetterAuthService delegated to PlatformIdentityStore for platform projections', async () => {
+  it('keeps BetterAuth delegated to a transactional identity service with resource-owned repositories', async () => {
     const source = await readFile(path.join(process.cwd(), 'src/security/authService.ts'), 'utf8')
+    const serviceSource = await readFile(path.join(process.cwd(), 'src/security/platformIdentityService.ts'), 'utf8')
+    const containerSource = await readFile(path.join(process.cwd(), 'src/app/container.ts'), 'utf8')
+    const sessionSource = await readFile(path.join(process.cwd(), 'src/store/postgres/authSessionRepository.ts'), 'utf8')
+    const userSource = await readFile(path.join(process.cwd(), 'src/store/postgres/platformUserRepository.ts'), 'utf8')
+    const membershipSource = await readFile(path.join(process.cwd(), 'src/store/postgres/membershipRepository.ts'), 'utf8')
     const forbidden = [
       'db.execute',
       'sql`',
@@ -474,13 +866,30 @@ describe('conversation architecture', () => {
       'auth_session',
     ]
 
-    expect(source.includes('new PlatformIdentityStore(db)')).toBe(true)
+    expect(source.includes('this.identity.ensureProjection(')).toBe(true)
+    expect(source.includes('new PlatformIdentityStore')).toBe(false)
+    expect(serviceSource.includes('this.dependencies.db.transaction')).toBe(true)
+    expect(serviceSource.includes('this.dependencies.users.upsertIdentityProjection')).toBe(true)
+    expect(serviceSource.includes('this.dependencies.workspaces.ensurePersonal')).toBe(true)
+    expect(serviceSource.includes('this.dependencies.memberships.insert')).toBe(true)
+    expect(serviceSource.includes('platformUsers')).toBe(false)
+    expect(serviceSource.includes('platformWorkspaces')).toBe(false)
+    expect(serviceSource.includes('platformMemberships')).toBe(false)
+    expect(sessionSource.includes('authSession')).toBe(true)
+    expect(sessionSource.includes('platformUsers')).toBe(false)
+    expect(userSource.includes('platformUsers')).toBe(true)
+    expect(userSource.includes('platformWorkspaces')).toBe(false)
+    expect(membershipSource.includes('platformMemberships')).toBe(true)
+    expect(containerSource.includes('new PlatformIdentityService')).toBe(true)
+    expect(containerSource.includes('new BetterAuthService({ db, env, identity: identityService })')).toBe(true)
+    await expect(stat(path.join(process.cwd(), 'src/security/platformIdentityStore.ts')))
+      .rejects.toMatchObject({ code: 'ENOENT' })
     for (const token of forbidden) {
       expect(source.includes(token), token).toBe(false)
     }
   })
 
-  it('keeps artifact HTTP routes delegated to ArtifactIndexStore instead of raw lookup SQL', async () => {
+  it('keeps artifact HTTP routes delegated to the narrow ArtifactReader boundary', async () => {
     const source = await readFile(path.join(process.cwd(), 'src/routes/artifacts.ts'), 'utf8')
     const forbidden = [
       'db.execute',
@@ -489,7 +898,7 @@ describe('conversation architecture', () => {
       'SELECT artifact_id',
     ]
 
-    expect(source.includes('artifactIndexStore.getArtifact')).toBe(true)
+    expect(source.includes('artifacts.getArtifact')).toBe(true)
     for (const token of forbidden) {
       expect(source.includes(token), token).toBe(false)
     }
@@ -617,7 +1026,7 @@ describe('conversation architecture', () => {
     expect(runtimePortSource.includes('type ThreadContextStore')).toBe(true)
     for (const relativePath of productionFiles) {
       const source = await readFile(path.join(root, relativePath), 'utf8')
-      expect(source.includes("from '../store/platformStore.js'"), relativePath).toBe(false)
+      expect(source.includes("from '../store/platformPersistenceFacade.js'"), relativePath).toBe(false)
       expect(source.includes("from '../store/runtimePorts.js'"), relativePath).toBe(true)
     }
   })
@@ -625,7 +1034,7 @@ describe('conversation architecture', () => {
   it('replays completed conversation items from the PostgreSQL repository', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'geo-items-'))
     try {
-      const harness = new PlatformStoreTestHarness()
+      const harness = new PersistenceFacadeTestHarness()
       const store = harness.create(dir)
       await store.initialize()
       const session = await store.createSession()
@@ -653,7 +1062,7 @@ describe('conversation architecture', () => {
   it('replays the latest thread projection and keeps deleted threads removed', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'geo-threads-'))
     try {
-      const harness = new PlatformStoreTestHarness()
+      const harness = new PersistenceFacadeTestHarness()
       const store = harness.create(dir)
       await store.initialize()
       const session = await store.createSession()
@@ -675,7 +1084,7 @@ describe('conversation architecture', () => {
   it('rebuilds derived indexes and pages run summaries without thread fan-out', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'geo-run-index-'))
     try {
-      const harness = new PlatformStoreTestHarness()
+      const harness = new PersistenceFacadeTestHarness()
       const store = harness.create(dir)
       await store.initialize()
       const session = await store.createSession()

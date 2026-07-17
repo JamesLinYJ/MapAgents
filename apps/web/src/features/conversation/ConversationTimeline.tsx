@@ -21,7 +21,7 @@ import { buildFadeUpMotion } from '../../shared/motion'
 import type { DataReferenceSummary } from '../../shared/constants'
 import type { DecisionRequest } from '@geo-agent-platform/shared-types'
 import type { ConversationEntry } from './items'
-import type { ChatPanelProps, MemoryEntry } from './types'
+import type { ChatPanelProps } from './types'
 import { ConversationEntryView } from './ConversationEntry'
 import { ConversationJumpRail } from './ConversationJumpRail'
 import { buildConversationJumpItems, conversationJumpAnchorId } from './conversationJumpItems'
@@ -40,8 +40,6 @@ interface ConversationTimelineProps {
   runStatus?: string
   executionPlan?: ChatPanelProps['executionPlan']
   progressTasks?: ChatPanelProps['tasks']
-  memories?: MemoryEntry[]
-  onRefreshMemories?: () => void
   onSelectArtifact: (id: string) => void
   onForkMessage?: (entryId: string) => void
   onRetry: () => void
@@ -63,8 +61,6 @@ export function ConversationTimeline({
   runStatus,
   executionPlan,
   progressTasks,
-  memories,
-  onRefreshMemories,
   onSelectArtifact,
   onForkMessage,
   onRetry,
@@ -147,9 +143,6 @@ export function ConversationTimeline({
         )}
         {progressTasks && progressTasks.length > 0 && (
           <TaskPanel tasks={progressTasks} entryVariants={entryVariants} />
-        )}
-        {memories && memories.length > 0 && (
-          <MemoryPanel memories={memories} onRefresh={onRefreshMemories} />
         )}
         {activeDecision && (
           <m.div key={activeDecision.decisionId} className="cc-timeline-item cc-timeline-item--notice" layout variants={entryVariants} initial="hidden" animate="visible" exit="exit">
@@ -234,43 +227,6 @@ export function ConversationTimeline({
         {dataReferences.length ? <span>引用 {dataReferences.length} 个数据</span> : uploadedLayerName && <span>已接入 {uploadedLayerName}</span>}
       </div>
     </m.div>
-  )
-}
-
-function MemoryPanel({ memories, onRefresh }: { memories: MemoryEntry[]; onRefresh?: () => void }) {
-  const [isOpen, setIsOpen] = useState(false)
-  if (!memories.length) return null
-
-  return (
-    <div className="cc-memory-panel">
-      <button className="cc-memory-panel__toggle" type="button" onClick={() => setIsOpen(!isOpen)}>
-        <ChevronDown size={14} className={`cc-chevron ${isOpen ? 'cc-chevron--open' : ''}`} />
-        <span>记忆系统</span>
-        <span className="cc-memory-panel__count">{memories.length}</span>
-      </button>
-      <AnimatePresence initial={false}>
-        {isOpen && (
-          <m.div className="cc-memory-panel__list" {...buildFadeUpMotion(false, 0, 4)}>
-            {memories.map((mem) => {
-              const typeLabel = ({ user: '用户', feedback: '反馈', project: '项目', reference: '参考' } as Record<string, string>)[mem.type] ?? mem.type
-              return (
-                <div key={mem.name} className="cc-memory-item">
-                  <span className={`cc-memory-item__type cc-memory-item__type--${mem.type}`}>{typeLabel}</span>
-                  <div className="cc-memory-item__body">
-                    <strong>{mem.name}</strong>
-                    <span>{mem.description}</span>
-                  </div>
-                  <span className="cc-memory-item__age">{mem.age}</span>
-                </div>
-              )
-            })}
-            {onRefresh && (
-              <button className="cc-memory-panel__refresh" type="button" onClick={onRefresh}>刷新记忆</button>
-            )}
-          </m.div>
-        )}
-      </AnimatePresence>
-    </div>
   )
 }
 

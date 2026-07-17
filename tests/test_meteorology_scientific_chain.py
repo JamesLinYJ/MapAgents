@@ -26,7 +26,16 @@ from gis_meteorology.nowcast import build_analysis_scope
 from gis_meteorology.third_party.radar_mosaic_agent import adapter as radar_adapter
 from gis_meteorology.third_party.rainfall_risk_map.adapter import render_rainfall_risk_map
 from gis_meteorology.third_party.short_term_forecast.adapter import generate_area_rainfall_table
-from worker_app import sidecar
+from worker_app.path_sandbox import WorkerPathSandbox
+from worker_app.tool_context import WorkerToolContext
+from worker_app.tool_registry import WorkerToolRegistry
+from worker_app.tools import register_builtin_tools
+
+
+def dispatch_worker_tool(runtime_root: Path, name: str, args: dict[str, object]) -> dict[str, object]:
+    registry = WorkerToolRegistry()
+    register_builtin_tools(registry)
+    return registry.dispatch(name, args, WorkerToolContext(WorkerPathSandbox(runtime_root)))
 
 
 def test_generated_netcdf_inspect_stats_threshold_render_and_report(tmp_path: Path) -> None:
@@ -42,7 +51,13 @@ def test_generated_netcdf_inspect_stats_threshold_render_and_report(tmp_path: Pa
     metadata = service.inspect(source)
     stats = service.stats(source, variable="rain", time_index=0)
     threshold = service.threshold_geojson(source, variable="rain", time_index=0, threshold=1.5)
-    render = service.render_heatmap(source, variable="rain", time_index=0, output_path=tmp_path / "rain.png")
+    render = service.render_heatmap(
+        source,
+        variable="rain",
+        time_index=0,
+        output_path=tmp_path / "rain.png",
+        cog_output_path=tmp_path / "rain.tif",
+    )
     report = service.generate_report_docx(
         source,
         output_path=tmp_path / "report.docx",
@@ -58,11 +73,9 @@ def test_generated_netcdf_inspect_stats_threshold_render_and_report(tmp_path: Pa
 
 def test_worker_reads_extensionless_runtime_object_with_original_filename(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # 平台上传文件是内容寻址对象；即便对象路径无扩展名，worker 也必须使用
     # valueRef 中的原始文件名识别科学格式，而不是把 hash 路径判为 unknown。
-    monkeypatch.setattr(sidecar, "RUNTIME_ROOT", tmp_path.resolve())
     source = tmp_path / "objects" / "sha256" / "ab" / ("a" * 64)
     source.parent.mkdir(parents=True, exist_ok=True)
     dataset = xr.Dataset(
@@ -76,24 +89,31 @@ def test_worker_reads_extensionless_runtime_object_with_original_filename(
         "file_relative_path": source.relative_to(tmp_path).as_posix(),
         "file_name": "202604091955_202604092000.nc",
     }
-    metadata = sidecar.execute_meteorology_tool("inspect_meteorological_dataset", common)
-    stats = sidecar.execute_meteorology_tool("meteorological_stats", {**common, "variable": "QPF"})
-    raster = sidecar.execute_meteorology_tool(
-        "render_meteorological_raster",
-        {**common, "variable": "QPF", "output_relative_path": "artifacts/qpf.png"},
+    metadata = dispatch_worker_tool(tmp_path, "meteorological_inspect", common)
+    stats = dispatch_worker_tool(tmp_path, "meteorological_stats", {**common, "variable": "QPF"})
+    raster = dispatch_worker_tool(
+        tmp_path,
+        "meteorological_render",
+        {
+            **common,
+            "variable": "QPF",
+            "output_relative_path": "artifacts/qpf.png",
+            "output_cog_relative_path": "artifacts/qpf.tif",
+        },
     )
 
     assert metadata["format"] == "NetCDF"
     assert metadata["filename"] == "202604091955_202604092000.nc"
     assert stats["max"] == 4.0
     assert raster["outputRelativePath"] == "artifacts/qpf.png"
+    assert raster["outputCogRelativePath"] == "artifacts/qpf.tif"
 
 
-def test_generated_netcdf_nowcast_reference_chain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sidecar, "RUNTIME_ROOT", tmp_path.resolve())
+def test_generated_netcdf_nowcast_reference_chain(tmp_path: Path) -> None:
     files = []
     for index, value in enumerate((1.0, 4.0)):
-        source = tmp_path / "uploads" / f"rain_202606080{index}00.nc"
+        valid_minute = (index + 1) * 5
+        source = tmp_path / "uploads" / f"202606080000_2026060800{valid_minute:02d}.nc"
         source.parent.mkdir(parents=True, exist_ok=True)
         dataset = xr.Dataset(
             {"rain": (("time", "lat", "lon"), np.array([[[0.0, value], [value, value + 1.0]]]))},
@@ -103,18 +123,24 @@ def test_generated_netcdf_nowcast_reference_chain(tmp_path: Path, monkeypatch: p
         dataset.to_netcdf(source)
         files.append({"fileId": f"file_{index}", "name": source.name, "relativePath": source.relative_to(tmp_path).as_posix()})
 
-    sequence = sidecar.execute_meteorology_tool("create_nowcast_sequence", {"files": files, "variable": "rain"})
-    inspection = sidecar.execute_meteorology_tool("inspect_nowcast_sequence", {"sequence": sequence})
-    analysis = sidecar.execute_meteorology_tool("analyze_nowcast_precipitation", {"sequence": sequence})
-    answer = sidecar.execute_meteorology_tool("answer_nowcast_question", {"analysis": analysis, "question": "未来会下雨吗？"})
-    forecast = sidecar.execute_meteorology_tool("generate_nowcast_forecast_text", {"analysis": analysis})
+    sequence = dispatch_worker_tool(tmp_path, "create_nowcast_sequence", {"files": files, "variable": "rain"})
+    inspection = dispatch_worker_tool(tmp_path, "inspect_nowcast_sequence", {"sequence": sequence})
+    analysis = dispatch_worker_tool(
+        tmp_path,
+        "meteorological_precipitation_nowcast",
+        {"sequence": sequence},
+    )
+    answer = dispatch_worker_tool(tmp_path, "answer_nowcast_question", {"analysis": analysis, "question": "未来会下雨吗？"})
+    forecast = dispatch_worker_tool(tmp_path, "generate_nowcast_forecast_text", {"analysis": analysis})
     candidate = analysis["mapCandidates"][0]
-    raster = sidecar.execute_meteorology_tool(
+    raster = dispatch_worker_tool(
+        tmp_path,
         "render_nowcast_raster",
         {
             "file_relative_path": candidate["relativePath"],
             "variable": candidate["variable"],
             "output_relative_path": "artifacts/nowcast.png",
+            "output_cog_relative_path": "artifacts/nowcast.tif",
         },
     )
 

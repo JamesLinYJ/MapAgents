@@ -144,7 +144,8 @@ function buildToolEntry(
 ): ConversationEntry {
   const callId = output?.callId ?? call?.callId ?? 'unknown'
   const toolName = call?.name ?? output?.name ?? 'unknown_tool'
-  const title = toolLabels.get(toolName) ?? toolName
+  const persistedLabel = toolDisplayLabel(call?.metadata) ?? toolDisplayLabel(output?.metadata)
+  const title = persistedLabel ?? toolLabels.get(toolName) ?? '工具调用'
   const args = safeJsonParse(call?.arguments ?? '')
   const outputText = output?.output ?? output?.body ?? ''
   const status = output ? itemStatus(output) : itemStatus(call)
@@ -186,6 +187,11 @@ function buildToolEntry(
     artifactId,
     details: metadata,
   }
+}
+
+function toolDisplayLabel(metadata: Record<string, unknown> | null | undefined): string | null {
+  const label = metadata?.toolLabel
+  return typeof label === 'string' && label.trim() ? label.trim() : null
 }
 
 function buildTerminalEntry(item: ConversationItem): ConversationEntry | undefined {

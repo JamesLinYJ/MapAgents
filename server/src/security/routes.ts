@@ -9,22 +9,25 @@
 // --------------------------------------------------------------------------
 
 import { Hono } from 'hono'
-import type { Database } from '../db/connection.js'
-import { platformRoleSchema } from '@geo-agent-platform/shared-types/platform'
+import { zValidator } from '@hono/zod-validator'
+import {
+  adminMembershipCreateSchema,
+  adminUserPatchSchema,
+  adminWorkspaceCreateSchema,
+} from '@geo-agent-platform/shared-types/platform'
 import { BetterAuthService } from './authService.js'
-import { SecurityAdminStore } from './adminStore.js'
+import type { SecurityAdminService } from './adminService.js'
 import { AuthorizationError, AuthorizationService } from './authorizationService.js'
 import type { AuthContext } from './types.js'
 
 export interface SecurityServices {
   auth: BetterAuthService
   authorization: AuthorizationService
-  db: Database
+  admin: SecurityAdminService
 }
 
 export function securityRoutes(services: SecurityServices) {
   const app = new Hono()
-  const adminStore = new SecurityAdminStore(services.db)
 
   app.get('/api/v1/auth/me', c => {
     const auth = getAuth(c)
@@ -35,18 +38,20 @@ export function securityRoutes(services: SecurityServices) {
   app.get('/api/v1/admin/users', async c => {
     const auth = requireAuth(c)
     await services.authorization.enforce(auth, 'admin', 'admin', { workspaceId: auth.defaultWorkspaceId })
-    return c.json(await adminStore.listUsers())
+    return c.json(await services.admin.listUsers())
   })
 
-  app.patch('/api/v1/admin/users/:userId', async c => {
+  app.patch('/api/v1/admin/users/:userId', zValidator('json', adminUserPatchSchema, (result, c) => {
+    if (!result.success) return c.json({ detail: firstValidationMessage(result.error) }, 400)
+  }), async c => {
     const auth = requireAuth(c)
     services.auth.requireCsrf(c.req.raw, auth)
     await services.authorization.enforce(auth, 'admin', 'admin', { workspaceId: auth.defaultWorkspaceId })
-    const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
-    const status = typeof body.status === 'string' ? body.status : null
-    const displayName = typeof body.displayName === 'string' ? body.displayName : null
-    await adminStore.updateUser(c.req.param('userId'), { displayName, status })
-    if (status === 'disabled') await services.auth.revokeUserSessionsByPlatformUserId(c.req.param('userId'))
+    const body = c.req.valid('json')
+    const userId = c.req.param('userId')
+    const updated = await services.admin.updateUser(userId, body)
+    if (!updated) return c.json({ detail: '用户不存在' }, 404)
+    if (body.status === 'disabled') await services.auth.revokeUserSessionsByPlatformUserId(userId)
     return c.json({ updated: true })
   })
 
@@ -54,17 +59,20 @@ export function securityRoutes(services: SecurityServices) {
     const auth = requireAuth(c)
     await services.authorization.enforce(auth, 'workspace', 'read', { workspaceId: auth.defaultWorkspaceId })
     const isPlatformAdmin = auth.roles.some(role => role.role === 'platform_admin')
-    return c.json(await adminStore.listWorkspaces({ platformAdmin: isPlatformAdmin, userId: auth.userId }))
+    return c.json(await services.admin.listWorkspaces({ platformAdmin: isPlatformAdmin, userId: auth.userId }))
   })
 
-  app.post('/api/v1/admin/workspaces', async c => {
+  app.post('/api/v1/admin/workspaces', zValidator('json', adminWorkspaceCreateSchema, (result, c) => {
+    if (!result.success) return c.json({ detail: firstValidationMessage(result.error) }, 400)
+  }), async c => {
     const auth = requireAuth(c)
     services.auth.requireCsrf(c.req.raw, auth)
     await services.authorization.enforce(auth, 'admin', 'admin', { workspaceId: auth.defaultWorkspaceId })
-    const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
-    const name = requiredString(body.name, '工作区名称')
-    const description = typeof body.description === 'string' ? body.description : ''
-    const workspace = await adminStore.createWorkspaceWithAdmin({ name, description, createdByUserId: auth.userId })
+    const body = c.req.valid('json')
+    const workspace = await services.admin.createWorkspaceWithAdmin({
+      ...body,
+      createdByUserId: auth.userId,
+    })
     return c.json(workspace, 201)
   })
 
@@ -73,41 +81,42 @@ export function securityRoutes(services: SecurityServices) {
     await services.authorization.enforce(auth, 'workspace', 'admin', { workspaceId: auth.defaultWorkspaceId })
     const workspaceId = c.req.query('workspaceId') ?? auth.defaultWorkspaceId
     await services.authorization.enforce(auth, 'workspace', 'admin', { workspaceId })
-    return c.json(await adminStore.listMemberships(workspaceId))
+    return c.json(await services.admin.listMemberships(workspaceId))
   })
 
-  app.post('/api/v1/admin/memberships', async c => {
+  app.post('/api/v1/admin/memberships', zValidator('json', adminMembershipCreateSchema, (result, c) => {
+    if (!result.success) return c.json({ detail: firstValidationMessage(result.error) }, 400)
+  }), async c => {
     const auth = requireAuth(c)
     services.auth.requireCsrf(c.req.raw, auth)
-    const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
-    const workspaceId = requiredString(body.workspaceId, 'workspaceId')
-    const userId = requiredString(body.userId, 'userId')
-    const role = platformRoleSchema.parse(requiredString(body.role, 'role'))
-    await services.authorization.enforce(auth, 'workspace', 'admin', { workspaceId })
-    await adminStore.addMembership({ workspaceId, userId, role })
-    return c.json({ created: true })
+    const body = c.req.valid('json')
+    await services.authorization.enforce(auth, 'workspace', 'admin', { workspaceId: body.workspaceId })
+    const created = await services.admin.addMembership(body)
+    return created ? c.json({ created: true }, 201) : c.json({ created: false })
   })
 
   app.delete('/api/v1/admin/memberships/:membershipId', async c => {
     const auth = requireAuth(c)
     services.auth.requireCsrf(c.req.raw, auth)
-    const workspaceId = await adminStore.getMembershipWorkspace(c.req.param('membershipId'))
+    const membershipId = c.req.param('membershipId')
+    const workspaceId = await services.admin.getMembershipWorkspace(membershipId)
     if (!workspaceId) return c.json({ detail: '成员关系不存在' }, 404)
     await services.authorization.enforce(auth, 'workspace', 'admin', { workspaceId })
-    await adminStore.deleteMembership(c.req.param('membershipId'))
+    const deleted = await services.admin.deleteMembership(membershipId)
+    if (!deleted) return c.json({ detail: '成员关系不存在' }, 404)
     return c.json({ deleted: true })
   })
 
   app.get('/api/v1/admin/roles', async c => {
     const auth = requireAuth(c)
     await services.authorization.enforce(auth, 'admin', 'admin', { workspaceId: auth.defaultWorkspaceId })
-    return c.json(await adminStore.listRoles())
+    return c.json(await services.admin.listRoles())
   })
 
   app.get('/api/v1/admin/audit-events', async c => {
     const auth = requireAuth(c)
     await services.authorization.enforce(auth, 'admin', 'admin', { workspaceId: auth.defaultWorkspaceId })
-    return c.json(await adminStore.listAuditEvents())
+    return c.json(await services.admin.listAuditEvents())
   })
 
   return app
@@ -152,11 +161,10 @@ function isAuthContext(value: unknown): value is AuthContext {
     && typeof (value as { defaultWorkspaceId?: unknown }).defaultWorkspaceId === 'string'
 }
 
-function requiredString(value: unknown, label: string): string {
-  if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} 不能为空`)
-  return value.trim()
-}
-
 function formatError(error: unknown, prefix: string): string {
   return error instanceof Error && error.message ? `${prefix}: ${error.message}` : prefix
+}
+
+function firstValidationMessage(error: { issues: Array<{ message: string }> }): string {
+  return error.issues[0]?.message ?? '请求参数无效'
 }

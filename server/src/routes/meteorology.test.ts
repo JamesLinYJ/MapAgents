@@ -12,7 +12,7 @@ import os from 'node:os'
 import { Hono } from 'hono'
 import { describe, expect, it } from 'vitest'
 import type { Database } from '../db/connection.js'
-import type { PostgresPlatformStore } from '../store/platformStore.js'
+import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import { ensureMeteorologicalTables, meteorologyRoutes } from './meteorology.js'
 import { verifySchema } from '../security/database.js'
 import type { SecurityServices } from '../security/routes.js'
@@ -26,7 +26,7 @@ describe('meteorology routes', () => {
         calls.push(filters)
         return [{ datasetId: 'dataset-b' }]
       },
-    } as unknown as PostgresPlatformStore
+    } as unknown as PlatformPersistenceFacade
     const app = new Hono()
     app.use('*', async (c, next) => {
       c.set('auth', TEST_AUTH)

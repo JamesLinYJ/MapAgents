@@ -1,8 +1,11 @@
 // +-------------------------------------------------------------------------
 //
-//   地理智能平台 - Token 用量统计面板
+//   地理智能平台 - 模型词元用量统计面板
 //
 //   文件:       UsageManagementPanel.tsx
+//
+//   日期:       2026年07月13日
+//   作者:       JamesLinYJ
 // --------------------------------------------------------------------------
 
 import type { TokenUsageBucket, TokenUsageLimit, TokenUsageRun, TokenUsageSummary } from '@geo-agent-platform/shared-types'
@@ -20,7 +23,7 @@ export function UsageManagementPanel({ summary }: UsageManagementPanelProps) {
     return (
       <main className="tool-management__detail tool-management__detail--extensions">
         <LiquidGlassSurface as="section" variant="strong" className="panel usage-panel">
-          <PanelTitle eyebrow="Token Usage" title="用量统计" />
+          <PanelTitle eyebrow="模型计量" title="词元用量" />
           <div className="panel__section">
             <div className="panel__empty">正在加载真实用量统计…</div>
           </div>
@@ -32,12 +35,12 @@ export function UsageManagementPanel({ summary }: UsageManagementPanelProps) {
   return (
     <main className="tool-management__detail tool-management__detail--extensions">
       <LiquidGlassSurface as="section" variant="strong" className="panel usage-panel">
-        <PanelTitle eyebrow="Token Usage" title="用量统计" count={summary.totals.runCount} />
+        <PanelTitle eyebrow="模型计量" title="词元用量" count={summary.totals.runCount} />
         <div className="usage-metric-grid">
-          <MetricCard label="输入 token" value={formatNumber(summary.totals.inputTokens)} hint={`${summary.totals.runsWithUsage} 个运行已报告 usage`} />
-          <MetricCard label="输出 token" value={formatNumber(summary.totals.outputTokens)} hint="来自模型 provider 返回值" />
-          <MetricCard label="缓存命中 token" value={formatNumber(summary.totals.cacheHitInputTokens)} hint={`${summary.totals.cacheHitReportedRuns} 个运行报告缓存明细`} />
-          <MetricCard label="总 token" value={formatNumber(summary.totals.totalTokens)} hint={`${summary.totals.runsWithoutUsage} 个运行未报告 usage`} />
+          <MetricCard label="输入词元" value={formatNumber(summary.totals.inputTokens)} hint={`${summary.totals.runsWithUsage} 个运行已报告实际用量`} />
+          <MetricCard label="输出词元" value={formatNumber(summary.totals.outputTokens)} hint="来自模型服务返回的用量数据" />
+          <MetricCard label="缓存命中词元" value={formatNumber(summary.totals.cacheHitInputTokens)} hint={`${summary.totals.cacheHitReportedRuns} 个运行报告缓存明细`} />
+          <MetricCard label="总词元" value={formatNumber(summary.totals.totalTokens)} hint={`${summary.totals.runsWithoutUsage} 个运行未报告实际用量`} />
         </div>
         <div className="usage-limit-grid">
           {summary.limits.map((limit) => <UsageLimitCard key={limit.period} limit={limit} />)}
@@ -52,7 +55,7 @@ export function UsageManagementPanel({ summary }: UsageManagementPanelProps) {
       </LiquidGlassSurface>
 
       <div className="usage-grid">
-        <UsageBucketPanel title="按 Provider" buckets={summary.byProvider} />
+        <UsageBucketPanel title="按服务提供方" buckets={summary.byProvider} />
         <UsageBucketPanel title="按模型" buckets={summary.byModel} />
         <UsageBucketPanel title="按运行状态" buckets={summary.byStatus} />
       </div>
@@ -84,7 +87,7 @@ function UsageLimitCard({ limit }: { limit: TokenUsageLimit }) {
       <div>
         <span>{limit.label}限制</span>
         <strong>{limit.enabled ? `${formatNumber(limit.usedTokens)} / ${formatNumber(limit.limitTokens ?? 0)}` : `${formatNumber(limit.usedTokens)} 已用`}</strong>
-        <p>{limit.enabled ? `剩余 ${formatNumber(limit.remainingTokens ?? 0)} token` : '未启用硬限制'}</p>
+        <p>{limit.enabled ? `剩余 ${formatNumber(limit.remainingTokens ?? 0)} 词元` : '未启用硬限制'}</p>
       </div>
       <StatusPill label={limit.enabled ? (limit.exceeded ? '已达上限' : '生效中') : '未启用'} tone={tone} />
       <small>重置：{formatDateTime(limit.resetsAt)}</small>
@@ -104,7 +107,7 @@ function UsageBucketPanel({ title, buckets }: { title: string; buckets: TokenUsa
               <span>{bucket.runCount} 运行 · {bucket.runsWithoutUsage} 未报告</span>
             </div>
             <div>
-              <strong>{formatNumber(bucket.totalTokens)}</strong>
+              <strong>{formatNumber(bucket.totalTokens)} 词元</strong>
               <span>输入 {formatNumber(bucket.inputTokens)} · 输出 {formatNumber(bucket.outputTokens)} · 缓存 {formatNumber(bucket.cacheHitInputTokens)}</span>
             </div>
           </article>

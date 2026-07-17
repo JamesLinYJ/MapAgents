@@ -15,28 +15,17 @@
 
 import maplibregl, { LngLatBounds, Map, type StyleSpecification } from 'maplibre-gl/dist/maplibre-gl-csp'
 
-import type { ArtifactRef, BasemapDescriptor } from '@geo-agent-platform/shared-types'
+import type { BasemapDescriptor } from '@geo-agent-platform/shared-types'
+import type { SceneRenderLayer } from './useMapScene'
 import { formatDurationLabel, formatRouteDistance } from './MapCanvasFormatters'
 
 export type GeoJsonPayload = GeoJSON.FeatureCollection
 
-export interface MapCanvasLayer {
-  kind: 'geojson' | 'raster'
-  artifact: ArtifactRef
-  data?: GeoJsonPayload
-  imageUrl?: string
-  coordinates?: [[number, number], [number, number], [number, number], [number, number]]
-  visible: boolean
-  opacity: number
-  featureCount: number
-  geometrySummary: string
-}
-
-export function isStaleArtifactMapError(message: string, layers: MapCanvasLayer[]) {
-  const artifactIds = message.match(/artifact_[A-Za-z0-9]+/gu) ?? []
-  if (!artifactIds.length) return false
-  const activeIds = new Set(layers.map(layer => layer.artifact.artifactId))
-  return artifactIds.every(artifactId => !activeIds.has(artifactId))
+export function isStaleMapLayerError(message: string, layers: SceneRenderLayer[]) {
+  const layerIds = message.match(/map_layer_[A-Za-z0-9_]+/gu) ?? []
+  if (!layerIds.length) return false
+  const activeIds = new Set(layers.map(layer => layer.manifest.mapLayerId))
+  return layerIds.every(layerId => !activeIds.has(layerId))
 }
 
 export function formatMapResourceWarning(message: string) {
@@ -162,18 +151,14 @@ export function boundsFromCollection(collection?: GeoJSON.FeatureCollection) {
   return bounds.isEmpty() ? null : bounds
 }
 
-export function boundsFromLayer(layer?: MapCanvasLayer) {
+export function boundsFromLayer(layer?: SceneRenderLayer) {
   if (!layer) {
     return null
   }
-  if (layer.kind === 'geojson') {
-    return boundsFromCollection(layer.data)
-  }
-  if (!layer.coordinates) {
-    return null
-  }
   const bounds = new LngLatBounds()
-  layer.coordinates.forEach((point) => bounds.extend(point))
+  const [west, south, east, north] = layer.manifest.bounds
+  bounds.extend([west, south])
+  bounds.extend([east, north])
   return bounds.isEmpty() ? null : bounds
 }
 
@@ -200,7 +185,7 @@ export function queryRenderedArtifactFeatures(map: Map, point: maplibregl.PointL
   // MapLibre 在样式初始化、切换和销毁边界会短暂返回空 style；鼠标移动属于高频 UI 事件，
   // 这里把未就绪状态视为“当前没有可悬停的结果图层”，避免非业务错误冒泡到页面级边界。
   const layerIds = (map.getStyle()?.layers ?? [])
-    .filter((layer) => layer.id.startsWith('artifact-'))
+    .filter((layer) => layer.id.startsWith('map-layer-'))
     .map((layer) => layer.id)
   if (!layerIds.length) {
     return []

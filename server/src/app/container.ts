@@ -19,18 +19,27 @@ import { ApplicationInstanceLock } from '../db/applicationInstanceLock.js'
 import type { Env } from '../framework/env.js'
 import { discoverAndLoad } from '../framework/loader.js'
 import { ToolRegistry } from '../framework/registry.js'
-import { PostGisRepository } from '../gis/postgis.js'
+import { ManagedLayerService } from '../gis/managedLayers/managedLayerService.js'
+import { MapTileGateway } from '../map/mapTileGateway.js'
 import { seedLayersFromDirectory } from '../gis/seedLayers.js'
 import { ModelAdapterRegistry } from '../model/registry.js'
 import { errorLogPayload, logger } from '../observability/logger.js'
 import { ensureMeteorologicalTables } from '../routes/meteorology.js'
 import { ensureSecurityTables } from '../security/database.js'
 import { BetterAuthService } from '../security/authService.js'
+import { SecurityAdminService } from '../security/adminService.js'
 import { AuthorizationService } from '../security/authorizationService.js'
+import { PlatformIdentityService } from '../security/platformIdentityService.js'
 import type { SecurityServices } from '../security/routes.js'
-import { PostgresPlatformStore } from '../store/platformStore.js'
-import { ArtifactIndexStore } from '../store/postgres/artifactIndexStore.js'
+import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
+import { ArtifactPublicationRepository } from '../store/postgres/artifactPublicationRepository.js'
+import { AuthSessionRepository } from '../store/postgres/authSessionRepository.js'
+import { MembershipRepository } from '../store/postgres/membershipRepository.js'
+import { PlatformUserRepository } from '../store/postgres/platformUserRepository.js'
+import { MapStore } from '../store/postgres/mapStore.js'
 import { AuditStore } from '../store/postgres/auditStore.js'
+import { RbacPolicyReader } from '../store/postgres/rbacPolicyReader.js'
+import { WorkspaceRepository } from '../store/postgres/workspaceRepository.js'
 import { validateToolContracts } from '../tools/contractValidator.js'
 import { UsageStatsService } from '../usage/usageStatsService.js'
 import { BackgroundTaskRegistry } from '../workflows/backgroundTaskRegistry.js'
@@ -46,9 +55,11 @@ export interface AppContainer {
   db: Database
   instanceLock: ApplicationInstanceLock
   runtimeRoot: string
-  store: PostgresPlatformStore
-  postgis: PostGisRepository
-  artifactIndexStore: ArtifactIndexStore
+  store: PlatformPersistenceFacade
+  managedLayers: ManagedLayerService
+  artifactRepository: ArtifactPublicationRepository
+  mapStore: MapStore
+  mapTileGateway: MapTileGateway
   auditStore: AuditStore
   toolRegistry: ToolRegistry
   modelRegistry: ModelAdapterRegistry
@@ -71,16 +82,36 @@ export async function createAppContainer(input: { env: Env; projectRoot: string 
   const db = createDb(env.DATABASE_URL)
   const instanceLock = new ApplicationInstanceLock(db)
   const runtimeRoot = path.resolve(env.RUNTIME_ROOT)
-  const store = new PostgresPlatformStore(db, path.join(runtimeRoot, 'conversations'))
-  const postgis = new PostGisRepository(db)
-  const artifactIndexStore = new ArtifactIndexStore(db)
+  const store = new PlatformPersistenceFacade(db, path.join(runtimeRoot, 'conversations'))
+  const managedLayers = new ManagedLayerService(db)
+  const artifactRepository = new ArtifactPublicationRepository(db)
+  const mapStore = new MapStore(db, store.mapSceneBus)
+  const mapTileGateway = new MapTileGateway(env)
   const auditStore = new AuditStore(db)
+  const userRepository = new PlatformUserRepository(db)
+  const workspaceRepository = new WorkspaceRepository(db)
+  const membershipRepository = new MembershipRepository(db)
+  const identityService = new PlatformIdentityService({
+    db,
+    users: userRepository,
+    workspaces: workspaceRepository,
+    memberships: membershipRepository,
+    authSessions: new AuthSessionRepository(db),
+  })
+  const adminService = new SecurityAdminService({
+    db,
+    users: userRepository,
+    workspaces: workspaceRepository,
+    memberships: membershipRepository,
+    policies: new RbacPolicyReader(db),
+    audit: auditStore,
+  })
   const toolRegistry = new ToolRegistry()
   const modelRegistry = new ModelAdapterRegistry(env)
   const security: SecurityServices = {
-    auth: new BetterAuthService(db, env),
+    auth: new BetterAuthService({ db, env, identity: identityService }),
     authorization: new AuthorizationService(db, auditStore),
-    db,
+    admin: adminService,
   }
   const runtimeConfigDefaults = defaultRuntimeConfig({
     sandbox: {
@@ -98,7 +129,7 @@ export async function createAppContainer(input: { env: Env; projectRoot: string 
 
   if (env.SEED_LAYERS_DIR) {
     const seedDirectory = path.resolve(projectRoot, env.SEED_LAYERS_DIR)
-    const seededLayers = await seedLayersFromDirectory(postgis, seedDirectory)
+    const seededLayers = await seedLayersFromDirectory(managedLayers, seedDirectory)
     logger.info({ count: seededLayers.length, seedLayersConfigured: true }, 'seeded layers')
   }
 
@@ -141,7 +172,7 @@ export async function createAppContainer(input: { env: Env; projectRoot: string 
       await jobQueue.unscheduleTask(taskId, task?.queueJobId)
     },
   })
-  await discoverAndLoad(postgis, { env, registry: toolRegistry, scheduledTaskService })
+  await discoverAndLoad(managedLayers, { env, registry: toolRegistry, scheduledTaskService })
   await validateWorkerContracts(env, toolRegistry)
   await workflowDefinitionService.initialize()
   await jobQueue.start((payload, queueJobId) => workflowRunner.executeQueuedJob(payload, queueJobId))
@@ -154,8 +185,10 @@ export async function createAppContainer(input: { env: Env; projectRoot: string 
     instanceLock,
     runtimeRoot,
     store,
-    postgis,
-    artifactIndexStore,
+    managedLayers,
+    artifactRepository,
+    mapStore,
+    mapTileGateway,
     auditStore,
     toolRegistry,
     modelRegistry,
@@ -173,7 +206,7 @@ export async function createAppContainer(input: { env: Env; projectRoot: string 
       await jobQueue.stop()
       await Promise.all([runTasks.drain(), backgroundTasks.drain()])
     },
-    checkReadiness: () => checkReadiness({ db, postgis, instanceLock, env }),
+    checkReadiness: () => checkReadiness({ db, managedLayers, instanceLock, env }),
   }
   } catch (error) {
     logger.error({ error: errorLogPayload(error) }, 'application container initialization failed')
@@ -183,7 +216,7 @@ export async function createAppContainer(input: { env: Env; projectRoot: string 
       })
     }
     await store.closeConversationStore().catch(cleanupError => {
-      logger.error({ error: errorLogPayload(cleanupError) }, 'conversation store cleanup after startup failure failed')
+      logger.error({ error: errorLogPayload(cleanupError) }, 'payload store cleanup after startup failure failed')
     })
     await instanceLock.release().catch(cleanupError => {
       logger.error({ error: errorLogPayload(cleanupError) }, 'instance lock cleanup after startup failure failed')
@@ -213,7 +246,7 @@ async function validateWorkerContracts(env: Env, toolRegistry: ToolRegistry): Pr
 
 async function checkReadiness(input: {
   db: Database
-  postgis: PostGisRepository
+  managedLayers: ManagedLayerService
   instanceLock: ApplicationInstanceLock
   env: Env
 }): Promise<{ status: 'ok' | 'degraded'; checks: Record<string, { ok: boolean; detail?: string }> }> {
@@ -230,11 +263,10 @@ async function checkReadiness(input: {
     checks.database = { ok: false, detail: '数据库不可用' }
   }
 
-  const postgisStatus = await input.postgis.status()
+  const postgisStatus = await input.managedLayers.status()
   if (postgisStatus.available) {
     checks.postgis = { ok: true }
   } else {
-    if (postgisStatus.error) logger.error({ error: errorLogPayload(postgisStatus.error) }, 'postgis health check failed')
     checks.postgis = { ok: false, detail: 'PostGIS 不可用' }
   }
 

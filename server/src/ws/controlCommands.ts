@@ -12,7 +12,7 @@ import { z } from 'zod'
 
 import { AzureSpeechService } from '../speech/azureSpeechService.js'
 import { agentRuntimeConfigSchema } from '@geo-agent-platform/shared-types/runtime'
-import { StoreNotFoundError } from '../store/platformStore.js'
+import { StoreNotFoundError } from '../store/storeErrors.js'
 import type { WsCommandRegistry } from './commandRegistry.js'
 
 const emptyPayloadSchema = z.object({}).passthrough()
@@ -121,7 +121,7 @@ export function registerControlCommands(registry: WsCommandRegistry): void {
     handler: (payload, context) => {
       const auth = context.auth
       if (!auth) throw new Error('WebSocket 命令需要登录。')
-      return context.dependencies.postgis.listVisibleLayers(
+      return context.dependencies.managedLayers.listVisibleLayers(
         auth.defaultWorkspaceId,
         payload.sessionId ?? null,
         payload.threadId ?? null,
@@ -134,7 +134,7 @@ export function registerControlCommands(registry: WsCommandRegistry): void {
     payloadSchema: layerUpdateSchema,
     auth: 'required',
     csrf: true,
-    handler: (payload, context) => context.dependencies.postgis.updateLayerMetadata(payload.layerKey, payload.update),
+    handler: (payload, context) => context.dependencies.managedLayers.updateLayerMetadata(payload.layerKey, payload.update),
   })
 
   registry.register({
@@ -143,7 +143,7 @@ export function registerControlCommands(registry: WsCommandRegistry): void {
     auth: 'required',
     csrf: true,
     handler: async (payload, context) => {
-      const deleted = await context.dependencies.postgis.deleteLayer(payload.layerKey)
+      const deleted = await context.dependencies.managedLayers.deleteLayer(payload.layerKey)
       if (!deleted) throw new StoreNotFoundError(`图层 '${payload.layerKey}' 不存在`)
       return { deleted: true, layerKey: payload.layerKey }
     },

@@ -74,12 +74,12 @@ export function registerCoreCommands(registry: WsCommandRegistry): void {
     auth: 'required',
     csrf: false,
     handler: async (_payload, context) => {
-      const postgisStatus = await context.dependencies.postgis.status()
+      const postgisStatus = await context.dependencies.managedLayers.status()
       return {
         catalogBackend: 'typescript',
         postgisEnabled: postgisStatus.available,
         postgisError: postgisStatus.error,
-        conversationStoreRoot: context.dependencies.store.getConversationStoreRoot(),
+        payloadStoreRoot: context.dependencies.store.getPayloadStoreRoot(),
         providers: context.dependencies.modelRegistry.descriptors(),
         toolProviders: context.dependencies.toolRegistry.providerStatuses(),
       }

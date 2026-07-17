@@ -4,7 +4,7 @@
 import type { RunTaskManager } from '../agent/runTaskManager.js'
 import type { SecurityServices } from '../security/routes.js'
 import type { AuthContext } from '../security/types.js'
-import type { PostgresPlatformStore } from '../store/platformStore.js'
+import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import type { UsageStatsService } from '../usage/usageStatsService.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 import { workflowRunsTotal } from '../observability/metrics.js'
@@ -62,7 +62,7 @@ export interface ScheduledTaskSnapshot {
 
 export class ScheduledTaskService {
   constructor(private readonly deps: {
-    store: PostgresPlatformStore
+    store: PlatformPersistenceFacade
     definitions: WorkflowDefinitionService
     compiler: WorkflowCompiler
     jobQueue: JobQueueService

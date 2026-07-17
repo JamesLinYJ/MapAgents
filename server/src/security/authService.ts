@@ -17,7 +17,7 @@ import { authAccount, authSession, authUser, authVerification } from '../db/sche
 import type { Env } from '../framework/env.js'
 import type { AuthContext, AuthRoleBinding } from './types.js'
 import type { AuthMe } from '../schemas/types.js'
-import { PlatformIdentityStore } from './platformIdentityStore.js'
+import type { PlatformIdentityService } from './platformIdentityService.js'
 
 const betterAuthSessionProjectionSchema = z.object({
   session: z.object({
@@ -70,11 +70,13 @@ type BetterAuthRuntime = ReturnType<typeof createBetterAuthRuntime>
 
 export class BetterAuthService {
   readonly auth: BetterAuthRuntime
-  private readonly identityStore: PlatformIdentityStore
+  private readonly env: Env
+  private readonly identity: PlatformIdentityService
 
-  constructor(db: Database, private readonly env: Env) {
-    this.auth = createBetterAuthRuntime(db, env, [...this.trustedOrigins()])
-    this.identityStore = new PlatformIdentityStore(db)
+  constructor(input: { db: Database; env: Env; identity: PlatformIdentityService }) {
+    this.env = input.env
+    this.identity = input.identity
+    this.auth = createBetterAuthRuntime(input.db, input.env, [...this.trustedOrigins()])
   }
 
   handler(request: Request): Promise<Response> {
@@ -144,9 +146,7 @@ export class BetterAuthService {
   }
 
   async revokeUserSessionsByPlatformUserId(platformUserId: string): Promise<void> {
-    const subject = await this.identityStore.getSubjectByPlatformUserId(platformUserId)
-    if (!subject) return
-    await this.identityStore.revokeBetterAuthSessions(subject)
+    await this.identity.revokePlatformUserSessions(platformUserId)
   }
 
   private async ensurePlatformProjection(session: BetterAuthSessionProjection): Promise<AuthContext | null> {
@@ -154,30 +154,18 @@ export class BetterAuthService {
     const email = requireString(session.user.email, 'Better Auth email').toLowerCase()
     const displayName = requireString(session.user.name || email, 'Better Auth user name')
     const platformUserId = platformUserIdFor(authUserId)
-    const { created, user: platformUser } = await this.identityStore.upsertUserProjection({
+    const { user: platformUser, roles } = await this.identity.ensureProjection({
       platformUserId,
-      subject: authUserId,
+      authUserId,
       email,
       displayName,
+      personalWorkspaceId: workspaceIdFor(email),
+      bootstrapAdmin: this.env.BOOTSTRAP_ADMIN_EMAIL?.toLowerCase() === email,
     })
-    if (!platformUser || platformUser.status !== 'active') {
-      await this.identityStore.revokeBetterAuthSessions(authUserId)
+    if (platformUser.status !== 'active') {
+      await this.identity.revokeAuthUserSessions(authUserId)
       return null
     }
-
-    if (created) {
-      const workspaceId = workspaceIdFor(email)
-      await this.identityStore.ensurePersonalWorkspace(workspaceId, platformUser.userId, displayName)
-      await this.identityStore.ensureMembership(workspaceId, platformUser.userId, 'analyst')
-    }
-    if (this.env.BOOTSTRAP_ADMIN_EMAIL?.toLowerCase() === email) {
-      const workspaceId = workspaceIdFor(email)
-      await this.identityStore.ensurePersonalWorkspace(workspaceId, platformUser.userId, displayName)
-      await this.identityStore.ensureMembership(workspaceId, platformUser.userId, 'platform_admin')
-      await this.identityStore.ensureMembership(workspaceId, platformUser.userId, 'workspace_admin')
-    }
-
-    const roles = await this.listUserRoles(platformUser.userId)
     if (!roles.length) return null
     return {
       userId: platformUser.userId,
@@ -193,15 +181,15 @@ export class BetterAuthService {
   }
 
   async isAuthContextActive(auth: AuthContext): Promise<boolean> {
-    return this.identityStore.isAuthSessionActive(auth.authSessionId)
+    return this.identity.isAuthSessionActive(auth.authSessionId)
   }
 
   async listUserRoles(userId: string): Promise<AuthRoleBinding[]> {
-    return this.identityStore.listUserRoles(userId)
+    return this.identity.listUserRoles(userId)
   }
 
   async buildServiceAuthContext(platformUserId: string, workspaceId: string): Promise<AuthContext> {
-    const user = await this.identityStore.getUserByPlatformUserId(platformUserId)
+    const user = await this.identity.getUser(platformUserId)
     if (!user || user.status !== 'active') {
       throw new Error('Workflow 创建者已禁用或不存在，任务不会执行。')
     }
@@ -212,9 +200,9 @@ export class BetterAuthService {
     }
     return {
       userId: user.userId,
-      subject: requireString(user.subject, '平台用户 subject'),
-      email: requireString(user.email, '平台用户 email').toLowerCase(),
-      displayName: requireString(user.displayName, '平台用户 displayName'),
+      subject: user.subject,
+      email: user.email.toLowerCase(),
+      displayName: user.displayName,
       authSessionId: `workflow:${user.userId}`,
       authSessionExpiresAt: null,
       csrfToken: '',

@@ -332,7 +332,7 @@ function ToolContractSummary({ tool, formState }: { tool: ToolDescriptor; formSt
     <div className="tool-mini-app__contract">
       <div>
         <strong>当前步骤</strong>
-        <p>{tool.label} · {tool.name}</p>
+        <p>{tool.label}</p>
       </div>
       <div className="tool-mini-app__contract-grid">
         {required.length ? required.map((parameter) => (

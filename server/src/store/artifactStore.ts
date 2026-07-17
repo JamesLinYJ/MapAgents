@@ -10,14 +10,14 @@
 
 import type { ArtifactRef } from '../schemas/types.js'
 import { nowUtc } from '../utils/ids.js'
-import type { ConversationIndexStore } from './conversationIndexStore.js'
-import type { ArtifactRepository } from './postgres/artifactIndexStore.js'
+import type { ConversationProjectionIndex } from './conversationProjectionIndex.js'
+import type { ArtifactRepository } from './postgres/artifactRepository.js'
 
 // Artifact 元数据、归属与线程导航投影都由 PostgreSQL 原子持久化；文件系统
 // 只保存 metadata.relativePath 指向的内容，不再维护 artifacts.jsonl 第二事实源。
 export class ArtifactStore {
   constructor(
-    private readonly index: ConversationIndexStore,
+    private readonly index: ConversationProjectionIndex,
     private readonly artifactRepository: ArtifactRepository,
   ) {}
 

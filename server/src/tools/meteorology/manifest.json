@@ -318,7 +318,7 @@
     {
       "name": "meteorological_render",
       "label": "渲染气象栅格",
-      "description": "渲染气象变量为地图 PNG",
+      "description": "生成气象变量 COG 地图与 PNG 预览",
       "group": "气象",
       "tags": [
         "meteorology"
@@ -1053,7 +1053,7 @@
     {
       "name": "render_nowcast_raster",
       "label": "渲染短时临近预报（短临）栅格",
-      "description": "渲染短时临近预报（短临）候选时次为地图 PNG",
+      "description": "生成短时临近预报候选时次 COG 地图与 PNG 预览",
       "group": "气象",
       "tags": [
         "meteorology"

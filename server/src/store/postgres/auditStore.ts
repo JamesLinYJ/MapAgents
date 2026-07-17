@@ -8,7 +8,11 @@
 //   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
+import { auditEventSchema, type AuditEvent } from '@geo-agent-platform/shared-types/platform'
+import { desc } from 'drizzle-orm'
+
 import type { Database } from '../../db/connection.js'
+import { decodeRequiredRecord } from '../../db/valueDecoders.js'
 import { platformAuditEvents } from '../../db/schema.js'
 import { makeId } from '../../utils/ids.js'
 
@@ -37,5 +41,23 @@ export class AuditStore {
       metadataJson: input.metadata,
       createdAt: new Date(),
     })
+  }
+
+  async listRecent(limit = 500): Promise<AuditEvent[]> {
+    const safeLimit = Math.min(1_000, Math.max(1, Math.trunc(limit)))
+    const rows = await this.db.select().from(platformAuditEvents)
+      .orderBy(desc(platformAuditEvents.createdAt))
+      .limit(safeLimit)
+    return rows.map(row => auditEventSchema.parse({
+      auditEventId: row.auditEventId,
+      actorUserId: row.actorUserId,
+      workspaceId: row.workspaceId,
+      action: row.action,
+      objectType: row.objectType,
+      objectId: row.objectId,
+      outcome: row.outcome,
+      metadata: decodeRequiredRecord(row.metadataJson, 'platform_audit_events.metadata_json'),
+      createdAt: row.createdAt.toISOString(),
+    }))
   }
 }

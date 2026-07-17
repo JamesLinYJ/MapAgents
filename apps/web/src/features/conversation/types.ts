@@ -24,24 +24,6 @@ import type {
 import type { DataReferenceSummary } from '../../shared/constants'
 import type { UploadReference } from '../../app/types'
 
-export type MemoryEntry = {
-  scope: 'private' | 'team'
-  relativePath: string
-  name: string
-  description: string
-  type: 'user' | 'feedback' | 'project' | 'reference'
-  age: string
-}
-
-export type MemoryWriteInput = {
-  scope: 'private' | 'team'
-  type: 'user' | 'feedback' | 'project' | 'reference'
-  name: string
-  description: string
-  content: string
-  relativePath?: string | null
-}
-
 export type ComposerMode = 'approval' | 'plan' | 'auto'
 export type TaskView = 'chat' | 'history'
 
@@ -85,9 +67,6 @@ export interface ChatPanelProps {
   onLoadTrash?: () => void
   onRestoreThread?: (threadId: string) => void
   onPurgeThread?: (threadId: string) => void
-
-  memories?: MemoryEntry[]
-  onRefreshMemories?: () => Promise<void> | void
 
   tokenBudget?: { used: number; max: number; status: 'normal' | 'warning' | 'critical' | 'exceeded' }
 

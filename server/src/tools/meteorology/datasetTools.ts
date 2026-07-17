@@ -23,11 +23,14 @@ import {
   assertSuffix,
   datasetFileFromArgs,
   datasetValue,
+  geoJsonDisplay,
   isRecord,
   mergeArtifactMetadata,
+  miniAppDisplay,
   NETCDF_SUFFIXES,
   optionalRefValue,
   requiredRefKind,
+  rasterTileDisplay,
   result,
   resultRefs,
   writeJsonArtifact,
@@ -43,7 +46,7 @@ export function createDatasetMeteorologyTools(deps: MeteorologyToolDeps): ToolDe
     tool('interpret_meteorological_dataset', '解读气象数据集', '保存经过结构化校验的模型气象解读', {
       dataset_ref: refParameter('数据集引用'),
     }, interpretDataset, ['dataset_ref']),
-    workerDatasetTool(deps, 'meteorological_render', '渲染气象栅格', '渲染气象变量为地图 PNG', 'png', {
+    workerDatasetTool(deps, 'meteorological_render', '渲染气象栅格', '生成气象变量 COG 地图与 PNG 预览', 'raster', {
       dataset_ref: refParameter('数据集引用'),
       variable_ref: refParameter('变量引用'),
       time_index_ref: refParameter('时间索引引用'),
@@ -86,7 +89,7 @@ function workerDatasetTool(
   name: MeteorologyWorkerToolName,
   label: string,
   description: string,
-  artifactType: 'png' | 'geojson' | null,
+  artifactType: 'raster' | 'geojson' | null,
   properties: Record<string, unknown>,
   required = ['dataset_ref'],
 ): ToolDef {
@@ -104,24 +107,35 @@ function workerDatasetTool(
       operator: typeof args.operator === 'string' ? args.operator : undefined,
     }
     let artifact = null
-    if (artifactType === 'png') {
-      artifact = artifactTarget(ctx, 'png', `${file.name} 栅格图`)
-      workerArgs.output_relative_path = artifact.relativePath
+    let previewArtifact = null
+    if (artifactType === 'raster') {
+      previewArtifact = artifactTarget(ctx, 'png', `${file.name} 栅格预览`)
+      artifact = artifactTarget(ctx, 'tif', `${file.name} 科学栅格`)
+      workerArgs.output_relative_path = previewArtifact.relativePath
+      workerArgs.output_cog_relative_path = artifact.relativePath
     }
     const worker = await deps.callWorker(name, workerArgs, ctx.signal)
-    if (artifactType === 'png' && artifact) {
-      mergeArtifactMetadata(artifact, {
-        ...worker.payload,
-        displaySurfaces: ['map', 'download'],
-        primarySurface: 'map',
-      })
+    if (artifactType === 'raster' && artifact && previewArtifact) {
+      mergeArtifactMetadata(previewArtifact, worker.payload, miniAppDisplay())
+      mergeArtifactMetadata(artifact, worker.payload, rasterTileDisplay(artifact, worker.payload))
     }
     if (artifactType === 'geojson') {
       artifact = artifactTarget(ctx, 'geojson', `${file.name} ${label}`)
       await writeJsonArtifact(deps, artifact.relativePath, worker.payload)
+      const features = Array.isArray(worker.payload.features) ? worker.payload.features : []
+      if (features.length > 0) {
+        mergeArtifactMetadata(
+          artifact,
+          worker.payload,
+          geoJsonDisplay(artifact, worker.payload, name === 'meteorological_contour' ? 'line' : 'polygon'),
+        )
+      } else {
+        mergeArtifactMetadata(artifact, worker.payload)
+      }
     }
     const refs = resultRefs(name, label, worker.payload)
-    return result(name, worker.message, worker.payload, refs, artifact ? [artifact] : [])
+    const artifacts = [previewArtifact, artifact].filter((item): item is NonNullable<typeof item> => item !== null)
+    return result(name, worker.message, worker.payload, refs, artifacts)
   }, required)
 }
 
@@ -190,8 +204,6 @@ async function generateReport(args: Record<string, unknown>, ctx: ToolContext, d
   }, ctx.signal)
   mergeArtifactMetadata(artifact, {
     ...worker.payload,
-    displaySurfaces: ['download'],
-    primarySurface: 'download',
   })
   return result('meteorological_report', worker.message, worker.payload, [], [artifact])
 }

@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   analysisRunSchema,
   type AnalysisRun,
+  type ConversationItem,
   type WorkspaceBootstrapSnapshot,
 } from '@geo-agent-platform/shared-types'
 
@@ -42,6 +43,19 @@ describe('sessionStore', () => {
     useSessionStore.getState().setThreadRuns(current => [...current, run('run_2')])
 
     expect(useSessionStore.getState().threadRuns.map(item => item.id)).toEqual(['run_1', 'run_2'])
+  })
+
+  it('异步历史刷新不能把旧 thread 的消息写进当前 thread', () => {
+    const store = useSessionStore.getState()
+    store.setActiveThreadId('thread_a')
+    store.setCanonicalThreadItems('thread_a', [conversationItem('entry_a', 'thread_a')])
+    store.setActiveThreadId('thread_b')
+    store.setCanonicalThreadItems('thread_b', [conversationItem('entry_b', 'thread_b')])
+    store.setCanonicalThreadItems('thread_a', [conversationItem('stale_a', 'thread_a')])
+
+    const state = useSessionStore.getState()
+    expect(state.canonicalThreadId).toBe('thread_b')
+    expect(state.canonicalThreadItems.map(item => item.itemId)).toEqual(['entry_b'])
   })
 })
 
@@ -131,4 +145,25 @@ function run(id: string): AnalysisRun {
       userQuery: '测试',
     },
   })
+}
+
+function conversationItem(itemId: string, threadId: string): ConversationItem {
+  return {
+    itemId,
+    itemType: 'message',
+    runId: `run_${threadId}`,
+    threadId,
+    turnId: null,
+    callId: null,
+    role: 'user',
+    body: itemId,
+    name: null,
+    arguments: null,
+    output: null,
+    isError: false,
+    phase: null,
+    status: 'completed',
+    metadata: {},
+    timestamp: '2026-07-10T00:00:00.000Z',
+  }
 }

@@ -13,14 +13,13 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { SecurityServices } from '../security/routes.js'
 import { requireAuth } from '../security/routes.js'
-import type { ArtifactIndexRecord } from '../store/postgres/artifactIndexStore.js'
-import { ArtifactIndexStore } from '../store/postgres/artifactIndexStore.js'
+import type { ArtifactReader, ArtifactRecord } from '../store/postgres/artifactRepository.js'
 
-export function artifactRoutes(artifactIndexStore: ArtifactIndexStore, runtimeRoot: string, security: SecurityServices) {
+export function artifactRoutes(artifacts: ArtifactReader, runtimeRoot: string, security: SecurityServices) {
   const app = new Hono()
 
   app.get('/api/v1/results/:artifactId/metadata', async c => {
-    const artifact = await artifactIndexStore.getArtifact(c.req.param('artifactId'))
+    const artifact = await artifacts.getArtifact(c.req.param('artifactId'))
     if (!artifact) return c.json({ detail: '产物不存在' }, 404)
     await authorizeArtifact(security, c, artifact, 'read')
     return c.json({
@@ -28,13 +27,14 @@ export function artifactRoutes(artifactIndexStore: ArtifactIndexStore, runtimeRo
       artifactType: artifact.artifactType,
       name: artifact.name,
       uri: artifact.uri,
+      display: artifact.display,
       metadata: artifact.metadata,
     })
   })
 
   const sendFile = async (c: { req: { param(name: string): string }; get(key: string): unknown }, download: boolean) => {
     const artifactId = c.req.param('artifactId')
-    const artifact = await artifactIndexStore.getArtifact(artifactId)
+    const artifact = await artifacts.getArtifact(artifactId)
     if (!artifact) return new Response(JSON.stringify({ detail: '产物不存在' }), {
       status: 404, headers: { 'Content-Type': 'application/json' },
     })
@@ -56,7 +56,7 @@ export function artifactRoutes(artifactIndexStore: ArtifactIndexStore, runtimeRo
 async function authorizeArtifact(
   security: SecurityServices,
   c: { get(key: string): unknown } | null,
-  artifact: ArtifactIndexRecord,
+  artifact: ArtifactRecord,
   action: 'read',
 ): Promise<void> {
   const auth = c ? requireAuth(c) : null

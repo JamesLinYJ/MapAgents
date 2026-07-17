@@ -20,6 +20,8 @@ export type Database = DrizzleDatabase & {
   close: () => Promise<void>
 }
 
+export type DatabaseTransaction = Parameters<Parameters<Database['transaction']>[0]>[0]
+
 export function createDb(databaseUrl: string) {
   const pool = new Pool({
     connectionString: databaseUrl,

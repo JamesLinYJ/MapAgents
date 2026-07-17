@@ -169,6 +169,10 @@ export function DebugPage({
   const subAgents = agentState?.subAgents ?? EMPTY_SUB_AGENTS
   const approvals = agentState?.approvals ?? EMPTY_APPROVALS
   const toolCalls = agentState?.toolResults ?? EMPTY_TOOL_RESULTS
+  const toolLabels = useMemo(
+    () => new Map(tools.map(tool => [tool.name, tool.label])),
+    [tools],
+  )
   const loopTrace = agentState?.loopTrace?.length ? agentState.loopTrace : deriveLoopTraceFromEvents(events)
   const latestLoopEntry = loopTrace.at(-1)
   const placeResolution = agentState?.placeResolution
@@ -250,9 +254,9 @@ export function DebugPage({
       tone: events.length ? 'success' : 'neutral',
     },
     {
-      label: '会话存储',
+      label: '载荷存储',
       value: conversationPath ? '已绑定' : '未绑定',
-      meta: conversationPath ? compactPath(conversationPath) : compactPath(systemComponents?.conversationStoreRoot),
+      meta: conversationPath ? compactPath(conversationPath) : compactPath(systemComponents?.payloadStoreRoot),
       tone: conversationPath ? 'success' : 'neutral',
     },
     {
@@ -403,7 +407,7 @@ export function DebugPage({
                 <div className="inventory-card">
                   <span>会话事实源</span>
                   <strong>{conversationPath ? '分片文件' : '--'}</strong>
-                  <p>{conversationPath ? compactPath(conversationPath) : compactPath(systemComponents?.conversationStoreRoot)}</p>
+                  <p>{conversationPath ? compactPath(conversationPath) : compactPath(systemComponents?.payloadStoreRoot)}</p>
                 </div>
                 <div className="inventory-card">
                   <span>当前结果</span>
@@ -471,8 +475,8 @@ export function DebugPage({
             <div className="panel__section">
               <div className="intent-block">
                 <div className="intent-row">
-                  <span>会话存储目录</span>
-                  <strong>{compactPath(systemComponents?.conversationStoreRoot)}</strong>
+                  <span>载荷存储目录</span>
+                  <strong>{compactPath(systemComponents?.payloadStoreRoot)}</strong>
                 </div>
                 <div className="intent-row">
                   <span>最新事件</span>
@@ -525,8 +529,8 @@ export function DebugPage({
                     </div>
                   ) : null}
                   <div className="intent-row">
-                    <span>文件会话内核</span>
-                    <strong>{systemComponents.conversationStoreRoot ? '已启用' : '未返回'}</strong>
+                    <span>文件载荷存储</span>
+                    <strong>{systemComponents.payloadStoreRoot ? '已启用' : '未返回'}</strong>
                   </div>
                   {systemComponents.toolProviders.map((toolProvider) => (
                     <div className="intent-row" key={toolProvider.providerId}>
@@ -790,7 +794,7 @@ export function DebugPage({
                       {toolCalls.map((toolCall) => (
                         <div key={toolCall.stepId} className="agent-ops-item">
                           <div>
-                            <strong>{toolCall.tool}</strong>
+                            <strong>{toolCall.toolLabel ?? toolLabels.get(toolCall.tool) ?? '工具调用'}</strong>
                             <p>{toolCall.message}</p>
                           </div>
                           <StatusPill label={formatExecutionStatus(toolCall.status)} tone={deriveExecutionTone(toolCall.status)} />

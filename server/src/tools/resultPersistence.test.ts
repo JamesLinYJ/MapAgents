@@ -12,21 +12,21 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { PostgresPlatformStore } from '../store/platformStore.js'
-import { createTestPlatformStore } from '../../test-support/platformStoreHarness.js'
+import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
+import { createTestPersistenceFacade } from '../../test-support/persistenceFacadeHarness.js'
 import { persistToolExecutionResult } from './resultPersistence.js'
 
 describe('tool result persistence', () => {
   it('persists inline GeoJSON identically for direct and agent tool paths', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-result-'))
-    let store: PostgresPlatformStore | undefined
+    let store: PlatformPersistenceFacade | undefined
     try {
-      store = createTestPlatformStore(path.join(root, 'sessions'))
+      store = createTestPersistenceFacade(path.join(root, 'sessions'))
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '结果测试')
       const run = await store.createRun(session.id, '执行工具', { threadId: thread.id })
-      await persistToolExecutionResult(store, run.id, 'route_planner', {}, {
+      await persistToolExecutionResult(store, run.id, 'route_planner', '路径规划', {}, {
         message: '路线完成',
         payload: { route: line() },
         warnings: [],
@@ -38,6 +38,7 @@ describe('tool result persistence', () => {
       const latest = store.getRun(run.id)
       expect(latest.state.artifacts).toHaveLength(1)
       expect(latest.state.toolValueRefs[0].refId).toBe('ref_route')
+      expect(latest.state.toolResults[0]?.toolLabel).toBe('路径规划')
       const relativePath = String(latest.state.artifacts[0].metadata.relativePath)
       expect(JSON.parse(await readFile(path.join(root, relativePath), 'utf8'))).toEqual(line())
     } finally {
@@ -48,14 +49,14 @@ describe('tool result persistence', () => {
 
   it('persists todo_write payload into AgentState.todos', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-result-'))
-    let store: PostgresPlatformStore | undefined
+    let store: PlatformPersistenceFacade | undefined
     try {
-      store = createTestPlatformStore(path.join(root, 'sessions'))
+      store = createTestPersistenceFacade(path.join(root, 'sessions'))
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, 'Todo 测试')
       const run = await store.createRun(session.id, '执行 Todo', { threadId: thread.id })
-      await persistToolExecutionResult(store, run.id, 'todo_write', {}, {
+      await persistToolExecutionResult(store, run.id, 'todo_write', '更新任务清单', {}, {
         message: '已更新 Todo',
         payload: {
           todos: [
@@ -80,14 +81,14 @@ describe('tool result persistence', () => {
 
   it('persists request_clarification payload as a pending DecisionRequest', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-result-clarification-'))
-    let store: PostgresPlatformStore | undefined
+    let store: PlatformPersistenceFacade | undefined
     try {
-      store = createTestPlatformStore(path.join(root, 'sessions'))
+      store = createTestPersistenceFacade(path.join(root, 'sessions'))
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '澄清测试')
       const run = await store.createRun(session.id, '要画图', { threadId: thread.id })
-      await persistToolExecutionResult(store, run.id, 'request_clarification', {}, {
+      await persistToolExecutionResult(store, run.id, 'request_clarification', '请求澄清', {}, {
         message: '需要确认平台',
         payload: {
           clarification: {

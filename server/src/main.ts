@@ -102,9 +102,15 @@ app.on(['GET', 'POST'], '/api/auth/*', authRateLimitMiddleware, c => container.s
 app.use('/api/v1/*', apiRateLimitMiddleware(container.security), (c, next) => requireHttpAuth(container.security, c, next))
 app.route('/', securityRoutes(container.security))
 app.route('/', fileRoutes(container.runtimeRoot, container.store, container.security, env))
-app.route('/', layerRoutes(container.postgis, container.store, container.security, env))
-app.route('/', artifactRoutes(container.artifactIndexStore, container.runtimeRoot, container.security))
-app.route('/', mapRoutes)
+app.route('/', layerRoutes(container.managedLayers, container.store, container.security, env))
+app.route('/', artifactRoutes(container.artifactRepository, container.runtimeRoot, container.security))
+app.route('/', mapRoutes({
+  mapStore: container.mapStore,
+  tileGateway: container.mapTileGateway,
+  security: container.security,
+  publicShareStore: container.store,
+  runtimeRoot: container.runtimeRoot,
+}))
 app.route('/', meteorologyRoutes(container.runtimeRoot, container.store, container.security, env))
 app.onError((error, c) => {
   if (error instanceof AuthorizationError) return c.json({ detail: error.message }, 403)
@@ -120,7 +126,7 @@ const wsServer = createWsHandler(server, {
   store: container.store,
   toolRegistry: container.toolRegistry,
   modelRegistry: container.modelRegistry,
-  postgis: container.postgis,
+  managedLayers: container.managedLayers,
   runtimeRoot: container.runtimeRoot,
   defaultRuntimeConfig: container.defaultRuntimeConfig,
   runtime: container.runtime,
@@ -129,6 +135,7 @@ const wsServer = createWsHandler(server, {
   workflowDefinitionService: container.workflowDefinitionService,
   backgroundTasks: container.backgroundTasks,
   usageStats: container.usageStats,
+  mapStore: container.mapStore,
   security: container.security,
 })
 installLifecycleManager({

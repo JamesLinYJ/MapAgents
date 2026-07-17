@@ -9,7 +9,8 @@
 // --------------------------------------------------------------------------
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { MapRenderLayer } from '../../app/types'
+import type { LayerDescriptor, MapLayerStyle, MapSceneLayer } from '@geo-agent-platform/shared-types'
+import type { SceneRenderLayer } from '../map/useMapScene'
 import { isRecord } from '../../shared/utils/guards'
 
 export type LayerPanelView = 'drawOrder' | 'sources' | 'selection' | 'style' | 'add' | 'labels' | 'table'
@@ -19,7 +20,7 @@ export interface LayerTreeNode {
   id: string
   name: string
   type: 'group' | 'layer'
-  layerKind?: MapRenderLayer['kind']
+  layerKind?: 'geojson' | 'raster'
   artifactType?: string
   sourceUri?: string
   visible: boolean
@@ -29,6 +30,7 @@ export interface LayerTreeNode {
   attributeRows?: Array<Record<string, unknown>>
   metadataRows?: Array<{ key: string; value: string }>
   artifactId?: string
+  managedLayerKey?: string
   featureCount?: number
   geometrySummary?: string
   children?: LayerTreeNode[]
@@ -37,15 +39,8 @@ export interface LayerTreeNode {
   labelField?: string
 }
 
-export interface LayerLabelSetting {
-  enabled: boolean
-  fieldName: string
-}
-
 export interface LayerOverride {
   name?: string
-  color?: string
-  removed?: boolean
 }
 
 export interface LayerGroup {
@@ -58,310 +53,299 @@ export interface LayerGroup {
 export interface LayerManagerPreferences {
   activeView: LayerPanelView
   visibilityFilter: LayerVisibilityFilter
-  order: string[]
   groups: LayerGroup[]
   overrides: Record<string, LayerOverride>
-  labelSettings: Record<string, LayerLabelSetting>
 }
 
 interface UseLayerManagerOptions {
-  mapLayers: MapRenderLayer[]
-  onToggleVisibility: (artifactId: string) => void
-  onSetVisibility: (artifactId: string, visible: boolean) => void
-  onChangeOpacity: (artifactId: string, opacity: number) => void
+  layers: SceneRenderLayer[]
+  referenceLayers: LayerDescriptor[]
+  onReplaceLayers: (layers: MapSceneLayer[]) => Promise<void>
+  onAddLayer: (mapLayerId: string) => Promise<void>
   preferenceKey?: string
 }
 
 const DEFAULT_LAYER_MANAGER_PREFERENCES: LayerManagerPreferences = {
   activeView: 'drawOrder',
   visibilityFilter: 'all',
-  order: [],
   groups: [],
   overrides: {},
-  labelSettings: {},
 }
 
-// 图层管理器只维护前端编辑态，不改变 artifact 和图层事实源。
-//
-// 透明度、显隐继续回调给资源控制器，保证地图渲染和面板显示使用同一份偏好。
-export function useLayerManager({
-  mapLayers,
-  onToggleVisibility,
-  onSetVisibility,
-  onChangeOpacity,
-  preferenceKey,
-}: UseLayerManagerOptions) {
+/** 图层面板直接编辑 MapScene；localStorage 只保存分组、面板视图和显示名称。 */
+export function useLayerManager({ layers, referenceLayers, onReplaceLayers, onAddLayer, preferenceKey }: UseLayerManagerOptions) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
-  const [preferences, setPreferences] = useState<LayerManagerPreferences>(() => readLayerManagerPreferences(preferenceKey))
+  const [operationError, setOperationError] = useState<string | null>(null)
+  const [preferenceState, setPreferenceState] = useState(() => ({
+    key: preferenceKey,
+    value: readLayerManagerPreferences(preferenceKey),
+  }))
 
+  const preferences = useMemo(
+    () => preferenceState.key === preferenceKey
+      ? preferenceState.value
+      : readLayerManagerPreferences(preferenceKey),
+    [preferenceKey, preferenceState],
+  )
   useEffect(() => {
-    setPreferences(readLayerManagerPreferences(preferenceKey))
-  }, [preferenceKey])
+    if (preferenceState.key === preferenceKey) {
+      writeLayerManagerPreferences(preferenceKey, preferenceState.value)
+    }
+  }, [preferenceKey, preferenceState])
 
-  useEffect(() => {
-    writeLayerManagerPreferences(preferenceKey, preferences)
-  }, [preferenceKey, preferences])
-
-  const layerIds = useMemo(() => mapLayers.map(layer => layer.artifact.artifactId), [mapLayers])
-  const { activeView, groups, labelSettings, order, overrides, visibilityFilter } = preferences
-
-  const orderedLayers = useMemo(() => {
-    const known = new Set(layerIds)
-    const orderedIds = [
-      ...order.filter(id => known.has(id)),
-      ...layerIds.filter(id => !order.includes(id)),
-    ]
-    const layerById = new Map(mapLayers.map(layer => [layer.artifact.artifactId, layer]))
-    return orderedIds
-      .map(id => layerById.get(id))
-      .filter((layer): layer is MapRenderLayer => Boolean(layer))
-      .filter(layer => !overrides[layer.artifact.artifactId]?.removed)
-  }, [layerIds, mapLayers, order, overrides])
+  const { activeView, groups, overrides, visibilityFilter } = preferences
+  const orderedLayers = useMemo(
+    () => layers.slice().sort((left, right) => left.scene.order - right.scene.order),
+    [layers],
+  )
+  const layerIds = useMemo(() => orderedLayers.map(layer => layer.manifest.mapLayerId), [orderedLayers])
+  const referenceByKey = useMemo(
+    () => new Map(referenceLayers.map(layer => [layer.layerKey, layer])),
+    [referenceLayers],
+  )
+  const sceneManagedLayerKeys = useMemo(
+    () => orderedLayers.flatMap(layer => layer.manifest.managedLayerKey ? [layer.manifest.managedLayerKey] : []),
+    [orderedLayers],
+  )
 
   const filteredLayers = useMemo(() => {
     const normalized = searchQuery.trim().toLocaleLowerCase()
     return orderedLayers.filter(layer => {
-      if (visibilityFilter === 'visible' && !layer.visible) return false
-      if (visibilityFilter === 'hidden' && layer.visible) return false
+      if (visibilityFilter === 'visible' && !layer.scene.visible) return false
+      if (visibilityFilter === 'hidden' && layer.scene.visible) return false
       if (!normalized) return true
-      const override = overrides[layer.artifact.artifactId]
-      const name = override?.name ?? layer.artifact.name
+      const reference = layer.manifest.managedLayerKey ? referenceByKey.get(layer.manifest.managedLayerKey) : undefined
       return [
-        name,
-        layer.artifact.artifactType,
-        layer.geometrySummary,
-      ].some(value => value.toLocaleLowerCase().includes(normalized))
+        overrides[layer.manifest.mapLayerId]?.name ?? layer.manifest.title,
+        layer.manifest.source.kind,
+        layer.manifest.style.kind,
+        reference?.geometryType,
+        reference?.description,
+      ].some(value => value?.toLocaleLowerCase().includes(normalized))
     })
-  }, [orderedLayers, overrides, searchQuery, visibilityFilter])
+  }, [orderedLayers, overrides, referenceByKey, searchQuery, visibilityFilter])
 
   const tree = useMemo<LayerTreeNode[]>(() => {
-    const layerNodes = filteredLayers.map(layer => {
-      const id = layer.artifact.artifactId
-      const override = overrides[id]
-      const fields = readFieldNames(layer)
-      const label = labelSettings[id]
-      return {
-        id,
-        artifactId: id,
-        name: override?.name ?? layer.artifact.name,
-        type: 'layer' as const,
-        layerKind: layer.kind,
-        artifactType: layer.artifact.artifactType,
-        sourceUri: layer.artifact.uri,
-        visible: layer.visible,
-        opacity: layer.opacity,
-        color: override?.color ?? readLayerColor(layer),
-        fieldNames: fields,
-        attributeRows: readAttributeRows(layer),
-        metadataRows: readMetadataRows(layer),
-        featureCount: layer.featureCount,
-        geometrySummary: layer.geometrySummary,
-        labelEnabled: Boolean(label?.enabled),
-        labelField: label?.fieldName && fields.includes(label.fieldName) ? label.fieldName : fields[0],
-      }
-    })
-
+    const layerNodes = filteredLayers.map(layer => toLayerTreeNode(
+      layer,
+      overrides[layer.manifest.mapLayerId],
+      layer.manifest.managedLayerKey ? referenceByKey.get(layer.manifest.managedLayerKey) : undefined,
+    ))
     if (!groups.length) return layerNodes
 
     const groupedIds = new Set(groups.flatMap(group => group.memberIds))
     const groupedNodes = groups.flatMap(group => {
-      const children = group.expanded
-        ? layerNodes.filter(node => group.memberIds.includes(node.id))
-        : []
-      if (!children.length && !group.memberIds.some(id => layerIds.includes(id))) return []
+      const knownMembers = group.memberIds.filter(id => layerIds.includes(id))
+      if (!knownMembers.length) return []
       return [{
         id: group.id,
         name: group.name,
         type: 'group' as const,
-        visible: group.memberIds.some(id => layerNodes.find(node => node.id === id)?.visible),
+        visible: knownMembers.some(id => layerNodes.find(node => node.id === id)?.visible),
         opacity: 1,
         expanded: group.expanded,
-        children,
+        children: group.expanded ? layerNodes.filter(node => knownMembers.includes(node.id)) : [],
       }]
     })
-
-    return [
-      ...groupedNodes,
-      ...layerNodes.filter(node => !groupedIds.has(node.id)),
-    ]
-  }, [filteredLayers, groups, labelSettings, layerIds, overrides])
+    return [...groupedNodes, ...layerNodes.filter(node => !groupedIds.has(node.id))]
+  }, [filteredLayers, groups, layerIds, overrides, referenceByKey])
 
   const flatNodes = useMemo(() => flattenTree(tree), [tree])
-  const selectedNode = useMemo(
-    () => flatNodes.find(node => node.id === selectedId),
-    [flatNodes, selectedId],
-  )
-  const visibleById = useMemo(
-    () => new Map(orderedLayers.map(layer => [layer.artifact.artifactId, layer.visible])),
-    [orderedLayers],
-  )
-  const styleOverrides = useMemo(() => Object.fromEntries(
-    orderedLayers.map(layer => {
-      const id = layer.artifact.artifactId
-      const override = overrides[id]
-      const label = labelSettings[id]
-      return [id, {
-        ...(override?.color ? { color: override.color } : {}),
-        ...(label?.enabled && label.fieldName ? { labelEnabled: true, labelField: label.fieldName } : {}),
-      }]
-    }).filter(([, value]) => Object.keys(value as Record<string, unknown>).length),
-  ) as Record<string, { color?: string; labelEnabled?: boolean; labelField?: string }>, [labelSettings, orderedLayers, overrides])
-  const renderLayers = useMemo(
-    () => orderedLayers.map(layer => applyLayerPresentation(layer, overrides[layer.artifact.artifactId], labelSettings[layer.artifact.artifactId])),
-    [labelSettings, orderedLayers, overrides],
-  )
+  const selectedNode = useMemo(() => flatNodes.find(node => node.id === selectedId), [flatNodes, selectedId])
 
   const updatePreferences = useCallback((updater: (current: LayerManagerPreferences) => LayerManagerPreferences) => {
-    setPreferences(current => sanitizeLayerManagerPreferences(updater(current)))
-  }, [])
+    setPreferenceState(current => {
+      const value = current.key === preferenceKey
+        ? current.value
+        : readLayerManagerPreferences(preferenceKey)
+      return {
+        key: preferenceKey,
+        value: sanitizeLayerManagerPreferences(updater(value)),
+      }
+    })
+  }, [preferenceKey])
+
+  const commit = useCallback((next: MapSceneLayer[]) => {
+    setOperationError(null)
+    const normalized = next.map((layer, order) => ({ ...layer, order }))
+    void onReplaceLayers(normalized).catch(error => {
+      setOperationError(error instanceof Error ? error.message : '地图场景更新失败。')
+    })
+  }, [onReplaceLayers])
+
+  const patchLayers = useCallback((ids: Set<string>, patch: Partial<MapSceneLayer>) => {
+    commit(orderedLayers.map(layer => ids.has(layer.manifest.mapLayerId)
+      ? { ...layer.scene, ...patch }
+      : layer.scene))
+  }, [commit, orderedLayers])
 
   const selectLayer = useCallback((id: string | null) => setSelectedId(id), [])
-
-  const setActiveView = useCallback((view: LayerPanelView) => {
-    updatePreferences(current => ({ ...current, activeView: view }))
-  }, [updatePreferences])
-
-  const setVisibilityFilter = useCallback((filter: LayerVisibilityFilter) => {
-    updatePreferences(current => ({ ...current, visibilityFilter: filter }))
-  }, [updatePreferences])
+  const setActiveView = useCallback((view: LayerPanelView) => updatePreferences(current => ({ ...current, activeView: view })), [updatePreferences])
+  const setVisibilityFilter = useCallback((filter: LayerVisibilityFilter) => updatePreferences(current => ({ ...current, visibilityFilter: filter })), [updatePreferences])
 
   const toggleVisibility = useCallback((id: string) => {
     const group = groups.find(item => item.id === id)
     if (group) {
-      const visibleMembers = group.memberIds.filter(memberId => visibleById.get(memberId) === true)
-      const nextVisible = visibleMembers.length === 0
-      group.memberIds
-        .filter(memberId => visibleById.has(memberId))
-        .forEach(memberId => onSetVisibility(memberId, nextVisible))
+      const members = new Set(group.memberIds.filter(memberId => layerIds.includes(memberId)))
+      const nextVisible = !orderedLayers.filter(layer => members.has(layer.manifest.mapLayerId)).every(layer => layer.scene.visible)
+      patchLayers(members, { visible: nextVisible })
       return
     }
-    onToggleVisibility(id)
-  }, [groups, onSetVisibility, onToggleVisibility, visibleById])
+    const layer = orderedLayers.find(item => item.manifest.mapLayerId === id)
+    if (layer) patchLayers(new Set([id]), { visible: !layer.scene.visible })
+  }, [groups, layerIds, orderedLayers, patchLayers])
 
   const toggleAllVisibility = useCallback(() => {
     if (!filteredLayers.length) return
-    const nextVisible = !filteredLayers.every(layer => layer.visible)
-    filteredLayers.forEach(layer => onSetVisibility(layer.artifact.artifactId, nextVisible))
-  }, [filteredLayers, onSetVisibility])
+    const ids = new Set(filteredLayers.map(layer => layer.manifest.mapLayerId))
+    patchLayers(ids, { visible: !filteredLayers.every(layer => layer.scene.visible) })
+  }, [filteredLayers, patchLayers])
 
   const setOpacity = useCallback((id: string, opacity: number) => {
     const group = groups.find(item => item.id === id)
-    if (group) {
-      group.memberIds.forEach(memberId => onChangeOpacity(memberId, opacity))
-      return
-    }
-    onChangeOpacity(id, opacity)
-  }, [groups, onChangeOpacity])
+    const ids = new Set(group ? group.memberIds : [id])
+    patchLayers(ids, { opacity: Math.max(0, Math.min(1, opacity)) })
+  }, [groups, patchLayers])
 
   const setColor = useCallback((id: string, color: string) => {
-    updatePreferences(current => ({
-      ...current,
-      overrides: {
-        ...current.overrides,
-        [id]: { ...current.overrides[id], color },
-      },
-    }))
-  }, [updatePreferences])
+    const layer = orderedLayers.find(item => item.manifest.mapLayerId === id)
+    if (!layer) return
+    const style = layer.scene.styleOverride ?? layer.manifest.style
+    if (!supportsSingleColor(style)) {
+      setOperationError('当前图层使用分级或栅格色带，不能用单一颜色覆盖。')
+      return
+    }
+    patchLayers(new Set([id]), { styleOverride: { ...style, color } })
+  }, [orderedLayers, patchLayers])
 
   const renameLayer = useCallback((id: string, name: string) => {
     updatePreferences(current => ({
       ...current,
       groups: current.groups.map(group => group.id === id ? { ...group, name } : group),
-      overrides: {
-        ...current.overrides,
-        ...(layerIds.includes(id) ? { [id]: { ...current.overrides[id], name } } : {}),
-      },
+      overrides: layerIds.includes(id)
+        ? { ...current.overrides, [id]: { name } }
+        : current.overrides,
     }))
   }, [layerIds, updatePreferences])
 
   const moveBy = useCallback((id: string, delta: number) => {
-    updatePreferences(current => {
-      const base = [
-        ...current.order.filter(item => layerIds.includes(item)),
-        ...layerIds.filter(item => !current.order.includes(item)),
-      ]
-      const index = base.indexOf(id)
-      if (index < 0) return current
-      const nextIndex = Math.max(0, Math.min(base.length - 1, index + delta))
-      if (nextIndex === index) return current
-      const next = [...base]
-      const [item] = next.splice(index, 1)
-      if (!item) return current
-      next.splice(nextIndex, 0, item)
-      return { ...current, order: next }
-    })
-  }, [layerIds, updatePreferences])
+    const index = orderedLayers.findIndex(layer => layer.manifest.mapLayerId === id)
+    if (index < 0) return
+    const nextIndex = Math.max(0, Math.min(orderedLayers.length - 1, index + delta))
+    if (index === nextIndex) return
+    const next = orderedLayers.map(layer => layer.scene)
+    const [item] = next.splice(index, 1)
+    if (!item) return
+    next.splice(nextIndex, 0, item)
+    commit(next)
+  }, [commit, orderedLayers])
 
   const removeLayer = useCallback((id: string) => {
-    updatePreferences(current => ({
-      ...current,
-      overrides: {
-        ...current.overrides,
-        [id]: { ...current.overrides[id], removed: true },
-      },
-    }))
+    if (!layerIds.includes(id)) return
+    commit(orderedLayers.filter(layer => layer.manifest.mapLayerId !== id).map(layer => layer.scene))
     setSelectedId(current => current === id ? null : current)
-  }, [updatePreferences])
+  }, [commit, layerIds, orderedLayers])
+
+  const addReferenceLayer = useCallback(async (layerKey: string) => {
+    setOperationError(null)
+    const reference = referenceByKey.get(layerKey)
+    if (!reference) {
+      setOperationError(`数据源 '${layerKey}' 不存在。`)
+      return
+    }
+    if (reference.status !== 'active') {
+      setOperationError(`数据源 '${reference.name}' 已停用，不能加入地图。`)
+      return
+    }
+    if (orderedLayers.some(layer => layer.manifest.mapLayerId === reference.mapLayerId)) return
+    try {
+      await onAddLayer(reference.mapLayerId)
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : '数据源加入地图失败。')
+    }
+  }, [onAddLayer, orderedLayers, referenceByKey])
+
+  const removeReferenceLayer = useCallback((layerKey: string) => {
+    const layer = orderedLayers.find(candidate => candidate.manifest.managedLayerKey === layerKey)
+    if (layer) removeLayer(layer.manifest.mapLayerId)
+  }, [orderedLayers, removeLayer])
 
   const createGroup = useCallback((name: string, memberIds: string[]) => {
     const cleanMemberIds = memberIds.filter(id => layerIds.includes(id))
     if (!name.trim() || !cleanMemberIds.length) return
     updatePreferences(current => ({
       ...current,
-      groups: [
-        ...current.groups,
-        {
-          id: `group_${crypto.randomUUID().replaceAll('-', '')}`,
-          name: name.trim(),
-          memberIds: cleanMemberIds,
-          expanded: true,
-        },
-      ],
+      groups: [...current.groups, {
+        id: `group_${crypto.randomUUID().replaceAll('-', '')}`,
+        name: name.trim(),
+        memberIds: cleanMemberIds,
+        expanded: true,
+      }],
     }))
   }, [layerIds, updatePreferences])
 
-  const toggleGroup = useCallback((id: string) => {
-    updatePreferences(current => ({
-      ...current,
-      groups: current.groups.map(group => (
-        group.id === id ? { ...group, expanded: !group.expanded } : group
-      )),
-    }))
-  }, [updatePreferences])
+  const toggleGroup = useCallback((id: string) => updatePreferences(current => ({
+    ...current,
+    groups: current.groups.map(group => group.id === id ? { ...group, expanded: !group.expanded } : group),
+  })), [updatePreferences])
 
   const setLabelEnabled = useCallback((id: string, enabled: boolean) => {
     const node = flatNodes.find(item => item.id === id)
-    const fieldName = node?.labelField ?? node?.fieldNames?.[0] ?? ''
-    updatePreferences(current => ({
-      ...current,
-      labelSettings: {
-        ...current.labelSettings,
-        [id]: { fieldName, enabled: enabled && Boolean(fieldName) },
+    const layer = orderedLayers.find(item => item.manifest.mapLayerId === id)
+    if (!layer) return
+    if (!enabled) {
+      patchLayers(new Set([id]), { label: null })
+      return
+    }
+    const field = layer.scene.label?.field ?? node?.labelField ?? node?.fieldNames?.[0]
+    if (!field) {
+      setOperationError('当前图层没有可用于标注的属性字段。')
+      return
+    }
+    patchLayers(new Set([id]), {
+      label: layer.scene.label ?? {
+        field,
+        placement: 'auto',
+        size: 12,
+        color: '#1f2937',
+        haloColor: '#ffffff',
+        haloWidth: 1.5,
       },
-    }))
-  }, [flatNodes, updatePreferences])
+    })
+  }, [flatNodes, orderedLayers, patchLayers])
 
-  const setLabelField = useCallback((id: string, fieldName: string) => {
-    updatePreferences(current => ({
-      ...current,
-      labelSettings: {
-        ...current.labelSettings,
-        [id]: { enabled: current.labelSettings[id]?.enabled ?? true, fieldName },
+  const setLabelField = useCallback((id: string, field: string) => {
+    const layer = orderedLayers.find(item => item.manifest.mapLayerId === id)
+    const node = flatNodes.find(item => item.id === id)
+    if (!layer || !node?.fieldNames?.includes(field)) {
+      setOperationError('所选标注字段不属于当前图层。')
+      return
+    }
+    patchLayers(new Set([id]), {
+      label: {
+        field,
+        placement: layer.scene.label?.placement ?? 'auto',
+        size: layer.scene.label?.size ?? 12,
+        color: layer.scene.label?.color ?? '#1f2937',
+        haloColor: layer.scene.label?.haloColor ?? '#ffffff',
+        haloWidth: layer.scene.label?.haloWidth ?? 1.5,
       },
-    }))
-  }, [updatePreferences])
+    })
+  }, [flatNodes, orderedLayers, patchLayers])
 
   return {
     tree,
     selectedId,
     searchQuery,
     totalCount: orderedLayers.length,
-    visibleCount: orderedLayers.filter(layer => layer.visible).length,
+    visibleCount: orderedLayers.filter(layer => layer.scene.visible).length,
     selectedNode,
     activeView,
     visibilityFilter,
+    sceneManagedLayerKeys,
     preferences,
+    operationError,
     selectLayer,
     toggleVisibility,
     toggleAllVisibility,
@@ -371,6 +355,8 @@ export function useLayerManager({
     moveUp: (id: string) => moveBy(id, -1),
     moveDown: (id: string) => moveBy(id, 1),
     removeLayer,
+    addReferenceLayer,
+    removeReferenceLayer,
     createGroup,
     toggleGroup,
     setSearchQuery,
@@ -378,19 +364,70 @@ export function useLayerManager({
     setVisibilityFilter,
     setLabelEnabled,
     setLabelField,
-    styleOverrides,
-    renderLayers,
   }
 }
 
-export function readLayerManagerPreferences(preferenceKey?: string): LayerManagerPreferences {
-  if (!preferenceKey || typeof window === 'undefined') {
-    return DEFAULT_LAYER_MANAGER_PREFERENCES
+function toLayerTreeNode(
+  layer: SceneRenderLayer,
+  override: LayerOverride | undefined,
+  reference: LayerDescriptor | undefined,
+): LayerTreeNode {
+  const { manifest, scene } = layer
+  const layerKind = isRasterStyle(manifest.style.kind) ? 'raster' : 'geojson'
+  const fieldNames = manifest.capabilities.labels ? reference?.propertySchema.map(field => field.name) ?? [] : []
+  return {
+    id: manifest.mapLayerId,
+    name: override?.name ?? manifest.title,
+    type: 'layer',
+    layerKind,
+    artifactType: manifest.source.kind,
+    sourceUri: sourceUri(manifest.source),
+    visible: scene.visible,
+    opacity: scene.opacity,
+    color: styleColor(scene.styleOverride ?? manifest.style),
+    fieldNames,
+    attributeRows: [],
+    metadataRows: [
+      { key: '地图图层标识', value: manifest.mapLayerId },
+      { key: '所有权', value: manifest.ownershipScope },
+      { key: '坐标系', value: manifest.crs },
+      { key: '数据版本', value: String(manifest.dataVersion) },
+      { key: '状态', value: manifest.status },
+    ],
+    artifactId: manifest.artifactId ?? undefined,
+    managedLayerKey: manifest.managedLayerKey ?? undefined,
+    featureCount: reference?.featureCount ?? (manifest.source.kind === 'geojson' ? manifest.source.featureCount : undefined),
+    geometrySummary: reference?.geometryType ?? manifest.style.kind,
+    labelEnabled: Boolean(scene.label),
+    labelField: scene.label?.field && fieldNames.includes(scene.label.field) ? scene.label.field : fieldNames[0],
   }
+}
+
+function isRasterStyle(kind: MapLayerStyle['kind']): boolean {
+  return kind === 'continuous_raster' || kind === 'categorical_raster' || kind === 'hillshade'
+}
+
+function styleColor(style: MapLayerStyle): string | undefined {
+  return 'color' in style && typeof style.color === 'string' ? style.color : undefined
+}
+
+function supportsSingleColor(style: MapLayerStyle): style is Extract<MapLayerStyle, { color: string }> {
+  return 'color' in style && typeof style.color === 'string'
+}
+
+function sourceUri(source: SceneRenderLayer['manifest']['source']): string {
+  return 'url' in source ? source.url : source.tileJsonUrl
+}
+
+function flattenTree(nodes: LayerTreeNode[]): LayerTreeNode[] {
+  return nodes.flatMap(node => [node, ...(node.children ? flattenTree(node.children) : [])])
+}
+
+export function readLayerManagerPreferences(preferenceKey?: string): LayerManagerPreferences {
+  if (!preferenceKey || typeof window === 'undefined') return DEFAULT_LAYER_MANAGER_PREFERENCES
   try {
     const raw = window.localStorage.getItem(storageKey(preferenceKey))
-    if (!raw) return DEFAULT_LAYER_MANAGER_PREFERENCES
-    return sanitizeLayerManagerPreferences(JSON.parse(raw))
+    return raw ? sanitizeLayerManagerPreferences(JSON.parse(raw)) : DEFAULT_LAYER_MANAGER_PREFERENCES
   } catch {
     return DEFAULT_LAYER_MANAGER_PREFERENCES
   }
@@ -401,140 +438,46 @@ export function writeLayerManagerPreferences(preferenceKey: string | undefined, 
   try {
     window.localStorage.setItem(storageKey(preferenceKey), JSON.stringify(sanitizeLayerManagerPreferences(preferences)))
   } catch {
-    // localStorage 可能被浏览器策略禁用；图层面板仍可在当前会话内工作。
+    // 浏览器禁用持久化时，当前 React 状态仍然可用；地图事实仍保存在服务端 MapScene。
   }
 }
 
 export function sanitizeLayerManagerPreferences(value: unknown): LayerManagerPreferences {
   if (!isRecord(value)) return DEFAULT_LAYER_MANAGER_PREFERENCES
-  const activeView = isLayerPanelView(value.activeView) ? value.activeView : DEFAULT_LAYER_MANAGER_PREFERENCES.activeView
-  const visibilityFilter = isVisibilityFilter(value.visibilityFilter) ? value.visibilityFilter : DEFAULT_LAYER_MANAGER_PREFERENCES.visibilityFilter
   return {
-    activeView,
-    visibilityFilter,
-    order: Array.isArray(value.order) ? value.order.map(String) : [],
+    activeView: isLayerPanelView(value.activeView) ? value.activeView : 'drawOrder',
+    visibilityFilter: isVisibilityFilter(value.visibilityFilter) ? value.visibilityFilter : 'all',
     groups: Array.isArray(value.groups) ? value.groups.flatMap(readLayerGroup) : [],
     overrides: readRecord(value.overrides, readLayerOverride),
-    labelSettings: readRecord(value.labelSettings, readLayerLabelSetting),
   }
-}
-
-function flattenTree(nodes: LayerTreeNode[]): LayerTreeNode[] {
-  return nodes.flatMap(node => [node, ...(node.children ? flattenTree(node.children) : [])])
-}
-
-function readLayerColor(layer: MapRenderLayer): string | undefined {
-  const color = layer.artifact.metadata?.color
-  return typeof color === 'string' ? color : undefined
-}
-
-function readFieldNames(layer: MapRenderLayer): string[] {
-  if (!layer.data) return []
-  const fields = new Set<string>()
-  for (const feature of layer.data.features.slice(0, 200)) {
-    const props = feature.properties
-    if (!props) continue
-    Object.keys(props).forEach(key => fields.add(key))
-    if (fields.size >= 30) break
-  }
-  return [...fields]
-}
-
-function readAttributeRows(layer: MapRenderLayer): Array<Record<string, unknown>> {
-  if (!layer.data) return []
-  return layer.data.features.slice(0, 20).map((feature, index) => ({
-    OBJECTID: index + 1,
-    ...(feature.properties ?? {}),
-  }))
-}
-
-function readMetadataRows(layer: MapRenderLayer): Array<{ key: string; value: string }> {
-  const metadata = layer.artifact.metadata ?? {}
-  return Object.entries(metadata)
-    .filter(([, value]) => value !== null && value !== undefined)
-    .slice(0, 24)
-    .map(([key, value]) => ({
-      key,
-      value: formatMetadataValue(value),
-    }))
-}
-
-function applyLayerPresentation(
-  layer: MapRenderLayer,
-  override: LayerOverride | undefined,
-  label: LayerLabelSetting | undefined,
-): MapRenderLayer {
-  if (!override?.color && !(label?.enabled && label.fieldName)) {
-    return layer
-  }
-  return {
-    ...layer,
-    artifact: {
-      ...layer.artifact,
-      metadata: {
-        ...layer.artifact.metadata,
-        ...(override?.color ? { color: override.color, layerColorOverride: true } : {}),
-        ...(label?.enabled && label.fieldName ? { labelEnabled: true, labelField: label.fieldName } : {}),
-      },
-    },
-  }
-}
-
-function formatMetadataValue(value: unknown): string {
-  if (typeof value === 'string') return value
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  if (Array.isArray(value)) return `${value.length} 项`
-  if (typeof value === 'object' && value) return `${Object.keys(value).length} 个字段`
-  return String(value)
-}
-
-function storageKey(preferenceKey: string) {
-  return `geoforge.layer-manager.${preferenceKey}`
 }
 
 function readLayerGroup(value: unknown): LayerGroup[] {
-  if (!isRecord(value) || typeof value.id !== 'string' || typeof value.name !== 'string') return []
-  return [{
-    id: value.id,
-    name: value.name,
-    memberIds: Array.isArray(value.memberIds) ? value.memberIds.map(String) : [],
-    expanded: value.expanded !== false,
-  }]
+  if (!isRecord(value) || typeof value.id !== 'string' || typeof value.name !== 'string' || !Array.isArray(value.memberIds)) return []
+  return [{ id: value.id, name: value.name, memberIds: value.memberIds.map(String), expanded: value.expanded !== false }]
 }
 
 function readLayerOverride(value: unknown): LayerOverride | undefined {
   if (!isRecord(value)) return undefined
-  return {
-    ...(typeof value.name === 'string' ? { name: value.name } : {}),
-    ...(typeof value.color === 'string' ? { color: value.color } : {}),
-    ...(typeof value.removed === 'boolean' ? { removed: value.removed } : {}),
-  }
+  return typeof value.name === 'string' ? { name: value.name } : undefined
 }
 
-function readLayerLabelSetting(value: unknown): LayerLabelSetting | undefined {
-  if (!isRecord(value)) return undefined
-  return {
-    enabled: value.enabled === true,
-    fieldName: typeof value.fieldName === 'string' ? value.fieldName : '',
-  }
-}
-
-function readRecord<T>(value: unknown, reader: (item: unknown) => T | undefined): Record<string, T> {
+function readRecord<T>(value: unknown, reader: (entry: unknown) => T | undefined): Record<string, T> {
   if (!isRecord(value)) return {}
-  return Object.fromEntries(
-    Object.entries(value)
-      .flatMap(([key, item]) => {
-        const parsed = reader(item)
-        return parsed ? [[key, parsed] as const] : []
-      }),
-  )
+  return Object.fromEntries(Object.entries(value).flatMap(([key, entry]) => {
+    const parsed = reader(entry)
+    return parsed === undefined ? [] : [[key, parsed]]
+  }))
 }
 
 function isLayerPanelView(value: unknown): value is LayerPanelView {
-  return value === 'drawOrder' || value === 'sources' || value === 'selection' || value === 'style' || value === 'add' || value === 'labels' || value === 'table'
+  return ['drawOrder', 'sources', 'selection', 'style', 'add', 'labels', 'table'].includes(String(value))
 }
 
 function isVisibilityFilter(value: unknown): value is LayerVisibilityFilter {
-  return value === 'all' || value === 'visible' || value === 'hidden'
+  return ['all', 'visible', 'hidden'].includes(String(value))
 }
 
+function storageKey(preferenceKey: string): string {
+  return `geoforge:layer-manager:${preferenceKey}`
+}

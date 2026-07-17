@@ -20,8 +20,8 @@ import type {
   MeteorologicalJobRecord,
 } from '../schemas/types.js'
 import { RuntimeFileStore, type FileLike } from '../store/fileStore.js'
-import type { PostgresPlatformStore } from '../store/platformStore.js'
-import { MeteorologicalDatasetStore } from '../store/postgres/meteorologicalDatasetStore.js'
+import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
+import { MeteorologicalStore } from '../store/postgres/meteorologicalStore.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 import type { SecurityServices } from '../security/routes.js'
 import { requireAuth } from '../security/routes.js'
@@ -61,7 +61,7 @@ export async function ensureMeteorologicalTables(db: Database): Promise<void> {
   await verifySchema(db, METEOROLOGICAL_TABLES)
 }
 
-export function meteorologyRoutes(runtimeRoot: string, store: PostgresPlatformStore, security: SecurityServices, env?: Env) {
+export function meteorologyRoutes(runtimeRoot: string, store: PlatformPersistenceFacade, security: SecurityServices, env?: Env) {
   const files = new RuntimeFileStore(runtimeRoot)
   const app = new Hono()
 
@@ -189,7 +189,7 @@ export async function resolveLatestMeteorologicalDataset(
   db: Database,
   params: { sessionId: string; threadId?: string | null; datasetId?: string | null; filename?: string | null },
 ): Promise<MeteorologicalDatasetRecord | null> {
-  const datasetStore = new MeteorologicalDatasetStore(db)
+  const datasetStore = new MeteorologicalStore(db)
   if (params.datasetId && params.datasetId !== 'latest_upload') {
     return datasetStore.get(params.datasetId)
   }

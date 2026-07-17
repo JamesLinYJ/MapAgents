@@ -11,6 +11,7 @@
 export * from './authApi'
 export * from './conversationApi'
 export * from './memoryApi'
+export * from './mapApi'
 export * from './resourceApi'
 export * from './runApi'
 export * from './toolApi'

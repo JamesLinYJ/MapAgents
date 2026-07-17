@@ -27,13 +27,13 @@ import type { Database } from '../db/connection.js'
 import * as schema from '../db/schema.js'
 import { ToolRegistry } from '../framework/registry.js'
 import type { Env } from '../framework/env.js'
-import type { PostGisRepository } from '../gis/postgis.js'
+import type { ManagedLayerService } from '../gis/managedLayers/managedLayerService.js'
 import { ModelAdapterRegistry, type ModelAdapter } from '../model/registry.js'
 import type { ConversationItem, RunEvent } from '../schemas/types.js'
-import { PostgresPlatformStore } from '../store/platformStore.js'
+import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import type { ToolProvider } from '../framework/types.js'
 import { defaultRuntimeConfig } from '../agent/defaultRuntimeConfig.js'
-import { createTestPlatformStore } from '../../test-support/platformStoreHarness.js'
+import { createTestPersistenceFacade } from '../../test-support/persistenceFacadeHarness.js'
 import { OpenAIAgentsRuntime, type SandboxSessionFactory } from '../agent/runtime.js'
 import { RunTaskManager } from '../agent/runTaskManager.js'
 import { UsageStatsService } from '../usage/usageStatsService.js'
@@ -103,7 +103,7 @@ afterEach(async () => {
 describe('WebSocket run subscriptions', () => {
   it('returns workspace summaries and paged runs without per-thread requests', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-bootstrap-'))
-    const store = createTestPlatformStore(root, noOpDb())
+    const store = createTestPersistenceFacade(root, noOpDb())
     await store.initialize()
     const session = await store.createSession()
     for (let index = 0; index < 4; index += 1) {
@@ -116,7 +116,7 @@ describe('WebSocket run subscriptions', () => {
       store,
       toolRegistry: new ToolRegistry(),
       modelRegistry: new ModelAdapterRegistry(testEnv()),
-      postgis: {} as unknown as PostGisRepository,
+      managedLayers: {} as unknown as ManagedLayerService,
       runtimeRoot: root,
       security: testSecurity(),
     })
@@ -145,7 +145,7 @@ describe('WebSocket run subscriptions', () => {
 
   it('replays a full snapshot after reconnect and resubscribe', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-'))
-    const store = createTestPlatformStore(root, noOpDb())
+    const store = createTestPersistenceFacade(root, noOpDb())
     await store.initialize()
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '订阅测试')
@@ -156,7 +156,7 @@ describe('WebSocket run subscriptions', () => {
       store,
       toolRegistry: new ToolRegistry(),
       modelRegistry: new ModelAdapterRegistry(testEnv()),
-      postgis: {} as unknown as PostGisRepository,
+      managedLayers: {} as unknown as ManagedLayerService,
       runtimeRoot: root,
       security: testSecurity(),
     })
@@ -191,7 +191,7 @@ describe('WebSocket run subscriptions', () => {
 
   it('responds to clarification decisions through the unified decision command', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-decision-'))
-    const store = createTestPlatformStore(root, noOpDb())
+    const store = createTestPersistenceFacade(root, noOpDb())
     await store.initialize()
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '决策测试')
@@ -248,7 +248,7 @@ describe('WebSocket run subscriptions', () => {
       store,
       toolRegistry: new ToolRegistry(),
       modelRegistry: registryWith(fakeAdapter(textModel('已收到补充。'))),
-      postgis: {} as unknown as PostGisRepository,
+      managedLayers: {} as unknown as ManagedLayerService,
       runtimeRoot: root,
       createSandboxSession: testSandboxSessionFactory,
       security: testSecurity(),
@@ -291,7 +291,7 @@ describe('WebSocket run subscriptions', () => {
 
   it('responds to approval decisions through the unified decision command', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-approval-decision-'))
-    const store = createTestPlatformStore(root, noOpDb())
+    const store = createTestPersistenceFacade(root, noOpDb())
     await store.initialize()
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '审批决策测试')
@@ -330,7 +330,7 @@ describe('WebSocket run subscriptions', () => {
       store,
       toolRegistry: tools,
       modelRegistry: models,
-      postgis: {} as unknown as PostGisRepository,
+      managedLayers: {} as unknown as ManagedLayerService,
       runtimeRoot: root,
       createSandboxSession: testSandboxSessionFactory,
       security: testSecurity(),
@@ -367,7 +367,7 @@ describe('WebSocket run subscriptions', () => {
 
   it('publishes direct tool:run calls as replayable tool output items with artifacts', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-tool-items-'))
-    const store = createTestPlatformStore(root, noOpDb())
+    const store = createTestPersistenceFacade(root, noOpDb())
     await store.initialize()
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '工具 mini app 回放')
@@ -379,7 +379,7 @@ describe('WebSocket run subscriptions', () => {
       store,
       toolRegistry: registry,
       modelRegistry: new ModelAdapterRegistry(testEnv()),
-      postgis: {} as unknown as PostGisRepository,
+      managedLayers: {} as unknown as ManagedLayerService,
       runtimeRoot: root,
       security: testSecurity(),
     })
@@ -413,7 +413,7 @@ describe('WebSocket run subscriptions', () => {
         artifacts: [expect.objectContaining({
           artifactType: 'raster_png',
           name: '风险图预览',
-          metadata: expect.objectContaining({ displaySurfaces: ['mini_app', 'download'] }),
+          display: expect.objectContaining({ surfaces: ['mini_app', 'download'] }),
         })],
       },
     })
@@ -422,7 +422,7 @@ describe('WebSocket run subscriptions', () => {
 
   it('serves thread history, context, memory, fork and trash commands with correlated envelopes', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-thread-kernel-'))
-    const store = createTestPlatformStore(root, noOpDb())
+    const store = createTestPersistenceFacade(root, noOpDb())
     await store.initialize()
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '连续上下文契约')
@@ -434,7 +434,7 @@ describe('WebSocket run subscriptions', () => {
       store,
       toolRegistry: new ToolRegistry(),
       modelRegistry: new ModelAdapterRegistry(testEnv()),
-      postgis: {} as unknown as PostGisRepository,
+      managedLayers: {} as unknown as ManagedLayerService,
       runtimeRoot: root,
       security: testSecurity(),
     })
@@ -481,7 +481,7 @@ describe('WebSocket run subscriptions', () => {
 
   it('serves long-term memory control commands over WebSocket', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-memory-'))
-    const store = createTestPlatformStore(root, noOpDb())
+    const store = createTestPersistenceFacade(root, noOpDb())
     await store.initialize()
     const config = defaultRuntimeConfig()
     config.context.privateMemoryDir = path.join(root, 'private-memory')
@@ -502,7 +502,7 @@ describe('WebSocket run subscriptions', () => {
       store,
       toolRegistry: new ToolRegistry(),
       modelRegistry,
-      postgis: {} as unknown as PostGisRepository,
+      managedLayers: {} as unknown as ManagedLayerService,
       runtimeRoot: root,
       defaultRuntimeConfig: config,
       security: testSecurity(),
@@ -560,7 +560,7 @@ describe('WebSocket run subscriptions', () => {
 
   it('rejects speech:authorization when CSRF token is missing', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-csrf-'))
-    const store = createTestPlatformStore(root, noOpDb())
+    const store = createTestPersistenceFacade(root, noOpDb())
     await store.initialize()
 
     const server = createServer((_request, response) => response.end())
@@ -568,7 +568,7 @@ describe('WebSocket run subscriptions', () => {
       store,
       toolRegistry: new ToolRegistry(),
       modelRegistry: new ModelAdapterRegistry(testEnv()),
-      postgis: {} as unknown as PostGisRepository,
+      managedLayers: {} as unknown as ManagedLayerService,
       runtimeRoot: root,
       security: testSecurity(),
     })
@@ -591,7 +591,7 @@ describe('WebSocket run subscriptions', () => {
 
   it('rejects read-type WS commands when auth context is inactive', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-inactive-'))
-    const store = createTestPlatformStore(root, noOpDb())
+    const store = createTestPersistenceFacade(root, noOpDb())
     await store.initialize()
 
     const inactiveSecurity = {
@@ -607,7 +607,7 @@ describe('WebSocket run subscriptions', () => {
       store,
       toolRegistry: new ToolRegistry(),
       modelRegistry: new ModelAdapterRegistry(testEnv()),
-      postgis: {} as unknown as PostGisRepository,
+      managedLayers: {} as unknown as ManagedLayerService,
       runtimeRoot: root,
       security: inactiveSecurity,
     })
@@ -726,7 +726,7 @@ function runEvent(runId: string, threadId: string): RunEvent {
   }
 }
 
-async function waitForRunSettled(store: PostgresPlatformStore, runId: string): Promise<void> {
+async function waitForRunSettled(store: PlatformPersistenceFacade, runId: string): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const status = store.getRun(runId).status
     if (status !== 'queued' && status !== 'running') return
@@ -925,7 +925,8 @@ function previewToolProvider(): ToolProvider {
           name: '风险图预览',
           uri: '/api/v1/results/artifact_preview_png/file',
           relativePath: 'artifacts/run_preview/artifact_preview_png.png',
-          metadata: { previewRole: 'rainfall_risk_map', displaySurfaces: ['mini_app', 'download'] },
+          display: { surfaces: ['mini_app', 'download'], primarySurface: 'mini_app', map: null },
+          metadata: { previewRole: 'rainfall_risk_map', relativePath: 'artifacts/run_preview/artifact_preview_png.png' },
         }],
       }),
     }],

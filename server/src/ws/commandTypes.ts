@@ -33,6 +33,7 @@ export function categorizeCommand(name: string): CommandCategory {
     || name === 'memory:session:rebuild'
     || name === 'file:delete'
     || name === 'layer:update' || name === 'layer:delete'
+    || name === 'map-scene:update'
   ) {
     return 'write'
   }

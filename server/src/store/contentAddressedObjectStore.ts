@@ -14,7 +14,7 @@ import path from 'node:path'
 import type { ContentRef } from '../schemas/types.js'
 
 // ContentAddressedObjectStore 只负责 SHA256 blob 的物理读写和完整性校验。
-// 引用生命周期、GC 和会话语义由 FileConversationStore 编排。
+// 引用生命周期、GC 和会话语义由 ConversationPayloadStore 编排。
 export class ContentAddressedObjectStore {
   constructor(private readonly objectsRoot: string) {}
 

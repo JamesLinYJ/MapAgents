@@ -11,7 +11,8 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-import type { ToolContext, ToolResult, ValueRef } from '../../framework/types.js'
+import type { ToolArtifact, ToolContext, ToolResult, ValueRef } from '../../framework/types.js'
+import type { ArtifactDisplay, MapBounds, MapLayerStyle } from '../../schemas/types.js'
 import { makeId } from '../../utils/ids.js'
 import type { MeteorologyToolDeps } from './toolDefinition.js'
 
@@ -121,16 +122,24 @@ export function datasetValue(_ctx: ToolContext, ref: ValueRef): { name: string; 
   return { name: typeof value.name === 'string' ? value.name : ref.label, relativePath }
 }
 
-type MeteorologicalArtifactExt = 'png' | 'geojson' | 'docx' | 'xlsx' | 'npz'
+type MeteorologicalArtifactExt = 'png' | 'tif' | 'geojson' | 'docx' | 'xlsx' | 'npz'
 
-export type MeteorologicalArtifactTarget = ReturnType<typeof artifactTarget>
+export type MeteorologicalArtifactTarget = ToolArtifact & {
+  relativePath: string
+  metadata: Record<string, unknown>
+}
 
-export function artifactTarget(ctx: ToolContext, artifactType: MeteorologicalArtifactExt, name: string) {
+export function artifactTarget(ctx: ToolContext, artifactType: MeteorologicalArtifactExt, name: string): MeteorologicalArtifactTarget {
   const artifactId = makeId('artifact')
   const relativePath = path.posix.join('artifacts', ctx.runId, `${artifactId}.${artifactType}`)
   return {
     artifactId, artifactType: artifactKind(artifactType), name,
     uri: `/api/v1/results/${artifactId}/${artifactType === 'geojson' ? 'geojson' : 'file'}`,
+    display: {
+      surfaces: ['download'],
+      primarySurface: 'download',
+      map: null,
+    },
     relativePath,
     metadata: { relativePath },
   }
@@ -162,8 +171,247 @@ export function thirdPartyProvenance(
 export function mergeArtifactMetadata(
   artifact: MeteorologicalArtifactTarget,
   payload: Record<string, unknown>,
+  display?: ArtifactDisplay,
 ): void {
-  artifact.metadata = { ...payload, relativePath: artifact.relativePath }
+  const { displaySurfaces: _legacySurfaces, primarySurface: _legacyPrimary, ...metadata } = payload
+  artifact.metadata = { ...metadata, relativePath: artifact.relativePath }
+  if (display) artifact.display = display
+}
+
+export function miniAppDisplay(): ArtifactDisplay {
+  return { surfaces: ['mini_app', 'download'], primarySurface: 'mini_app', map: null }
+}
+
+export function downloadDisplay(): ArtifactDisplay {
+  return { surfaces: ['download'], primarySurface: 'download', map: null }
+}
+
+export function rasterImageDisplay(
+  artifact: MeteorologicalArtifactTarget,
+  payload: Record<string, unknown>,
+  title = artifact.name,
+): ArtifactDisplay {
+  const bounds = requireMapBounds(payload.bounds, `${title} bounds`)
+  const coordinates = mapCoordinates(payload.coordinates, bounds)
+  const range = valueRange(payload.valueRange)
+  const unit = textValue(payload.unit) ?? textValue(payload.units)
+  const colorStops = precipitationColorStops(range)
+  return {
+    surfaces: ['map', 'download'],
+    primarySurface: 'map',
+    map: {
+      title,
+      bounds,
+      crs: 'EPSG:4326',
+      minZoom: 0,
+      maxZoom: 22,
+      source: { kind: 'raster_image', url: artifact.uri, coordinates },
+      style: {
+        kind: 'continuous_raster',
+        rangeMode: 'data',
+        dataRange: range,
+        renderRange: range,
+        colorStops,
+        opacity: 0.86,
+      },
+      legend: {
+        kind: 'continuous',
+        title,
+        unit,
+        range,
+        stops: colorStops,
+        nodataLabel: '无数据',
+      },
+      temporal: null,
+      capabilities: {
+        query: false,
+        labels: false,
+        style: true,
+        temporal: false,
+        opacity: true,
+        download: true,
+      },
+    },
+  }
+}
+
+export function rasterTileDisplay(
+  artifact: MeteorologicalArtifactTarget,
+  payload: Record<string, unknown>,
+  title = artifact.name,
+): ArtifactDisplay {
+  const bounds = requireMapBounds(payload.bounds, `${title} bounds`)
+  const range = valueRange(payload.valueRange)
+  const unit = textValue(payload.unit) ?? textValue(payload.units)
+  const colorStops = precipitationColorStops(range)
+  return {
+    surfaces: ['map', 'download'],
+    primarySurface: 'map',
+    map: {
+      title,
+      bounds,
+      crs: 'EPSG:4326',
+      minZoom: 0,
+      maxZoom: 22,
+      source: {
+        kind: 'raster_tiles',
+        tileJsonUrl: `/api/v1/map/layers/map_layer_${artifact.artifactId}/tilejson`,
+        tileSize: 256,
+      },
+      style: {
+        kind: 'continuous_raster',
+        rangeMode: 'data',
+        dataRange: range,
+        renderRange: range,
+        colorStops,
+        opacity: 0.9,
+      },
+      legend: {
+        kind: 'continuous',
+        title,
+        unit,
+        range,
+        stops: colorStops,
+        nodataLabel: '无数据',
+      },
+      temporal: null,
+      capabilities: {
+        query: false,
+        labels: false,
+        style: true,
+        temporal: false,
+        opacity: true,
+        download: true,
+      },
+    },
+  }
+}
+
+export function geoJsonDisplay(
+  artifact: MeteorologicalArtifactTarget,
+  payload: Record<string, unknown>,
+  styleKind: 'line' | 'polygon',
+  options: {
+    title?: string
+    bounds?: unknown
+    colorField?: string | null
+    categories?: Array<{ value: string | number | boolean; label: string; color: string }>
+    legendTitle?: string
+  } = {},
+): ArtifactDisplay {
+  const title = options.title ?? artifact.name
+  const bounds = requireMapBounds(options.bounds ?? payload.bounds ?? geoJsonBounds(payload), `${title} bounds`)
+  const features = Array.isArray(payload.features) ? payload.features.length : 0
+  const categories = options.categories ?? []
+  const style: MapLayerStyle = styleKind === 'line'
+    ? {
+        kind: 'line', opacity: 1, colorField: options.colorField ?? null, categories,
+        color: '#1769aa', width: 2, dashArray: null,
+      }
+    : {
+        kind: 'polygon', opacity: 0.72, colorField: options.colorField ?? null, categories,
+        color: '#2e8b70', outlineColor: '#145c4a', outlineWidth: 1,
+      }
+  return {
+    surfaces: ['map', 'download'],
+    primarySurface: 'map',
+    map: {
+      title,
+      bounds,
+      crs: 'EPSG:4326',
+      minZoom: 0,
+      maxZoom: 22,
+      source: { kind: 'geojson', url: artifact.uri, featureCount: features, sizeBytes: 0 },
+      style,
+      legend: categories.length
+        ? { kind: 'categorical', title: options.legendTitle ?? title, categories }
+        : null,
+      temporal: null,
+      capabilities: {
+        query: true,
+        labels: styleKind === 'line',
+        style: true,
+        temporal: false,
+        opacity: true,
+        download: true,
+      },
+    },
+  }
+}
+
+function requireMapBounds(value: unknown, label: string): MapBounds {
+  if (!Array.isArray(value) || value.length !== 4 || !value.every(item => typeof item === 'number' && Number.isFinite(item))) {
+    throw new Error(`${label} 缺少有效的 WGS84 范围`)
+  }
+  const [west, south, east, north] = value as [number, number, number, number]
+  if (west >= east || south >= north || west < -180 || east > 180 || south < -90 || north > 90) {
+    throw new Error(`${label} 不是有效的 WGS84 范围`)
+  }
+  return [west, south, east, north]
+}
+
+function mapCoordinates(value: unknown, bounds: MapBounds): [[number, number], [number, number], [number, number], [number, number]] {
+  if (Array.isArray(value) && value.length === 4 && value.every(item =>
+    Array.isArray(item) && item.length === 2 && item.every(coordinate => typeof coordinate === 'number' && Number.isFinite(coordinate)),
+  )) {
+    return value as [[number, number], [number, number], [number, number], [number, number]]
+  }
+  const [west, south, east, north] = bounds
+  return [[west, north], [east, north], [east, south], [west, south]]
+}
+
+function valueRange(value: unknown): [number, number] {
+  const record = isRecord(value) ? value : null
+  const rawMin = record?.min
+  const rawMax = record?.max
+  const min = typeof rawMin === 'number' && Number.isFinite(rawMin) ? rawMin : 0
+  const max = typeof rawMax === 'number' && Number.isFinite(rawMax) ? rawMax : min + 1
+  return max > min ? [min, max] : [min, min + 1]
+}
+
+function precipitationColorStops(range: [number, number]) {
+  const [min, max] = range
+  const at = (ratio: number) => min + ((max - min) * ratio)
+  return [
+    { value: min, color: '#f7fbff' },
+    { value: at(0.2), color: '#9ecae1' },
+    { value: at(0.4), color: '#41ab5d' },
+    { value: at(0.6), color: '#fdd835' },
+    { value: at(0.8), color: '#f57c00' },
+    { value: max, color: '#b71c1c' },
+  ]
+}
+
+function geoJsonBounds(value: unknown): MapBounds | null {
+  if (!isRecord(value) || !Array.isArray(value.features)) return null
+  const positions: Array<[number, number]> = []
+  for (const feature of value.features) collectGeoJsonPositions(isRecord(feature) ? feature.geometry : null, positions)
+  if (!positions.length) return null
+  const xs = positions.map(position => position[0])
+  const ys = positions.map(position => position[1])
+  return requireMapBounds([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], 'GeoJSON bounds')
+}
+
+function collectGeoJsonPositions(value: unknown, positions: Array<[number, number]>): void {
+  if (!isRecord(value)) return
+  if (value.type === 'GeometryCollection' && Array.isArray(value.geometries)) {
+    for (const geometry of value.geometries) collectGeoJsonPositions(geometry, positions)
+    return
+  }
+  collectCoordinateArray(value.coordinates, positions)
+}
+
+function collectCoordinateArray(value: unknown, positions: Array<[number, number]>): void {
+  if (!Array.isArray(value)) return
+  if (value.length >= 2 && typeof value[0] === 'number' && typeof value[1] === 'number') {
+    positions.push([value[0], value[1]])
+    return
+  }
+  for (const child of value) collectCoordinateArray(child, positions)
+}
+
+function textValue(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
 export async function writeJsonArtifact(deps: MeteorologyToolDeps, relativePath: string, payload: Record<string, unknown>): Promise<void> {
@@ -377,9 +625,13 @@ export function requiredCandidateText(candidate: Record<string, unknown>, key: s
   return value.trim()
 }
 
-export function nowcastRenderBbox(analysis: Record<string, unknown>): unknown {
+export function nowcastRenderBbox(analysis: Record<string, unknown>): number[] | undefined {
   const scope = isRecord(analysis.scope) ? analysis.scope : null
-  return scope && Array.isArray(scope.renderBbox) ? scope.renderBbox : undefined
+  if (!scope || !Array.isArray(scope.renderBbox)) return undefined
+  if (scope.renderBbox.length !== 4 || !scope.renderBbox.every(value => typeof value === 'number' && Number.isFinite(value))) {
+    throw new Error('短时临近预报范围必须是四个有限数值组成的 bbox')
+  }
+  return scope.renderBbox
 }
 
 export function refObject(value: unknown): Record<string, unknown> {

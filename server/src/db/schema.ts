@@ -8,7 +8,13 @@
 //   作者:       JamesLinYJ
 // --------------------------------------------------------------------------
 
-import { boolean, pgTable, text, timestamp, jsonb, index, integer, primaryKey, uniqueIndex, type AnyPgColumn } from 'drizzle-orm/pg-core'
+import { boolean, customType, pgTable, text, timestamp, jsonb, index, integer, primaryKey, uniqueIndex, type AnyPgColumn } from 'drizzle-orm/pg-core'
+
+const geometry4326 = customType<{ data: string; driverData: string }>({
+  dataType() {
+    return 'geometry(Geometry, 4326)'
+  },
+})
 
 export const authUser = pgTable('auth_user', {
   id: text('id').primaryKey(),
@@ -30,7 +36,7 @@ export const authSession = pgTable('auth_session', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   ipAddress: text('ip_address'),
   userAgent: text('user_agent'),
-  userId: text('user_id').notNull(),
+  userId: text('user_id').notNull().references(() => authUser.id, { onDelete: 'cascade' }),
 }, (table) => ({
   tokenIdx: uniqueIndex('idx_auth_session_token_unique').on(table.token),
   userIdx: index('idx_auth_session_user_id').on(table.userId),
@@ -40,7 +46,7 @@ export const authAccount = pgTable('auth_account', {
   id: text('id').primaryKey(),
   accountId: text('account_id').notNull(),
   providerId: text('provider_id').notNull(),
-  userId: text('user_id').notNull(),
+  userId: text('user_id').notNull().references(() => authUser.id, { onDelete: 'cascade' }),
   accessToken: text('access_token'),
   refreshToken: text('refresh_token'),
   idToken: text('id_token'),
@@ -84,15 +90,15 @@ export const platformWorkspaces = pgTable('platform_workspaces', {
   name: text('name').notNull(),
   description: text('description').notNull().default(''),
   status: text('status').notNull().default('active'),
-  createdByUserId: text('created_by_user_id').notNull(),
+  createdByUserId: text('created_by_user_id').notNull().references(() => platformUsers.userId, { onDelete: 'restrict' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
 
 export const platformMemberships = pgTable('platform_memberships', {
   membershipId: text('membership_id').primaryKey(),
-  workspaceId: text('workspace_id').notNull(),
-  userId: text('user_id').notNull(),
+  workspaceId: text('workspace_id').notNull().references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => platformUsers.userId, { onDelete: 'cascade' }),
   role: text('role').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
@@ -214,7 +220,7 @@ export const platformThreadMemoryVersions = pgTable('platform_thread_memory_vers
   version: integer('version').notNull(),
   contentHash: text('content_hash').notNull(),
   source: text('source').notNull(),
-  basedOnEntryId: text('based_on_entry_id'),
+  basedOnEntryId: text('based_on_entry_id').references(() => platformConversationEntries.entryId, { onDelete: 'set null' }),
   estimatedTokens: integer('estimated_tokens').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
@@ -225,11 +231,11 @@ export const platformThreadMemoryVersions = pgTable('platform_thread_memory_vers
 export const platformThreadCompactions = pgTable('platform_thread_compactions', {
   compactionId: text('compaction_id').primaryKey(),
   threadId: text('thread_id').notNull().references(() => platformThreads.threadId, { onDelete: 'cascade' }),
-  boundaryEntryId: text('boundary_entry_id').notNull(),
-  summaryEntryId: text('summary_entry_id').notNull(),
-  firstCompactedEntryId: text('first_compacted_entry_id').notNull(),
-  lastCompactedEntryId: text('last_compacted_entry_id').notNull(),
-  preservedFromEntryId: text('preserved_from_entry_id'),
+  boundaryEntryId: text('boundary_entry_id').notNull().references(() => platformConversationEntries.entryId, { onDelete: 'cascade' }),
+  summaryEntryId: text('summary_entry_id').notNull().references(() => platformConversationEntries.entryId, { onDelete: 'cascade' }),
+  firstCompactedEntryId: text('first_compacted_entry_id').notNull().references(() => platformConversationEntries.entryId, { onDelete: 'cascade' }),
+  lastCompactedEntryId: text('last_compacted_entry_id').notNull().references(() => platformConversationEntries.entryId, { onDelete: 'cascade' }),
+  preservedFromEntryId: text('preserved_from_entry_id').references(() => platformConversationEntries.entryId, { onDelete: 'set null' }),
   summary: text('summary').notNull(),
   strategy: text('strategy').notNull(),
   preTokens: integer('pre_tokens').notNull(),
@@ -302,8 +308,8 @@ export const platformRbacPolicies = pgTable('platform_rbac_policies', {
 
 export const platformAuditEvents = pgTable('platform_audit_events', {
   auditEventId: text('audit_event_id').primaryKey(),
-  actorUserId: text('actor_user_id'),
-  workspaceId: text('workspace_id'),
+  actorUserId: text('actor_user_id').references(() => platformUsers.userId, { onDelete: 'set null' }),
+  workspaceId: text('workspace_id').references(() => platformWorkspaces.workspaceId, { onDelete: 'set null' }),
   action: text('action').notNull(),
   objectType: text('object_type').notNull(),
   objectId: text('object_id'),
@@ -324,6 +330,7 @@ export const platformArtifacts = pgTable('platform_artifacts', {
   artifactType: text('artifact_type').notNull(),
   name: text('name').notNull(),
   uri: text('uri').notNull(),
+  displayJson: jsonb('display_json').notNull().$type<Record<string, unknown>>(),
   metadataJson: jsonb('metadata_json').notNull().default({}),
   contentRelativePath: text('content_relative_path').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -346,13 +353,97 @@ export const toolCatalogEntries = pgTable('tool_catalog_entries', {
   pk: primaryKey({ columns: [table.toolName, table.toolKind] }),
 }))
 
+export const platformMapLayers = pgTable('platform_map_layers', {
+  mapLayerId: text('map_layer_id').primaryKey(),
+  ownershipScope: text('ownership_scope').notNull(),
+  workspaceId: text('workspace_id').references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
+  threadId: text('thread_id').references(() => platformThreads.threadId, { onDelete: 'cascade' }),
+  artifactId: text('artifact_id').references(() => platformArtifacts.artifactId, { onDelete: 'cascade' }),
+  managedLayerKey: text('managed_layer_key'),
+  title: text('title').notNull(),
+  sourceType: text('source_type').notNull().default('artifact'),
+  geometryType: text('geometry_type').notNull().default('unknown'),
+  srid: integer('srid').notNull().default(4326),
+  description: text('description').notNull().default(''),
+  featureCount: integer('feature_count'),
+  propertySchemaJson: jsonb('property_schema_json').notNull().$type<Array<Record<string, unknown>>>().default([]),
+  category: text('category').notNull().default('general'),
+  tagsJson: jsonb('tags_json').notNull().$type<string[]>().default([]),
+  analysisCapabilitiesJson: jsonb('analysis_capabilities_json').notNull().$type<string[]>().default([]),
+  sourceConfigSummary: text('source_config_summary'),
+  sessionId: text('session_id').references(() => platformSessions.sessionId, { onDelete: 'cascade' }),
+  createdByUserId: text('created_by_user_id').references(() => platformUsers.userId, { onDelete: 'set null' }),
+  visibility: text('visibility').notNull().default('workspace'),
+  readonly: boolean('readonly').notNull().default(false),
+  status: text('status').notNull().default('ready'),
+  errorMessage: text('error_message'),
+  boundsJson: jsonb('bounds_json').notNull().$type<[number, number, number, number]>(),
+  crs: text('crs').notNull(),
+  minZoom: integer('min_zoom').notNull().default(0),
+  maxZoom: integer('max_zoom').notNull().default(22),
+  sourceJson: jsonb('source_json').notNull().$type<Record<string, unknown>>(),
+  styleJson: jsonb('style_json').notNull().$type<Record<string, unknown>>(),
+  legendJson: jsonb('legend_json').$type<Record<string, unknown> | null>(),
+  temporalJson: jsonb('temporal_json').$type<Record<string, unknown> | null>(),
+  capabilitiesJson: jsonb('capabilities_json').notNull().$type<Record<string, boolean>>(),
+  dataVersion: integer('data_version').notNull().default(1),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, table => ({
+  artifactIdx: uniqueIndex('idx_platform_map_layers_artifact_unique').on(table.artifactId),
+  managedLayerIdx: uniqueIndex('idx_platform_map_layers_managed_unique').on(table.managedLayerKey),
+  threadUpdatedIdx: index('idx_platform_map_layers_thread_updated').on(table.threadId, table.updatedAt),
+  workspaceUpdatedIdx: index('idx_platform_map_layers_workspace_updated').on(table.workspaceId, table.updatedAt),
+}))
+
+export const platformMapScenes = pgTable('platform_map_scenes', {
+  sceneId: text('scene_id').primaryKey(),
+  workspaceId: text('workspace_id').notNull().references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
+  threadId: text('thread_id').notNull().references(() => platformThreads.threadId, { onDelete: 'cascade' }),
+  version: integer('version').notNull().default(1),
+  defaultLayersInitialized: boolean('default_layers_initialized').notNull().default(false),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, table => ({
+  threadIdx: uniqueIndex('idx_platform_map_scenes_thread_unique').on(table.threadId),
+  workspaceUpdatedIdx: index('idx_platform_map_scenes_workspace_updated').on(table.workspaceId, table.updatedAt),
+}))
+
+export const platformMapSceneLayers = pgTable('platform_map_scene_layers', {
+  sceneId: text('scene_id').notNull().references(() => platformMapScenes.sceneId, { onDelete: 'cascade' }),
+  mapLayerId: text('map_layer_id').notNull().references(() => platformMapLayers.mapLayerId, { onDelete: 'cascade' }),
+  layerOrder: integer('layer_order').notNull(),
+  visible: boolean('visible').notNull().default(true),
+  opacity: integer('opacity_percent').notNull().default(100),
+  styleOverrideJson: jsonb('style_override_json').$type<Record<string, unknown> | null>(),
+  labelJson: jsonb('label_json').$type<Record<string, unknown> | null>(),
+  currentFrameId: text('current_frame_id'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, table => ({
+  pk: primaryKey({ columns: [table.sceneId, table.mapLayerId] }),
+  orderIdx: uniqueIndex('idx_platform_map_scene_layers_order_unique').on(table.sceneId, table.layerOrder),
+}))
+
+export const platformLayerFeatures = pgTable('platform_layer_features', {
+  mapLayerId: text('map_layer_id').notNull().references(() => platformMapLayers.mapLayerId, { onDelete: 'cascade' }),
+  featureId: text('feature_id').notNull(),
+  propertiesJson: jsonb('properties_json').notNull().$type<Record<string, unknown>>().default({}),
+  geometry: geometry4326('geometry').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, table => ({
+  pk: primaryKey({ columns: [table.mapLayerId, table.featureId] }),
+  layerIdx: index('idx_platform_layer_features_layer').on(table.mapLayerId),
+  geometryIdx: index('idx_platform_layer_features_geometry').using('gist', table.geometry),
+}))
+
 export const platformMeteorologicalDatasets = pgTable('platform_meteorological_datasets', {
   datasetId: text('dataset_id').primaryKey(),
-  workspaceId: text('workspace_id'),
-  createdByUserId: text('created_by_user_id'),
+  workspaceId: text('workspace_id').references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
+  createdByUserId: text('created_by_user_id').references(() => platformUsers.userId, { onDelete: 'set null' }),
   visibility: text('visibility').notNull().default('workspace'),
-  sessionId: text('session_id').notNull(),
-  threadId: text('thread_id'),
+  sessionId: text('session_id').notNull().references(() => platformSessions.sessionId, { onDelete: 'cascade' }),
+  threadId: text('thread_id').references(() => platformThreads.threadId, { onDelete: 'set null' }),
   filename: text('filename').notNull(),
   originalFilename: text('original_filename').notNull(),
   fileId: text('file_id'),
@@ -371,11 +462,11 @@ export const platformMeteorologicalDatasets = pgTable('platform_meteorological_d
 
 export const platformMeteorologicalJobs = pgTable('platform_meteorological_jobs', {
   jobId: text('job_id').primaryKey(),
-  datasetId: text('dataset_id').notNull(),
-  workspaceId: text('workspace_id'),
-  createdByUserId: text('created_by_user_id'),
-  sessionId: text('session_id').notNull(),
-  threadId: text('thread_id'),
+  datasetId: text('dataset_id').notNull().references(() => platformMeteorologicalDatasets.datasetId, { onDelete: 'cascade' }),
+  workspaceId: text('workspace_id').references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
+  createdByUserId: text('created_by_user_id').references(() => platformUsers.userId, { onDelete: 'set null' }),
+  sessionId: text('session_id').notNull().references(() => platformSessions.sessionId, { onDelete: 'cascade' }),
+  threadId: text('thread_id').references(() => platformThreads.threadId, { onDelete: 'set null' }),
   kind: text('kind').notNull(),
   status: text('status').notNull(),
   message: text('message'),
@@ -443,7 +534,7 @@ export const platformScheduledTasks = pgTable('platform_scheduled_tasks', {
   status: text('status').notNull().default('active'),
   lastFiredAt: timestamp('last_fired_at', { withTimezone: true }),
   nextFireAt: timestamp('next_fire_at', { withTimezone: true }),
-  lastRunId: text('last_run_id'),
+  lastRunId: text('last_run_id').references(() => platformRuns.runId, { onDelete: 'set null' }),
   queueJobId: text('queue_job_id'),
   failureCount: integer('failure_count').notNull().default(0),
   lastErrorMessage: text('last_error_message'),
@@ -461,7 +552,7 @@ export const platformWorkflowRuns = pgTable('platform_workflow_runs', {
   scheduledTaskId: text('scheduled_task_id').references(() => platformScheduledTasks.taskId, { onDelete: 'set null' }),
   workspaceId: text('workspace_id').notNull().references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
   createdByUserId: text('created_by_user_id').notNull().references(() => platformUsers.userId, { onDelete: 'restrict' }),
-  runId: text('run_id'),
+  runId: text('run_id').references(() => platformRuns.runId, { onDelete: 'set null' }),
   status: text('status').notNull().default('queued'),
   currentStep: text('current_step'),
   triggerKind: text('trigger_kind').notNull().default('manual'),

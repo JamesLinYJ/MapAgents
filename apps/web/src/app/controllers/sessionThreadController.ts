@@ -33,6 +33,9 @@ import {
   updateThread,
 } from '../../api/client'
 import { useSessionStore } from '../stores/sessionStore'
+import { ensureActiveThread as orchestrateActiveThread } from '../services/activeThreadOrchestrator'
+import { projectTimeline } from '../../features/conversation/timelineProjector'
+import { transcriptEntriesToConversationItems } from '../bootstrap'
 
 export const sessionThreadController = {
   bootstrapWorkspace,
@@ -44,7 +47,7 @@ export const sessionThreadController = {
   updateThread,
 }
 
-// 分目录 JSON/JSONL 是 thread/run 事实源；这里仅持有首屏摘要、分页游标和当前选中态。
+// PostgreSQL 是 thread/run 结构化事实源；这里仅持有可重建的浏览器投影与当前选中态。
 // 完整运行快照只由 run:subscribe 吸收，不再通过历史列表隐式水合。
 export function useSessionThreadController() {
   const session = useSessionStore(state => state.session)
@@ -57,7 +60,8 @@ export function useSessionThreadController() {
   const trashedThreads = useSessionStore(state => state.trashedThreads)
   const runHistoryCursor = useSessionStore(state => state.runHistoryCursor)
   const isRunHistoryLoading = useSessionStore(state => state.isRunHistoryLoading)
-  const canonicalThreadItems = useSessionStore(state => state.canonicalThreadItems)
+  const canonicalThreadId = useSessionStore(state => state.canonicalThreadId)
+  const storedCanonicalThreadItems = useSessionStore(state => state.canonicalThreadItems)
   const applyBootstrapState = useSessionStore(state => state.applyBootstrap)
   const setSession = useSessionStore(state => state.setSession)
   const setSessionRuns = useSessionStore(state => state.setSessionRuns)
@@ -70,6 +74,8 @@ export function useSessionThreadController() {
   const setRunHistoryState = useSessionStore(state => state.setRunHistoryState)
   const setRunHistoryLoading = useSessionStore(state => state.setRunHistoryLoading)
   const setCanonicalThreadItems = useSessionStore(state => state.setCanonicalThreadItems)
+  const clearCanonicalThreadItems = useSessionStore(state => state.clearCanonicalThreadItems)
+  const canonicalThreadItems = canonicalThreadId === activeThreadId ? storedCanonicalThreadItems : []
 
   const applyBootstrap = useCallback((snapshot: WorkspaceBootstrapSnapshot) => {
     startTransition(() => applyBootstrapState(snapshot))
@@ -86,6 +92,13 @@ export function useSessionThreadController() {
     setSessionThreads(threads ?? [])
     return { threads }
   }, [setSessionThreads])
+
+  const refreshCanonicalThreadHistory = useCallback(async (threadId: string) => {
+    const history = await getThreadHistory(threadId, null, 200)
+    const projected = transcriptEntriesToConversationItems(history.entries)
+    setCanonicalThreadItems(threadId, current => projectTimeline(current, projected))
+    return history
+  }, [setCanonicalThreadItems])
 
   const loadRunHistory = useCallback(async (sessionId: string, append = false) => {
     const current = useSessionStore.getState()
@@ -108,17 +121,23 @@ export function useSessionThreadController() {
     }
   }, [setRunHistoryLoading, setRunHistoryState, setSessionRuns])
 
-  const ensureUploadThread = useCallback(async (
+  const ensureActiveThread = useCallback(async (
     currentThreadId: string | null | undefined,
     syncUrl: (sessionId: string, runId?: string, threadId?: string) => void,
+    title: string,
   ) => {
-    if (!session) throw new Error('当前会话还没有初始化，暂时不能上传文件。')
-    if (currentThreadId) return currentThreadId
-    const thread = await createThread(session.id, '文件上传')
-    setActiveThreadId(thread.id)
-    setSessionThreads(current => current.some(item => item.id === thread.id) ? current : [thread, ...current])
-    syncUrl(session.id, undefined, thread.id)
-    return thread.id
+    return orchestrateActiveThread({
+      currentThreadId,
+      sessionId: session?.id,
+      title,
+    }, {
+      createThread,
+      activateThread: thread => setActiveThreadId(thread.id),
+      addThreadToHistory: thread => setSessionThreads(current => (
+        current.some(item => item.id === thread.id) ? current : [thread, ...current]
+      )),
+      syncLocation: (sessionId, threadId) => syncUrl(sessionId, undefined, threadId),
+    })
   }, [session, setActiveThreadId, setSessionThreads])
 
   const renameThread = useCallback(async (threadId: string, title: string) => {
@@ -197,8 +216,9 @@ export function useSessionThreadController() {
   return {
     activeThreadId,
     canonicalThreadItems,
+    clearCanonicalThreadItems,
     compactCurrentThread,
-    ensureUploadThread,
+    ensureActiveThread,
     getThread,
     getThreadHistory,
     forkFromMessage,
@@ -207,6 +227,7 @@ export function useSessionThreadController() {
     loadRunHistory,
     loadWorkspaceBootstrap,
     refreshSessionHistory,
+    refreshCanonicalThreadHistory,
     loadThreadContextState,
     purgeTrashedThread,
     rebuildCurrentThreadMemory,

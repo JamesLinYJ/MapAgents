@@ -8,7 +8,7 @@ import type { ToolRegistry } from '../framework/registry.js'
 import type { SecurityServices } from '../security/routes.js'
 import type { AuthContext } from '../security/types.js'
 import { assertDirectToolRunAllowed } from '../security/toolExecutionPolicy.js'
-import type { PostgresPlatformStore } from '../store/platformStore.js'
+import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import { executePersistedTool } from '../tools/persistentToolExecutor.js'
 import { optionalString, requiredRecord, requiredString } from './payload.js'
 import { resolveRuntimeConfig } from './runtimeConfig.js'
@@ -42,7 +42,7 @@ export function registerToolCommands(registry: WsCommandRegistry): void {
 
 export async function executeTool(
   payload: Record<string, unknown>,
-  store: PostgresPlatformStore,
+  store: PlatformPersistenceFacade,
   registry: ToolRegistry,
   modelRegistry: ModelAdapterRegistry,
   runtimeConfigDefaults: AgentRuntimeConfig | undefined,
@@ -51,13 +51,15 @@ export async function executeTool(
 ) {
   const toolName = requiredString(payload, 'toolName')
   await assertDirectToolRunAllowed(auth, security.authorization, registry, toolName)
+  const tool = registry.get(toolName)
+  if (!tool) throw new Error(`工具 '${toolName}' 未注册`)
   let runId = optionalString(payload.runId)
   let directRun = false
   if (!runId) {
     const sessionId = requiredString(payload, 'sessionId')
     let threadId = optionalString(payload.threadId)
-    if (!threadId) threadId = (await store.createThread(sessionId, `工具：${toolName}`)).id
-    const created = await store.createRun(sessionId, `执行工具 ${toolName}`, {
+    if (!threadId) threadId = (await store.createThread(sessionId, `工具：${tool.label}`)).id
+    const created = await store.createRun(sessionId, `执行工具：${tool.label}`, {
       threadId,
       modelProvider: modelRegistry.defaultProvider || null,
       runtimeConfigSnapshot: await resolveRuntimeConfig(store, runtimeConfigDefaults),

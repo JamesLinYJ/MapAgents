@@ -9,6 +9,14 @@
 // --------------------------------------------------------------------------
 
 import { useEffect, useMemo, useState } from 'react'
+import type {
+  AdminMembership,
+  AuditEvent,
+  PlatformRole,
+  PlatformUser,
+  PlatformWorkspace,
+  RbacPolicyRow,
+} from '@geo-agent-platform/shared-types'
 import {
   createAdminMembership,
   createAdminWorkspace,
@@ -22,6 +30,7 @@ import {
 } from '../../api/client'
 
 type View = 'users' | 'workspaces' | 'memberships' | 'roles' | 'audit'
+type AdminTableRow = PlatformUser | PlatformWorkspace | AdminMembership | RbacPolicyRow | AuditEvent
 
 const VIEWS: Array<{ id: View; label: string }> = [
   { id: 'users', label: '用户' },
@@ -33,20 +42,20 @@ const VIEWS: Array<{ id: View; label: string }> = [
 
 export default function SecurityAdminPage() {
   const [view, setView] = useState<View>('users')
-  const [users, setUsers] = useState<Array<Record<string, unknown>>>([])
-  const [workspaces, setWorkspaces] = useState<Array<Record<string, unknown>>>([])
-  const [memberships, setMemberships] = useState<Array<Record<string, unknown>>>([])
-  const [roles, setRoles] = useState<Array<Record<string, unknown>>>([])
-  const [auditEvents, setAuditEvents] = useState<Array<Record<string, unknown>>>([])
+  const [users, setUsers] = useState<PlatformUser[]>([])
+  const [workspaces, setWorkspaces] = useState<PlatformWorkspace[]>([])
+  const [memberships, setMemberships] = useState<AdminMembership[]>([])
+  const [roles, setRoles] = useState<RbacPolicyRow[]>([])
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([])
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState('')
   const [workspaceName, setWorkspaceName] = useState('')
   const [workspaceDescription, setWorkspaceDescription] = useState('')
   const [memberUserId, setMemberUserId] = useState('')
-  const [memberRole, setMemberRole] = useState('analyst')
+  const [memberRole, setMemberRole] = useState<PlatformRole>('analyst')
   const [errorMessage, setErrorMessage] = useState<string>()
   const [isLoading, setIsLoading] = useState(false)
 
-  const defaultWorkspaceId = selectedWorkspaceId || stringValue(workspaces[0]?.workspaceId)
+  const defaultWorkspaceId = selectedWorkspaceId || workspaces[0]?.workspaceId || ''
 
   async function refresh() {
     setIsLoading(true)
@@ -62,7 +71,7 @@ export default function SecurityAdminPage() {
       setWorkspaces(nextWorkspaces)
       setRoles(nextRoles)
       setAuditEvents(nextAudit)
-      const workspaceId = selectedWorkspaceId || stringValue(nextWorkspaces[0]?.workspaceId)
+      const workspaceId = selectedWorkspaceId || nextWorkspaces[0]?.workspaceId || ''
       setSelectedWorkspaceId(workspaceId)
       setMemberships(workspaceId ? await listAdminMemberships(workspaceId) : [])
     } catch (error) {
@@ -104,16 +113,16 @@ export default function SecurityAdminPage() {
     })
   }
 
-  async function handleToggleUser(row: Record<string, unknown>) {
+  async function handleToggleUser(row: PlatformUser) {
     await runAdminMutation(async () => {
-      await updateAdminUser(stringValue(row.userId), { status: row.status === 'disabled' ? 'active' : 'disabled' })
+      await updateAdminUser(row.userId, { status: row.status === 'disabled' ? 'active' : 'disabled' })
       await refresh()
     })
   }
 
-  async function handleDeleteMembership(row: Record<string, unknown>) {
+  async function handleDeleteMembership(row: AdminMembership) {
     await runAdminMutation(async () => {
-      await deleteAdminMembership(stringValue(row.membershipId))
+      await deleteAdminMembership(row.membershipId)
       if (defaultWorkspaceId) setMemberships(await listAdminMemberships(defaultWorkspaceId))
     })
   }
@@ -127,7 +136,7 @@ export default function SecurityAdminPage() {
     }
   }
 
-  const currentRows = useMemo(() => {
+  const currentRows = useMemo<AdminTableRow[]>(() => {
     if (view === 'users') return users
     if (view === 'workspaces') return workspaces
     if (view === 'memberships') return memberships
@@ -165,13 +174,13 @@ export default function SecurityAdminPage() {
         {view === 'memberships' ? (
           <form className="dc-security-form" onSubmit={(event) => { event.preventDefault(); void handleAddMembership() }}>
             <select value={selectedWorkspaceId} onChange={event => void refreshMemberships(event.target.value)}>
-              {workspaces.map(workspace => <option key={stringValue(workspace.workspaceId)} value={stringValue(workspace.workspaceId)}>{stringValue(workspace.name)}</option>)}
+              {workspaces.map(workspace => <option key={workspace.workspaceId} value={workspace.workspaceId}>{workspace.name}</option>)}
             </select>
             <select value={memberUserId} onChange={event => setMemberUserId(event.target.value)}>
               <option value="">选择用户</option>
-              {users.map(user => <option key={stringValue(user.userId)} value={stringValue(user.userId)}>{stringValue(user.email)}</option>)}
+              {users.map(user => <option key={user.userId} value={user.userId}>{user.email}</option>)}
             </select>
-            <select value={memberRole} onChange={event => setMemberRole(event.target.value)}>
+            <select value={memberRole} onChange={event => setMemberRole(event.target.value as PlatformRole)}>
               <option value="workspace_admin">workspace_admin</option>
               <option value="analyst">analyst</option>
               <option value="viewer">viewer</option>
@@ -190,8 +199,8 @@ export default function SecurityAdminPage() {
             <tbody>
               {currentRows.map((row, index) => (
                 <tr key={`${view}-${index}`}>
-                  {columnsFor(view).map(column => <td key={column}>{formatCell(row[column])}</td>)}
-                  {view === 'users' ? (
+                  {columnsFor(view).map(column => <td key={column}>{formatCell(cellValue(row, column))}</td>)}
+                  {view === 'users' && isPlatformUser(row) ? (
                     <td>
                       <button
                         type="button"
@@ -202,7 +211,7 @@ export default function SecurityAdminPage() {
                       </button>
                     </td>
                   ) : null}
-                  {view === 'memberships' ? (
+                  {view === 'memberships' && isAdminMembership(row) ? (
                     <td><button type="button" onClick={() => void handleDeleteMembership(row)}>移除</button></td>
                   ) : null}
                 </tr>
@@ -223,8 +232,16 @@ function columnsFor(view: View): string[] {
   return ['createdAt', 'actorUserId', 'workspaceId', 'objectType', 'action', 'outcome']
 }
 
-function stringValue(value: unknown): string {
-  return typeof value === 'string' ? value : ''
+function cellValue(row: AdminTableRow, column: string): unknown {
+  return (row as unknown as Record<string, unknown>)[column]
+}
+
+function isPlatformUser(row: AdminTableRow): row is PlatformUser {
+  return 'subject' in row && 'lastLoginAt' in row
+}
+
+function isAdminMembership(row: AdminTableRow): row is AdminMembership {
+  return 'membershipId' in row && 'email' in row
 }
 
 function formatCell(value: unknown): string {

@@ -3,7 +3,7 @@
 
 import type { SecurityServices } from '../security/routes.js'
 import type { AuthContext } from '../security/types.js'
-import type { PostgresPlatformStore } from '../store/platformStore.js'
+import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 import {
   workflowDefinitionSchema,
@@ -35,7 +35,7 @@ export interface WorkflowDraftInput {
 
 export class WorkflowDefinitionService {
   constructor(private readonly deps: {
-    store: PostgresPlatformStore
+    store: PlatformPersistenceFacade
     registry: WorkflowRegistry
     compiler: WorkflowCompiler
     security: SecurityServices

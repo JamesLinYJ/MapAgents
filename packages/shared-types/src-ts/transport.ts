@@ -113,6 +113,7 @@ export type WsControlCommand =
   | 'memory:instructions:list'
   | 'file:list' | 'file:delete'
   | 'layer:list' | 'layer:update' | 'layer:delete'
+  | 'map-scene:update'
   | 'workflow:list' | 'workflow:validate' | 'workflow:create' | 'workflow:update'
   | 'workflow:publish' | 'workflow:disable' | 'workflow:history'
   | 'workflow:start' | 'workflow:cancel' | 'workflow:run:get' | 'workflow:respond-approval'
@@ -142,3 +143,4 @@ export type WsRunPush =
   | { type: 'thread.updated'; id: null; payload: { data: { thread: AgentThreadRecord; manifest: ThreadManifest } } }
   | { type: 'thread.compacted'; id: null; payload: { data: CompactionRecord } }
   | { type: 'thread.memory.updated'; id: null; payload: { data: ThreadMemoryDocument } }
+  | { type: 'map.scene.updated'; id: null; payload: { data: import('./map.js').MapScene } }

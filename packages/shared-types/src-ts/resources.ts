@@ -1,4 +1,13 @@
-// GeoForge 可展示资源与控制面协议。
+// +-------------------------------------------------------------------------
+//
+//   GeoForge 地理智能平台 - 资源与控制面协议
+//
+//   文件:       resources.ts
+//
+//   日期:       2026年07月13日
+//   作者:       JamesLinYJ
+// --------------------------------------------------------------------------
+
 import { z } from 'zod'
 import { runStatusSchema } from './core.js'
 import { resourceVisibilitySchema } from './platform.js'
@@ -13,6 +22,7 @@ export const layerPropertyDescriptorSchema = z.object({
 })
 
 export const layerDescriptorSchema = z.object({
+  mapLayerId: z.string().trim().min(1),
   layerKey: z.string(),
   name: z.string(),
   sourceType: z.string(),
@@ -76,7 +86,7 @@ export const systemComponentsStatusSchema = z.object({
   catalogBackend: z.string(),
   postgisEnabled: z.boolean(),
   postgisError: z.string().nullable().default(null),
-  conversationStoreRoot: z.string().nullable().default(null),
+  payloadStoreRoot: z.string().nullable().default(null),
   providers: z.array(modelProviderDescriptorSchema).default([]),
   toolProviders: z.array(z.object({
     providerId: z.string(),

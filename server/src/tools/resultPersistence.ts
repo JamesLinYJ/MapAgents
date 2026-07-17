@@ -22,6 +22,7 @@ export async function persistToolExecutionResult(
   store: ToolExecutionStore,
   runId: string,
   toolName: string,
+  toolLabel: string,
   args: Record<string, unknown>,
   result: ToolResult,
 ): Promise<void> {
@@ -40,6 +41,7 @@ export async function persistToolExecutionResult(
     artifactType: artifact.artifactType,
     name: artifact.name,
     uri: artifact.uri,
+    display: artifact.display,
     metadata: { ...(artifact.metadata ?? {}), ...(artifact.relativePath ? { relativePath: artifact.relativePath } : {}) },
     isIntermediate: false,
   }))
@@ -57,6 +59,7 @@ export async function persistToolExecutionResult(
     toolResults: [...run.state.toolResults, {
       stepId: makeId('step'),
       tool: toolName,
+      toolLabel,
       args,
       status: 'completed',
       message: result.message,
@@ -236,9 +239,126 @@ async function writeGeoArtifact(
     artifactType: 'geojson',
     name,
     uri: `/api/v1/results/${artifactId}/geojson`,
+    display: {
+      surfaces: ['map', 'download'],
+      primarySurface: 'map',
+      map: {
+        title: name,
+        bounds: requireGeoJsonBounds(geojson),
+        crs: 'EPSG:4326',
+        minZoom: 0,
+        maxZoom: 22,
+        source: {
+          kind: 'geojson',
+          url: `/api/v1/results/${artifactId}/geojson`,
+          featureCount: countGeoJsonFeatures(geojson),
+          sizeBytes: Buffer.byteLength(content, 'utf8'),
+        },
+        style: defaultGeoJsonStyle(geojson),
+        legend: null,
+        temporal: null,
+        capabilities: {
+          query: true,
+          labels: true,
+          style: true,
+          temporal: false,
+          opacity: true,
+          download: true,
+        },
+      },
+    },
     metadata: { relativePath, kind },
     isIntermediate: false,
   }
+}
+
+function requireGeoJsonBounds(geojson: Record<string, unknown>): [number, number, number, number] {
+  const coordinates: Array<[number, number]> = []
+  collectGeoJsonCoordinates(geojson, coordinates)
+  if (!coordinates.length) throw new Error('GeoJSON Artifact 没有可制图坐标')
+  const longitudes = coordinates.map(([longitude]) => longitude)
+  const latitudes = coordinates.map(([, latitude]) => latitude)
+  const west = Math.min(...longitudes)
+  const east = Math.max(...longitudes)
+  const south = Math.min(...latitudes)
+  const north = Math.max(...latitudes)
+  if (west === east || south === north) {
+    const longitudePadding = west === east ? 0.0001 : 0
+    const latitudePadding = south === north ? 0.0001 : 0
+    return [west - longitudePadding, south - latitudePadding, east + longitudePadding, north + latitudePadding]
+  }
+  return [west, south, east, north]
+}
+
+function collectGeoJsonCoordinates(value: unknown, output: Array<[number, number]>): void {
+  if (Array.isArray(value)) {
+    if (value.length >= 2 && typeof value[0] === 'number' && typeof value[1] === 'number') {
+      if (Number.isFinite(value[0]) && Number.isFinite(value[1])) output.push([value[0], value[1]])
+      return
+    }
+    for (const child of value) collectGeoJsonCoordinates(child, output)
+    return
+  }
+  if (!isRecord(value)) return
+  if ('coordinates' in value) collectGeoJsonCoordinates(value.coordinates, output)
+  if (Array.isArray(value.features)) collectGeoJsonCoordinates(value.features, output)
+  if ('geometry' in value) collectGeoJsonCoordinates(value.geometry, output)
+  if (Array.isArray(value.geometries)) collectGeoJsonCoordinates(value.geometries, output)
+}
+
+function countGeoJsonFeatures(geojson: Record<string, unknown>): number {
+  if (geojson.type === 'FeatureCollection' && Array.isArray(geojson.features)) return geojson.features.length
+  return 1
+}
+
+function defaultGeoJsonStyle(geojson: Record<string, unknown>) {
+  const geometryTypes = new Set<string>()
+  collectGeoJsonGeometryTypes(geojson, geometryTypes)
+  if ([...geometryTypes].some(type => type.includes('Polygon'))) {
+    return {
+      kind: 'polygon' as const,
+      color: '#2563eb',
+      opacity: 0.55,
+      colorField: null,
+      categories: [],
+      outlineColor: '#1d4ed8',
+      outlineWidth: 1,
+    }
+  }
+  if ([...geometryTypes].some(type => type.includes('LineString'))) {
+    return {
+      kind: 'line' as const,
+      color: '#2563eb',
+      opacity: 0.9,
+      colorField: null,
+      categories: [],
+      width: 2,
+      dashArray: null,
+    }
+  }
+  return {
+    kind: 'point' as const,
+    color: '#2563eb',
+    opacity: 0.9,
+    colorField: null,
+    categories: [],
+    radius: 6,
+    strokeColor: '#ffffff',
+    strokeWidth: 1,
+    cluster: false,
+  }
+}
+
+function collectGeoJsonGeometryTypes(value: unknown, output: Set<string>): void {
+  if (Array.isArray(value)) {
+    for (const child of value) collectGeoJsonGeometryTypes(child, output)
+    return
+  }
+  if (!isRecord(value)) return
+  if (typeof value.type === 'string' && value.type !== 'Feature' && value.type !== 'FeatureCollection') output.add(value.type)
+  if (Array.isArray(value.features)) collectGeoJsonGeometryTypes(value.features, output)
+  if ('geometry' in value) collectGeoJsonGeometryTypes(value.geometry, output)
+  if (Array.isArray(value.geometries)) collectGeoJsonGeometryTypes(value.geometries, output)
 }
 
 function extractGeoJson(value: unknown, kind?: string): Record<string, unknown> | null {

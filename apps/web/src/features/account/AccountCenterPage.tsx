@@ -99,7 +99,7 @@ export function AccountCenterPage({ authMe, onLogout }: AccountCenterPageProps) 
             <PanelHead icon={<Fingerprint size={18} />} title="数据与隐私" />
             <p className="account-copy">
               GeoForge 使用账号、工作区、运行记录、上传文件、工具调用和审计日志来提供气象分析、地图浏览、
-              Workflow、语音识别授权和安全管理功能。长期密钥不会进入浏览器；短期授权和 CSRF token 仅用于当前会话。
+              Workflow、语音识别授权和安全管理功能。长期密钥不会进入浏览器；短期授权令牌和 CSRF 令牌仅用于当前会话。
             </p>
             <div className="account-link-list">
               <Link to="/privacy">数据处理详情</Link>

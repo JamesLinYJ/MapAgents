@@ -12,12 +12,12 @@
 // 输入必须先通过共享 GeoJSON 校验，不能用类型断言绕过边界。
 
 import type { ToolDef } from '../../framework/types.js'
-import type { PostGisRepository } from '../../gis/postgis.js'
+import type { ManagedLayerService } from '../../gis/managedLayers/managedLayerService.js'
 import { parseGeoJsonEntity, toFeatureCollection } from '../../gis/geojson.js'
 import { makeId } from '../../utils/ids.js'
 import { LAYER_CREATE_PROMPT } from '../spatial/prompts.js'
 
-export function createLayerCreateTool(postgis: PostGisRepository): ToolDef {
+export function createLayerCreateTool(managedLayers: ManagedLayerService): ToolDef {
   return {
     name: 'layer_create',
     label: '创建分析图层',
@@ -37,11 +37,13 @@ export function createLayerCreateTool(postgis: PostGisRepository): ToolDef {
       required: ['geojson', 'name'],
     },
     async handler(args, ctx) {
+      const workspaceId = ctx.auth?.defaultWorkspaceId
+      if (!workspaceId) throw new Error('创建分析图层需要有效的工作区身份。')
       const collection = toFeatureCollection(parseGeoJsonEntity(args.geojson, 'geojson'))
       if (!collection.features.length) throw new Error('GeoJSON 没有任何要素，无法创建图层')
       const name = requiredText(args.name, 'name')
       const description = typeof args.description === 'string' ? args.description.trim() : ''
-      const layer = await postgis.importGeoJsonLayer({
+      const layer = await managedLayers.importGeoJsonLayer({
         name,
         description,
         sourceType: 'analysis',
@@ -49,6 +51,8 @@ export function createLayerCreateTool(postgis: PostGisRepository): ToolDef {
         tags: ['auto-generated', 'analysis'],
         sessionId: ctx.sessionId,
         threadId: ctx.threadId,
+        workspaceId,
+        createdByUserId: ctx.auth?.userId ?? null,
         collection,
       })
 

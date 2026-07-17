@@ -9,7 +9,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import type { AnalysisRun } from '../schemas/types.js'
-import type { PostgresPlatformStore } from '../store/platformStore.js'
+import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import type { OpenAIAgentsRuntime, RunOptions } from './runtime.js'
 import { RunTaskManager } from './runTaskManager.js'
 import { BackgroundTaskRegistry } from '../workflows/backgroundTaskRegistry.js'
@@ -170,8 +170,8 @@ function testRun(id: string): AnalysisRun {
   }
 }
 
-function testStore(run: AnalysisRun): PostgresPlatformStore {
+function testStore(run: AnalysisRun): PlatformPersistenceFacade {
   return {
     getRun: () => run,
-  } as unknown as PostgresPlatformStore
+  } as unknown as PlatformPersistenceFacade
 }

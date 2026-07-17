@@ -44,7 +44,7 @@ import { projectTimeline } from '../features/conversation/timelineProjector'
 import {
   useConnectionController,
   useNavigationController,
-  useResourceController,
+  useWorkspaceResources,
   useRunController,
   useSessionThreadController,
   useToolingController,
@@ -123,7 +123,8 @@ function AppShell() {
   const {
     activeThreadId,
     canonicalThreadItems,
-    ensureUploadThread: ensureSessionUploadThread,
+    clearCanonicalThreadItems,
+    ensureActiveThread: ensureSessionActiveThread,
     getThread,
     getThreadHistory,
     forkFromMessage,
@@ -133,6 +134,7 @@ function AppShell() {
     loadWorkspaceBootstrap,
     purgeTrashedThread,
     refreshTrash,
+    refreshCanonicalThreadHistory,
     refreshSessionHistory,
     removeThread,
     renameThread,
@@ -231,9 +233,9 @@ function AppShell() {
     loadDiagnostics: location.pathname === '/debug' || panelMode === 'compute' || panelMode === 'config' || panelMode === 'tools',
     setUiError,
   })
-  const ensureUploadThread = useCallback(
-    () => ensureSessionUploadThread(currentThreadId, syncUrl),
-    [currentThreadId, ensureSessionUploadThread, syncUrl],
+  const ensureActiveThread = useCallback(
+    (title: string) => ensureSessionActiveThread(currentThreadId, syncUrl, title),
+    [currentThreadId, ensureSessionActiveThread, syncUrl],
   )
 
   const {
@@ -250,6 +252,7 @@ function AppShell() {
     layerManager,
     layers,
     loadBasemaps,
+    mapScene,
     mapLayers,
     refreshLayers,
     removeFile: handleDeleteAnyFile,
@@ -266,10 +269,10 @@ function AppShell() {
     uploadFile: handleUploadAnyFile,
     uploadFiles: handleUploadFiles,
     uploadReferences,
-  } = useResourceController({
+  } = useWorkspaceResources({
     artifacts,
     currentThreadId,
-    ensureUploadThread,
+    ensureActiveThread,
     layerPreferenceKey: `${currentThreadId ?? 'no-thread'}:${run?.id ?? 'no-run'}`,
     onSessionRecord: setSession,
     onShowSources: showSources,
@@ -316,18 +319,18 @@ function AppShell() {
   const workspaceListVariants = buildListVariants(reducedMotion, 0.04, 0.02)
   const workspaceItemVariants = buildListItemVariants(reducedMotion, 16)
 
-  const handleLayerZoomTo = useCallback((artifactId: string) => {
-    // 图层管理的定位是一个显式地图动作：先同步选中结果，再发出一次性视角请求。
-    setSelectedArtifactId(artifactId)
-    requestMapFocus(artifactId)
-  }, [requestMapFocus, setSelectedArtifactId])
+  const handleLayerZoomTo = useCallback((mapLayerId: string) => {
+    const target = mapScene.layers.find(layer => layer.manifest.mapLayerId === mapLayerId)
+    if (target?.manifest.artifactId) setSelectedArtifactId(target.manifest.artifactId)
+    requestMapFocus(mapLayerId)
+  }, [mapScene.layers, requestMapFocus, setSelectedArtifactId])
 
   const { clearActiveRunState, hydrateRunState } = useWorkspaceRunProjection({
     clearArtifacts,
+    clearCanonicalThreadItems,
     clearRun,
     hydrateRun,
     setActiveThreadId,
-    setCanonicalThreadItems,
     setModel,
     setProvider,
     setSelectedArtifactId,
@@ -388,7 +391,9 @@ function AppShell() {
     acceptRun,
     cancelRun,
     clearArtifacts,
+    clearCanonicalThreadItems,
     hydrateRunState,
+    refreshCanonicalThreadHistory,
     refreshSessionHistory,
     respondDecision,
     steerRun,
@@ -669,8 +674,6 @@ function AppShell() {
                     onLoadTrash={onRefreshTrashAction}
                     onRestoreThread={onRestoreThreadAction}
                     onPurgeThread={onPurgeThreadAction}
-                    memories={memoryEntries}
-                    onRefreshMemories={onRefreshMemoriesAction}
                     tokenBudget={tokenBudget}
                     activeSkills={activeSkills}
                     activeMcpServers={activeMcpServers}
@@ -685,11 +688,11 @@ function AppShell() {
                   <WorkspaceMapPanel
                     artifactCount={artifacts.length}
                     basemaps={basemaps}
+                    mapScene={mapScene}
                     isMapActivated={isMapActivated}
                     runStatus={run?.status}
                     selectedBasemapKey={selectedBasemapKey}
                     onSelectBasemap={setSelectedBasemapKey}
-                    layers={mapLayers}
                     selectedArtifactId={selectedArtifactId}
                     selectedArtifactName={selectedArtifact?.name}
                     focusRequest={mapFocusRequest}
@@ -762,6 +765,7 @@ function AppShell() {
                     layerSelectedNode={layerManager.selectedNode}
                     layerActiveView={layerManager.activeView}
                     layerVisibilityFilter={layerManager.visibilityFilter}
+                    layerOperationError={layerManager.operationError}
                     onLayerSelect={layerManager.selectLayer}
                     onLayerToggleVisibility={layerManager.toggleVisibility}
                     onLayerToggleAllVisibility={layerManager.toggleAllVisibility}
@@ -780,6 +784,9 @@ function AppShell() {
                     onLayerSetVisibilityFilter={layerManager.setVisibilityFilter}
                     onLayerSetLabelEnabled={layerManager.setLabelEnabled}
                     onLayerSetLabelField={layerManager.setLabelField}
+                    layerSceneManagedLayerKeys={layerManager.sceneManagedLayerKeys}
+                    onLayerAddReference={layerManager.addReferenceLayer}
+                    onLayerRemoveReference={layerManager.removeReferenceLayer}
                     allFiles={allFiles}
                     onUploadFile={(file) => { void handleUploadAnyFile(file) }}
                     onDeleteFile={(fileId) => { void handleDeleteAnyFile(fileId) }}

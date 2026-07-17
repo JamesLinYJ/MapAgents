@@ -36,6 +36,7 @@ interface SessionState {
   trashedThreads: TrashedThreadEntry[]
   runHistoryCursor: string | null
   isRunHistoryLoading: boolean
+  canonicalThreadId?: string
   canonicalThreadItems: ConversationItem[]
   applyBootstrap: (snapshot: WorkspaceBootstrapSnapshot) => void
   setSession: (session?: SessionRecord) => void
@@ -48,7 +49,8 @@ interface SessionState {
   setTrashedThreads: (trashedThreads: TrashedThreadEntry[]) => void
   setRunHistoryState: (cursor: string | null, loading: boolean) => void
   setRunHistoryLoading: (loading: boolean) => void
-  setCanonicalThreadItems: (value: StateUpdater<ConversationItem[]>) => void
+  setCanonicalThreadItems: (threadId: string, value: StateUpdater<ConversationItem[]>) => void
+  clearCanonicalThreadItems: () => void
   resetSessionState: () => void
 }
 
@@ -63,6 +65,7 @@ const initialSessionState = {
   trashedThreads: [] as TrashedThreadEntry[],
   runHistoryCursor: null,
   isRunHistoryLoading: false,
+  canonicalThreadId: undefined,
   canonicalThreadItems: [] as ConversationItem[],
 }
 
@@ -91,8 +94,19 @@ export const useSessionStore = create<SessionState>((set) => ({
     isRunHistoryLoading,
   }),
   setRunHistoryLoading: isRunHistoryLoading => set({ isRunHistoryLoading }),
-  setCanonicalThreadItems: value => set(state => ({
-    canonicalThreadItems: resolveUpdater(state.canonicalThreadItems, value),
-  })),
+  setCanonicalThreadItems: (threadId, value) => set(state => {
+    if (state.activeThreadId && state.activeThreadId !== threadId) return state
+    return {
+      canonicalThreadId: threadId,
+      canonicalThreadItems: resolveUpdater(
+        state.canonicalThreadId === threadId ? state.canonicalThreadItems : [],
+        value,
+      ),
+    }
+  }),
+  clearCanonicalThreadItems: () => set({
+    canonicalThreadId: undefined,
+    canonicalThreadItems: [],
+  }),
   resetSessionState: () => set(initialSessionState),
 }))

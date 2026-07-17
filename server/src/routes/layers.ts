@@ -9,8 +9,8 @@
 // --------------------------------------------------------------------------
 
 import { Hono } from 'hono'
-import type { PostGisRepository } from '../gis/postgis.js'
-import type { PostgresPlatformStore } from '../store/platformStore.js'
+import type { ManagedLayerService } from '../gis/managedLayers/managedLayerService.js'
+import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import type { Env } from '../framework/env.js'
 import type { SecurityServices } from '../security/routes.js'
 import { requireAuth } from '../security/routes.js'
@@ -33,13 +33,18 @@ interface ImportOptions {
   visibility?: 'private' | 'workspace' | 'public'
 }
 
-export function layerRoutes(postgis: PostGisRepository, store: PostgresPlatformStore, security: SecurityServices, env?: Env) {
+export function layerRoutes(
+  managedLayers: ManagedLayerService,
+  store: PlatformPersistenceFacade,
+  security: SecurityServices,
+  env?: Env,
+) {
   return new Hono()
     .post('/api/v1/layers/register', async (c) => {
       const tooLarge = checkContentLength(c.req.header('content-length'), env?.MAX_GEOJSON_UPLOAD_BYTES ?? env?.MAX_FILE_UPLOAD_BYTES)
       if (tooLarge) return c.json({ detail: tooLarge }, 413)
       const auth = requireAuth(c)
-      const result = await importLayerFromForm(c.req.raw, postgis, env, {
+      const result = await importLayerFromForm(c.req.raw, managedLayers, env, {
         sourceType: 'upload',
         defaultCategory: 'upload',
         requireSession: true,
@@ -63,7 +68,7 @@ export function layerRoutes(postgis: PostGisRepository, store: PostgresPlatformS
       if (tooLarge) return c.json({ detail: tooLarge }, 413)
       const auth = requireAuth(c)
       await security.authorization.enforce(auth, 'layer', 'create', { workspaceId: auth.defaultWorkspaceId })
-      const result = await importLayerFromForm(c.req.raw, postgis, env, {
+      const result = await importLayerFromForm(c.req.raw, managedLayers, env, {
         sourceType: 'managed',
         defaultCategory: 'managed',
         requireSession: false,
@@ -76,7 +81,7 @@ export function layerRoutes(postgis: PostGisRepository, store: PostgresPlatformS
     .post('/api/v1/layers/:layerKey/replace', async (c) => {
       const tooLarge = checkContentLength(c.req.header('content-length'), env?.MAX_GEOJSON_UPLOAD_BYTES ?? env?.MAX_FILE_UPLOAD_BYTES)
       if (tooLarge) return c.json({ detail: tooLarge }, 413)
-      const existing = await postgis.getLayer(c.req.param('layerKey'))
+      const existing = await managedLayers.getLayer(c.req.param('layerKey'))
       if (!existing) return c.json({ detail: '图层不存在' }, { status: 404 })
       if (existing.readonly) return c.json({ detail: '系统图层为只读，不能替换。' }, { status: 403 })
       const auth = requireAuth(c)
@@ -86,7 +91,7 @@ export function layerRoutes(postgis: PostGisRepository, store: PostgresPlatformS
         visibility: existing.visibility,
         resourceId: existing.layerKey,
       })
-      const result = await importLayerFromForm(c.req.raw, postgis, env, {
+      const result = await importLayerFromForm(c.req.raw, managedLayers, env, {
         layerKey: existing.layerKey,
         sourceType: existing.sourceType,
         defaultCategory: existing.category,
@@ -107,7 +112,7 @@ export function layerRoutes(postgis: PostGisRepository, store: PostgresPlatformS
 
 async function importLayerFromForm(
   request: Request,
-  postgis: PostGisRepository,
+  managedLayers: ManagedLayerService,
   env: Env | undefined,
   opts: ImportOptions,
   resolveOwner?: (sessionId: string) => Promise<{ workspaceId: string; createdByUserId: string } | null>,
@@ -124,7 +129,7 @@ async function importLayerFromForm(
     const owner = sessionId && resolveOwner ? await resolveOwner(sessionId) : null
     const threadId = formString(form, 'threadId') ?? formString(form, 'thread_id') ?? opts.threadId ?? null
     const collection = parseGeoJsonPayload(await parseJsonFile(file), env)
-    const layer = await postgis.importGeoJsonLayer({
+    const layer = await managedLayers.importGeoJsonLayer({
       layerKey: opts.layerKey ?? null,
       name: formString(form, 'name') ?? opts.defaultName ?? stripExtension(file.name),
       description: formString(form, 'description') ?? opts.defaultDescription ?? '',

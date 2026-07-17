@@ -1,5 +1,6 @@
 // GeoForge Agent 核心协议：运行状态、决策、事件与实时对话项。
 import { z } from 'zod'
+import { artifactDisplaySchema } from './map.js'
 
 // --- Enums ---
 
@@ -120,6 +121,7 @@ export const toolValueRefSchema = z.object({
 export const toolCallSchema = z.object({
   stepId: z.string(),
   tool: z.string(),
+  toolLabel: z.string().nullable().default(null),
   args: z.record(z.string(), z.unknown()).prefault({}),
   status: z.string(),
   message: z.string(),
@@ -250,6 +252,7 @@ export const artifactRefSchema = z.object({
   artifactType: z.string(),
   name: z.string(),
   uri: z.string(),
+  display: artifactDisplaySchema,
   metadata: z.record(z.string(), z.unknown()).prefault({}),
   isIntermediate: z.boolean().default(false),
 })

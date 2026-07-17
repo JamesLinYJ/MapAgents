@@ -73,6 +73,64 @@ describe('deriveEntriesFromItems', () => {
     expect(entries.at(0)?.commands?.at(0)?.details?.resultId).toBe('res_1')
   })
 
+  it('优先使用运行记录持久化的中文工具名称', () => {
+    const entries = deriveEntriesFromItems([
+      item({
+        itemId: 'toolcall:run1:call1',
+        itemType: 'function_call',
+        callId: 'call1',
+        name: 'meteorological_inspect',
+        arguments: '{}',
+        metadata: { toolLabel: '检查气象数据集' },
+      }),
+    ])
+
+    expect(entries.at(0)?.title).toBe('检查气象数据集')
+  })
+
+  it('未知工具不向用户泄露机器名称', () => {
+    const entries = deriveEntriesFromItems([
+      item({
+        itemId: 'toolcall:run1:call1',
+        itemType: 'function_call',
+        callId: 'call1',
+        name: 'unknown_machine_tool',
+        arguments: '{}',
+      }),
+    ])
+
+    expect(entries.at(0)?.title).toBe('工具调用')
+    expect(entries.at(0)?.title).not.toContain('unknown_machine_tool')
+  })
+
+  it('优先使用运行记录持久化的中文工具名', () => {
+    const entries = deriveEntriesFromItems([
+      item({
+        itemId: 'toolcall:run1:call1',
+        itemType: 'function_call',
+        callId: 'call1',
+        name: 'meteorological_inspect',
+        metadata: { toolLabel: '检查气象数据集' },
+      }),
+    ])
+
+    expect(entries.at(0)?.title).toBe('检查气象数据集')
+  })
+
+  it('未知外部工具不向普通用户暴露机器标识', () => {
+    const entries = deriveEntriesFromItems([
+      item({
+        itemId: 'toolcall:run1:call1',
+        itemType: 'function_call',
+        callId: 'call1',
+        name: 'foreign_internal_tool_name',
+      }),
+    ])
+
+    expect(entries.at(0)?.title).toBe('工具调用')
+    expect(entries.at(0)?.title).not.toContain('foreign_internal_tool_name')
+  })
+
   it('把短时临近预报（短临）回答工具的结构化输出投影成标准纯文本', () => {
     const entries = deriveEntriesFromItems([
       item({ itemId: 'call', itemType: 'function_call', callId: 'call1', name: 'answer_nowcast_question', arguments: '{}' }),

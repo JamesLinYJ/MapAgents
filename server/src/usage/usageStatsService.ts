@@ -8,7 +8,7 @@
 import type { AuthContext } from '../security/types.js'
 import type { Env } from '../framework/env.js'
 import type { AnalysisRun, RunStatus } from '../schemas/types.js'
-import type { PostgresPlatformStore } from '../store/platformStore.js'
+import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 
 interface UsageTotals {
   runCount: number
@@ -74,7 +74,7 @@ export interface TokenUsageSummary {
 
 export class UsageStatsService {
   constructor(
-    private readonly store: PostgresPlatformStore,
+    private readonly store: PlatformPersistenceFacade,
     private readonly env: Env,
   ) {}
 

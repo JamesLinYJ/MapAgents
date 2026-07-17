@@ -3,13 +3,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { PlatformStoreTestHarness } from '../../test-support/platformStoreHarness.js'
+import { PersistenceFacadeTestHarness } from '../../test-support/persistenceFacadeHarness.js'
 import { RunSteeringController } from './runSteeringController.js'
 
 describe('RunSteeringController', () => {
   it('queues idempotently, consumes in order, and rejects new input after close', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geoforge-steering-'))
-    const store = new PlatformStoreTestHarness().create(root)
+    const store = new PersistenceFacadeTestHarness().create(root)
     try {
       await store.initialize()
       const session = await store.createSession()

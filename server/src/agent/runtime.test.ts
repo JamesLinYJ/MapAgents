@@ -25,8 +25,8 @@ import { ToolRegistry } from '../framework/registry.js'
 import type { ToolDef, ToolProvider, ToolResult, ValueRef } from '../framework/types.js'
 import { ModelAdapterRegistry, type ModelAdapter } from '../model/registry.js'
 import { RuntimeFileStore } from '../store/fileStore.js'
-import { PostgresPlatformStore } from '../store/platformStore.js'
-import { createTestPlatformStore, PlatformStoreTestHarness } from '../../test-support/platformStoreHarness.js'
+import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
+import { createTestPersistenceFacade, PersistenceFacadeTestHarness } from '../../test-support/persistenceFacadeHarness.js'
 import planProvider from '../tools/plan/index.js'
 import { defaultRuntimeConfig } from './defaultRuntimeConfig.js'
 import { OpenAIAgentsRuntime, type SandboxSessionFactory } from './runtime.js'
@@ -48,7 +48,7 @@ const testSandboxSessionFactory: SandboxSessionFactory = async manifest => ({
 })
 
 function testRuntime(
-  store: PostgresPlatformStore,
+  store: PlatformPersistenceFacade,
   tools: ToolRegistry,
   models: ModelAdapterRegistry,
 ): OpenAIAgentsRuntime {
@@ -69,7 +69,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         return { text: responseNumber === 1 ? '项目代号是西湖。' : '我记得，项目代号是西湖。' }
       })
       const models = registryWith(fakeAdapter(model))
-      const harness = new PlatformStoreTestHarness()
+      const harness = new PersistenceFacadeTestHarness()
       const firstStore = harness.create(root)
       await firstStore.initialize()
       const session = await firstStore.createSession()
@@ -114,7 +114,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
   it('persists an SDK approval interruption and resumes it once after restart', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-approval-'))
     try {
-      const harness = new PlatformStoreTestHarness()
+      const harness = new PersistenceFacadeTestHarness()
       const store = harness.create(root)
       await store.initialize()
       const session = await store.createSession()
@@ -145,7 +145,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         decisionId: waiting.state.approvals[0].approvalId,
         kind: 'approval',
         status: 'pending',
-        title: '批准执行：sensitive_tool',
+        title: '批准执行：执行敏感操作',
       }))
       await store.flushConversationStore()
 
@@ -175,7 +175,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
   it('starts explicit plan mode as a hard read-only boundary', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-boundary-'))
     try {
-      const store = createTestPlatformStore(root)
+      const store = createTestPersistenceFacade(root)
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '计划模式写入边界')
@@ -215,7 +215,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
   it('rejects text-only completion while the run is still in plan mode', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-text-only-'))
     try {
-      const store = createTestPlatformStore(root)
+      const store = createTestPersistenceFacade(root)
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '文字计划禁止假成功')
@@ -242,7 +242,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
   it('asks for clarification instead of completing a greeting in explicit plan mode', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-greeting-'))
     try {
-      const store = createTestPlatformStore(root)
+      const store = createTestPersistenceFacade(root)
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '计划模式寒暄')
@@ -298,7 +298,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
   it('requires the clarification tool when the planning goal is underspecified', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-clarify-'))
     try {
-      const store = createTestPlatformStore(root)
+      const store = createTestPersistenceFacade(root)
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '计划模式澄清')
@@ -349,7 +349,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
   it('reviews exit_plan_mode through approval and persists the approved execution plan', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-approval-'))
     try {
-      const harness = new PlatformStoreTestHarness()
+      const harness = new PersistenceFacadeTestHarness()
       const store = harness.create(root)
       await store.initialize()
       const session = await store.createSession()
@@ -430,7 +430,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
   it('executes SDK tool calls that omit nullable optional arguments', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-optional-tool-'))
     try {
-      const store = createTestPlatformStore(root)
+      const store = createTestPersistenceFacade(root)
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '可选参数工具')
@@ -573,7 +573,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
   it('runs configured subagents as Agent tools with inherited model and persisted transcript', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-subagent-'))
     try {
-      const store = createTestPlatformStore(root)
+      const store = createTestPersistenceFacade(root)
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '子 Agent 测试')
@@ -632,7 +632,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
   it('restores previous run valueRefs for continuous thread tool calls', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-thread-values-'))
     try {
-      const store = createTestPlatformStore(root)
+      const store = createTestPersistenceFacade(root)
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '连续 valueRef 测试')
@@ -703,7 +703,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
   it('routes uploaded meteorological files through the deterministic nowcast chain', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-nowcast-'))
     try {
-      const store = createTestPlatformStore(root)
+      const store = createTestPersistenceFacade(root)
       await store.initialize()
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '短时临近预报（短临）确定性路由')
@@ -807,7 +807,7 @@ function outputItems(response: ScriptedResponse, responseId: string): AgentOutpu
 async function executeTextRun(model: Model, tools = new ToolRegistry()) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-stream-'))
   try {
-    const store = createTestPlatformStore(root)
+    const store = createTestPersistenceFacade(root)
     await store.initialize()
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '模型流测试')
@@ -918,9 +918,22 @@ function deterministicNowcastProvider(calls: string[]): ToolProvider {
 }
 
 function toolDefinition(name: string, required: string[]): Omit<ToolDef, 'handler'> {
+  const labels: Record<string, string> = {
+    sensitive_tool: '执行敏感操作',
+    write_layer: '写入图层',
+    answer_nowcast_question: '回答短时临近预报问题',
+    lookup_context: '查询上下文',
+    query_layer: '查询图层',
+    use_dataset_ref: '使用数据集引用',
+    list_meteorological_files: '列出气象文件',
+    create_nowcast_sequence: '创建短时临近预报序列',
+    meteorological_precipitation_nowcast: '分析短时临近预报降水',
+  }
+  const label = labels[name]
+  if (!label) throw new Error(`测试工具 '${name}' 缺少中文展示名称`)
   return {
     name,
-    label: name,
+    label,
     description: `${name} test tool`,
     prompt: `用于测试 ${name} 工具调用边界。`,
     group: '测试',

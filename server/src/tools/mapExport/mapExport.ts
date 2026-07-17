@@ -43,7 +43,9 @@ export function createMapExportTool(runtimeRoot: string): ToolDef {
       const relativePath = path.posix.join('artifacts', ctx.runId, `${artifactId}.geojson`)
       const target = resolveRuntimePath(runtimeRoot, relativePath)
       await mkdir(path.dirname(target), { recursive: true })
-      await writeFile(target, JSON.stringify(geojson, null, 2), 'utf8')
+      const serialized = JSON.stringify(geojson, null, 2)
+      await writeFile(target, serialized, 'utf8')
+      const bounds = geoJsonBounds(geojson)
 
       return {
         message: `地图数据已导出为 ${filename}`,
@@ -63,6 +65,42 @@ export function createMapExportTool(runtimeRoot: string): ToolDef {
           artifactType: 'geojson',
           name: filename,
           uri: `/api/v1/results/${artifactId}/geojson`,
+          display: {
+            surfaces: ['map', 'download'],
+            primarySurface: 'map',
+            map: {
+              title: filename,
+              bounds,
+              crs: 'EPSG:4326',
+              minZoom: 0,
+              maxZoom: 22,
+              source: {
+                kind: 'geojson',
+                url: `/api/v1/results/${artifactId}/geojson`,
+                featureCount: geojson.type === 'FeatureCollection' ? geojson.features.length : 1,
+                sizeBytes: Buffer.byteLength(serialized, 'utf8'),
+              },
+              style: {
+                kind: 'line',
+                color: '#2563eb',
+                width: 2,
+                dashArray: null,
+                opacity: 0.9,
+                colorField: null,
+                categories: [],
+              },
+              legend: null,
+              temporal: null,
+              capabilities: {
+                query: true,
+                labels: true,
+                style: true,
+                temporal: false,
+                opacity: true,
+                download: true,
+              },
+            },
+          },
           relativePath,
           metadata: { relativePath, downloadUrl: `/api/v1/artifacts/${artifactId}/download` },
         }],
@@ -74,6 +112,35 @@ export function createMapExportTool(runtimeRoot: string): ToolDef {
         }],
       }
     },
+  }
+}
+
+function geoJsonBounds(value: unknown): [number, number, number, number] {
+  const coordinates: Array<[number, number]> = []
+  collectCoordinates(value, coordinates)
+  if (!coordinates.length) throw new Error('导出的 GeoJSON 没有可制图坐标')
+  const xs = coordinates.map(([x]) => x)
+  const ys = coordinates.map(([, y]) => y)
+  const west = Math.min(...xs)
+  const east = Math.max(...xs)
+  const south = Math.min(...ys)
+  const north = Math.max(...ys)
+  return [west === east ? west - 0.0001 : west, south === north ? south - 0.0001 : south, west === east ? east + 0.0001 : east, south === north ? north + 0.0001 : north]
+}
+
+function collectCoordinates(value: unknown, output: Array<[number, number]>): void {
+  if (Array.isArray(value)) {
+    if (value.length >= 2 && typeof value[0] === 'number' && typeof value[1] === 'number') {
+      output.push([value[0], value[1]])
+      return
+    }
+    for (const child of value) collectCoordinates(child, output)
+    return
+  }
+  if (typeof value !== 'object' || value === null) return
+  for (const [key, child] of Object.entries(value)) {
+    if (key === 'properties') continue
+    collectCoordinates(child, output)
   }
 }
 

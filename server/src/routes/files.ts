@@ -10,13 +10,13 @@
 
 import { Hono } from 'hono'
 import { RuntimeFileStore, type FileLike } from '../store/fileStore.js'
-import type { PostgresPlatformStore } from '../store/platformStore.js'
+import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import type { SecurityServices } from '../security/routes.js'
 import { requireAuth } from '../security/routes.js'
 import type { Env } from '../framework/env.js'
 import { HttpClientError, routeErrorResponse } from './errors.js'
 
-export function fileRoutes(runtimeRoot: string, store: PostgresPlatformStore, security: SecurityServices, env?: Env) {
+export function fileRoutes(runtimeRoot: string, store: PlatformPersistenceFacade, security: SecurityServices, env?: Env) {
   const files = new RuntimeFileStore(runtimeRoot)
 
   return new Hono()

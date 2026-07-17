@@ -84,7 +84,7 @@ const AGENT_TOOL_NAME = /^[a-zA-Z0-9_-]+$/u
 // OpenAIAgentsRuntime
 //
 // Runner 是单次 run 内编排的唯一状态机；本类只投影 SDK 事件并维护 GeoForge
-// 文件事实源、审批边界和确定性领域入口。
+// 内容载荷存储、审批边界和确定性领域入口。
 export class OpenAIAgentsRuntime {
   private readonly abortControllers = new Map<string, AbortController>()
   private readonly checkpoints: AgentsCheckpointService
@@ -569,6 +569,7 @@ export class OpenAIAgentsRuntime {
             payload: {
               callId: item.callId,
               name: item.name,
+              label: isSubAgent ? '子智能体任务' : '沙箱工具调用',
               summary: content,
               content,
               contentRef: null,
@@ -582,14 +583,14 @@ export class OpenAIAgentsRuntime {
               callId: item.callId,
               name: item.name,
               role: 'tool',
-              metadata: { source: 'openai_agents_sandbox' },
+              metadata: { toolLabel: '沙箱工具调用', source: 'openai_agents_sandbox' },
             })
             itemSink.completeItem(outputItem.itemId, {
               callId: item.callId,
               name: item.name,
               output: content,
               isError: ledgerStatus === 'failed',
-              metadata: { source: 'openai_agents_sandbox' },
+              metadata: { toolLabel: '沙箱工具调用', source: 'openai_agents_sandbox' },
             })
           }
           await this.store.saveRunCheckpoint(options.runId, {

@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentThreadRecord, SessionRecord } from '../schemas/types.js'
-import { InvalidHistoryCursorError } from '../store/fileConversationIo.js'
+import { InvalidHistoryCursorError } from '../store/conversationEncoding.js'
 import { shareRoutes, type PublicShareStore } from './share.js'
 
 const session = {

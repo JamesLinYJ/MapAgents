@@ -499,7 +499,6 @@
   .cc-tool-detail,
   .cc-composer,
   .cc-decision-sheet,
-  .cc-memory-panel,
   .cc-data-context,
   .cc-data-reference,
   .cc-plan-panel,
@@ -581,7 +580,6 @@
   .cc-tool-detail::before,
   .cc-composer::before,
   .cc-decision-sheet::before,
-  .cc-memory-panel::before,
   .cc-data-context::before,
   .cc-data-reference::before,
   .cc-plan-panel::before,
@@ -657,7 +655,6 @@
   .cc-tool-detail::after,
   .cc-composer::after,
   .cc-decision-sheet::after,
-  .cc-memory-panel::after,
   .cc-data-context::after,
   .cc-data-reference::after,
   .cc-plan-panel::after,
@@ -723,7 +720,6 @@
     .cc-tool-detail,
     .cc-composer,
     .cc-decision-sheet,
-    .cc-memory-panel,
     .cc-data-context,
     .cc-data-reference,
     .cc-plan-panel,
@@ -3593,7 +3589,6 @@
     .cc-tool-io-card,
     .cc-tool-detail,
     .cc-decision-sheet,
-    .cc-memory-panel,
     .cc-data-context,
     .cc-data-reference,
     .cc-plan-panel,
@@ -4508,6 +4503,26 @@
 
   .sdk-memory-card {
     @apply grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 rounded-[18px] border border-white/50 bg-white/26 p-3;
+  }
+
+  .sdk-memory-card__type {
+    @apply inline-flex min-h-6 items-center rounded-full border px-2 text-[10px] font-semibold;
+  }
+
+  .sdk-memory-card__type--user {
+    @apply border-[#9fcfc0]/55 bg-[#e8f6f0]/75 text-[#397567];
+  }
+
+  .sdk-memory-card__type--feedback {
+    @apply border-[#e2c29c]/60 bg-[#fff4df]/80 text-[#8d673d];
+  }
+
+  .sdk-memory-card__type--project {
+    @apply border-[#9fcbd3]/60 bg-[#e8f5f7]/80 text-[#35717a];
+  }
+
+  .sdk-memory-card__type--reference {
+    @apply border-[#bcc7d0]/60 bg-[#f0f4f7]/80 text-[#586a78];
   }
 
   .sdk-memory-card strong {

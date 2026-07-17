@@ -19,7 +19,7 @@ const WORKSPACE_POINTER_KEY = 'geoforge.workspace.pointer.v1'
 
 // URL 指针是可分享的轻量定位信息，不是运行历史事实源。
 //
-// session/thread/run 的真实内容仍通过 WebSocket 和文件型 conversation store 读取。
+// session/thread/run 的结构化事实来自 PostgreSQL；大对象和诊断载荷通过受控接口读取。
 export function readWorkspacePointer(search = window.location.search): WorkspacePointer {
   const params = new URLSearchParams(search)
   const persisted = readPersistedPointer()

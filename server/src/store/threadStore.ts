@@ -18,14 +18,22 @@ import type {
 } from '../schemas/types.js'
 import { threadMemoryDocumentSchema } from '../schemas/types.js'
 import { makeId, nowUtc } from '../utils/ids.js'
-import type { ConversationIndexStore } from './conversationIndexStore.js'
+import type { ConversationProjectionIndex } from './conversationProjectionIndex.js'
 import type { InMemoryEventBus } from './eventBus.js'
-import type { FileConversationStore } from './fileConversationStore.js'
-import { estimateTokens } from './fileConversationIo.js'
+import type { ConversationPayloadStore } from './conversationPayloadStore.js'
+import { estimateTokens } from './conversationEncoding.js'
 import { RuntimeFileStore } from './fileStore.js'
-import { splitMemoryContent } from './platformStoreUtils.js'
+import { splitThreadMemoryDocument } from './threadMemoryDocument.js'
 import type { SessionStore } from './sessionStore.js'
-import type { ConversationRepository, DeletedThreadRecord } from './postgres/conversationRepository.js'
+import type {
+  ConversationTranscriptRepository,
+  DeletedThreadRecord,
+  ObjectReferenceRepository,
+  RunRepository,
+  ThreadCompactionRepository,
+  ThreadLifecycleRepository,
+  ThreadMemoryRepository,
+} from './postgres/conversationPersistencePorts.js'
 import { MemoryVersionConflictError } from './storeErrors.js'
 
 export interface ThreadStoreEvents {
@@ -35,14 +43,23 @@ export interface ThreadStoreEvents {
   threadMemoryBus: InMemoryEventBus<ThreadMemoryDocument>
 }
 
+export interface ThreadPersistencePorts {
+  lifecycle: ThreadLifecycleRepository
+  transcript: ConversationTranscriptRepository
+  memory: ThreadMemoryRepository
+  compactions: ThreadCompactionRepository
+}
+
 // ThreadStore 是线程 manifest、transcript、线程记忆和垃圾箱动作的唯一拥有者。
 // Run 状态只通过 index 读取；不会在这里创建或完成 run。
 export class ThreadStore {
   constructor(
-    private readonly index: ConversationIndexStore,
-    private readonly conversationStore: FileConversationStore,
+    private readonly index: ConversationProjectionIndex,
+    private readonly payloadStore: ConversationPayloadStore,
     private readonly sessionStore: SessionStore,
-    private readonly repository: ConversationRepository,
+    private readonly repositories: ThreadPersistencePorts,
+    private readonly runReader: Pick<RunRepository, 'listRunsForThread'>,
+    private readonly objectReferences: ObjectReferenceRepository,
     private readonly runtimeRoot: string,
     private readonly events: ThreadStoreEvents,
   ) {}
@@ -74,8 +91,8 @@ export class ThreadStore {
       historyPreview: null,
       conversationPath: null,
     }
-    const persisted = await this.repository.createThreadLifecycle(thread)
-    this.conversationStore.registerThread(persisted.thread)
+    const persisted = await this.repositories.lifecycle.createThreadLifecycle(thread)
+    this.payloadStore.registerThread(persisted.thread)
     this.sessionStore.acceptPersisted(persisted.session)
     this.index.setThread(persisted.thread)
     this.events.threadUpdateBus.publish(thread.id, {
@@ -95,8 +112,8 @@ export class ThreadStore {
       throw new Error('线程状态只能通过删除或恢复操作修改')
     }
     const next = { ...current, ...fields, updatedAt: nowUtc() }
-    await this.repository.saveThread(next)
-    const manifest = await this.repository.getThreadManifest(threadId)
+    await this.repositories.lifecycle.saveThread(next)
+    const manifest = await this.repositories.lifecycle.getThreadManifest(threadId)
     this.index.setThread(next)
     this.events.threadUpdateBus.publish(threadId, { thread: structuredClone(next), manifest })
     return next
@@ -107,25 +124,25 @@ export class ThreadStore {
     const next = { ...thread, status: 'deleted' as const, updatedAt: nowUtc() }
     const purgeAfter = new Date(Date.now() + 30 * 86_400_000).toISOString()
     const replacement = this.listForSession(next.sessionId).find(candidate => candidate.id !== threadId) ?? null
-    const persisted = await this.repository.trashThread(next, purgeAfter, replacement?.id ?? null)
-    this.conversationStore.setThreadTrashed(threadId, true)
+    const persisted = await this.repositories.lifecycle.trashThread(next, purgeAfter, replacement?.id ?? null)
+    this.payloadStore.setThreadTrashed(threadId, true)
     this.index.deleteThread(threadId)
     this.sessionStore.acceptPersisted(persisted.session)
   }
 
   async getManifest(threadId: string): Promise<ThreadManifest> {
     this.get(threadId)
-    return this.repository.getThreadManifest(threadId)
+    return this.repositories.lifecycle.getThreadManifest(threadId)
   }
 
   async listHistory(threadId: string, cursor?: string | null, limit?: number) {
     this.get(threadId)
-    return this.repository.readThreadHistory(threadId, cursor, limit)
+    return this.repositories.transcript.readThreadHistory(threadId, cursor, limit)
   }
 
   async activeTranscript(threadId: string, leafEntryId?: string | null): Promise<TranscriptEntry[]> {
     this.get(threadId)
-    return this.repository.readActiveConversation(threadId, leafEntryId)
+    return this.repositories.transcript.readActiveConversation(threadId, leafEntryId)
   }
 
   async appendTranscript(input: {
@@ -139,7 +156,7 @@ export class ThreadStore {
     entryId?: string
   }): Promise<TranscriptEntry> {
     this.get(input.threadId)
-    const entry = await this.repository.appendConversationEntry(input)
+    const entry = await this.repositories.transcript.appendConversationEntry(input)
     this.events.threadEntryBus.publish(input.threadId, entry)
     return entry
   }
@@ -147,7 +164,7 @@ export class ThreadStore {
   async fork(sourceThreadId: string, sourceEntryId: string, title?: string | null): Promise<AgentThreadRecord> {
     const source = this.get(sourceThreadId)
     const target = await this.create(source.sessionId, title ?? `${source.title} · 分支`)
-    const mapping = await this.repository.forkConversation(sourceThreadId, target.id, sourceEntryId)
+    const mapping = await this.repositories.transcript.forkConversation(sourceThreadId, target.id, sourceEntryId)
     await new RuntimeFileStore(this.runtimeRoot).cloneThreadFiles(sourceThreadId, target.id)
     const sourceMemory = await this.getMemory(sourceThreadId)
     if (sourceMemory.version > 0 || sourceMemory.content.trim()) {
@@ -159,16 +176,16 @@ export class ThreadStore {
         sourceMemory.basedOnEntryId ? mapping.get(sourceMemory.basedOnEntryId) ?? null : null,
       )
     }
-    const targetManifest = await this.repository.getThreadManifest(target.id)
+    const targetManifest = await this.repositories.lifecycle.getThreadManifest(target.id)
     this.events.threadUpdateBus.publish(target.id, { thread: structuredClone(target), manifest: targetManifest })
     return target
   }
 
   async getMemory(threadId: string): Promise<ThreadMemoryDocument> {
     this.get(threadId)
-    const reference = await this.repository.getLatestThreadMemoryVersion(threadId)
+    const reference = await this.repositories.memory.getLatestThreadMemoryVersion(threadId)
     if (!reference) {
-      const manifest = await this.repository.getThreadManifest(threadId)
+      const manifest = await this.repositories.lifecycle.getThreadManifest(threadId)
       return threadMemoryDocumentSchema.parse({
         threadId,
         version: 0,
@@ -181,7 +198,7 @@ export class ThreadStore {
         updatedAt: manifest.updatedAt,
       })
     }
-    const bytes = await this.conversationStore.readObjectByHash(reference.contentHash)
+    const bytes = await this.payloadStore.readObjectByHash(reference.contentHash)
     const document = threadMemoryDocumentSchema.parse(JSON.parse(Buffer.from(bytes).toString('utf8')))
     if (document.threadId !== threadId || document.version !== reference.version) {
       throw new Error(`线程 '${threadId}' 的记忆对象与数据库版本不一致`)
@@ -197,11 +214,11 @@ export class ThreadStore {
     basedOnEntryId: string | null = null,
   ): Promise<ThreadMemoryDocument> {
     this.get(threadId)
-    const manifest = await this.repository.getThreadManifest(threadId)
+    const manifest = await this.repositories.lifecycle.getThreadManifest(threadId)
     if (expectedVersion !== undefined && expectedVersion !== manifest.memoryVersion) {
       throw new MemoryVersionConflictError(expectedVersion, manifest.memoryVersion)
     }
-    const { generatedContent, pinnedContent } = splitMemoryContent(content)
+    const { generatedContent, pinnedContent } = splitThreadMemoryDocument(content)
     const document = threadMemoryDocumentSchema.parse({
       threadId,
       version: manifest.memoryVersion + 1,
@@ -213,11 +230,11 @@ export class ThreadStore {
       estimatedTokens: estimateTokens(content),
       updatedAt: nowUtc(),
     })
-    const reference = await this.conversationStore.putObject(
+    const reference = await this.payloadStore.putObject(
       JSON.stringify(document),
       'application/vnd.geoforge.thread-memory+json',
     )
-    await this.repository.saveThreadMemoryVersion({
+    await this.repositories.memory.saveThreadMemoryVersion({
       threadId,
       expectedVersion: manifest.memoryVersion,
       version: document.version,
@@ -233,35 +250,35 @@ export class ThreadStore {
 
   async appendCompaction(record: CompactionRecord): Promise<void> {
     this.get(record.threadId)
-    await this.repository.appendCompaction(record)
+    await this.repositories.compactions.appendCompaction(record)
     this.events.threadCompactionBus.publish(record.threadId, record)
   }
 
   async listCompactions(threadId: string): Promise<CompactionRecord[]> {
     this.get(threadId)
-    return this.repository.listCompactions(threadId)
+    return this.repositories.compactions.listCompactions(threadId)
   }
 
   async listTrash(sessionId: string): Promise<DeletedThreadRecord[]> {
     this.sessionStore.get(sessionId)
-    return this.repository.listTrash(sessionId)
+    return this.repositories.lifecycle.listTrash(sessionId)
   }
 
   async getTrashed(threadId: string): Promise<AgentThreadRecord> {
-    const trashed = await this.repository.getTrashedThread(threadId)
+    const trashed = await this.repositories.lifecycle.getTrashedThread(threadId)
     return trashed.thread
   }
 
   async restore(threadId: string): Promise<AgentThreadRecord> {
-    const trashed = await this.repository.getTrashedThread(threadId)
-    const restored = await this.repository.restoreThread(threadId, trashed.thread.sessionId)
+    const trashed = await this.repositories.lifecycle.getTrashedThread(threadId)
+    const restored = await this.repositories.lifecycle.restoreThread(threadId, trashed.thread.sessionId)
     const nextThread = restored.thread
-    this.conversationStore.setThreadTrashed(threadId, false)
+    this.payloadStore.setThreadTrashed(threadId, false)
     this.sessionStore.acceptPersisted(restored.session)
     this.index.setThread(nextThread)
-    for (const run of await this.repository.listRunsForThread(threadId)) {
+    for (const run of await this.runReader.listRunsForThread(threadId)) {
       this.index.setRun(run)
-      this.conversationStore.registerRun(run)
+      this.payloadStore.registerRun(run)
     }
     this.index.rebuildDerivedIndexes()
     this.events.threadUpdateBus.publish(threadId, { thread: structuredClone(nextThread), manifest: restored.manifest })
@@ -269,13 +286,13 @@ export class ThreadStore {
   }
 
   async purge(threadId: string): Promise<void> {
-    const trashed = await this.repository.getTrashedThread(threadId)
-    const session = await this.repository.purgeThread(threadId, trashed.thread.sessionId)
+    const trashed = await this.repositories.lifecycle.getTrashedThread(threadId)
+    const session = await this.repositories.lifecycle.purgeThread(threadId, trashed.thread.sessionId)
     this.sessionStore.acceptPersisted(session)
     this.index.deleteRunsForThread(threadId)
-    await this.conversationStore.purgeThreadPayload(threadId)
-    const references = await this.repository.listReferencedObjectHashes()
-    await this.conversationStore.garbageCollectObjects(references)
+    await this.payloadStore.purgeThreadPayload(threadId)
+    const references = await this.objectReferences.listReferencedObjectHashes()
+    await this.payloadStore.garbageCollectObjects(references)
   }
 
   async recordAttachment(threadId: string, input: {
@@ -287,7 +304,7 @@ export class ThreadStore {
     relativePath: string
   }, action: 'attached' | 'deleted' = 'attached'): Promise<void> {
     this.get(threadId)
-    await this.conversationStore.appendAttachment(threadId, {
+    await this.payloadStore.appendAttachment(threadId, {
       attachmentId: input.id,
       action,
       name: input.name,

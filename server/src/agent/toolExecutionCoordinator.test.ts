@@ -8,9 +8,13 @@
 //   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
-import { describe, expect, it } from 'vitest'
-import type { ToolResult } from '../framework/types.js'
-import { formatToolResultForModel } from './toolExecutionCoordinator.js'
+import { describe, expect, it, vi } from 'vitest'
+import { ItemSink } from '../conversation/itemSink.js'
+import { ToolRegistry } from '../framework/registry.js'
+import type { ToolProvider, ToolResult } from '../framework/types.js'
+import type { ToolExecutionStore } from '../store/runtimePorts.js'
+import { formatToolResultForModel, ToolExecutionCoordinator } from './toolExecutionCoordinator.js'
+import { RunEventSink } from './turnRunner.js'
 
 describe('formatToolResultForModel', () => {
   it('keeps valueRefs visible while summarizing oversized payloads', () => {
@@ -51,3 +55,99 @@ describe('formatToolResultForModel', () => {
     expect(JSON.stringify(formatted)).not.toContain('lead_059.nc')
   })
 })
+
+describe('ToolExecutionCoordinator', () => {
+  it('persists the Chinese tool label with transcript and conversation items', async () => {
+    const transcriptWrites: Array<Record<string, unknown>> = []
+    const conversationItems: Array<{ metadata: Record<string, unknown> }> = []
+    const store = {
+      activeTranscript: vi.fn(async () => []),
+      appendTranscript: vi.fn(async (input: Record<string, unknown>) => {
+        transcriptWrites.push(input)
+        return {
+          schemaVersion: 2,
+          seq: transcriptWrites.length,
+          entryId: `entry_${transcriptWrites.length}`,
+          parentEntryId: null,
+          logicalParentEntryId: null,
+          threadId: 'thread_1',
+          runId: 'run_1',
+          turnId: 'turn_1',
+          kind: input.kind,
+          timestamp: '2026-06-24T00:00:00.000Z',
+          payload: input.payload ?? {},
+        }
+      }),
+      saveRunCheckpoint: vi.fn(async () => undefined),
+    } as unknown as ToolExecutionStore
+    const registry = new ToolRegistry()
+    registry.register(testProvider())
+    const itemSink = new ItemSink(
+      item => { conversationItems.push(item) },
+      'run_1',
+      'thread_1',
+    )
+    const coordinator = new ToolExecutionCoordinator({
+      store,
+      registry,
+      adapter: null,
+      runId: 'run_1',
+      sessionId: 'session_1',
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      inlineToolResultMaxChars: 4_000,
+      eventSink: new RunEventSink(async () => undefined, 'run_1', 'thread_1'),
+      itemSink,
+      valueState: new Map(),
+      signal: new AbortController().signal,
+    })
+
+    await coordinator.prepare('inspect_dataset', { datasetId: 'dataset_1' }, 'call_1')
+    await itemSink.flush()
+
+    expect(transcriptWrites[0]).toMatchObject({
+      kind: 'tool_call',
+      payload: { name: 'inspect_dataset', label: '检查数据集' },
+    })
+    expect(conversationItems[0]?.metadata).toMatchObject({ toolLabel: '检查数据集' })
+  })
+})
+
+function testProvider(): ToolProvider {
+  const definition = {
+    name: 'inspect_dataset',
+    label: '检查数据集',
+    description: '检查测试数据集。',
+    prompt: '读取并检查测试数据集，不修改数据。',
+    group: '测试',
+    tags: ['test'],
+    isReadOnly: true,
+    isDestructive: false,
+    jsonSchema: {
+      type: 'object',
+      properties: { datasetId: { type: 'string' } },
+      required: ['datasetId'],
+    },
+  }
+  return {
+    manifest: {
+      id: 'test-inspection',
+      name: '测试检查工具',
+      version: '1.0.0',
+      author: 'test',
+      language: 'typescript',
+      description: '测试工具 Provider。',
+      tools: [definition],
+    },
+    tools: () => [{
+      ...definition,
+      handler: async () => ({
+        message: '检查完成',
+        payload: {},
+        warnings: [],
+        resultId: 'result_1',
+        source: 'test',
+      }),
+    }],
+  }
+}

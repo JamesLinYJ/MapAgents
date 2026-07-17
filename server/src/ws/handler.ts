@@ -12,7 +12,7 @@ import type { Server, IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer } from 'ws'
 import { RuntimeFileStore } from '../store/fileStore.js'
-import { StoreNotFoundError } from '../store/platformStore.js'
+import { StoreNotFoundError } from '../store/storeErrors.js'
 import { AuthorizationError } from '../security/authorizationService.js'
 import { makeId } from '../utils/ids.js'
 import { failure, parseMessage, push, success, type ClientMsg } from './protocol.js'
@@ -154,4 +154,3 @@ function rejectUpgrade(socket: Duplex, status: number, message: string): void {
   socket.write(`HTTP/1.1 ${status} ${message}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
   socket.destroy()
 }
-

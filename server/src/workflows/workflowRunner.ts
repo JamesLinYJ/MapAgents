@@ -7,7 +7,7 @@ import type { AgentRuntimeConfig } from '../schemas/types.js'
 import type { ModelAdapterRegistry } from '../model/registry.js'
 import type { SecurityServices } from '../security/routes.js'
 import type { AuthContext } from '../security/types.js'
-import type { PostgresPlatformStore } from '../store/platformStore.js'
+import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import type { UsageStatsService } from '../usage/usageStatsService.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 import { resolveRuntimeConfig } from '../ws/runtimeConfig.js'
@@ -36,7 +36,7 @@ import {
 import type { WorkflowNode, WorkflowNodeRun, WorkflowRunRecord } from './schemas.js'
 
 export interface WorkflowRunnerOptions {
-  store: PostgresPlatformStore
+  store: PlatformPersistenceFacade
   definitions: WorkflowDefinitionService
   compiler: WorkflowCompiler
   toolRegistry: ToolRegistry
@@ -253,7 +253,7 @@ export class WorkflowRunner {
       }
       if (node.type === 'tool') {
         const tool = this.options.toolRegistry.get(node.config.toolName)
-        if (!tool) throw new Error(`工具 '${node.config.toolName}' 未注册。`)
+        if (!tool) throw new Error(`工具“${node.label}”未注册。`)
         await this.options.security.authorization.enforce(auth, 'tool', 'execute', {
           workspaceId: record.workspaceId,
           resourceId: node.config.toolName,
@@ -621,7 +621,7 @@ async function retry<T>(
   throw lastError
 }
 
-async function latestAssistantResponse(store: PostgresPlatformStore, threadId: string, runId: string): Promise<string> {
+async function latestAssistantResponse(store: PlatformPersistenceFacade, threadId: string, runId: string): Promise<string> {
   const entries = await store.activeTranscript(threadId)
   const entry = [...entries].reverse().find(item => (
     item.runId === runId

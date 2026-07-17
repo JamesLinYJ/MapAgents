@@ -32,24 +32,18 @@ describe('layer manager preferences', () => {
     const preferences = sanitizeLayerManagerPreferences({
       activeView: 'legacyPanel',
       visibilityFilter: 'selectedOnly',
-      order: ['layer_2', 17],
       groups: [{ id: 'group_1', name: '气象产品', memberIds: ['layer_1'], expanded: false }],
       overrides: {
-        layer_1: { name: '雷达回波', color: '#1188ff', removed: true },
+        layer_1: { name: '雷达回波' },
         layer_2: 'bad',
-      },
-      labelSettings: {
-        layer_1: { enabled: true, fieldName: 'name' },
       },
     })
 
     expect(preferences.activeView).toBe('drawOrder')
     expect(preferences.visibilityFilter).toBe('all')
-    expect(preferences.order).toEqual(['layer_2', '17'])
     expect(preferences.groups).toEqual([{ id: 'group_1', name: '气象产品', memberIds: ['layer_1'], expanded: false }])
-    expect(preferences.overrides.layer_1).toEqual({ name: '雷达回波', color: '#1188ff', removed: true })
+    expect(preferences.overrides.layer_1).toEqual({ name: '雷达回波' })
     expect(preferences.overrides.layer_2).toBeUndefined()
-    expect(preferences.labelSettings.layer_1).toEqual({ enabled: true, fieldName: 'name' })
   })
 
   it('persists preferences by thread and run scoped storage key', () => {
@@ -57,10 +51,8 @@ describe('layer manager preferences', () => {
     const preferences: LayerManagerPreferences = {
       activeView: 'sources',
       visibilityFilter: 'visible',
-      order: ['layer_a'],
       groups: [],
-      overrides: { layer_a: { color: '#0ea5e9' } },
-      labelSettings: { layer_a: { enabled: true, fieldName: 'station' } },
+      overrides: { layer_a: { name: '雷达回波' } },
     }
 
     writeLayerManagerPreferences('thread_1:run_1', preferences)
@@ -69,9 +61,7 @@ describe('layer manager preferences', () => {
     expect(readLayerManagerPreferences('thread_1:run_1')).toMatchObject({
       activeView: 'sources',
       visibilityFilter: 'visible',
-      order: ['layer_a'],
-      overrides: { layer_a: { color: '#0ea5e9' } },
-      labelSettings: { layer_a: { enabled: true, fieldName: 'station' } },
+      overrides: { layer_a: { name: '雷达回波' } },
     })
     expect(readLayerManagerPreferences('thread_1:run_2').activeView).toBe('table')
   })

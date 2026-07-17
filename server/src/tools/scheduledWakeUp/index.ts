@@ -34,7 +34,7 @@ export function createScheduledWakeUpProvider(service: ScheduledTaskService): To
     manifest,
     tools: (): ToolDef[] => [{
       name: 'ScheduledWakeUp',
-      label: scheduledWakeUpManifestTool?.label ?? 'ScheduledWakeUp 定时唤醒',
+      label: scheduledWakeUpManifestTool?.label ?? '定时唤醒',
       description: scheduledWakeUpManifestTool?.description ?? '管理系统定时任务。v1 支持将 Workflow 作为定时目标。',
       prompt: [
         '你可以调用 ScheduledWakeUp 管理系统定时任务。',

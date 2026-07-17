@@ -23,12 +23,14 @@ import {
   featureCollectionFromBoundaryRef,
   isRecord,
   mergeArtifactMetadata,
+  miniAppDisplay,
   nowcastRenderBbox,
   optionalRefValue,
   refObject,
   requiredCandidateText,
   requiredRefKind,
   requiredText,
+  rasterTileDisplay,
   result,
   resultRefs,
   selectNowcastMapCandidate,
@@ -61,7 +63,7 @@ export function createNowcastMeteorologyTools(deps: MeteorologyToolDeps): ToolDe
     tool('generate_nowcast_forecast_text', '生成短时临近预报（短临）预报文本', '保存基于短时临近预报（短临）分析事实生成并校验的模型文本', {
       nowcast_analysis_ref: refParameter('短时临近预报（短临）分析引用'),
     }, withMeteorologyDeps(deps, generateNowcastText), ['nowcast_analysis_ref']),
-    tool('render_nowcast_raster', '渲染短时临近预报（短临）栅格', '渲染短时临近预报（短临）候选时次为地图 PNG', {
+    tool('render_nowcast_raster', '渲染短时临近预报（短临）栅格', '生成短时临近预报候选时次 COG 地图与 PNG 预览', {
       nowcast_map_candidate_ref: refParameter('短时临近预报（短临）地图候选引用'),
     }, withMeteorologyDeps(deps, renderNowcastRaster), ['nowcast_map_candidate_ref']),
   ]
@@ -204,32 +206,22 @@ async function answerNowcast(args: Record<string, unknown>, ctx: ToolContext, de
   )
   const ref: ValueRef = { refId: makeId('ref'), kind: 'nowcast_answer', label: '短时临近预报（短临）问题回答事实', value: worker.payload }
   const candidate = selectNowcastMapCandidate(analysis)
-  const artifact = artifactTarget(ctx, 'png', `${String(candidate.label ?? '代表时次')} 短时临近预报（短临）降水`)
-  const candidateFileName = typeof candidate.filename === 'string' ? candidate.filename : undefined
-  const raster = await deps.callWorker('render_nowcast_raster', {
-    file_relative_path: requiredCandidateText(candidate, 'relativePath'),
-    file_name: candidateFileName,
-    variable: requiredCandidateText(candidate, 'variable'),
-    bbox: nowcastRenderBbox(analysis),
-    output_relative_path: artifact.relativePath,
-  }, ctx.signal)
-  mergeArtifactMetadata(artifact, {
-    ...raster.payload,
-    nowcastCandidate: candidate,
-    nowcastMapReason: candidate.reason ?? null,
-    nowcastLeadMinutes: candidate.leadMinutes ?? null,
-    displaySurfaces: ['map', 'download'],
-    primarySurface: 'map',
-  })
+  const rendered = await renderCandidateArtifacts(
+    ctx,
+    deps,
+    candidate,
+    `${String(candidate.label ?? '代表时次')} 短时临近预报（短临）降水`,
+    nowcastRenderBbox(analysis),
+  )
   return result('answer_nowcast_question', worker.message, {
     ...worker.payload,
     map: {
-      artifactId: artifact.artifactId,
-      label: artifact.name,
+      artifactId: rendered.map.artifactId,
+      label: rendered.map.name,
       reason: candidate.reason ?? null,
       leadMinutes: candidate.leadMinutes ?? null,
     },
-  }, [ref], [artifact])
+  }, [ref], [rendered.preview, rendered.map])
 }
 
 async function generateNowcastText(args: Record<string, unknown>, ctx: ToolContext, deps: MeteorologyToolDeps): Promise<ToolResult> {
@@ -248,17 +240,40 @@ async function generateNowcastText(args: Record<string, unknown>, ctx: ToolConte
 
 async function renderNowcastRaster(args: Record<string, unknown>, ctx: ToolContext, deps: MeteorologyToolDeps): Promise<ToolResult> {
   const candidate = refObject(requiredRefKind(ctx, args, 'nowcast_map_candidate_ref', ['nowcast_map_candidate']).value)
-  const artifact = artifactTarget(ctx, 'png', '短时临近预报（短临）降水栅格')
+  const rendered = await renderCandidateArtifacts(ctx, deps, candidate, '短时临近预报（短临）降水栅格')
+  return result(
+    'render_nowcast_raster',
+    rendered.worker.message,
+    rendered.worker.payload,
+    resultRefs('render_nowcast_raster', '短时临近预报（短临）栅格', rendered.worker.payload),
+    [rendered.preview, rendered.map],
+  )
+}
+
+async function renderCandidateArtifacts(
+  ctx: ToolContext,
+  deps: MeteorologyToolDeps,
+  candidate: Record<string, unknown>,
+  title: string,
+  bbox?: number[],
+) {
+  const preview = artifactTarget(ctx, 'png', `${title}预览`)
+  const map = artifactTarget(ctx, 'tif', title)
   const worker = await deps.callWorker('render_nowcast_raster', {
-    file_relative_path: candidate.relativePath,
+    file_relative_path: requiredCandidateText(candidate, 'relativePath'),
     file_name: typeof candidate.filename === 'string' ? candidate.filename : undefined,
-    variable: candidate.variable,
-    output_relative_path: artifact.relativePath,
+    variable: requiredCandidateText(candidate, 'variable'),
+    bbox,
+    output_relative_path: preview.relativePath,
+    output_cog_relative_path: map.relativePath,
   }, ctx.signal)
-  mergeArtifactMetadata(artifact, {
+  const metadata = {
     ...worker.payload,
-    displaySurfaces: ['map', 'download'],
-    primarySurface: 'map',
-  })
-  return result('render_nowcast_raster', worker.message, worker.payload, resultRefs('render_nowcast_raster', '短时临近预报（短临）栅格', worker.payload), [artifact])
+    nowcastCandidate: candidate,
+    nowcastMapReason: candidate.reason ?? null,
+    nowcastLeadMinutes: candidate.leadMinutes ?? null,
+  }
+  mergeArtifactMetadata(preview, metadata, miniAppDisplay())
+  mergeArtifactMetadata(map, metadata, rasterTileDisplay(map, worker.payload))
+  return { preview, map, worker }
 }

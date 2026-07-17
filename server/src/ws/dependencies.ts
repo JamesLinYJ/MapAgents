@@ -15,25 +15,26 @@
 
 import type { AgentRuntimeConfig } from '../schemas/types.js'
 import type { Env } from '../framework/env.js'
-import type { PostGisRepository } from '../gis/postgis.js'
+import type { ManagedLayerService } from '../gis/managedLayers/managedLayerService.js'
 import type { ModelAdapterRegistry } from '../model/registry.js'
 import type { ToolRegistry } from '../framework/registry.js'
 import type { SandboxSessionFactory } from '../agent/runtime.js'
 import type { OpenAIAgentsRuntime } from '../agent/runtime.js'
 import type { RunTaskManager } from '../agent/runTaskManager.js'
-import type { PostgresPlatformStore } from '../store/platformStore.js'
+import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import type { SecurityServices } from '../security/routes.js'
 import type { ScheduledTaskService } from '../workflows/scheduledTaskService.js'
 import type { WorkflowDefinitionService } from '../workflows/workflowDefinitionService.js'
 import type { BackgroundTaskRegistry } from '../workflows/backgroundTaskRegistry.js'
 import type { UsageStatsService } from '../usage/usageStatsService.js'
+import type { MapStore } from '../store/postgres/mapStore.js'
 
 export interface WsDependencies {
   env: Env
-  store: PostgresPlatformStore
+  store: PlatformPersistenceFacade
   toolRegistry: ToolRegistry
   modelRegistry: ModelAdapterRegistry
-  postgis: PostGisRepository
+  managedLayers: ManagedLayerService
   runtimeRoot: string
   defaultRuntimeConfig?: AgentRuntimeConfig
   createSandboxSession?: SandboxSessionFactory
@@ -43,5 +44,6 @@ export interface WsDependencies {
   workflowDefinitionService: WorkflowDefinitionService
   backgroundTasks: BackgroundTaskRegistry
   usageStats: UsageStatsService
+  mapStore: MapStore
   security: SecurityServices
 }

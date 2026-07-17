@@ -13,7 +13,7 @@
 // 集中维护 WS 控制命令的 CSRF 与 RBAC 规则。handler 只负责连接和分发，
 // 每个命令在进入业务执行前必须经过这里的会话活跃性和资源 scope 校验。
 
-import { StoreNotFoundError } from '../store/platformStore.js'
+import { StoreNotFoundError } from '../store/storeErrors.js'
 import type { AuthContext } from '../security/types.js'
 import { assertDirectToolRunAllowed } from '../security/toolExecutionPolicy.js'
 import type { WsCommandContext, WsCommandRegistry } from './commandRegistry.js'
@@ -89,6 +89,12 @@ export function registerWsAuthorizationPolicies(registry: WsCommandRegistry): vo
   set('layer:list', (_payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'layer', 'read', { workspaceId: auth.defaultWorkspaceId }))
   set('layer:update', (payload, context, auth) => authorizeLayer(context.dependencies, auth, requiredString(payload, 'layerKey'), 'update'))
   set('layer:delete', (payload, context, auth) => authorizeLayer(context.dependencies, auth, requiredString(payload, 'layerKey'), 'delete'))
+  set('map-scene:update', (payload, context, auth) => authorizeThread(
+    context.dependencies,
+    auth,
+    requiredString(payload, 'threadId'),
+    'update',
+  ))
   set('workflow:list', (_payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'workflow', 'read', { workspaceId: auth.defaultWorkspaceId }))
   set('workflow:validate', (_payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'workflow', 'create', { workspaceId: auth.defaultWorkspaceId }))
   set('workflow:create', (_payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'workflow', 'create', { workspaceId: auth.defaultWorkspaceId }))
@@ -243,7 +249,7 @@ async function authorizeLayer(
   layerKey: string,
   action: 'update' | 'delete',
 ): Promise<void> {
-  const layer = await dependencies.postgis.getLayer(layerKey)
+  const layer = await dependencies.managedLayers.getLayer(layerKey)
   if (!layer) throw new StoreNotFoundError(`图层 '${layerKey}' 不存在`)
   if (layer.readonly) throw new Error('系统图层为只读，不能修改。')
   await dependencies.security.authorization.assertResourceWorkspace(auth, 'layer', action, {

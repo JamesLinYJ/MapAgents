@@ -12,8 +12,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { PostgresPlatformStore } from '../store/platformStore.js'
-import { createTestPlatformStore } from '../../test-support/platformStoreHarness.js'
+import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
+import { createTestPersistenceFacade } from '../../test-support/persistenceFacadeHarness.js'
 import { RuntimeFileStore } from '../store/fileStore.js'
 import { defaultRuntimeConfig } from './defaultRuntimeConfig.js'
 import { assembleThreadContext, compactThreadIfNeeded, rebuildThreadMemory } from './contextManager.js'
@@ -226,8 +226,8 @@ describe('thread context management', () => {
   })
 })
 
-async function createStore(root: string): Promise<PostgresPlatformStore> {
-  const store = createTestPlatformStore(root)
+async function createStore(root: string): Promise<PlatformPersistenceFacade> {
+  const store = createTestPersistenceFacade(root)
   await store.initialize()
   return store
 }

@@ -12,7 +12,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import type { AgentThreadRecord, SessionRecord } from '../schemas/types.js'
 import type { ThreadHistoryPage } from '@geo-agent-platform/shared-types'
-import { InvalidHistoryCursorError } from '../store/fileConversationIo.js'
+import { InvalidHistoryCursorError } from '../store/conversationEncoding.js'
 
 const publicShareQuerySchema = z.object({
   threadId: z.string().trim().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/u).optional(),

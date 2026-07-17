@@ -71,6 +71,7 @@ class MeteorologicalRenderRequest(StrictWorkerRequest):
     level_index: int | None = None
     bbox: list[float] | None = Field(None, min_length=4, max_length=4)
     output_relative_path: str = Field(..., min_length=1)
+    output_cog_relative_path: str = Field(..., min_length=1)
 
 
 class MeteorologicalStatsRequest(StrictWorkerRequest):

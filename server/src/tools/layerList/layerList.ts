@@ -9,14 +9,14 @@
 // --------------------------------------------------------------------------
 
 import type { ToolDef } from '../../framework/types.js'
-import type { PostGisRepository } from '../../gis/postgis.js'
+import type { ManagedLayerService } from '../../gis/managedLayers/managedLayerService.js'
 import type { LayerDescriptor } from '../../schemas/types.js'
 import { makeId } from '../../utils/ids.js'
 import { LIST_LAYERS_PROMPT } from '../spatial/prompts.js'
 
 // list_layers 是 Agent 进入平台图层事实源的只读入口。
 // 它只返回 PostGIS 中已经注册的系统/会话图层，不做外部搜索或隐式导入。
-export function createLayerListTool(postgis: PostGisRepository): ToolDef {
+export function createLayerListTool(managedLayers: ManagedLayerService): ToolDef {
   return {
     name: 'list_layers',
     label: '检索平台图层',
@@ -37,7 +37,9 @@ export function createLayerListTool(postgis: PostGisRepository): ToolDef {
       },
     },
     async handler(args, ctx) {
-      const layers = await postgis.listLayers(ctx.sessionId, ctx.threadId)
+      const workspaceId = ctx.auth?.defaultWorkspaceId
+      if (!workspaceId) throw new Error('检索平台图层需要有效的工作区身份。')
+      const layers = await managedLayers.listLayers(workspaceId, ctx.sessionId, ctx.threadId)
       const queryTerms = normalizeQueryTerms(args.query)
       const entityTerms = extractEntityTerms(queryTerms)
       const boundaryIntent = hasAdministrativeBoundaryIntent(queryTerms)

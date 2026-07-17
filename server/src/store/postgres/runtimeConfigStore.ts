@@ -11,7 +11,7 @@
 import { eq } from 'drizzle-orm'
 import type { Database } from '../../db/connection.js'
 import { platformRuntimeConfig } from '../../db/schema.js'
-import { isRecord } from '../platformStoreUtils.js'
+import { decodeRequiredRecord } from '../../db/valueDecoders.js'
 
 // 运行时配置是平台控制面资源。这里仅负责持久化，不决定权限；
 // 权限在 HTTP/WS 控制面通过 AuthorizationService 统一判断。
@@ -24,8 +24,10 @@ export class RuntimeConfigStore {
       .from(platformRuntimeConfig)
       .where(eq(platformRuntimeConfig.configKey, configKey))
       .limit(1)
-    const payload = rows[0]?.payloadJson
-    return isRecord(payload) ? payload : null
+    const row = rows[0]
+    return row
+      ? decodeRequiredRecord(row.payloadJson, 'platform_runtime_config.payload_json')
+      : null
   }
 
   async upsert(configKey: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {

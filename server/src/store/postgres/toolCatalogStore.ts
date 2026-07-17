@@ -11,7 +11,7 @@
 import { and, asc, eq } from 'drizzle-orm'
 import type { Database } from '../../db/connection.js'
 import { toolCatalogEntries } from '../../db/schema.js'
-import { isRecord } from '../platformStoreUtils.js'
+import { decodeRequiredRecord } from '../../db/valueDecoders.js'
 
 type ToolCatalogRow = typeof toolCatalogEntries.$inferSelect
 
@@ -72,7 +72,7 @@ function mapToolCatalogRow(row: ToolCatalogRow): ToolCatalogEntry {
   return {
     toolKind: row.toolKind,
     toolName: row.toolName,
-    payload: isRecord(row.payloadJson) ? row.payloadJson : {},
+    payload: decodeRequiredRecord(row.payloadJson, 'tool_catalog_entries.payload_json'),
     sortOrder: row.sortOrder,
   }
 }

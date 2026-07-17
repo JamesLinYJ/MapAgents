@@ -61,7 +61,13 @@ export class ToolExecutionCoordinator {
       runId: this.options.runId,
       turnId: this.options.turnId,
       kind: 'tool_call',
-      payload: { callId, name: toolName, arguments: args, ledgerStatus: 'prepared' },
+      payload: {
+        callId,
+        name: toolName,
+        label: tool.label,
+        arguments: args,
+        ledgerStatus: 'prepared',
+      },
     })
     await this.options.store.saveRunCheckpoint(this.options.runId, {
       pendingToolCallIds: [callId],
@@ -71,6 +77,7 @@ export class ToolExecutionCoordinator {
       name: toolName,
       callId,
       arguments: JSON.stringify(args),
+      metadata: { toolLabel: tool.label },
     })
     this.preparedCalls.add(callId)
     this.callItems.set(callId, item.itemId)
@@ -101,30 +108,43 @@ export class ToolExecutionCoordinator {
     try {
       this.assertPlanModeAllows(toolName)
       await this.appendLedger(callId, toolName, 'started')
-      this.options.eventSink.emit('tool.started', toolName, { tool: toolName, callId })
+      const toolLabel = this.toolLabel(toolName)
+      this.options.eventSink.emit('tool.started', toolLabel, { tool: toolName, toolLabel, callId })
       const result = await this.options.registry.execute(toolName, args, this.createToolContext())
-      await persistToolExecutionResult(this.options.store, this.options.runId, toolName, args, result)
+      await persistToolExecutionResult(
+        this.options.store,
+        this.options.runId,
+        toolName,
+        this.toolLabel(toolName),
+        args,
+        result,
+      )
       for (const ref of result.valueRefs ?? []) this.options.valueState.set(ref.refId, ref)
-      this.options.eventSink.emit('tool.completed', result.message, { tool: toolName, callId, result: result.payload })
+      this.options.eventSink.emit('tool.completed', result.message, {
+        tool: toolName,
+        toolLabel,
+        callId,
+        result: result.payload,
+      })
       if (itemId) {
         this.options.itemSink.completeItem(itemId, {
           callId,
           name: toolName,
           output: JSON.stringify(result.payload),
-          metadata: { resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [] },
+          metadata: { toolLabel: this.toolLabel(toolName), resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [] },
         })
       }
       const outputItemId = this.options.itemSink.startItem('function_call_output', {
         callId,
         name: toolName,
         role: 'tool',
-        metadata: { resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [] },
+        metadata: { toolLabel: this.toolLabel(toolName), resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [] },
       }).itemId
       this.options.itemSink.completeItem(outputItemId, {
         callId,
         name: toolName,
         output: JSON.stringify(result.payload),
-        metadata: { resultId: result.resultId, source: result.source, valueRefs: result.valueRefs ?? [], artifacts: result.artifacts ?? [] },
+        metadata: { toolLabel: this.toolLabel(toolName), resultId: result.resultId, source: result.source, valueRefs: result.valueRefs ?? [], artifacts: result.artifacts ?? [] },
       })
       await this.appendToolResult(callId, toolName, result)
       await this.options.store.saveRunCheckpoint(this.options.runId, {
@@ -135,7 +155,13 @@ export class ToolExecutionCoordinator {
     } catch (error) {
       const message = errorMessage(error)
       await this.appendLedger(callId, toolName, 'failed', message)
-      if (itemId) this.options.itemSink.completeItem(itemId, { callId, name: toolName, isError: true, body: message })
+      if (itemId) this.options.itemSink.completeItem(itemId, {
+        callId,
+        name: toolName,
+        isError: true,
+        body: message,
+        metadata: { toolLabel: this.toolLabel(toolName) },
+      })
       // started 后失败是已知终态，可以清理 pending；进程直接崩溃时不会执行到这里。
       await this.options.store.saveRunCheckpoint(this.options.runId, {
         pendingToolCallIds: [],
@@ -154,6 +180,12 @@ export class ToolExecutionCoordinator {
     if (!tool) throw new Error(`工具 '${toolName}' 未注册`)
     if (tool.isReadOnly || toolName === 'exit_plan_mode' || toolName === 'enter_plan_mode') return
     throw new Error(`计划模式禁止执行写入或副作用工具 '${toolName}'。请先用 exit_plan_mode 提交计划并等待批准。`)
+  }
+
+  private toolLabel(toolName: string): string {
+    const tool = this.options.registry.get(toolName)
+    if (!tool) throw new Error(`工具 '${toolName}' 未注册`)
+    return tool.label
   }
 
   private createToolContext(): ToolContext {
@@ -200,6 +232,7 @@ export class ToolExecutionCoordinator {
       payload: {
         callId,
         name: toolName,
+        label: this.toolLabel(toolName),
         summary: result.message,
         content: contentRef ? null : content,
         contentRef,
@@ -220,7 +253,13 @@ export class ToolExecutionCoordinator {
       runId: this.options.runId,
       turnId: this.options.turnId,
       kind: 'checkpoint',
-      payload: { callId, name: toolName, ledgerStatus, error: error ?? null },
+      payload: {
+        callId,
+        name: toolName,
+        label: this.toolLabel(toolName),
+        ledgerStatus,
+        error: error ?? null,
+      },
     })
   }
 }

@@ -12,8 +12,8 @@ import { mkdtemp, mkdir, symlink, writeFile, utimes, rm } from 'node:fs/promises
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { PostgresPlatformStore } from '../store/platformStore.js'
-import { createTestPlatformStore } from '../../test-support/platformStoreHarness.js'
+import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
+import { createTestPersistenceFacade } from '../../test-support/persistenceFacadeHarness.js'
 import { defaultRuntimeConfig } from '../agent/defaultRuntimeConfig.js'
 import { parseMemoryMarkdown, truncateEntrypointContent } from './markdown.js'
 import { createMemoryPathConfig, resolveMemoryFilePath, validateRelativeMemoryPath } from './paths.js'
@@ -141,7 +141,7 @@ describe('memory core', () => {
 
   it('extracts memories through restricted memory tool operations only', async () => {
     const root = await makeTempRoot()
-    const store = createTestPlatformStore(root)
+    const store = createTestPersistenceFacade(root)
     await store.initialize()
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '受限提取')
@@ -198,7 +198,7 @@ describe('memory core', () => {
 
   it('rejects non-memory tools in automatic extraction output', async () => {
     const root = await makeTempRoot()
-    const store = createTestPlatformStore(root)
+    const store = createTestPersistenceFacade(root)
     await store.initialize()
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '提取白名单')
@@ -223,7 +223,7 @@ describe('memory core', () => {
 
   it('excludes current run entries when rebuilding session memory for the next prompt', async () => {
     const root = await makeTempRoot()
-    const store = createTestPlatformStore(root)
+    const store = createTestPersistenceFacade(root)
     await store.initialize()
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '当前轮隔离')

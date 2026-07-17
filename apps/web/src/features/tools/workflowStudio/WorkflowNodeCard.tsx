@@ -73,7 +73,7 @@ function portLabel(port: string): string {
 }
 
 function nodeSummary(node: StudioFlowNode['data']['workflowNode']): string {
-  if (node.type === 'tool') return node.config.toolName
+  if (node.type === 'tool') return '执行已配置工具并传递结构化结果'
   if (node.type === 'agent') return '根据上下文执行智能分析'
   if (node.type === 'condition') return node.config.operator
   if (node.type === 'approval') return node.config.question

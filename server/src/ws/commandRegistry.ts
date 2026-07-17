@@ -32,6 +32,7 @@ export interface WsCommandContext {
 export interface WsCommandDefinition<TPayload extends z.ZodTypeAny = z.ZodTypeAny> {
   type: ClientMsg['type']
   payloadSchema: TPayload
+  responseSchema?: z.ZodTypeAny
   auth?: 'required' | 'optional'
   csrf?: boolean
   authorize?: (payload: Record<string, unknown>, context: WsCommandContext) => Promise<void> | void
@@ -73,7 +74,8 @@ export class WsCommandRegistry {
     const commandContext = { ...context, msg }
     if (!definition.authorize) throw new Error(`WS 命令 '${msg.type}' 缺少授权策略。`)
     await definition.authorize(requireRecordPayload(parsedPayload, msg.type), commandContext)
-    return definition.handler(parsedPayload, commandContext)
+    const result = await definition.handler(parsedPayload, commandContext)
+    return definition.responseSchema ? definition.responseSchema.parse(result) : result
   }
 
   registeredTypes(): ClientMsg['type'][] {

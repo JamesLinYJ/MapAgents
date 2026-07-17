@@ -16,7 +16,7 @@
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
-import type { PostGisRepository } from './postgis.js'
+import type { ManagedLayerService } from './managedLayers/managedLayerService.js'
 import type { GeoJsonFeatureCollection } from './geojson.js'
 import { parseGeoJsonEntity, toFeatureCollection } from './geojson.js'
 import type { LayerDescriptor } from '../schemas/types.js'
@@ -50,7 +50,7 @@ export interface SeedLayerImportSummary {
 }
 
 export async function seedLayersFromDirectory(
-  postgis: Pick<PostGisRepository, 'importGeoJsonLayer'>,
+  managedLayers: Pick<ManagedLayerService, 'importGeoJsonLayer'>,
   seedDirectory: string,
 ): Promise<SeedLayerImportSummary[]> {
   const catalog = await loadSeedLayerCatalog(seedDirectory)
@@ -59,7 +59,7 @@ export async function seedLayersFromDirectory(
     const filename = entry.filename ?? `${entry.layer_key}.geojson`
     const filePath = resolveSeedFile(seedDirectory, filename)
     const collection = await readSeedFeatureCollection(filePath)
-    const layer = await postgis.importGeoJsonLayer({
+    const layer = await managedLayers.importGeoJsonLayer({
       layerKey: entry.layer_key,
       name: entry.name,
       description: entry.description,

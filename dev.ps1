@@ -129,12 +129,15 @@ function Set-DefaultEnvironment {
     Import-DotEnv (Join-Path $Root '.env')
 
     Set-ProcessDefault 'POSTGIS_PORT' '55432'
-    Set-ProcessDefault 'API_HOST' '127.0.0.1'
+    Set-ProcessDefault 'MARTIN_PORT' '3000'
+    Set-ProcessDefault 'TITILER_PORT' '8001'
+    # 本地一键启动只对当前主机开放；生产监听地址由生产启动环境单独配置。
+    Set-ProcessValue 'API_HOST' '127.0.0.1'
     Set-ProcessDefault 'API_PORT' '8000'
     Set-ProcessDefault 'WORKER_PORT' '8012'
     Set-ProcessDefault 'WORKER_PYTHON' (Resolve-SystemPython)
     Set-ProcessDefault 'WORKER_SHARED_SECRET' 'development-only-worker-shared-secret-change-before-production'
-    Set-ProcessDefault 'WEB_DEV_HOST' '127.0.0.1'
+    Set-ProcessValue 'WEB_DEV_HOST' '127.0.0.1'
     Set-ProcessDefault 'WEB_DEV_PORT' '5173'
     Set-ProcessDefault 'RUNTIME_ROOT' $RuntimeRoot
     Set-ProcessDefault 'SEED_LAYERS_DIR' (Join-Path $Root 'infra\seeds\layers')
@@ -142,6 +145,9 @@ function Set-DefaultEnvironment {
     Set-ResolvedDevPort 'WORKER_PORT' 'worker' ([int]$env:WORKER_PORT) 8102
     Set-ResolvedDevPort 'WEB_DEV_PORT' 'web' ([int]$env:WEB_DEV_PORT) 5300
     Set-ProcessValue 'DATABASE_URL' "postgresql://geo_agent:geo_agent@127.0.0.1:$($env:POSTGIS_PORT)/geo_agent"
+    Set-ProcessValue 'MARTIN_INTERNAL_URL' "http://127.0.0.1:$($env:MARTIN_PORT)"
+    Set-ProcessValue 'TITILER_INTERNAL_URL' "http://127.0.0.1:$($env:TITILER_PORT)"
+    Set-ProcessDefault 'MAP_TILE_TIMEOUT_MS' '30000'
     Set-ProcessValue 'WORKER_URL' "http://127.0.0.1:$($env:WORKER_PORT)"
     Set-ProcessValue 'API_PROXY_TARGET' "http://127.0.0.1:$($env:API_PORT)"
     Set-ProcessValue 'APP_BASE_URL' "http://127.0.0.1:$($env:API_PORT)"
@@ -354,23 +360,22 @@ function Get-PostgisPublishedPort {
 
 function Start-Postgis {
     Start-DockerEngine
-    if ((Get-PostgisState) -eq 'RUNNING') {
-        Write-Result "PostGIS 已运行 · localhost:$(Get-PostgisPublishedPort)" 'ok'
-        return
-    }
-    Write-Step '正在启动 PostGIS 容器'
-    & docker.exe compose -f $ComposeFile up -d postgis | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'PostGIS 容器启动失败。' }
+    Write-Step '正在启动 PostGIS、Martin 与 TiTiler'
+    & docker.exe compose -f $ComposeFile up -d postgis martin titiler | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw '地图数据基础设施启动失败。' }
 
     $started = Get-Date
     while (((Get-Date) - $started).TotalSeconds -lt 120) {
-        if ((Get-PostgisState) -eq 'RUNNING') {
-            Write-Result "PostGIS 已健康 · localhost:$(Get-PostgisPublishedPort)" 'ok'
+        $postgisReady = (Get-PostgisState) -eq 'RUNNING'
+        $martinReady = Test-Http "http://127.0.0.1:$($env:MARTIN_PORT)/health"
+        $titilerReady = Test-Http "http://127.0.0.1:$($env:TITILER_PORT)/healthz"
+        if ($postgisReady -and $martinReady -and $titilerReady) {
+            Write-Result "地图数据基础设施已健康 · PostGIS $(Get-PostgisPublishedPort) · Martin $($env:MARTIN_PORT) · TiTiler $($env:TITILER_PORT)" 'ok'
             return
         }
         Start-Sleep -Seconds 1
     }
-    throw 'PostGIS 在 120 秒内未通过健康检查。'
+    throw 'PostGIS、Martin 或 TiTiler 在 120 秒内未通过健康检查。'
 }
 
 function Stop-Postgis {
@@ -378,14 +383,10 @@ function Stop-Postgis {
         Write-Result 'Docker 未运行，跳过 PostGIS 停止' 'warn'
         return
     }
-    if ((Get-PostgisState) -eq 'STOPPED') {
-        Write-Result 'PostGIS 已停止' 'ok'
-        return
-    }
-    Write-Step '正在停止 PostGIS'
-    & docker.exe compose -f $ComposeFile stop postgis | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'PostGIS 停止失败。' }
-    Write-Result 'PostGIS 已停止' 'ok'
+    Write-Step '正在停止地图数据基础设施'
+    & docker.exe compose -f $ComposeFile stop postgis martin titiler | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw '地图数据基础设施停止失败。' }
+    Write-Result 'PostGIS、Martin 与 TiTiler 已停止' 'ok'
 }
 
 function Get-ServiceDefinition {
@@ -642,6 +643,8 @@ function Show-Dashboard {
     $postgis = Get-PostgisState
     $postgisPort = Get-PostgisPublishedPort
     Write-ServiceRow 'PostGIS' $postgis $postgisPort 'docker' "postgresql://127.0.0.1:$postgisPort"
+    Write-ServiceRow 'Martin MVT' $(if (Test-Http "http://127.0.0.1:$($env:MARTIN_PORT)/health") { 'RUNNING' } else { 'STOPPED' }) $env:MARTIN_PORT 'docker' $env:MARTIN_INTERNAL_URL
+    Write-ServiceRow 'TiTiler COG' $(if (Test-Http "http://127.0.0.1:$($env:TITILER_PORT)/healthz") { 'RUNNING' } else { 'STOPPED' }) $env:TITILER_PORT 'docker' $env:TITILER_INTERNAL_URL
     foreach ($name in @('worker', 'api', 'web')) {
         $state = Get-AppServiceState $name
         Write-ServiceRow $state.Label $state.State $state.Port $(if ($state.Pid) { $state.Pid } else { '-' }) $state.Url

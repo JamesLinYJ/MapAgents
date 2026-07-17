@@ -34,6 +34,8 @@ describe('LayerPanel', () => {
     expect(html).toContain('数据源')
     expect(html).toContain('杭州市行政区划')
     expect(html).toContain('MultiPolygon · 13 要素 · 已启用')
+    expect(html).toContain('未加入地图')
+    expect(html).toContain('加入地图')
     expect(html).toContain('导入 GeoJSON')
     expect(html).toContain('刷新')
     expect(html).toContain('停用')
@@ -47,12 +49,12 @@ describe('LayerPanel', () => {
   })
 
   it('does not render non-existent basemap placeholders as manageable layers', () => {
-    // 图层树只能展示真实结果图层；底图切换由地图画布负责，不能伪造成可管理图层。
+    // 底图切换由地图画布负责；系统、托管和结果图层则统一来自 MapScene。
     const html = renderLayerPanel('drawOrder')
 
     expect(html).not.toContain('世界地形图')
     expect(html).not.toContain('全球山影')
-    expect(html).toContain('底图由地图画布的底图按钮管理')
+    expect(html).toContain('底图仍由地图画布单独管理')
   })
 })
 
@@ -67,6 +69,7 @@ function renderLayerPanel(activeView: LayerPanelView) {
       activeView={activeView}
       visibilityFilter="all"
       referenceLayers={[referenceLayer]}
+      sceneManagedLayerKeys={[]}
       onSelectLayer={noop}
       onToggleVisibility={noop}
       onToggleAllVisibility={noop}
@@ -90,12 +93,15 @@ function renderLayerPanel(activeView: LayerPanelView) {
       onToggleReferenceLayerStatus={noop}
       onDeleteReferenceLayer={noop}
       onRefreshReferenceLayers={noop}
+      onAddReferenceLayer={noop}
+      onRemoveReferenceLayer={noop}
       onClose={noop}
     />,
   )
 }
 
 const referenceLayer: LayerDescriptor = {
+  mapLayerId: 'map_layer_managed_1',
   layerKey: 'hangzhou_districts',
   name: '杭州市行政区划',
   description: '系统内置杭州市区县边界。',

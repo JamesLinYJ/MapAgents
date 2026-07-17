@@ -10,46 +10,17 @@
 
 import type { LayerDescriptor } from '@geo-agent-platform/shared-types'
 import { create } from 'zustand'
-import {
-  deleteLayer,
-  importManagedLayer,
-  listLayers,
-  replaceManagedLayer,
-  updateLayer,
-} from '../../api/client'
 
 interface LayerState {
   layers: LayerDescriptor[]
   setLayers: (layers: LayerDescriptor[]) => void
-  refreshLayers: (sessionId?: string | null, threadId?: string | null) => Promise<LayerDescriptor[]>
-  importLayer: (file: File) => Promise<LayerDescriptor[]>
-  toggleLayerStatus: (layerKey: string, nextStatus: string) => Promise<LayerDescriptor[]>
-  replaceLayer: (layerKey: string, file: File) => Promise<LayerDescriptor[]>
-  removeLayer: (layerKey: string) => Promise<LayerDescriptor[]>
+  clearLayers: () => void
 }
 
-export const useLayerStore = create<LayerState>((set, get) => ({
+// Zustand 只保存浏览器事实投影。HTTP/WS 副作用由应用控制器负责，
+// 避免状态容器同时承担数据访问与命令编排职责。
+export const useLayerStore = create<LayerState>((set) => ({
   layers: [],
   setLayers: layers => set({ layers }),
-  refreshLayers: async (sessionId, threadId) => {
-    const layers = await listLayers(sessionId, threadId)
-    set({ layers })
-    return layers
-  },
-  importLayer: async file => {
-    await importManagedLayer(file)
-    return get().refreshLayers()
-  },
-  toggleLayerStatus: async (layerKey, nextStatus) => {
-    await updateLayer(layerKey, { status: nextStatus })
-    return get().refreshLayers()
-  },
-  replaceLayer: async (layerKey, file) => {
-    await replaceManagedLayer(layerKey, file)
-    return get().refreshLayers()
-  },
-  removeLayer: async layerKey => {
-    await deleteLayer(layerKey)
-    return get().refreshLayers()
-  },
+  clearLayers: () => set({ layers: [] }),
 }))

@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/maplibre/martin/main/schemas/config.json
+listen_addresses: 0.0.0.0:3000
+cors: false
+on_invalid: abort
+cache:
+  size_mb: 256
+  tile_size_mb: 192
+  tile_expiry: 10m
+postgres:
+  connection_string: ${MARTIN_DATABASE_URL}
+  auto_bounds: skip
+  auto_publish:
+    tables: false
+    functions:
+      from_schemas:
+        - public
+      source_id_format: "{function}"
+  max_feature_count: 50000
+  pool_size: 8

@@ -86,7 +86,7 @@ export function useWorkspaceBootstrap({
   loadWorkspaceBootstrap: (sessionId?: string) => Promise<WorkspaceBootstrapSnapshot>
   readWorkspacePointer: () => WorkspaceBootstrapPointer
   setActiveThreadId: (threadId: string | undefined) => void
-  setCanonicalThreadItems: (items: ConversationItem[]) => void
+  setCanonicalThreadItems: (threadId: string, items: ConversationItem[]) => void
   setUiError: (message: string | undefined) => void
   syncUrl: (sessionId: string, runId?: string, threadId?: string) => void
   syncWorkspaceUrl?: boolean
@@ -176,7 +176,7 @@ export function useWorkspaceBootstrap({
           if (restoredRun.threadId) {
             const history = await getThreadHistory(restoredRun.threadId, null, 200)
             if (disposed) return
-            setCanonicalThreadItems(transcriptEntriesToConversationItems(history.entries))
+            setCanonicalThreadItems(restoredRun.threadId, transcriptEntriesToConversationItems(history.entries))
           }
           if (pointerRejected && syncWorkspaceUrl) syncUrl(sessionRecord.id, restoredRun.id, restoredRun.threadId ?? undefined)
         } catch (error) {

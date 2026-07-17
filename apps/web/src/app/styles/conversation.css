@@ -363,38 +363,21 @@
 }
 
 .cc-jump-rail__popover {
-  pointer-events: none;
-  position: absolute;
-  left: 46px;
-  top: 50%;
+  z-index: 30;
   width: min(320px, calc(100vw - 72px));
   max-height: min(430px, 72vh);
-  transform: translate(-8px, -50%) scale(0.98);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid rgb(15 23 42 / 0.10);
   border-radius: 22px;
-  opacity: 0;
-  visibility: hidden;
   background:
     linear-gradient(180deg, rgb(255 255 255 / 0.94), rgb(255 255 255 / 0.84)),
     rgb(255 255 255 / 0.88);
   box-shadow: 0 22px 60px rgb(15 23 42 / 0.16);
   backdrop-filter: blur(18px) saturate(140%);
   -webkit-backdrop-filter: blur(18px) saturate(140%);
-  transition:
-    opacity 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    visibility 0s linear 180ms;
-}
-
-.cc-jump-rail--open .cc-jump-rail__popover {
-  pointer-events: auto;
-  opacity: 1;
-  visibility: visible;
-  transform: translate(0, -50%) scale(1);
-  transition-delay: 0s;
+  transform-origin: var(--radix-popover-content-transform-origin);
 }
 
 .cc-jump-rail__head {
@@ -1726,7 +1709,6 @@
   }
 
   .cc-jump-rail__popover {
-    left: 42px;
     width: min(288px, calc(100vw - 58px));
   }
 

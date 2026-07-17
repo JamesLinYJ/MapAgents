@@ -14,8 +14,8 @@ import { TODO_WRITE_PROMPT } from './prompt.js'
 
 export const todoWriteTool: ToolDef = {
   name: 'todo_write',
-  label: '更新 Todo',
-  description: '更新当前运行的可见 Todo 列表。',
+  label: '更新任务清单',
+  description: '更新当前运行的可见任务清单。',
   prompt: TODO_WRITE_PROMPT,
   group: '开发工具',
   tags: ['developer', 'todo', 'state'],

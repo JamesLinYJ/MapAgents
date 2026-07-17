@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Geometry } from 'geojson'
-import type { PostGisRepository } from '../gis/postgis.js'
+import type { ManagedLayerService } from '../gis/managedLayers/managedLayerService.js'
 import type { LayerDescriptor } from '../schemas/types.js'
 import { createLayerListTool } from './layerList/layerList.js'
 import { createLayerQueryTool } from './layerQuery/layerQuery.js'
@@ -9,8 +9,9 @@ import { createSpatialAnalysisTool } from './spatialAnalysis/spatialAnalysis.js'
 
 describe('geo tools', () => {
   it('lists existing platform layers without external fetching', async () => {
-    const postgis = {
-      listLayers: async (sessionId: string | null, threadId: string | null) => {
+    const managedLayers = {
+      listLayers: async (workspaceId: string, sessionId: string | null, threadId: string | null) => {
+        expect(workspaceId).toBe('workspace_1')
         expect(sessionId).toBe('session_1')
         expect(threadId).toBe('thread_1')
         return [
@@ -19,9 +20,9 @@ describe('geo tools', () => {
           layer('roads', '道路中心线', ['道路']),
         ]
       },
-    } as unknown as PostGisRepository
+    } as unknown as ManagedLayerService
 
-    const result = await createLayerListTool(postgis).handler({ query: '杭州 行政区划' }, runtime())
+    const result = await createLayerListTool(managedLayers).handler({ query: '杭州 行政区划' }, runtime())
 
     expect(result.source).toBe('postgis')
     expect(result.provenance).toMatchObject({ externalFetch: false })
@@ -31,7 +32,7 @@ describe('geo tools', () => {
   })
 
   it('does not treat auto-generated analysis rectangles as administrative boundaries', async () => {
-    const postgis = {
+    const managedLayers = {
       listLayers: async () => [
         layer('layer_bbox', '杭州市边界', ['auto-generated', 'analysis'], {
           sourceType: 'analysis',
@@ -39,16 +40,16 @@ describe('geo tools', () => {
           description: '杭州市行政边界矩形范围',
         }),
       ],
-    } as unknown as PostGisRepository
+    } as unknown as ManagedLayerService
 
-    const result = await createLayerListTool(postgis).handler({ query: '杭州 行政区划' }, runtime())
+    const result = await createLayerListTool(managedLayers).handler({ query: '杭州 行政区划' }, runtime())
 
     expect(result.payload.count).toBe(0)
     expect(result.payload.layers).toEqual([])
   })
 
   it('queries real PostGIS rows through query_layer', async () => {
-    const postgis = {
+    const managedLayers = {
       getLayer: async () => ({
         layerKey: 'roads',
         name: '道路',
@@ -74,9 +75,9 @@ describe('geo tools', () => {
         { geometry: point(120, 30), properties: { name: 'A', hidden: true } },
         { geometry: point(121, 31), properties: { name: 'B', hidden: false } },
       ],
-    } as unknown as PostGisRepository
+    } as unknown as ManagedLayerService
 
-    const result = await createLayerQueryTool(postgis).handler({ layerKey: 'roads', properties: ['name'] }, runtime())
+    const result = await createLayerQueryTool(managedLayers).handler({ layerKey: 'roads', properties: ['name'] }, runtime())
     const collection = result.payload.featureCollection as { features: Array<{ properties: Record<string, unknown> }> }
 
     expect(result.source).toBe('postgis')
@@ -85,16 +86,16 @@ describe('geo tools', () => {
   })
 
   it('creates both layer and feature_collection refs for downstream tools', async () => {
-    const postgis = {
+    const managedLayers = {
       importGeoJsonLayer: async (input: Record<string, unknown>) => {
         expect(input.sessionId).toBe('session_1')
         expect(input.threadId).toBe('thread_1')
         expect(input.collection).toMatchObject({ type: 'FeatureCollection' })
         return layer('layer_1', String(input.name), ['analysis'])
       },
-    } as unknown as PostGisRepository
+    } as unknown as ManagedLayerService
 
-    const result = await createLayerCreateTool(postgis).handler({
+    const result = await createLayerCreateTool(managedLayers).handler({
       name: '杭州中心点',
       geojson: {
         type: 'Feature',
@@ -110,8 +111,8 @@ describe('geo tools', () => {
   })
 
   it('runs deterministic Turf operations through spatial_analysis', async () => {
-    const postgis = {} as PostGisRepository
-    const result = await createSpatialAnalysisTool(postgis).handler({
+    const managedLayers = {} as ManagedLayerService
+    const result = await createSpatialAnalysisTool(managedLayers).handler({
       operation: 'area',
       sourceGeojson: {
         type: 'Feature',
@@ -166,6 +167,12 @@ function runtime() {
     runId: 'run_1',
     threadId: 'thread_1',
     sessionId: 'session_1',
+    signal: new AbortController().signal,
+    auth: {
+      userId: 'user_1', subject: 'user_1', email: 'user@example.com', displayName: '测试用户',
+      authSessionId: 'auth_session_1', authSessionExpiresAt: null, csrfToken: 'csrf',
+      defaultWorkspaceId: 'workspace_1', roles: [],
+    },
     state: new Map(),
     resolveValueRef: () => {
       throw new Error('未知 valueRef')

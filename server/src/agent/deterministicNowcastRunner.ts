@@ -78,9 +78,9 @@ export async function runDeterministicNowcast(options: {
   options.itemSink.appendAssistantMessage(answer, { transcriptEntryId: answerEntry.entryId })
 }
 
-function isNowcastQuestion(query: string): boolean {
+export function isNowcastQuestion(query: string): boolean {
   const normalized = query.replace(/\s+/gu, '')
-  return /(天气怎么样|天气如何|会不会下雨|会下雨吗|下雨吗|短时临近预报（短临）|未来.{0,8}(降水|降雨|天气)|接下来.{0,8}(天气|降水|降雨|下雨))/u.test(normalized)
+  return /(天气怎么样|天气如何|会不会下雨|会下雨吗|下雨吗|短时临近预报（短临）|短临预报|未来.{0,8}(降水|降雨|天气)|接下来.{0,8}(天气|降水|降雨|下雨))/u.test(normalized)
 }
 
 function requiredResultRef(result: ToolResult, kinds: string[]): ValueRef {

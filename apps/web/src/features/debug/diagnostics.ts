@@ -198,7 +198,7 @@ export function buildSupervisorFocus({
   }
   const runningTool = toolCalls.find(item => item.status === 'running')
   if (runningTool) {
-    return { title: '工具执行中', description: `${runningTool.tool}：${runningTool.message}` }
+    return { title: '工具执行中', description: `${runningTool.toolLabel ?? '工具调用'}：${runningTool.message}` }
   }
   const runningTodo = todos.find(item => item.status === 'running')
   if (runningTodo) {

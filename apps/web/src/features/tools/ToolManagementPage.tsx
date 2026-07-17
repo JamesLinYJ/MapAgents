@@ -56,7 +56,7 @@ import {
 } from './toolFormState'
 import { ToolMiniAppPanel } from './ToolMiniApp'
 import { isRecord } from '../../shared/utils/guards'
-import type { MemoryEntry } from '../conversation/types'
+import type { MemoryEntry } from '../memory/types'
 import { SdkExtensionManagement, type SdkManagementView } from './SdkExtensionManagement'
 import type {
   ScheduledTaskCreatePayload,
@@ -186,7 +186,7 @@ export function ToolManagementPage({
   const viewTabs: Array<{ id: ToolManagementView; label: string; count: number; description: string }> = [
     { id: 'tools', label: '内置工具', count: tools.length, description: 'Provider 工具与目录治理' },
     { id: 'workflows', label: '工作流编排', count: workflowDefinitions.length, description: '可视化工具流、版本与运行审批' },
-    { id: 'scheduled', label: '定时任务', count: scheduledTasks.length, description: 'ScheduledWakeUp' },
+    { id: 'scheduled', label: '定时任务', count: scheduledTasks.length, description: '定时唤醒与周期执行' },
     { id: 'background', label: '后台任务', count: backgroundTasks.length, description: '运行中任务观察' },
     { id: 'usage', label: '用量统计', count: tokenUsageSummary?.totals.runsWithUsage ?? 0, description: '输入 / 输出 / 缓存' },
     { id: 'mcp', label: 'MCP', count: mcpServerCount, description: '外部 MCP Server' },

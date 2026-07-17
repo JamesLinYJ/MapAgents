@@ -1,3 +1,20 @@
+// +-------------------------------------------------------------------------
+//
+//   GeoForge 地理智能平台 - 持久化领域错误
+//
+//   文件:       storeErrors.ts
+//
+//   日期:       2026年07月13日
+//   作者:       JamesLinYJ
+// --------------------------------------------------------------------------
+
+export class StoreNotFoundError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'StoreNotFoundError'
+  }
+}
+
 export class StoreConflictError extends Error {
   constructor(message: string) {
     super(message)

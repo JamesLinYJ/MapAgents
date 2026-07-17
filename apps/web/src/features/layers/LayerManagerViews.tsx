@@ -14,6 +14,7 @@ import {
   Eye,
   EyeOff,
   FolderPlus,
+  Layers3,
   LocateFixed,
   RefreshCw,
   Trash2,
@@ -93,7 +94,7 @@ export function DrawOrderView({
         )) : (
           <div className="arcgis-layer-panel__empty">
             <strong>暂无可管理图层</strong>
-            <span>生成地图结果后，结果图层会出现在这里。底图由地图画布的底图按钮管理，不作为结果图层显示。</span>
+            <span>创建对话或添加数据后，系统图层、托管图层和分析结果会统一出现在这里。底图仍由地图画布单独管理。</span>
           </div>
         )}
       </div>
@@ -219,6 +220,9 @@ export function SourcesView({
   onToggleReferenceLayerStatus,
   onDeleteReferenceLayer,
   onRefreshReferenceLayers,
+  sceneManagedLayerKeys,
+  onAddReferenceLayer,
+  onRemoveReferenceLayer,
 }: {
   referenceLayers: LayerDescriptor[]
   selectedReferenceKey: string | null
@@ -228,6 +232,9 @@ export function SourcesView({
   onToggleReferenceLayerStatus: (layerKey: string, nextStatus: string) => void
   onDeleteReferenceLayer: (layerKey: string) => void
   onRefreshReferenceLayers: () => void
+  sceneManagedLayerKeys: string[]
+  onAddReferenceLayer: (layerKey: string) => void
+  onRemoveReferenceLayer: (layerKey: string) => void
 }) {
   return (
     <div className="arcgis-layer-details">
@@ -248,11 +255,12 @@ export function SourcesView({
         <div className="arcgis-layer-source-list">
           {referenceLayers.map(layer => {
             const active = layer.status === 'active'
+            const inScene = sceneManagedLayerKeys.includes(layer.layerKey)
             return (
               <article key={layer.layerKey} className={`arcgis-layer-source${selectedReferenceKey === layer.layerKey ? ' is-selected' : ''}`}>
                 <button type="button" className="arcgis-layer-source__main" onClick={() => onSelectReference(layer.layerKey)}>
                   <strong>{layer.name}</strong>
-                  <span>{layer.geometryType} · {layer.featureCount ?? 0} 要素 · {active ? '已启用' : '已停用'}</span>
+                  <span>{layer.geometryType} · {layer.featureCount ?? 0} 要素 · {active ? '已启用' : '已停用'} · {inScene ? '已加入地图' : '未加入地图'}</span>
                 </button>
                 <div className="arcgis-layer-source__meta">
                   <span>{layer.sourceType}</span>
@@ -261,14 +269,27 @@ export function SourcesView({
                   <span>{formatLayerBounds(layer.bounds)}</span>
                 </div>
                 <div className="arcgis-layer-panel__selected-actions">
-                  <button type="button" onClick={() => onToggleReferenceLayerStatus(layer.layerKey, active ? 'inactive' : 'active')}>
+                  <button
+                    type="button"
+                    onClick={() => inScene ? onRemoveReferenceLayer(layer.layerKey) : onAddReferenceLayer(layer.layerKey)}
+                    disabled={!inScene && !active}
+                    title={!inScene && !active ? '请先启用数据源' : undefined}
+                  >
+                    <Layers3 size={13} /> {inScene ? '从地图移除' : '加入地图'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onToggleReferenceLayerStatus(layer.layerKey, active ? 'inactive' : 'active')}
+                    disabled={layer.readonly || inScene}
+                    title={layer.readonly ? '系统数据源只读' : inScene ? '请先从地图移除' : undefined}
+                  >
                     {active ? <EyeOff size={13} /> : <Eye size={13} />} {active ? '停用' : '启用'}
                   </button>
-                  <label className="arcgis-layer-panel__file-action">
+                  <label className={`arcgis-layer-panel__file-action${layer.readonly ? ' is-disabled' : ''}`} title={layer.readonly ? '系统数据源只读' : undefined}>
                     <Upload size={13} /> 替换
-                    <input type="file" accept=".geojson,.json,application/geo+json,application/json" onChange={(event) => consumeFileInput(event.currentTarget, file => onReplaceManagedLayer(layer.layerKey, file))} />
+                    <input type="file" disabled={layer.readonly} accept=".geojson,.json,application/geo+json,application/json" onChange={(event) => consumeFileInput(event.currentTarget, file => onReplaceManagedLayer(layer.layerKey, file))} />
                   </label>
-                  <button type="button" onClick={() => onDeleteReferenceLayer(layer.layerKey)}>
+                  <button type="button" disabled={layer.readonly || inScene} title={layer.readonly ? '系统数据源只读' : inScene ? '请先从地图移除' : undefined} onClick={() => onDeleteReferenceLayer(layer.layerKey)}>
                     <Trash2 size={13} /> 删除
                   </button>
                 </div>

@@ -11,7 +11,7 @@
 import type { Env } from './env.js'
 import type { ToolRegistry } from './registry.js'
 import type { InstallContext, ToolProvider } from './types.js'
-import type { PostGisRepository } from '../gis/postgis.js'
+import type { ManagedLayerService } from '../gis/managedLayers/managedLayerService.js'
 import chartProvider from '../tools/chart/index.js'
 import geocodeProvider from '../tools/geocode/index.js'
 import { createMediaProvider } from '../tools/media/index.js'
@@ -29,11 +29,11 @@ const LEGACY_METEOROLOGY_PROVIDER_ID = ['wea', 'ther'].join('')
 
 // 安装到仓库并不等于启用；只有 ENABLED_TOOL_PROVIDERS 中的精确 ID 会进入运行时。
 export async function discoverAndLoad(
-  postgis: PostGisRepository,
+  managedLayers: ManagedLayerService,
   deps: { env: Env; registry: ToolRegistry; scheduledTaskService?: ScheduledTaskService },
 ): Promise<void> {
   const { env, registry } = deps
-  const spatialProvider = createSpatialProvider(postgis, { runtimeRoot: env.RUNTIME_ROOT })
+  const spatialProvider = createSpatialProvider(managedLayers, { runtimeRoot: env.RUNTIME_ROOT })
   const routingProvider = createRoutingProvider({
     ...(env.VALHALLA_BASE_URL ? { valhallaBaseUrl: env.VALHALLA_BASE_URL } : {}),
     timeoutMs: env.ROUTING_TIMEOUT_MS,

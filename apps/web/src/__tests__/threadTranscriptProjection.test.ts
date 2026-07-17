@@ -56,7 +56,7 @@ describe('thread transcript projection', () => {
   it('projects assistantContent on tool calls as a normal assistant message before the tool card', () => {
     const projected = transcriptEntriesToConversationItems([
       entry(1, 'entry_user_1', 'run_1', 'user', '查一下杭州短时强降水风险。'),
-      toolEntry(2, 'entry_tool_1', 'run_1', 'call_1', 'list_meteorological_files', '我先查找当前线程里的气象文件。'),
+      toolEntry(2, 'entry_tool_1', 'run_1', 'call_1', 'list_meteorological_files', '我先查找当前线程里的气象文件。', '列出气象文件'),
     ])
 
     expect(projected.map(item => [item.itemType, item.body ?? item.name])).toEqual([
@@ -65,6 +65,7 @@ describe('thread transcript projection', () => {
       ['function_call', 'list_meteorological_files'],
     ])
     expect(projected.at(1)?.metadata.assistantContentForCallId).toBe('call_1')
+    expect(projected.at(2)?.metadata.toolLabel).toBe('列出气象文件')
   })
 
   // Agents SDK 有时在工具 ledger 落盘后才通过 Session 给出完整 assistant 消息；
@@ -184,6 +185,7 @@ function toolEntry(
   callId: string,
   name: string,
   assistantContent: string,
+  label?: string,
 ): TranscriptEntry {
   return {
     schemaVersion: 2,
@@ -196,7 +198,7 @@ function toolEntry(
     turnId: `turn_${seq}`,
     kind: 'tool_call',
     timestamp: new Date(2026, 5, 22, 8, 0, seq).toISOString(),
-    payload: { callId, name, arguments: {}, assistantContent },
+    payload: { callId, name, arguments: {}, assistantContent, ...(label ? { label } : {}) },
   }
 }
 

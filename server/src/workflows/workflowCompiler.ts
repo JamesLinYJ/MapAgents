@@ -178,7 +178,7 @@ function validateToolNode(
 ): void {
   const tool = tools.get(node.config.toolName)
   if (!tool) {
-    issues.push(issue('error', 'tool_missing', `工具 '${node.config.toolName}' 未注册。`, { nodeId: node.nodeId }))
+    issues.push(issue('error', 'tool_missing', `工具“${node.label}”未注册。`, { nodeId: node.nodeId }))
     return
   }
   const schema = tool.jsonSchema
@@ -187,7 +187,7 @@ function validateToolNode(
   const required = Array.isArray(schema.required) ? schema.required.filter(item => typeof item === 'string') : []
   for (const argumentName of Object.keys(node.config.arguments)) {
     if (!(argumentName in properties) && schema.additionalProperties === false) {
-      issues.push(issue('error', 'tool_argument_unknown', `工具 '${tool.name}' 不接受参数 '${argumentName}'。`, {
+      issues.push(issue('error', 'tool_argument_unknown', `工具“${tool.label}”不接受参数 '${argumentName}'。`, {
         nodeId: node.nodeId,
         path: `config.arguments.${argumentName}`,
       }))
@@ -195,7 +195,7 @@ function validateToolNode(
   }
   for (const requiredName of required) {
     if (!(requiredName in node.config.arguments)) {
-      issues.push(issue('error', 'tool_argument_required', `工具 '${tool.name}' 缺少必填参数 '${requiredName}'。`, {
+      issues.push(issue('error', 'tool_argument_required', `工具“${tool.label}”缺少必填参数 '${requiredName}'。`, {
         nodeId: node.nodeId,
         path: `config.arguments.${requiredName}`,
       }))

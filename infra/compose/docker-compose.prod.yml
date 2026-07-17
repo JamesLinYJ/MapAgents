@@ -28,5 +28,28 @@ services:
       timeout: 5s
       retries: 12
 
+  martin:
+    image: ${MARTIN_IMAGE:-ghcr.io/maplibre/martin:latest}
+    restart: unless-stopped
+    depends_on:
+      postgis:
+        condition: service_healthy
+    environment:
+      MARTIN_DATABASE_URL: postgresql://${POSTGRES_USER:-geo_agent}:${POSTGRES_PASSWORD}@postgis:5432/${POSTGRES_DB:-geo_agent}
+    command: ["--config", "/config/config.yaml"]
+    expose:
+      - "3000"
+    volumes:
+      - ../martin/config.yaml:/config/config.yaml:ro
+
+  titiler:
+    image: ${TITILER_IMAGE:-ghcr.io/developmentseed/titiler:latest}
+    restart: unless-stopped
+    command: ["uvicorn", "titiler.application.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    expose:
+      - "8000"
+    volumes:
+      - ${RUNTIME_ROOT:?RUNTIME_ROOT is required}:/data:ro
+
 volumes:
   geoforge-postgis-prod:

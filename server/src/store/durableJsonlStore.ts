@@ -13,7 +13,7 @@ import path from 'node:path'
 import PQueue from 'p-queue'
 import { errorLogPayload, logger } from '../observability/logger.js'
 import { jsonlFlushLatencyMs, jsonlQueueDepth } from '../observability/metrics.js'
-import { appendJsonLineDurable, recordJsonLineCorruption } from './fileConversationIo.js'
+import { appendJsonLineDurable, recordJsonLineCorruption } from './durableFileIo.js'
 
 interface JsonlQueueState {
   queue: PQueue
@@ -32,7 +32,7 @@ export class JsonlQueuePoisonedError extends Error {
 }
 
 // DurableJsonlStore 是 JSONL append/read/flush 的唯一拥有者。
-// FileConversationStore 负责资源编排；本类负责按文件串行追加、行级恢复和损坏行登记。
+// ConversationPayloadStore 负责资源编排；本类负责按文件串行追加、行级恢复和损坏行登记。
 export class DurableJsonlStore {
   private readonly writeQueues = new Map<string, JsonlQueueState>()
   private readonly appendRecord: typeof appendJsonLineDurable

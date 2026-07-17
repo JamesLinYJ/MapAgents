@@ -40,6 +40,9 @@ const envSchema = z.object({
   MAX_METEOROLOGY_UPLOAD_BYTES: z.coerce.number().int().positive().default(500 * 1024 * 1024),
   MAX_GEOJSON_FEATURES: z.coerce.number().int().positive().default(50_000),
   MAX_GEOJSON_COORDINATES: z.coerce.number().int().positive().default(2_000_000),
+  MARTIN_INTERNAL_URL: z.string().url().default('http://127.0.0.1:3000'),
+  TITILER_INTERNAL_URL: z.string().url().default('http://127.0.0.1:8001'),
+  MAP_TILE_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
 
   // 模型 providers（至少一个）
   DEFAULT_MODEL_PROVIDER: z.string().optional(),

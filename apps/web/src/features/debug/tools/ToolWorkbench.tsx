@@ -163,7 +163,7 @@ export function ToolWorkbench({
           <div className="panel__subheader">
             <span>工具目录配置</span>
             <span className="panel__muted">
-              {selectedToolCatalogEntry ? `${selectedTool.toolKind}/${selectedTool.name}` : '当前没有覆盖项'}
+              {selectedToolCatalogEntry ? `${selectedTool.label}目录配置` : '当前没有覆盖项'}
             </span>
           </div>
           <StatefulToolCatalogEditor

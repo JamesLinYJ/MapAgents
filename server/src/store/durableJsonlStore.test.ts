@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { appendJsonLineDurable } from './fileConversationIo.js'
+import { appendJsonLineDurable } from './durableFileIo.js'
 import { DurableJsonlStore, JsonlQueuePoisonedError } from './durableJsonlStore.js'
 
 const roots: string[] = []

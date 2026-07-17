@@ -10,7 +10,7 @@
 
 import { readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
-import { listDirectories, listFileNames, listFilesRecursively } from './fileConversationIo.js'
+import { listDirectories, listFileNames, listFilesRecursively } from './durableFileIo.js'
 
 interface AttachmentRecord {
   attachmentId: string
@@ -19,7 +19,7 @@ interface AttachmentRecord {
 }
 
 // 会话对象 GC 根据所有 JSON/JSONL 引用和附件最新状态决定对象存活。
-// FileConversationStore 提供根目录；本类不接触 session/thread/run 生命周期。
+// ConversationPayloadStore 提供根目录；本类不接触 session/thread/run 生命周期。
 export class ConversationObjectGarbageCollector {
   constructor(
     private readonly sessionsRoot: string,

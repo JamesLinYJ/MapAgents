@@ -138,7 +138,14 @@ export function transcriptEntriesToConversationItems(entries: TranscriptEntry[])
         isError: false,
         phase: null,
         status: 'completed',
-        metadata: { transcriptEntryId: entry.entryId, transcriptSeq: entry.seq, canonical: true },
+        metadata: {
+          transcriptEntryId: entry.entryId,
+          transcriptSeq: entry.seq,
+          canonical: true,
+          ...(typeof entry.payload.label === 'string' && entry.payload.label.trim()
+            ? { toolLabel: entry.payload.label.trim() }
+            : {}),
+        },
         timestamp: entry.timestamp,
       })
       return items
@@ -161,7 +168,15 @@ export function transcriptEntriesToConversationItems(entries: TranscriptEntry[])
         isError: entry.payload.ledgerStatus === 'failed',
         phase: null,
         status: entry.payload.ledgerStatus === 'failed' ? 'failed' : 'completed',
-        metadata: { transcriptEntryId: entry.entryId, transcriptSeq: entry.seq, canonical: true, contentRef: entry.payload.contentRef ?? null },
+        metadata: {
+          transcriptEntryId: entry.entryId,
+          transcriptSeq: entry.seq,
+          canonical: true,
+          contentRef: entry.payload.contentRef ?? null,
+          ...(typeof entry.payload.label === 'string' && entry.payload.label.trim()
+            ? { toolLabel: entry.payload.label.trim() }
+            : {}),
+        },
         timestamp: entry.timestamp,
       }]
     }

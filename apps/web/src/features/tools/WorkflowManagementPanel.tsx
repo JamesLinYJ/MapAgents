@@ -86,7 +86,7 @@ function ScheduledTasksPanel(props: WorkflowManagementPanelProps) {
   return (
     <main className="tool-management__detail tool-management__detail--extensions">
       <section className="panel workflow-panel workflow-panel--summary">
-        <div className="panel__header"><div><div className="panel__eyebrow">ScheduledWakeUp</div><h2>定时任务</h2></div><StatusPill label={`${props.scheduledTasks.length} 个任务`} tone="accent" /></div>
+        <div className="panel__header"><div><div className="panel__eyebrow">系统调度</div><h2>定时任务</h2></div><StatusPill label={`${props.scheduledTasks.length} 个任务`} tone="accent" /></div>
         <div className="panel__section workflow-form-grid">
           <Field label="目标 Workflow"><select value={selectedWorkflowId} onChange={event => setSelectedWorkflowId(event.target.value)}>{enabledWorkflows.map(workflow => <option key={workflow.workflowId} value={workflow.workflowId}>{workflow.name} · r{workflow.revision}</option>)}</select></Field>
           <Field label="任务名称"><input value={title} placeholder="例如：每 30 分钟降水短临监测" onChange={event => setTitle(event.target.value)} /></Field>

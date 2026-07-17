@@ -10,8 +10,8 @@
 
 import type { SessionRecord } from '../schemas/types.js'
 import { makeId, makeShareToken, nowUtc } from '../utils/ids.js'
-import type { ConversationIndexStore } from './conversationIndexStore.js'
-import type { ConversationRepository } from './postgres/conversationRepository.js'
+import type { ConversationProjectionIndex } from './conversationProjectionIndex.js'
+import type { SessionRepository } from './postgres/conversationPersistencePorts.js'
 
 export interface ResourceOwner {
   workspaceId: string
@@ -24,8 +24,8 @@ export const DEFAULT_SESSION_ID = '__default__'
 // 投影更新由对应 resource store 调用这里完成，避免 facade 继续承载会话规则。
 export class SessionStore {
   constructor(
-    private readonly index: ConversationIndexStore,
-    private readonly repository: ConversationRepository,
+    private readonly index: ConversationProjectionIndex,
+    private readonly repository: SessionRepository,
   ) {}
 
   values(): IterableIterator<SessionRecord> {

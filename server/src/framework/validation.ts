@@ -14,6 +14,7 @@ import type { ToolDef, ToolManifest, ToolManifestEntry, ToolProvider } from './t
 export function validateToolDefinition(tool: ToolDef): void {
     requireText(tool.name, 'tool.name');
     requireText(tool.label, `${tool.name}.label`);
+    requireChineseLabel(tool.label, `${tool.name}.label`);
     requireText(tool.description, `${tool.name}.description`);
     requireText(tool.prompt, `${tool.name}.prompt`);
     requireText(tool.group, `${tool.name}.group`);
@@ -71,6 +72,8 @@ function validateManifest(manifest: ToolManifest): void {
     const names = new Set<string>();
     for (const tool of manifest.tools) {
         requireText(tool.name, `${manifest.id}.tool.name`);
+        requireText(tool.label, `${manifest.id}.${tool.name}.label`);
+        requireChineseLabel(tool.label, `${manifest.id}.${tool.name}.label`);
         if (names.has(tool.name))
             throw new Error(`Provider "${manifest.id}" 重复声明工具 "${tool.name}"`);
         names.add(tool.name);
@@ -107,6 +110,10 @@ function validateJsonSchema(schema: Record<string, unknown>, field: string): voi
 function requireText(value: string | undefined, field: string): void {
     if (!value?.trim())
         throw new Error(`${field} 不能为空`);
+}
+function requireChineseLabel(value: string, field: string): void {
+    if (!/[\u3400-\u9fff]/u.test(value))
+        throw new Error(`${field} 必须包含中文展示名称`);
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);

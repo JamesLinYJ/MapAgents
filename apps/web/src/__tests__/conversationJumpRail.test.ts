@@ -13,6 +13,7 @@ import {
   buildConversationJumpItems,
   conversationJumpAnchorId,
 } from '../features/conversation/conversationJumpItems'
+import { conversationJumpRailReducer } from '../features/conversation/conversationJumpRailState'
 import type { ConversationEntry } from '../features/conversation/items'
 
 describe('buildConversationJumpItems', () => {
@@ -64,6 +65,20 @@ describe('buildConversationJumpItems', () => {
 describe('conversationJumpAnchorId', () => {
   it('keeps DOM ids stable and safe', () => {
     expect(conversationJumpAnchorId('message:abc/123')).toBe('cc-jump-message-abc-123')
+  })
+})
+
+describe('conversationJumpRailReducer', () => {
+  it('keeps a clicked index open after pointer exit until it is dismissed', () => {
+    const hovered = conversationJumpRailReducer({ hovered: false, pinned: false }, { type: 'enter' })
+    const pinned = conversationJumpRailReducer(hovered, { type: 'toggle-pin' })
+    const afterPointerExit = conversationJumpRailReducer(pinned, { type: 'leave' })
+
+    expect(afterPointerExit).toEqual({ hovered: false, pinned: true })
+    expect(conversationJumpRailReducer(afterPointerExit, { type: 'dismiss' })).toEqual({
+      hovered: false,
+      pinned: false,
+    })
   })
 })
 

@@ -10,14 +10,14 @@
 
 // 模块职责
 //
-// 管理 AppShell 展示给 ChatPanel 的记忆索引列表。这里仅投影 memory:list
+// 管理工具页展示的记忆索引列表。这里仅投影 memory:list
 // 响应，不把记忆正文注入聊天上下文，也不创建新的运行时事实源。
 
 import { useCallback, useEffect, useState } from 'react'
 import type { MemoryFileRecord } from '@geo-agent-platform/shared-types'
 
 import { listMemories } from '../api/client'
-import type { MemoryEntry } from '../features/conversation/types'
+import type { MemoryEntry } from '../features/memory/types'
 import { reportNonBlockingError } from './bootstrap'
 
 export function useMemoryEntries(memoryEnabled: boolean) {

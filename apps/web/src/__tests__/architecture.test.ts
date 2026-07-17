@@ -73,27 +73,41 @@ describe('frontend architecture guards', () => {
     expect(controllerSource.includes('startTransition')).toBe(false)
   })
 
-  it('keeps shared resource facts in the Zustand resource store', async () => {
+  it('separates artifact, basemap, and upload facts into domain stores', async () => {
     const srcRoot = path.resolve(process.cwd(), 'src')
-    const controllerSource = await readFile(path.join(srcRoot, 'app/controllers/resourceController.ts'), 'utf8')
-    const storeSource = await readFile(path.join(srcRoot, 'app/stores/resourceStore.ts'), 'utf8')
+    const controllerSource = await readFile(path.join(srcRoot, 'app/controllers/workspaceResourceComposition.ts'), 'utf8')
+    const artifactStoreSource = await readFile(path.join(srcRoot, 'app/stores/artifactStore.ts'), 'utf8')
+    const basemapStoreSource = await readFile(path.join(srcRoot, 'app/stores/basemapStore.ts'), 'utf8')
+    const uploadStoreSource = await readFile(path.join(srcRoot, 'app/stores/uploadStore.ts'), 'utf8')
+    const artifactSource = await readFile(
+      path.join(srcRoot, 'app/controllers/resources/useArtifactResources.ts'),
+      'utf8',
+    )
+    const basemapSource = await readFile(
+      path.join(srcRoot, 'app/controllers/resources/useBasemapResources.ts'),
+      'utf8',
+    )
+    const uploadSource = await readFile(
+      path.join(srcRoot, 'app/controllers/resources/useUploadResources.ts'),
+      'utf8',
+    )
 
-    expect(storeSource.includes("from 'zustand'")).toBe(true)
-    for (const field of [
-      'basemaps',
-      'selectedBasemapKey',
-      'artifactData',
-      'artifactMetadata',
-      'selectedArtifactId',
-      'uploadedLayerName',
-      'uploadReferences',
-      'allFiles',
-      'isFileSubmitting',
-    ]) {
-      expect(storeSource.includes(field), field).toBe(true)
-    }
+    expect(artifactStoreSource.includes("from 'zustand'")).toBe(true)
+    expect(artifactStoreSource.includes('selectedArtifactId')).toBe(true)
+    expect(artifactStoreSource.includes('hydrationErrors')).toBe(true)
+    expect(artifactStoreSource.includes('basemaps')).toBe(false)
+    expect(artifactStoreSource.includes('isFileSubmitting')).toBe(false)
+    expect(basemapStoreSource.includes('basemaps')).toBe(true)
+    expect(basemapStoreSource.includes('selectedBasemapKey')).toBe(true)
+    expect(basemapStoreSource.includes('selectedArtifactId')).toBe(false)
+    expect(uploadStoreSource.includes('uploadedLayerName')).toBe(true)
+    expect(uploadStoreSource.includes('isFileSubmitting')).toBe(true)
+    expect(uploadStoreSource.includes('selectedBasemapKey')).toBe(false)
 
-    expect(controllerSource.includes('useResourceStore')).toBe(true)
+    expect(controllerSource.includes('useResourceStore')).toBe(false)
+    expect(artifactSource.includes('useArtifactStore')).toBe(true)
+    expect(basemapSource.includes('useBasemapStore')).toBe(true)
+    expect(uploadSource.includes('useUploadStore')).toBe(true)
     for (const token of [
       'useState<BasemapDescriptor',
       "useState('osm')",
@@ -161,25 +175,17 @@ describe('frontend architecture guards', () => {
     expect(runSource.includes('runSnapshotSchema')).toBe(true)
   })
 
-  it('keeps layer facts and layer mutations in the Zustand layer store', async () => {
+  it('keeps layer facts in Zustand and layer mutations in an application module', async () => {
     const srcRoot = path.resolve(process.cwd(), 'src')
-    const controllerSource = await readFile(path.join(srcRoot, 'app/controllers/resourceController.ts'), 'utf8')
+    const controllerSource = await readFile(path.join(srcRoot, 'app/controllers/workspaceResourceComposition.ts'), 'utf8')
     const storeSource = await readFile(path.join(srcRoot, 'app/stores/layerStore.ts'), 'utf8')
+    const layerResourcesSource = await readFile(
+      path.join(srcRoot, 'app/controllers/resources/useManagedLayerResources.ts'),
+      'utf8',
+    )
 
     expect(storeSource.includes("from 'zustand'")).toBe(true)
-    for (const field of [
-      'layers',
-      'refreshLayers',
-      'importLayer',
-      'toggleLayerStatus',
-      'replaceLayer',
-      'removeLayer',
-    ]) {
-      expect(storeSource.includes(field), field).toBe(true)
-    }
-
-    expect(controllerSource.includes('useLayerStore')).toBe(true)
-    expect(controllerSource.includes('useState<LayerDescriptor')).toBe(false)
+    expect(storeSource.includes('layers')).toBe(true)
     for (const token of [
       'listLayers(',
       'deleteLayer(',
@@ -187,8 +193,32 @@ describe('frontend architecture guards', () => {
       'replaceManagedLayer(',
       'updateLayer(',
     ]) {
-      expect(controllerSource.includes(token), token).toBe(false)
+      expect(storeSource.includes(token), token).toBe(false)
+      expect(layerResourcesSource.includes(token), token).toBe(true)
     }
+
+    expect(layerResourcesSource.includes('useLayerStore')).toBe(true)
+    expect(controllerSource.includes('useManagedLayerResources')).toBe(true)
+    expect(controllerSource.includes('useLayerStore')).toBe(false)
+    expect(controllerSource.includes('useState<LayerDescriptor')).toBe(false)
+  })
+
+  it('keeps the resource controller as a composition facade', async () => {
+    const srcRoot = path.resolve(process.cwd(), 'src')
+    const controllerSource = await readFile(path.join(srcRoot, 'app/controllers/workspaceResourceComposition.ts'), 'utf8')
+
+    for (const moduleName of [
+      'useArtifactResources',
+      'useBasemapResources',
+      'useManagedLayerResources',
+      'useMapResources',
+      'useUploadResources',
+    ]) {
+      expect(controllerSource.includes(moduleName), moduleName).toBe(true)
+    }
+    expect(controllerSource.includes("from '../../api/client'")).toBe(false)
+    expect(controllerSource.includes('useEffect(')).toBe(false)
+    expect(controllerSource.includes('useResourceStore')).toBe(false)
   })
 
   it('keeps map rendering isolated from AppShell', async () => {
@@ -209,6 +239,43 @@ describe('frontend architecture guards', () => {
     expect(mapPanelSource.includes('MapErrorBoundary')).toBe(true)
     expect(mapActivationSource.includes('requestIdleCallback')).toBe(true)
     expect(mapActivationSource.includes('requestMapFocus')).toBe(true)
+  })
+
+  it('extends map sources and styles through renderer registries', async () => {
+    const srcRoot = path.resolve(process.cwd(), 'src')
+    const layerSyncSource = await readFile(path.join(srcRoot, 'features/map/MapCanvasLayerSync.ts'), 'utf8')
+    const registrySource = await readFile(
+      path.join(srcRoot, 'features/map/renderers/MapLayerRendererRegistry.ts'),
+      'utf8',
+    )
+    const defaultRegistrySource = await readFile(
+      path.join(srcRoot, 'features/map/renderers/defaultRendererRegistry.ts'),
+      'utf8',
+    )
+
+    expect(layerSyncSource.includes('defaultRendererRegistry')).toBe(true)
+    expect(layerSyncSource.includes("source.kind ===")).toBe(false)
+    expect(layerSyncSource.includes("style.kind ===")).toBe(false)
+    expect(registrySource.includes('未注册地图数据源渲染器')).toBe(true)
+    expect(registrySource.includes('未注册地图样式渲染器')).toBe(true)
+    expect(defaultRegistrySource.includes('defaultSourceRenderers')).toBe(true)
+    expect(defaultRegistrySource.includes('defaultStyleRenderers')).toBe(true)
+  })
+
+  it('keeps thread lifecycle and map scene commands behind explicit application ports', async () => {
+    const srcRoot = path.resolve(process.cwd(), 'src')
+    const activeThreadSource = await readFile(path.join(srcRoot, 'app/services/activeThreadOrchestrator.ts'), 'utf8')
+    const mapCommandsSource = await readFile(path.join(srcRoot, 'features/map/MapSceneCommandService.ts'), 'utf8')
+    const layerManagerSource = await readFile(path.join(srcRoot, 'features/layers/useLayerManager.ts'), 'utf8')
+
+    expect(activeThreadSource.includes("from 'react'")).toBe(false)
+    expect(activeThreadSource.includes('useSessionStore')).toBe(false)
+    expect(activeThreadSource.includes('syncLocation')).toBe(true)
+    expect(mapCommandsSource.includes("from 'react'")).toBe(false)
+    expect(mapCommandsSource.includes('MapSceneCommandPort')).toBe(true)
+    expect(mapCommandsSource.includes('MapSceneMutationCoordinator')).toBe(true)
+    expect(layerManagerSource.includes('onAddLayer')).toBe(true)
+    expect(layerManagerSource.includes("title: '地图浏览'")).toBe(false)
   })
 
   it('keeps tool management rendering isolated from AppShell', async () => {
@@ -243,6 +310,20 @@ describe('frontend architecture guards', () => {
     expect(appShellSource.includes('../features/conversation/ChatPanel')).toBe(false)
     expect(conversationPanelSource.includes("from '../../features/conversation/ChatPanel'")).toBe(true)
     expect(conversationPanelSource.includes('ChatPanelProps')).toBe(true)
+  })
+
+  it('keeps memory management out of the conversation timeline', async () => {
+    const srcRoot = path.resolve(process.cwd(), 'src')
+    const timelineSource = await readFile(path.join(srcRoot, 'features/conversation/ConversationTimeline.tsx'), 'utf8')
+    const conversationTypes = await readFile(path.join(srcRoot, 'features/conversation/types.ts'), 'utf8')
+    const memoryManagement = await readFile(path.join(srcRoot, 'features/tools/SdkExtensionManagement.tsx'), 'utf8')
+
+    expect(timelineSource.includes('MemoryPanel')).toBe(false)
+    expect(timelineSource.includes('cc-memory-panel')).toBe(false)
+    expect(conversationTypes.includes('memories?:')).toBe(false)
+    expect(memoryManagement.includes("from '../memory/types'")).toBe(true)
+    expect(memoryManagement.includes('cc-memory-item__type')).toBe(false)
+    expect(memoryManagement.includes('sdk-memory-card__type')).toBe(true)
   })
 
   it('keeps debug page rendering isolated from AppShell', async () => {

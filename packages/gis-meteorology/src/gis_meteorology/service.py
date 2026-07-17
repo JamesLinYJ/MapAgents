@@ -38,6 +38,33 @@ def is_supported_meteorological_file(filename: str) -> bool:
     return Path(filename).suffix.lower() in SUPPORTED_METEOROLOGICAL_SUFFIXES
 
 
+def _write_cog(output_path: Path, data: Any, bounds: list[float]) -> None:
+    """把已完成地理定向的二维科学网格写为带数值语义的 WGS84 COG。"""
+    array = _np().asarray(data, dtype="float32")
+    if array.ndim != 2 or array.shape[0] < 1 or array.shape[1] < 1:
+        raise ValueError("COG 输出要求非空二维网格。")
+    west, south, east, north = bounds
+    transform = _rasterio_transform().from_bounds(west, south, east, north, array.shape[1], array.shape[0])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with _rasterio().open(
+        output_path,
+        "w",
+        driver="COG",
+        height=array.shape[0],
+        width=array.shape[1],
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=transform,
+        nodata=float("nan"),
+        compress="DEFLATE",
+        blocksize=512,
+        overview_resampling="AVERAGE",
+        bigtiff="IF_SAFER",
+    ) as dataset:
+        dataset.write(array, 1)
+
+
 @dataclass(frozen=True)
 class MeteorologicalGrid:
     # 运行时网格切片
@@ -99,6 +126,7 @@ class MeteorologicalDataService:
         path: Path,
         *,
         output_path: Path,
+        cog_output_path: Path,
         filename: str | None = None,
         variable: str | None = None,
         time_index: int | None = None,
@@ -120,6 +148,7 @@ class MeteorologicalDataService:
         image = _colorize_grid(data)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         image.save(output_path)
+        _write_cog(cog_output_path, data, bounds)
         value_range = _finite_range(data)
         west, south, east, north = bounds
         return {
@@ -133,6 +162,8 @@ class MeteorologicalDataService:
             "valueRange": value_range,
             "width": image.width,
             "height": image.height,
+            "cogWidth": int(data.shape[1]),
+            "cogHeight": int(data.shape[0]),
             "backend": grid.source_kind,
         }
 

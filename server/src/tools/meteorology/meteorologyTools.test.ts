@@ -208,15 +208,15 @@ describe('nowcast tools', () => {
     expect(result.artifacts).toHaveLength(3)
     expect(result.artifacts?.[1]).toMatchObject({
       artifactType: 'raster_png',
+      display: { surfaces: ['map', 'download'], primarySurface: 'map' },
       metadata: {
         previewRole: 'radar_mosaic_overlay',
         coordinates: [[119, 31], [121, 31], [121, 29], [119, 29]],
-        displaySurfaces: ['map', 'download'],
       },
     })
-    expect(result.artifacts?.[0]?.metadata).toMatchObject({
-      previewRole: 'radar_mosaic',
-      displaySurfaces: ['mini_app', 'download'],
+    expect(result.artifacts?.[0]).toMatchObject({
+      display: { surfaces: ['mini_app', 'download'], primarySurface: 'mini_app' },
+      metadata: { previewRole: 'radar_mosaic' },
     })
     expect(result.provenance).toMatchObject({
       thirdPartySource: 'radar_mosaic_agent',
@@ -371,6 +371,7 @@ describe('nowcast tools', () => {
       units: 'mm',
       mapMode: 'regional',
       aggregation: 'mean',
+      bounds: [119, 29, 121, 31],
       thresholds: [{ label: '强降雨', min: 1, max: 999, color: '#d73027' }],
       regionSummary: { counts: { 强降雨: 1 }, topRegions: [{ name: '测试区', value: 3 }] },
       outputs: { png: 'risk.png', geojson: 'risk.geojson' },
@@ -412,14 +413,14 @@ describe('nowcast tools', () => {
     expect(result.artifacts).toEqual([
       expect.objectContaining({
         artifactType: 'raster_png',
-        metadata: expect.objectContaining({ displaySurfaces: ['mini_app', 'download'] }),
+        display: expect.objectContaining({ surfaces: ['mini_app', 'download'] }),
       }),
       expect.objectContaining({
         artifactType: 'geojson',
+        display: expect.objectContaining({ surfaces: ['map', 'download'] }),
         metadata: expect.objectContaining({
           mapRole: 'rainfall_risk_regions',
           previewArtifactId: expect.stringMatching(/^artifact_/u),
-          displaySurfaces: ['map', 'download'],
         }),
       }),
     ])
@@ -432,6 +433,7 @@ describe('nowcast tools', () => {
       units: 'mm',
       mapMode: 'regional',
       aggregation: 'mean',
+      bounds: [119, 29, 121, 31],
       thresholds: [{ label: '强降雨', min: 1, max: 999, color: '#d73027' }],
       regionSummary: { counts: { 强降雨: 1 }, topRegions: [{ name: '测试区', value: 3 }] },
       outputs: { png: 'risk.png', geojson: 'risk.geojson' },
@@ -510,11 +512,11 @@ describe('nowcast tools', () => {
     expect(table.artifacts).toEqual([
       expect.objectContaining({
         artifactType: 'xlsx',
-        metadata: expect.objectContaining({ displaySurfaces: ['download'] }),
+        display: expect.objectContaining({ surfaces: ['download'] }),
       }),
       expect.objectContaining({
         artifactType: 'raster_png',
-        metadata: expect.objectContaining({ displaySurfaces: ['mini_app', 'download'] }),
+        display: expect.objectContaining({ surfaces: ['mini_app', 'download'] }),
       }),
     ])
     expect(table.provenance).toMatchObject({

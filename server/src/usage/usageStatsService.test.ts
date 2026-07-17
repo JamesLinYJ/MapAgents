@@ -10,7 +10,7 @@ import { parseEnv, type Env } from '../framework/env.js'
 import { analysisRunSchema, type AnalysisRun } from '@geo-agent-platform/shared-types/platform'
 import type { RunStatus } from '@geo-agent-platform/shared-types/core'
 import type { AuthContext } from '../security/types.js'
-import type { PostgresPlatformStore } from '../store/platformStore.js'
+import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import { UsageStatsService } from './usageStatsService.js'
 
 describe('UsageStatsService', () => {
@@ -97,13 +97,13 @@ describe('UsageStatsService', () => {
   })
 })
 
-function fakeStore(runs: AnalysisRun[]): PostgresPlatformStore {
+function fakeStore(runs: AnalysisRun[]): PlatformPersistenceFacade {
   return {
     listRunsForWorkspace: (workspaceId: string) => {
       expect(workspaceId).toBe('workspace_test')
       return runs
     },
-  } as unknown as PostgresPlatformStore
+  } as unknown as PlatformPersistenceFacade
 }
 
 function auth(): AuthContext {

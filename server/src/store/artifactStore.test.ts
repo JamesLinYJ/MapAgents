@@ -2,11 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { AgentThreadRecord, AnalysisRun, ArtifactRef, SessionRecord } from '../schemas/types.js'
 import { ArtifactStore } from './artifactStore.js'
-import { ConversationIndexStore } from './conversationIndexStore.js'
-import type { ArtifactRepository } from './postgres/artifactIndexStore.js'
+import { ConversationProjectionIndex } from './conversationProjectionIndex.js'
+import type { ArtifactRepository } from './postgres/artifactRepository.js'
 
 function createFixture(persistArtifact = vi.fn().mockResolvedValue(undefined)) {
-  const index = new ConversationIndexStore()
+  const index = new ConversationProjectionIndex()
   const session = {
     id: 'session_1',
     workspaceId: 'workspace_1',

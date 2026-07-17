@@ -36,9 +36,12 @@ import {
   datasetValue,
   defaultAreaRainfallStyle,
   defaultRainfallThresholds,
+  downloadDisplay,
+  geoJsonDisplay,
   inputKind,
   isRecord,
   mergeArtifactMetadata,
+  miniAppDisplay,
   METEOROLOGICAL_FILE_SUFFIXES,
   NETCDF_SUFFIXES,
   normalizeThresholds,
@@ -183,9 +186,12 @@ async function renderRainfallRiskMap(args: Record<string, unknown>, ctx: ToolCon
     ...worker.payload,
     previewRole: 'rainfall_risk_map',
     miniApp: { type: 'rainfall_risk_map_console' },
-    displaySurfaces: ['mini_app', 'download'],
-    primarySurface: 'mini_app',
-  })
+  }, miniAppDisplay())
+  const mapCategories = normalizeThresholds(worker.payload.thresholds).map(item => ({
+    value: item.label,
+    label: `${item.label}（${item.min}–${item.max}）`,
+    color: item.color,
+  }))
   mergeArtifactMetadata(regionLayer, {
     mapRole: 'rainfall_risk_regions',
     variable: worker.payload.variable,
@@ -196,9 +202,12 @@ async function renderRainfallRiskMap(args: Record<string, unknown>, ctx: ToolCon
     regionSummary: worker.payload.regionSummary,
     previewArtifactId: artifact.artifactId,
     miniApp: { type: 'rainfall_risk_map_console' },
-    displaySurfaces: ['map', 'download'],
-    primarySurface: 'map',
-  })
+  }, geoJsonDisplay(regionLayer, worker.payload, 'polygon', {
+    bounds: worker.payload.bounds,
+    colorField: 'risk_level',
+    categories: mapCategories,
+    legendTitle: '短时强降水风险等级',
+  }))
   const ref: ValueRef = {
     refId: makeId('ref'),
     kind: 'rainfall_risk_map_result',
@@ -235,16 +244,12 @@ async function generateAreaRainfallTable(args: Record<string, unknown>, ctx: Too
   mergeArtifactMetadata(xlsx, {
     ...worker.payload,
     downloadRole: 'area_rainfall_table_xlsx',
-    displaySurfaces: ['download'],
-    primarySurface: 'download',
-  })
+  }, downloadDisplay())
   mergeArtifactMetadata(png, {
     ...worker.payload,
     previewRole: 'area_rainfall_table_png',
     miniApp: { type: 'area_rainfall_table_console' },
-    displaySurfaces: ['mini_app', 'download'],
-    primarySurface: 'mini_app',
-  })
+  }, miniAppDisplay())
   const ref: ValueRef = {
     refId: makeId('ref'),
     kind: 'area_rainfall_table_result',

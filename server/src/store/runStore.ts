@@ -21,18 +21,18 @@ import type {
 import { summarizeAssistantText } from '../conversation/items.js'
 import { errorLogPayload, logger } from '../observability/logger.js'
 import { makeId, nowUtc } from '../utils/ids.js'
-import type { ConversationIndexStore } from './conversationIndexStore.js'
+import type { ConversationProjectionIndex } from './conversationProjectionIndex.js'
 import type { InMemoryEventBus } from './eventBus.js'
-import type { FileConversationStore } from './fileConversationStore.js'
+import type { ConversationPayloadStore } from './conversationPayloadStore.js'
 import {
   decodeRunCursor,
   compareRuns,
   encodeRunCursor,
   isRunAfterCursor,
   toRunSummary,
-} from './platformStoreUtils.js'
+} from './runProjection.js'
 import type { SessionStore } from './sessionStore.js'
-import type { ConversationRepository } from './postgres/conversationRepository.js'
+import type { RunRepository, ThreadLifecycleRepository } from './postgres/conversationPersistencePorts.js'
 
 export interface RunStoreEvents {
   runBus: InMemoryEventBus<AnalysisRun>
@@ -46,10 +46,11 @@ export class RunStore {
   private readonly durableRunningItems = new Map<string, Set<string>>()
 
   constructor(
-    private readonly index: ConversationIndexStore,
-    private readonly conversationStore: FileConversationStore,
+    private readonly index: ConversationProjectionIndex,
+    private readonly payloadStore: ConversationPayloadStore,
     private readonly sessionStore: SessionStore,
-    private readonly repository: ConversationRepository,
+    private readonly repository: RunRepository,
+    private readonly threadWriter: Pick<ThreadLifecycleRepository, 'saveThread'>,
     private readonly events: RunStoreEvents,
   ) {}
 
@@ -166,7 +167,7 @@ export class RunStore {
       },
     }
     const persisted = await this.repository.createRunLifecycle(run)
-    this.conversationStore.registerRun(persisted.run)
+    this.payloadStore.registerRun(persisted.run)
     this.sessionStore.acceptPersisted(persisted.session)
     if (persisted.thread) this.index.setThread(persisted.thread)
     this.index.setRun(persisted.run)
@@ -203,7 +204,7 @@ export class RunStore {
         ? 'requires_action'
         : 'clean',
     })
-    await this.conversationStore.flush()
+    await this.payloadStore.flush()
     this.index.setRun(next)
     this.events.runBus.publish(runId, structuredClone(next))
     await this.persistDerivedThreadRunStatusProjection(run, next.status, next.updatedAt)
@@ -226,7 +227,7 @@ export class RunStore {
 
   async appendAgentTranscript(runId: string, agentId: string, record: Record<string, unknown>): Promise<void> {
     this.get(runId)
-    await this.conversationStore.appendAgentTranscript(runId, agentId, record)
+    await this.payloadStore.appendAgentTranscript(runId, agentId, record)
   }
 
   async saveAgentsSdkState(
@@ -235,7 +236,7 @@ export class RunStore {
     metadata: { agentsSdkVersion: string; runtimeConfigDigest: string },
   ): Promise<void> {
     this.get(runId)
-    const reference = await this.conversationStore.putObject(
+    const reference = await this.payloadStore.putObject(
       serializedState,
       'application/vnd.geoforge.agents-state+json',
     )
@@ -252,7 +253,7 @@ export class RunStore {
     const checkpoint = await this.repository.getRunCheckpoint(runId)
     const hash = checkpoint.sdkStateContentHash
     if (!hash) throw new Error(`run '${runId}' 缺少 Agents SDK 状态，不能恢复`)
-    const bytes = await this.conversationStore.readObjectByHash(hash)
+    const bytes = await this.payloadStore.readObjectByHash(hash)
     return Buffer.from(bytes).toString('utf8')
   }
 
@@ -296,7 +297,7 @@ export class RunStore {
     const thread = this.index.getThreadOrNull(run.threadId)
     if (!thread) return
     const nextThread = { ...thread, latestRunStatus: status, updatedAt }
-    await this.repository.saveThread(nextThread)
+    await this.threadWriter.saveThread(nextThread)
     this.index.setThread(nextThread)
   }
 

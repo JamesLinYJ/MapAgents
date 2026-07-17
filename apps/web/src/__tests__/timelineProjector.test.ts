@@ -110,6 +110,46 @@ describe('projectTimeline', () => {
     expect(result.some(r => r.body === 'streaming')).toBe(true)
   })
 
+  it('preserves earlier thread messages when an approved run snapshot is hydrated', () => {
+    const canonical = [
+      item({
+        itemId: 'transcript:old-user',
+        itemType: 'message',
+        role: 'user',
+        runId: 'run_old',
+        threadId: 'thread_1',
+        body: '审批前的历史问题',
+        metadata: { transcriptEntryId: 'old-user', transcriptSeq: 1 },
+      }),
+      item({
+        itemId: 'transcript:old-answer',
+        itemType: 'message',
+        role: 'assistant',
+        runId: 'run_old',
+        threadId: 'thread_1',
+        body: '审批前的历史回答',
+        metadata: { transcriptEntryId: 'old-answer', transcriptSeq: 2 },
+      }),
+    ]
+    const approvedRunSnapshot = [
+      item({
+        itemId: 'run-current-answer',
+        itemType: 'message',
+        role: 'assistant',
+        runId: 'run_current',
+        threadId: 'thread_1',
+        body: '批准后继续执行的回答',
+        metadata: { transcriptEntryId: 'current-answer', transcriptSeq: 3 },
+      }),
+    ]
+
+    expect(projectTimeline(canonical, approvedRunSnapshot).map(entry => entry.body)).toEqual([
+      '审批前的历史问题',
+      '审批前的历史回答',
+      '批准后继续执行的回答',
+    ])
+  })
+
   it('uses itemId as final tiebreaker when all other keys are equal', () => {
     const ts = new Date('2026-07-07T10:00:00Z').toISOString()
     const items = [

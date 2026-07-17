@@ -11,7 +11,7 @@
 // Agent 生命周期管理——创建 run、提交消息、处理 plan mode、工具审批。
 // 通过接口与其他 context 通信，不直接依赖文件系统或 HTTP 层。
 
-export type { ConversationStorage } from '../store/ConversationStorage.js'
+export type { ConversationPayloadStorage } from '../store/conversationPayloadStorage.js'
 export interface AgentRuntime {
   startRun(input: {
     sessionId: string

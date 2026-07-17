@@ -83,6 +83,11 @@ export function createTextToSpeechTool(env: Env): ToolDef {
           artifactType: 'audio_mp3',
           name,
           uri: `/api/v1/results/${artifactId}/file`,
+          display: {
+            surfaces: ['download'],
+            primarySurface: 'download',
+            map: null,
+          },
           relativePath,
           metadata: {
             relativePath,
