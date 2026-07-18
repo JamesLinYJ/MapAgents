@@ -191,19 +191,19 @@ export class BetterAuthService {
   async buildServiceAuthContext(platformUserId: string, workspaceId: string): Promise<AuthContext> {
     const user = await this.identity.getUser(platformUserId)
     if (!user || user.status !== 'active') {
-      throw new Error('Workflow 创建者已禁用或不存在，任务不会执行。')
+      throw new Error('Automation 创建者已禁用或不存在，任务不会执行。')
     }
     const roles = await this.listUserRoles(platformUserId)
     const hasWorkspaceRole = roles.some(role => role.role === 'platform_admin' || role.workspaceId === workspaceId)
     if (!hasWorkspaceRole) {
-      throw new Error('Workflow 创建者已失去当前工作区权限，任务不会执行。')
+      throw new Error('Automation 创建者已失去当前工作区权限，任务不会执行。')
     }
     return {
       userId: user.userId,
       subject: user.subject,
       email: user.email.toLowerCase(),
       displayName: user.displayName,
-      authSessionId: `workflow:${user.userId}`,
+      authSessionId: `automation:${user.userId}`,
       authSessionExpiresAt: null,
       csrfToken: '',
       defaultWorkspaceId: workspaceId,

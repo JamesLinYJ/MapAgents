@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   地理智能平台 - GeoForge 分步登录页
+//   地理智能平台 - 分步登录页
 //
 //   文件:       LoginScreen.tsx
 //
@@ -110,26 +110,26 @@ export function LoginScreen({
 
   return (
     <main className="digital-cartographer dc-auth-screen">
-      <div className="dc-entry-shell" aria-label="GeoForge 启动入口">
-        <section className="dc-entry-hero" aria-labelledby="geoforge-entry-title">
+      <div className="dc-entry-shell" aria-label="地理智能工作台启动入口">
+        <section className="dc-entry-hero" aria-labelledby="platform-entry-title">
           <div className="dc-entry-brand">
             <span className="dc-entry-brand__mark" aria-hidden="true">G</span>
             <span>
-              <strong>GeoForge</strong>
+              <strong>气象空间分析</strong>
               <small>气象空间智能平台</small>
             </span>
           </div>
 
           <div className="dc-entry-copy">
-            <h1 id="geoforge-entry-title">GeoForge 工作台</h1>
-            <p>统一气象数据、地图浏览、智能工具、Workflow 和安全管理，用可审计的方式完成从上传到结果交付的完整分析链路。</p>
+            <h1 id="platform-entry-title">地理智能工作台</h1>
+            <p>统一气象数据、地图浏览、智能工具、自动化流程和安全管理，用可审计的方式完成从上传到结果交付的完整分析链路。</p>
           </div>
 
           <div className="dc-entry-command-grid" aria-label="平台核心能力">
             <FeatureCard icon={<CloudSun size={20} />} title="气象分析" description="NetCDF、雷达、短临预报和报告输出" />
             <FeatureCard icon={<Map size={20} />} title="地图浏览" description="图层管理、空间查询和结果制图" />
             <FeatureCard icon={<Bot size={20} />} title="智能指令" description="审批、计划模式、工具调用和连续对话" />
-            <FeatureCard icon={<Database size={20} />} title="数据治理" description="用量统计、权限审计和可追踪 Artifact" />
+            <FeatureCard icon={<Database size={20} />} title="数据治理" description="用量统计、权限审计和可追踪成果文件" />
           </div>
 
           <div className="dc-entry-preview" aria-label="启动预览">
@@ -180,12 +180,12 @@ export function LoginScreen({
             <div className="dc-auth-options" aria-label="登录选项列表">
               <button type="button" onClick={goEmail}>
                 <Mail size={20} aria-hidden="true" />
-                <span><strong>邮箱密码登录</strong><small>使用 GeoForge 账号继续访问工作台。</small></span>
+                <span><strong>邮箱密码登录</strong><small>使用工作台账号继续访问。</small></span>
                 <ArrowRight size={17} aria-hidden="true" />
               </button>
               <button type="button" onClick={goSignup}>
                 <ShieldCheck size={20} aria-hidden="true" />
-                <span><strong>创建 GeoForge 账号</strong><small>注册后会自动创建个人工作区。</small></span>
+                <span><strong>创建工作台账号</strong><small>注册后会自动创建个人工作区。</small></span>
                 <ArrowRight size={17} aria-hidden="true" />
               </button>
               <div className="dc-auth-options__note">
@@ -285,7 +285,7 @@ function FeatureCard({ icon, title, description }: FeatureCardProps) {
 
 function stepTitle(step: LoginStep): string {
   if (step === 'password') return '输入密码'
-  if (step === 'signup') return '创建 GeoForge 账号'
+  if (step === 'signup') return '创建工作台账号'
   if (step === 'options') return '选择登录方式'
   return '登录'
 }
@@ -294,5 +294,5 @@ function stepDescription(step: LoginStep): string {
   if (step === 'password') return '确认密码后进入你的气象分析与地图工作区。'
   if (step === 'signup') return '使用邮箱创建账号，系统会为你准备个人工作区。'
   if (step === 'options') return '当前版本支持邮箱密码登录和公开注册。'
-  return '使用 GeoForge 账号继续访问气象分析、地图浏览和安全管理功能。'
+  return '使用工作台账号继续访问气象分析、地图浏览和安全管理功能。'
 }

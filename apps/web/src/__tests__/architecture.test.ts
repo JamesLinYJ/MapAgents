@@ -157,7 +157,7 @@ describe('frontend architecture guards', () => {
       'resourceApi',
       'runApi',
       'toolApi',
-      'workflowApi',
+      'automationApi',
     ]
 
     expect(clientSource.includes('requestControl(')).toBe(false)
@@ -310,6 +310,30 @@ describe('frontend architecture guards', () => {
     expect(appShellSource.includes('../features/conversation/ChatPanel')).toBe(false)
     expect(conversationPanelSource.includes("from '../../features/conversation/ChatPanel'")).toBe(true)
     expect(conversationPanelSource.includes('ChatPanelProps')).toBe(true)
+  })
+
+  it('keeps product codenames and internal automation wording out of rendered pages', async () => {
+    const srcRoot = path.resolve(process.cwd(), 'src')
+    const pageFiles = (await collectSourceFiles(srcRoot))
+      .filter(file => file.endsWith('.tsx'))
+      .filter(file => !file.includes(`${path.sep}__tests__${path.sep}`))
+    const forbiddenVisibleText = [
+      'GeoForge',
+      'Automation Studio',
+      '未命名 Automation',
+      '目标 Automation',
+      '启动 Automation',
+      'Automation JSON',
+      '内置 Automation',
+      'Automation 运行',
+    ]
+
+    for (const file of pageFiles) {
+      const source = await readFile(file, 'utf8')
+      for (const text of forbiddenVisibleText) {
+        expect(source.includes(text), `${file}: ${text}`).toBe(false)
+      }
+    }
   })
 
   it('keeps memory management out of the conversation timeline', async () => {

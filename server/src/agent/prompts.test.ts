@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { defaultRuntimeConfig } from './defaultRuntimeConfig.js'
 import { buildSystemPrompt } from './prompts.js'
 
-describe('GeoForge system prompt', () => {
+describe('system prompt', () => {
   it('includes SDK MCP and Skill instructions without legacy product names', () => {
     const config = defaultRuntimeConfig()
     config.sdk.mcp = {
@@ -48,7 +48,7 @@ describe('GeoForge system prompt', () => {
     expect(prompt).toContain('search_docs')
     expect(prompt).toContain('## Skill 指令')
     expect(prompt).toContain('SKILL.md')
-    expect(prompt).not.toMatch(/Claude|Newmap|CLAUDE/u)
+    expect(prompt).not.toMatch(/Claude|Newmap|GeoForge|CLAUDE/u)
   })
 
   it('keeps platform artifacts distinct from sandbox local files', () => {

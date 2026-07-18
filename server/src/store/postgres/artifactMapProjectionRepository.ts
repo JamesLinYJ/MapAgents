@@ -7,7 +7,7 @@
 //   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
-import { eq, max, sql } from 'drizzle-orm'
+import { and, eq, inArray, max, ne, sql } from 'drizzle-orm'
 
 import type { DatabaseTransaction } from '../../db/connection.js'
 import { platformMapLayers, platformMapSceneLayers, platformMapScenes } from '../../db/schema.js'
@@ -41,6 +41,7 @@ export class ArtifactMapProjectionRepository {
       artifactId: artifact.artifactId,
       managedLayerKey: null,
       title: draft.title,
+      replacementGroup: draft.replacementGroup,
       sourceType: 'artifact',
       geometryType: draft.style.kind,
       srid: 4326,
@@ -75,6 +76,7 @@ export class ArtifactMapProjectionRepository {
       target: platformMapLayers.artifactId,
       set: {
         title: draft.title,
+        replacementGroup: draft.replacementGroup,
         status: 'ready',
         errorMessage: null,
         boundsJson: draft.bounds,
@@ -105,6 +107,26 @@ export class ArtifactMapProjectionRepository {
       .where(eq(platformMapSceneLayers.mapLayerId, mapLayerId))
       .limit(1)
     if (existingSceneLayer[0]) return
+
+    if (draft.replacementGroup) {
+      const replacedLayers = await tx.select({ mapLayerId: platformMapLayers.mapLayerId })
+        .from(platformMapLayers)
+        .where(and(
+          eq(platformMapLayers.threadId, owner.threadId),
+          eq(platformMapLayers.replacementGroup, draft.replacementGroup),
+          ne(platformMapLayers.mapLayerId, mapLayerId),
+        ))
+      const replacedIds = replacedLayers.map(layer => layer.mapLayerId)
+      if (replacedIds.length > 0) {
+        await tx.update(platformMapSceneLayers).set({
+          visible: false,
+          updatedAt: now,
+        }).where(and(
+          eq(platformMapSceneLayers.sceneId, sceneId),
+          inArray(platformMapSceneLayers.mapLayerId, replacedIds),
+        ))
+      }
+    }
 
     const orderRows = await tx.select({ value: max(platformMapSceneLayers.layerOrder) })
       .from(platformMapSceneLayers)

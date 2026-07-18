@@ -12,7 +12,7 @@
     {
       "name": "list_meteorological_files",
       "label": "列出气象文件",
-      "description": "列出当前线程可用的通用气象文件",
+      "description": "列出当前会话可用的通用气象数据集",
       "group": "气象",
       "tags": [
         "meteorology"
@@ -543,6 +543,7 @@
       ],
       "isReadOnly": false,
       "isDestructive": false,
+      "requiresApproval": true,
       "jsonSchema": {
         "type": "object",
         "properties": {
@@ -653,6 +654,35 @@
         "x-mini-app": {
           "type": "rainfall_risk_map_console"
         }
+      }
+    },
+    {
+      "name": "meteorological_nowcast_report",
+      "label": "生成短临自动化报告",
+      "description": "从一条已完成的自动化运行事实生成确定性 DOCX 报告。",
+      "group": "气象",
+      "tags": [
+        "meteorology"
+      ],
+      "isReadOnly": false,
+      "isDestructive": false,
+      "requiresApproval": true,
+      "jsonSchema": {
+        "type": "object",
+        "properties": {
+          "automation_run_ref": {
+            "type": "string",
+            "title": "自动化运行结果引用",
+            "description": "必须使用当前 run 中已存在的 valueRef ID",
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "automation_run_output"
+            ]
+          }
+        },
+        "required": [
+          "automation_run_ref"
+        ]
       }
     },
     {
@@ -864,6 +894,7 @@
       ],
       "isReadOnly": true,
       "isDestructive": false,
+      "executionSurfaces": ["automation", "debug"],
       "jsonSchema": {
         "type": "object",
         "properties": {
@@ -895,6 +926,7 @@
       ],
       "isReadOnly": true,
       "isDestructive": false,
+      "executionSurfaces": ["automation", "debug"],
       "jsonSchema": {
         "type": "object",
         "properties": {
@@ -920,6 +952,7 @@
       ],
       "isReadOnly": true,
       "isDestructive": false,
+      "executionSurfaces": ["automation", "debug"],
       "jsonSchema": {
         "type": "object",
         "properties": {
@@ -967,6 +1000,7 @@
       ],
       "isReadOnly": true,
       "isDestructive": false,
+      "executionSurfaces": ["automation", "debug"],
       "jsonSchema": {
         "type": "object",
         "properties": {
@@ -1004,6 +1038,7 @@
       ],
       "isReadOnly": true,
       "isDestructive": false,
+      "executionSurfaces": ["automation", "debug"],
       "jsonSchema": {
         "type": "object",
         "properties": {
@@ -1035,6 +1070,7 @@
       ],
       "isReadOnly": true,
       "isDestructive": false,
+      "executionSurfaces": ["automation", "debug"],
       "jsonSchema": {
         "type": "object",
         "properties": {
@@ -1060,6 +1096,7 @@
       ],
       "isReadOnly": true,
       "isDestructive": false,
+      "executionSurfaces": ["automation", "debug"],
       "jsonSchema": {
         "type": "object",
         "properties": {

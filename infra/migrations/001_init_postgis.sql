@@ -356,6 +356,7 @@ CREATE TABLE IF NOT EXISTS platform_map_layers (
   artifact_id        TEXT REFERENCES platform_artifacts(artifact_id) ON DELETE CASCADE,
   managed_layer_key  TEXT,
   title              TEXT NOT NULL,
+  replacement_group  TEXT,
   source_type        TEXT NOT NULL DEFAULT 'artifact',
   geometry_type      TEXT NOT NULL DEFAULT 'unknown',
   srid                INTEGER NOT NULL DEFAULT 4326,
@@ -398,6 +399,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_map_layers_managed_unique
   ON platform_map_layers (managed_layer_key);
 CREATE INDEX IF NOT EXISTS idx_platform_map_layers_thread_updated
   ON platform_map_layers (thread_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_platform_map_layers_thread_replacement
+  ON platform_map_layers (thread_id, replacement_group, updated_at);
 CREATE INDEX IF NOT EXISTS idx_platform_map_layers_workspace_updated
   ON platform_map_layers (workspace_id, updated_at);
 
@@ -538,11 +541,11 @@ CREATE INDEX IF NOT EXISTS idx_meteorological_jobs_session_updated
   ON platform_meteorological_jobs (session_id, updated_at);
 
 -- ==========================================================================
--- Workflow / 定时任务 / 后台运行索引
+-- Automation / 定时任务 / 后台运行索引
 -- ==========================================================================
 
-CREATE TABLE IF NOT EXISTS platform_workflow_definitions (
-  workflow_id             TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS platform_automation_definitions (
+  automation_id             TEXT PRIMARY KEY,
   workspace_id            TEXT REFERENCES platform_workspaces(workspace_id) ON DELETE CASCADE,
   created_by_user_id      TEXT REFERENCES platform_users(user_id) ON DELETE SET NULL,
   name                    TEXT NOT NULL,
@@ -561,30 +564,40 @@ CREATE TABLE IF NOT EXISTS platform_workflow_definitions (
   output_type             TEXT NOT NULL DEFAULT 'conversation',
   definition_json         JSONB NOT NULL,
   created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT platform_automation_definitions_source_check CHECK (source IN ('builtin', 'workspace')),
+  CONSTRAINT platform_automation_definitions_lifecycle_check CHECK (lifecycle IN ('draft', 'published', 'disabled')),
+  CONSTRAINT platform_automation_definitions_revision_check CHECK (revision > 0),
+  CONSTRAINT platform_automation_definitions_timeout_check CHECK (timeout_seconds > 0),
+  CONSTRAINT platform_automation_definitions_ownership_check CHECK (
+    (source = 'builtin' AND workspace_id IS NULL)
+    OR (source = 'workspace' AND workspace_id IS NOT NULL)
+  )
 );
-CREATE INDEX IF NOT EXISTS idx_workflow_definitions_workspace_updated
-  ON platform_workflow_definitions (workspace_id, updated_at);
-CREATE INDEX IF NOT EXISTS idx_workflow_definitions_source_lifecycle
-  ON platform_workflow_definitions (source, lifecycle);
+CREATE INDEX IF NOT EXISTS idx_automation_definitions_workspace_updated
+  ON platform_automation_definitions (workspace_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_automation_definitions_source_lifecycle
+  ON platform_automation_definitions (source, lifecycle);
 
-CREATE TABLE IF NOT EXISTS platform_workflow_versions (
-  workflow_id        TEXT NOT NULL REFERENCES platform_workflow_definitions(workflow_id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS platform_automation_versions (
+  automation_id        TEXT NOT NULL REFERENCES platform_automation_definitions(automation_id) ON DELETE CASCADE,
   revision           INTEGER NOT NULL,
   lifecycle          TEXT NOT NULL,
   definition_json    JSONB NOT NULL,
   created_by_user_id TEXT REFERENCES platform_users(user_id) ON DELETE SET NULL,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   published_at       TIMESTAMPTZ,
-  PRIMARY KEY (workflow_id, revision)
+  PRIMARY KEY (automation_id, revision),
+  CONSTRAINT platform_automation_versions_lifecycle_check CHECK (lifecycle IN ('draft', 'published', 'archived')),
+  CONSTRAINT platform_automation_versions_revision_check CHECK (revision > 0)
 );
-CREATE INDEX IF NOT EXISTS idx_workflow_versions_lifecycle
-  ON platform_workflow_versions (workflow_id, lifecycle);
+CREATE INDEX IF NOT EXISTS idx_automation_versions_lifecycle
+  ON platform_automation_versions (automation_id, lifecycle);
 
 CREATE TABLE IF NOT EXISTS platform_scheduled_tasks (
   task_id            TEXT PRIMARY KEY,
   target_kind        TEXT NOT NULL,
-  target_id          TEXT NOT NULL,
+  target_id          TEXT NOT NULL REFERENCES platform_automation_definitions(automation_id) ON DELETE RESTRICT,
   workspace_id       TEXT NOT NULL REFERENCES platform_workspaces(workspace_id) ON DELETE CASCADE,
   created_by_user_id TEXT NOT NULL REFERENCES platform_users(user_id) ON DELETE RESTRICT,
   title              TEXT NOT NULL,
@@ -602,17 +615,20 @@ CREATE TABLE IF NOT EXISTS platform_scheduled_tasks (
   failure_count      INTEGER NOT NULL DEFAULT 0,
   last_error_message TEXT,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT platform_scheduled_tasks_target_kind_check CHECK (target_kind = 'automation'),
+  CONSTRAINT platform_scheduled_tasks_status_check CHECK (status IN ('active', 'paused', 'missed', 'failed', 'deleted')),
+  CONSTRAINT platform_scheduled_tasks_failure_count_check CHECK (failure_count >= 0)
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_workspace_next
   ON platform_scheduled_tasks (workspace_id, next_fire_at);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_target
   ON platform_scheduled_tasks (target_kind, target_id);
 
-CREATE TABLE IF NOT EXISTS platform_workflow_runs (
-  workflow_run_id    TEXT PRIMARY KEY,
-  workflow_id        TEXT NOT NULL REFERENCES platform_workflow_definitions(workflow_id) ON DELETE RESTRICT,
-  workflow_revision  INTEGER NOT NULL,
+CREATE TABLE IF NOT EXISTS platform_automation_runs (
+  automation_run_id    TEXT PRIMARY KEY,
+  automation_id        TEXT NOT NULL,
+  automation_revision  INTEGER NOT NULL,
   scheduled_task_id  TEXT REFERENCES platform_scheduled_tasks(task_id) ON DELETE SET NULL,
   workspace_id       TEXT NOT NULL REFERENCES platform_workspaces(workspace_id) ON DELETE CASCADE,
   created_by_user_id TEXT NOT NULL REFERENCES platform_users(user_id) ON DELETE RESTRICT,
@@ -626,9 +642,17 @@ CREATE TABLE IF NOT EXISTS platform_workflow_runs (
   pending_approval_json JSONB,
   outputs_json       JSONB NOT NULL DEFAULT '{}'::jsonb,
   started_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  completed_at       TIMESTAMPTZ
+  completed_at       TIMESTAMPTZ,
+  CONSTRAINT platform_automation_runs_definition_revision_fk
+    FOREIGN KEY (automation_id, automation_revision)
+    REFERENCES platform_automation_versions(automation_id, revision)
+    ON DELETE RESTRICT,
+  CONSTRAINT platform_automation_runs_status_check
+    CHECK (status IN ('queued', 'running', 'waiting_approval', 'completed', 'failed', 'cancelled')),
+  CONSTRAINT platform_automation_runs_trigger_kind_check
+    CHECK (trigger_kind IN ('manual', 'schedule', 'agent'))
 );
-CREATE INDEX IF NOT EXISTS idx_workflow_runs_workspace_started
-  ON platform_workflow_runs (workspace_id, started_at);
-CREATE INDEX IF NOT EXISTS idx_workflow_runs_scheduled_task_started
-  ON platform_workflow_runs (scheduled_task_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_workspace_started
+  ON platform_automation_runs (workspace_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_scheduled_task_started
+  ON platform_automation_runs (scheduled_task_id, started_at);

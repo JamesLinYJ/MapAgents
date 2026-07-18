@@ -120,7 +120,7 @@ function interpolateColormap(stops: Array<{ value: number; color: string }>): Re
       Math.round(lowerColor[0] + (upperColor[0] - lowerColor[0]) * ratio),
       Math.round(lowerColor[1] + (upperColor[1] - lowerColor[1]) * ratio),
       Math.round(lowerColor[2] + (upperColor[2] - lowerColor[2]) * ratio),
-      255,
+      Math.round(lowerColor[3] + (upperColor[3] - lowerColor[3]) * ratio),
     ]
   }
   return result

@@ -68,9 +68,9 @@ export function buildSandboxManifest(
     entries: {
       'README.md': {
         type: 'file',
-        content: `# GeoForge Sandbox
+        content: `# 智能体沙箱
 
-本工作区由 GeoForge 运行时为单次 Agent run 创建。
+本工作区由平台运行时为单次智能体运行创建。
 
 - runId: ${options.runId}
 - threadId: ${threadId}

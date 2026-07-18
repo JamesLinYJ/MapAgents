@@ -12,6 +12,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { LayerDescriptor } from '@geo-agent-platform/shared-types'
 import { LayerPanel } from '../features/layers/LayerManagerPanel'
+import { LayerNodeView } from '../features/layers/LayerManagerShared'
 import type { LayerPanelView } from '../features/layers/useLayerManager'
 
 const noop = () => {}
@@ -55,6 +56,43 @@ describe('LayerPanel', () => {
     expect(html).not.toContain('世界地形图')
     expect(html).not.toContain('全球山影')
     expect(html).toContain('底图仍由地图画布单独管理')
+  })
+
+  it('renders scientific raster legends from the manifest instead of assuming RGB bands', () => {
+    const html = renderToStaticMarkup(
+      <LayerNodeView
+        node={{
+          id: 'qpf-layer',
+          name: '三小时累计降水',
+          type: 'layer',
+          layerKind: 'raster',
+          visible: true,
+          opacity: 0.9,
+          geometrySummary: 'continuous_raster',
+          legend: {
+            kind: 'continuous',
+            title: '累计降水',
+            unit: 'mm',
+            range: [0, 50],
+            stops: [
+              { value: 0, color: '#ffffff' },
+              { value: 50, color: '#7f0000' },
+            ],
+            nodataLabel: '无数据',
+          },
+        }}
+        depth={0}
+        selectedId={null}
+        onSelectLayer={noop}
+        onToggleVisibility={noop}
+        onToggleGroup={noop}
+      />,
+    )
+
+    expect(html).toContain('累计降水（mm）')
+    expect(html).toContain('0 – 50 mm')
+    expect(html).not.toContain('R / Band 1')
+    expect(html).not.toContain('RGB')
   })
 })
 

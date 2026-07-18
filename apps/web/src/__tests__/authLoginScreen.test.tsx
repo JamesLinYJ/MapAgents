@@ -34,8 +34,8 @@ describe('LoginScreen', () => {
   it('renders the email-first Microsoft-style flow without tabs', () => {
     const html = renderLogin(<LoginScreen onAuthenticated={noop} />)
 
-    expect(html).toContain('GeoForge')
-    expect(html).toContain('<h1 id="geoforge-entry-title">GeoForge 工作台</h1>')
+    expect(html).not.toContain('GeoForge')
+    expect(html).toContain('<h1 id="platform-entry-title">地理智能工作台</h1>')
     expect(html).toContain('<h2 id="geoforge-login-panel-title">登录</h2>')
     expect(html).toContain('气象分析')
     expect(html).toContain('地图浏览')
@@ -58,7 +58,7 @@ describe('LoginScreen', () => {
     expect(passwordHtml).toContain('输入密码')
     expect(passwordHtml).toContain('后退')
     expect(passwordHtml).toContain('disabled=""')
-    expect(signupHtml).toContain('创建 GeoForge 账号')
+    expect(signupHtml).toContain('创建工作台账号')
     expect(signupHtml).toContain('你的名称')
     expect(optionsHtml).toContain('邮箱密码登录')
     expect(optionsHtml).toContain('联系平台管理员')
@@ -78,7 +78,7 @@ describe('LoginScreen', () => {
       <LoginScreen onAuthenticated={noop} errorMessage="Bad Gateway" />,
     )
 
-    expect(html).toContain('GeoForge API 未连接，请启动 Node API 服务。')
+    expect(html).toContain('工作台 API 未连接，请启动 Node API 服务。')
     expect(html).not.toContain('Bad Gateway')
   })
 })

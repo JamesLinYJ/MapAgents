@@ -76,7 +76,7 @@ function createRunStore(overrides: Partial<ConversationPayloadStore> = {}) {
       contextReferences: [],
       contextResolution: null,
       runLifecycle: { status: 'created', reason: null, updatedAt: null },
-      executionPlan: null,
+      agentWorkflow: null,
       currentStep: 0,
       loopIteration: 0,
       loopPhase: 'idle',

@@ -95,17 +95,17 @@ export function registerWsAuthorizationPolicies(registry: WsCommandRegistry): vo
     requiredString(payload, 'threadId'),
     'update',
   ))
-  set('workflow:list', (_payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'workflow', 'read', { workspaceId: auth.defaultWorkspaceId }))
-  set('workflow:validate', (_payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'workflow', 'create', { workspaceId: auth.defaultWorkspaceId }))
-  set('workflow:create', (_payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'workflow', 'create', { workspaceId: auth.defaultWorkspaceId }))
-  set('workflow:update', (payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'workflow', 'update', { workspaceId: auth.defaultWorkspaceId, resourceId: requiredString(payload, 'workflowId') }))
-  set('workflow:publish', (payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'workflow', 'update', { workspaceId: auth.defaultWorkspaceId, resourceId: requiredString(payload, 'workflowId') }))
-  set('workflow:disable', (payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'workflow', 'delete', { workspaceId: auth.defaultWorkspaceId, resourceId: requiredString(payload, 'workflowId') }))
-  set('workflow:history', (payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'workflow', 'read', { workspaceId: auth.defaultWorkspaceId, resourceId: requiredString(payload, 'workflowId') }))
-  set('workflow:start', (payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'workflow', 'execute', { workspaceId: auth.defaultWorkspaceId, resourceId: requiredString(payload, 'workflowId') }))
-  set('workflow:cancel', (payload, context, auth) => authorizeWorkflowRun(context.dependencies, auth, requiredString(payload, 'workflowRunId'), 'execute'))
-  set('workflow:run:get', (payload, context, auth) => authorizeWorkflowRun(context.dependencies, auth, requiredString(payload, 'workflowRunId'), 'read'))
-  set('workflow:respond-approval', (payload, context, auth) => authorizeWorkflowRun(context.dependencies, auth, requiredString(payload, 'workflowRunId'), 'approve'))
+  set('automation:list', (_payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'automation', 'read', { workspaceId: auth.defaultWorkspaceId }))
+  set('automation:validate', (_payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'automation', 'create', { workspaceId: auth.defaultWorkspaceId }))
+  set('automation:create', (_payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'automation', 'create', { workspaceId: auth.defaultWorkspaceId }))
+  set('automation:update', (payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'automation', 'update', { workspaceId: auth.defaultWorkspaceId, resourceId: requiredString(payload, 'automationId') }))
+  set('automation:publish', (payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'automation', 'update', { workspaceId: auth.defaultWorkspaceId, resourceId: requiredString(payload, 'automationId') }))
+  set('automation:disable', (payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'automation', 'delete', { workspaceId: auth.defaultWorkspaceId, resourceId: requiredString(payload, 'automationId') }))
+  set('automation:history', (payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'automation', 'read', { workspaceId: auth.defaultWorkspaceId, resourceId: requiredString(payload, 'automationId') }))
+  set('automation:start', (payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'automation', 'execute', { workspaceId: auth.defaultWorkspaceId, resourceId: requiredString(payload, 'automationId') }))
+  set('automation:cancel', (payload, context, auth) => authorizeAutomationRun(context.dependencies, auth, requiredString(payload, 'automationRunId'), 'execute'))
+  set('automation:run:get', (payload, context, auth) => authorizeAutomationRun(context.dependencies, auth, requiredString(payload, 'automationRunId'), 'read'))
+  set('automation:respond-approval', (payload, context, auth) => authorizeAutomationRun(context.dependencies, auth, requiredString(payload, 'automationRunId'), 'approve'))
   set('scheduled-task:list', (_payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'scheduled_task', 'read', { workspaceId: auth.defaultWorkspaceId }))
   set('scheduled-task:create', (payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'scheduled_task', 'create', { workspaceId: auth.defaultWorkspaceId, resourceId: optionalString(payload.targetId) ?? null }))
   set('scheduled-task:update', (payload, context, auth) => authorizeScheduledTask(context.dependencies, auth, requiredString(payload, 'taskId'), 'update'))
@@ -276,18 +276,18 @@ async function authorizeScheduledTask(
   })
 }
 
-async function authorizeWorkflowRun(
+async function authorizeAutomationRun(
   dependencies: WsDependencies,
   auth: AuthContext,
-  workflowRunId: string,
+  automationRunId: string,
   action: 'read' | 'execute' | 'approve',
 ): Promise<void> {
-  const workflowRun = await dependencies.store.getWorkflowRunRecord(workflowRunId)
-  if (!workflowRun) throw new StoreNotFoundError(`Workflow 运行 '${workflowRunId}' 不存在`)
-  await dependencies.security.authorization.assertResourceWorkspace(auth, 'workflow', action, {
-    workspaceId: workflowRun.workspaceId,
-    createdByUserId: workflowRun.createdByUserId,
+  const automationRun = await dependencies.store.getAutomationRunRecord(automationRunId)
+  if (!automationRun) throw new StoreNotFoundError(`自动化流程运行 '${automationRunId}' 不存在`)
+  await dependencies.security.authorization.assertResourceWorkspace(auth, 'automation', action, {
+    workspaceId: automationRun.workspaceId,
+    createdByUserId: automationRun.createdByUserId,
     visibility: 'workspace',
-    resourceId: workflowRun.workflowRunId,
+    resourceId: automationRun.automationRunId,
   })
 }

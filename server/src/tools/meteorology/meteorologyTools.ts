@@ -10,11 +10,11 @@
 
 import type { Env } from '../../framework/env.js'
 import type { ToolContext, ToolDef, ToolResult, ValueRef } from '../../framework/types.js'
-import { RuntimeFileStore } from '../../store/fileStore.js'
 import { makeId } from '../../utils/ids.js'
 import { callMeteorologyWorker } from './meteorologyWorkerClient.js'
 import { createDatasetMeteorologyTools } from './datasetTools.js'
 import { createNowcastMeteorologyTools } from './nowcastTools.js'
+import { createNowcastResultTools } from './nowcastResultTools.js'
 import { createRadarMeteorologyTools } from './radarTools.js'
 import {
   jsonParameter,
@@ -51,7 +51,6 @@ import {
   result,
   sequenceFiles,
   thirdPartyProvenance,
-  uploadSourceKey,
 } from './toolRuntime.js'
 
 export function createMeteorologyTools(env: Env): ToolDef[] {
@@ -65,7 +64,7 @@ export function createMeteorologyTools(env: Env): ToolDef[] {
   }
 
   return [
-  tool('list_meteorological_files', '列出气象文件', '列出当前线程可用的通用气象文件', {}, withMeteorologyDeps(deps, listMeteorologicalFiles)),
+  tool('list_meteorological_files', '列出气象文件', '列出当前会话可用的通用气象数据集', {}, listMeteorologicalFiles),
   ...createRadarMeteorologyTools(deps),
   ...createDatasetMeteorologyTools(deps),
   tool('define_rainfall_risk_thresholds', '定义短时强降水风险阈值', '保存短时强降水风险区划图使用的阈值和调色板', {
@@ -89,30 +88,35 @@ export function createMeteorologyTools(env: Env): ToolDef[] {
     style: jsonParameter('表格样式 JSON', areaRainfallStyleSchema(), defaultAreaRainfallStyle()),
   }, withMeteorologyDeps(deps, generateAreaRainfallTable), ['file_collection_ref', 'boundary_ref']),
   ...createNowcastMeteorologyTools(deps),
+  ...createNowcastResultTools(deps),
   ]
 }
 
-async function listMeteorologicalFiles(_args: Record<string, unknown>, ctx: ToolContext, deps: MeteorologyToolDeps): Promise<ToolResult> {
-  if (!ctx.threadId) throw new Error('列出气象文件需要当前 thread')
-  // 开发期旧数据可能存在同名重传；按已排序列表保留最新条目，避免重复时次进入序列。
-  const entries = (await new RuntimeFileStore(deps.runtimeRoot).list(ctx.threadId))
-    .filter(entry => METEOROLOGICAL_FILE_SUFFIXES.some(suffix => entry.name.toLowerCase().endsWith(suffix)))
-    .filter((entry, index, all) => all.findIndex(candidate => uploadSourceKey(candidate) === uploadSourceKey(entry)) === index)
+async function listMeteorologicalFiles(_args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+  if (!ctx.listMeteorologicalDatasets) throw new Error('气象数据集目录服务未配置')
+  // 数据集是会话资源，threadId 只记录上传来源。按数据库更新时间保留同一来源路径的最新条目，
+  // 后续对话无需复制对象文件即可继续使用本会话上传的数据。
+  const entries = (await ctx.listMeteorologicalDatasets({ scope: 'session', limit: 500 }))
+    .filter(entry => entry.status === 'ready')
+    .filter(entry => METEOROLOGICAL_FILE_SUFFIXES.some(suffix => entry.filename.toLowerCase().endsWith(suffix)))
+    .filter((entry, index, all) => all.findIndex(candidate => datasetSourceKey(candidate) === datasetSourceKey(entry)) === index)
   const fileRefs: ValueRef[] = entries.map(entry => ({
     refId: makeId('ref'),
     kind: 'meteorological_file',
-    label: entry.name,
+    label: entry.filename,
     value: {
-      fileId: entry.id,
-      name: entry.name,
-      relativePath: entry.relativePath,
-      ...(entry.sourceRelativePath ? { sourceRelativePath: entry.sourceRelativePath } : {}),
+      datasetId: entry.datasetId,
+      fileId: entry.fileId,
+      name: entry.filename,
+      relativePath: entry.fileRelativePath,
+      ...(datasetSourceRelativePath(entry) ? { sourceRelativePath: datasetSourceRelativePath(entry) } : {}),
     },
     metadata: {
       threadId: entry.threadId,
+      sessionId: entry.sessionId,
       sizeBytes: entry.sizeBytes,
-      inputKind: inputKind(entry.name),
-      ...(entry.sourceRelativePath ? { sourceRelativePath: entry.sourceRelativePath } : {}),
+      inputKind: inputKind(entry.filename),
+      ...(datasetSourceRelativePath(entry) ? { sourceRelativePath: datasetSourceRelativePath(entry) } : {}),
     },
   }))
   const datasetFiles = fileRefs.filter(ref => ref.metadata?.inputKind === 'dataset').map(ref => refObject(ref.value))
@@ -137,7 +141,14 @@ async function listMeteorologicalFiles(_args: Record<string, unknown>, ctx: Tool
     value: { files: boundaryFiles },
   } : null
   return result('list_meteorological_files', `找到 ${entries.length} 个气象相关文件`, {
-    files: entries,
+    files: entries.map(entry => ({
+      datasetId: entry.datasetId,
+      name: entry.filename,
+      sourceRelativePath: datasetSourceRelativePath(entry),
+      sizeBytes: entry.sizeBytes,
+      status: entry.status,
+      uploadedFromThreadId: entry.threadId,
+    })),
     counts: { dataset: datasetFiles.length, radar: radarFiles.length, boundary: boundaryFiles.length },
   }, [
     ...fileRefs,
@@ -145,6 +156,15 @@ async function listMeteorologicalFiles(_args: Record<string, unknown>, ctx: Tool
     ...(radarCollection ? [radarCollection] : []),
     ...(boundaryCollection ? [boundaryCollection] : []),
   ])
+}
+
+function datasetSourceRelativePath(entry: { metadata: Record<string, unknown> }): string | null {
+  const value = entry.metadata.sourceRelativePath
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function datasetSourceKey(entry: { filename: string; metadata: Record<string, unknown> }): string {
+  return datasetSourceRelativePath(entry) ?? entry.filename
 }
 
 async function defineRainfallRiskThresholds(args: Record<string, unknown>): Promise<ToolResult> {

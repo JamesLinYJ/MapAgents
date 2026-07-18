@@ -132,7 +132,7 @@ const wsServer = createWsHandler(server, {
   runtime: container.runtime,
   runTasks: container.runTasks,
   scheduledTaskService: container.scheduledTaskService,
-  workflowDefinitionService: container.workflowDefinitionService,
+  automationDefinitionService: container.automationDefinitionService,
   backgroundTasks: container.backgroundTasks,
   usageStats: container.usageStats,
   mapStore: container.mapStore,

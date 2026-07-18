@@ -10,6 +10,7 @@ export function createGeminiAdapter(opts: GeminiOptions): ModelAdapter {
     provider: 'gemini',
     displayName: opts.displayName ?? 'Gemini',
     defaultModel: opts.defaultModel,
+    agentToolSchemaMode: 'compatible',
     isConfigured: () => Boolean(opts.apiKey && opts.defaultModel),
     capabilities: () => ['chat', 'structured'],
     async chat(prompt: string, kwargs?: Record<string, unknown>): Promise<Record<string, unknown>> {

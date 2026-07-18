@@ -101,6 +101,120 @@ class MeteorologicalReportRequest(StrictWorkerRequest):
     output_relative_path: str = Field(..., min_length=1)
 
 
+class NowcastStatistics(BaseModel):
+    """单个短临时次的确定性统计。"""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    min: float
+    max: float
+    mean: float
+    median: float
+    p90: float
+    count: int = Field(..., ge=0)
+    rain_coverage: float = Field(..., alias="rainCoverage", ge=0, le=1)
+
+
+class NowcastTimelineEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    stats: NowcastStatistics
+    filename: str = Field(..., min_length=1)
+    dataset_id: str = Field(..., alias="datasetId", min_length=1)
+    rain_level: str = Field(..., alias="rainLevel", min_length=1)
+    valid_time: str = Field(..., alias="validTime", min_length=1)
+    lead_minutes: int = Field(..., alias="leadMinutes", ge=0)
+    sequence_index: int = Field(..., alias="sequenceIndex", ge=0)
+
+
+class NowcastDiagnosis(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    trend: str = Field(..., min_length=1)
+    has_rain: bool = Field(..., alias="hasRain")
+    peak_p90: float = Field(..., alias="peakP90")
+    summary: str = Field(..., min_length=1)
+    peak_level: str = Field(..., alias="peakLevel", min_length=1)
+    end_lead_minutes: int | None = Field(None, alias="endLeadMinutes", ge=0)
+    peak_lead_minutes: int = Field(..., alias="peakLeadMinutes", ge=0)
+    onset_lead_minutes: int | None = Field(None, alias="onsetLeadMinutes", ge=0)
+
+
+class NowcastRegion(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    label: str = Field(..., min_length=1)
+    region_id: str = Field(..., alias="regionId", min_length=1)
+    timeline: list[NowcastTimelineEntry] = Field(..., min_length=1)
+    diagnosis: NowcastDiagnosis
+
+
+class NowcastMovementPoint(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    lat: float
+    lng: float
+    sequence_index: int = Field(..., alias="sequenceIndex", ge=0)
+
+
+class NowcastMovement(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    available: bool
+    direction: str
+    distance_km: float = Field(..., alias="distanceKm", ge=0)
+    from_point: NowcastMovementPoint = Field(..., alias="from")
+    to_point: NowcastMovementPoint = Field(..., alias="to")
+
+
+class NowcastMapCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    label: str
+    reason: str
+    filename: str
+    variable: str
+    dataset_id: str = Field(..., alias="datasetId")
+    valid_time: str = Field(..., alias="validTime")
+    lead_minutes: int = Field(..., alias="leadMinutes", ge=0)
+    relative_path: str = Field(..., alias="relativePath")
+    sequence_index: int = Field(..., alias="sequenceIndex", ge=0)
+
+
+class NowcastAnalysis(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    kind: Literal["nowcast_precipitation_analysis"]
+    scope: dict[str, Any]
+    regions: list[NowcastRegion] = Field(..., min_length=1)
+    movement: NowcastMovement
+    variable: str = Field(..., min_length=1)
+    warnings: list[str]
+    sequence_id: str = Field(..., alias="sequenceId", min_length=1)
+    map_candidates: list[NowcastMapCandidate] = Field(..., alias="mapCandidates")
+
+
+class NowcastArtifactReference(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    artifact_id: str = Field(..., alias="artifactId", min_length=1)
+    artifact_type: str = Field(..., alias="artifactType", min_length=1)
+    name: str = Field(..., min_length=1)
+    uri: str = Field(..., min_length=1)
+
+
+class MeteorologicalNowcastReportRequest(StrictWorkerRequest):
+    automation_run_id: str = Field(..., min_length=1)
+    automation_id: str = Field(..., min_length=1)
+    automation_revision: int = Field(..., ge=1)
+    started_at: str = Field(..., min_length=1)
+    completed_at: str = Field(..., min_length=1)
+    answer: str = Field(..., min_length=1)
+    analysis: NowcastAnalysis
+    artifacts: list[NowcastArtifactReference]
+    output_relative_path: str = Field(..., min_length=1)
+
+
 class CreateNowcastSequenceRequest(StrictWorkerRequest):
     files: list[FileReference] = Field(..., min_length=1)
     variable: str | None = Field(None, min_length=1)

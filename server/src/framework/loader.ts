@@ -23,7 +23,7 @@ import { createSpatialProvider } from '../tools/spatial/index.js'
 import { createRoutingProvider } from '../tools/routing/index.js'
 import { createScheduledWakeUpProvider } from '../tools/scheduledWakeUp/index.js'
 import { logger } from '../observability/logger.js'
-import type { ScheduledTaskService } from '../workflows/scheduledTaskService.js'
+import type { ScheduledTaskService } from '../automations/scheduledTaskService.js'
 
 const LEGACY_METEOROLOGY_PROVIDER_ID = ['wea', 'ther'].join('')
 

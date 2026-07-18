@@ -44,7 +44,7 @@ interface MiniArtifact {
   metadata?: Record<string, unknown>
 }
 
-interface WorkflowStage {
+interface AutomationStage {
   label: string
   description: string
   requiredKinds?: string[]
@@ -67,7 +67,7 @@ export function ToolMiniAppPanel({
   )
   if (!kind) return null
   const copy = miniAppCopy(kind)
-  const workflow = miniAppWorkflow(kind)
+  const automation = miniAppAutomation(kind)
   const canRun = tool.available && !isSubmitting && !formState.missing.length && !formState.parsed.error
   return (
     <section className={`tool-mini-app tool-mini-app--${kind}`}>
@@ -88,11 +88,11 @@ export function ToolMiniAppPanel({
         ))}
       </div>
       <MiniAppConsole kind={kind} formState={formState} valueRefs={valueRefs} selectedRefs={selectedRefs} />
-      <div className="tool-mini-app__workflow" aria-label={`${copy.title} 流程台`}>
-        {workflow.map((stage) => {
-          const status = workflowStageStatus(stage, valueRefs)
+      <div className="tool-mini-app__automation" aria-label={`${copy.title} 流程台`}>
+        {automation.map((stage) => {
+          const status = automationStageStatus(stage, valueRefs)
           return (
-            <div className={`tool-mini-app__workflow-step ${status.done ? 'is-done' : ''}`} key={stage.label}>
+            <div className={`tool-mini-app__automation-step ${status.done ? 'is-done' : ''}`} key={stage.label}>
               {status.done ? <CheckCircle2 size={16} aria-hidden="true" /> : <CircleDashed size={16} aria-hidden="true" />}
               <div>
                 <strong>{stage.label}</strong>
@@ -522,7 +522,7 @@ function miniAppCopy(kind: MiniAppKind) {
   }
 }
 
-function miniAppWorkflow(kind: MiniAppKind): WorkflowStage[] {
+function miniAppAutomation(kind: MiniAppKind): AutomationStage[] {
   if (kind === 'radar_mosaic_console') {
     return [
       {
@@ -595,7 +595,7 @@ function miniAppWorkflow(kind: MiniAppKind): WorkflowStage[] {
   ]
 }
 
-function workflowStageStatus(stage: WorkflowStage, valueRefs: ToolValueRef[]) {
+function automationStageStatus(stage: AutomationStage, valueRefs: ToolValueRef[]) {
   const kinds = new Set(valueRefs.map((reference) => reference.kind))
   const required = stage.requiredKinds ?? []
   const anyOf = stage.anyOfKinds ?? []

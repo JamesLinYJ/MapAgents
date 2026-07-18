@@ -161,7 +161,7 @@ export const memoryManifest: ToolManifest = {
   version: '1.0.0',
   author: 'geo-agent-platform',
   language: 'typescript',
-  description: 'GeoForge 长期记忆读写、检索和遗忘工具。',
+  description: '长期记忆读写、检索和遗忘工具。',
   tools: memoryTools.map(tool => ({
     name: tool.name,
     label: tool.label,

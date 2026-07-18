@@ -56,22 +56,22 @@ export const toolExecutionDurationMs = new Histogram({
   buckets: [50, 100, 250, 500, 1000, 2500, 5000, 15000, 30000],
 })
 
-// Workflow
-export const workflowRunsTotal = new Counter({
-  name: 'geoforge_workflow_runs_total',
-  help: 'Workflow 运行终态总数',
+// Automation
+export const automationRunsTotal = new Counter({
+  name: 'geoforge_automation_runs_total',
+  help: 'Automation 运行终态总数',
   labelNames: ['trigger', 'status'],
 })
 
-export const workflowNodeExecutionsTotal = new Counter({
-  name: 'geoforge_workflow_node_executions_total',
-  help: 'Workflow 节点执行总数',
+export const automationNodeExecutionsTotal = new Counter({
+  name: 'geoforge_automation_node_executions_total',
+  help: 'Automation 节点执行总数',
   labelNames: ['node_type', 'status'],
 })
 
-export const workflowNodeDurationMs = new Histogram({
-  name: 'geoforge_workflow_node_duration_ms',
-  help: 'Workflow 节点执行耗时 (ms)',
+export const automationNodeDurationMs = new Histogram({
+  name: 'geoforge_automation_node_duration_ms',
+  help: 'Automation 节点执行耗时 (ms)',
   labelNames: ['node_type'],
   buckets: [5, 25, 100, 500, 1000, 5000, 15000, 60000, 300000],
 })

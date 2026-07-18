@@ -16,6 +16,7 @@
 import type {
   AgentRuntimeConfig,
   AgentExecutionMode,
+  AgentWorkflow,
   AgentThreadRecord,
   ConversationItem,
   DecisionRequest,
@@ -76,7 +77,7 @@ export interface ChatPanelProps {
   runStats?: { toolAttempts: number; toolSuccesses: number; toolFailures: number; tokensUsed: number }
   denialCounts?: Record<string, number>
 
-  executionPlan?: { goal: string; steps: { tool: string; args: Record<string, unknown>; reason: string }[] } | null
+  agentWorkflow?: AgentWorkflow | null
 
   tasks?: { id: string; content: string; status: string; activeForm: string }[]
 }

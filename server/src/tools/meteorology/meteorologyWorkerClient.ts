@@ -33,6 +33,7 @@ export const REQUIRED_METEOROLOGY_WORKER_TOOLS = [
   'meteorological_threshold',
   'meteorological_contour',
   'meteorological_report',
+  'meteorological_nowcast_report',
   'create_nowcast_sequence',
   'inspect_nowcast_sequence',
   'meteorological_precipitation_nowcast',

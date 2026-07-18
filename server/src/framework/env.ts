@@ -51,6 +51,7 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().optional(),
   OPENAI_SUBAGENT_MODEL: z.string().optional(),
+  OPENAI_TOOL_SCHEMA_MODE: z.enum(['strict', 'compatible']).default('compatible'),
   USAGE_DAILY_TOTAL_TOKEN_LIMIT: z.coerce.number().int().nonnegative().default(0),
   USAGE_MONTHLY_TOTAL_TOKEN_LIMIT: z.coerce.number().int().nonnegative().default(0),
 

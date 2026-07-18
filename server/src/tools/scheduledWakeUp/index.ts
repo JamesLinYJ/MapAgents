@@ -10,7 +10,7 @@ import { z } from 'zod'
 import manifest from './manifest.json' with { type: 'json' }
 import type { ToolDef, ToolProvider, ToolResult } from '../../framework/types.js'
 import type { AuthContext } from '../../security/types.js'
-import type { ScheduledTaskService } from '../../workflows/scheduledTaskService.js'
+import type { ScheduledTaskService } from '../../automations/scheduledTaskService.js'
 import { makeId } from '../../utils/ids.js'
 
 const scheduledWakeUpManifestTool = manifest.tools[0]
@@ -18,7 +18,7 @@ const scheduledWakeUpManifestTool = manifest.tools[0]
 const scheduledWakeUpArgsSchema = z.object({
   operation: z.enum(['list', 'create', 'update', 'delete']),
   taskId: z.string().min(1).optional(),
-  targetKind: z.enum(['workflow']).optional(),
+  targetKind: z.enum(['automation']).optional(),
   targetId: z.string().min(1).optional(),
   title: z.string().optional(),
   prompt: z.string().optional(),
@@ -35,15 +35,15 @@ export function createScheduledWakeUpProvider(service: ScheduledTaskService): To
     tools: (): ToolDef[] => [{
       name: 'ScheduledWakeUp',
       label: scheduledWakeUpManifestTool?.label ?? '定时唤醒',
-      description: scheduledWakeUpManifestTool?.description ?? '管理系统定时任务。v1 支持将 Workflow 作为定时目标。',
+      description: scheduledWakeUpManifestTool?.description ?? '管理系统定时任务。当前版本支持将自动化流程作为定时目标。',
       prompt: [
         '你可以调用 ScheduledWakeUp 管理系统定时任务。',
-        '创建或更新任务前必须确认 cron、timezone、目标 workflow 和提示词都明确。',
+        '创建或更新任务前必须确认 cron、timezone、目标 automation 和提示词都明确。',
         '如果用户只是询问已有定时任务，使用 operation=list。',
         '不要承诺任务已经创建，除非工具结果明确返回成功。',
       ].join('\n'),
       group: scheduledWakeUpManifestTool?.group ?? 'system',
-      tags: scheduledWakeUpManifestTool?.tags ?? ['scheduler', 'workflow', 'system'],
+      tags: scheduledWakeUpManifestTool?.tags ?? ['scheduler', 'automation', 'system'],
       isReadOnly: false,
       isDestructive: false,
       requiresApproval: true,
@@ -54,11 +54,11 @@ export function createScheduledWakeUpProvider(service: ScheduledTaskService): To
         const parsed = scheduledWakeUpArgsSchema.parse(args)
         if (parsed.operation === 'list') {
           const snapshot = await service.listScheduledTasks(auth)
-          return success('已读取定时任务列表。', { tasks: snapshot.tasks, workflowRuns: snapshot.workflowRuns })
+          return success('已读取定时任务列表。', { tasks: snapshot.tasks, automationRuns: snapshot.automationRuns })
         }
         if (parsed.operation === 'create') {
           const task = await service.createScheduledTask(auth, {
-            targetKind: parsed.targetKind ?? 'workflow',
+            targetKind: parsed.targetKind ?? 'automation',
             targetId: requireArg(parsed.targetId, 'targetId'),
             title: parsed.title ?? null,
             prompt: requireArg(parsed.prompt, 'prompt'),

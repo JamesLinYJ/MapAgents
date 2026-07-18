@@ -17,6 +17,7 @@ export function defaultRuntimeConfig(options: DefaultRuntimeConfigOptions = {}):
   return {
     loopTraceLimit: 80,
     maxTurns: 50,
+    maxFunctionToolConcurrency: 4,
     sandbox,
     sdk: {
       mcp: {
@@ -35,7 +36,8 @@ export function defaultRuntimeConfig(options: DefaultRuntimeConfigOptions = {}):
     supervisor: {
       name: 'geo_agent_supervisor',
       systemPrompt: '',
-      approvalInterruptTools: ['exit_plan_mode', 'write_file', 'edit_file', 'import_managed_layer', 'export_collection', 'meteorological_report'],
+      // 额外审批名单仅用于部署方覆盖策略；工具自身的固有审批要求由 ToolDef 声明。
+      approvalInterruptTools: [],
       permissionRules: [],
     },
     subAgents: [
@@ -44,7 +46,7 @@ export function defaultRuntimeConfig(options: DefaultRuntimeConfigOptions = {}):
         name: '空间分析助手',
         role: 'spatial_analyst',
         summary: '负责地理空间分析和图层查询',
-        systemPrompt: `你是 GeoForge 的空间分析子 Agent，负责平台图层检索、真实要素查询和确定性 GIS 几何分析。
+        systemPrompt: `你是平台的空间分析子智能体，负责平台图层检索、真实要素查询和确定性 GIS 几何分析。
 
 工作规则：
 - 需要行政边界、区县范围或区域统计时，先用 list_layers 检索平台已有图层，再用 query_layer 读取真实要素。

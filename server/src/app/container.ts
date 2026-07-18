@@ -41,14 +41,16 @@ import { AuditStore } from '../store/postgres/auditStore.js'
 import { RbacPolicyReader } from '../store/postgres/rbacPolicyReader.js'
 import { WorkspaceRepository } from '../store/postgres/workspaceRepository.js'
 import { validateToolContracts } from '../tools/contractValidator.js'
+import { createAutomationExecutionProvider } from '../tools/automationExecution/index.js'
 import { UsageStatsService } from '../usage/usageStatsService.js'
-import { BackgroundTaskRegistry } from '../workflows/backgroundTaskRegistry.js'
-import { JobQueueService } from '../workflows/jobQueueService.js'
-import { ScheduledTaskService } from '../workflows/scheduledTaskService.js'
-import { WorkflowRunner } from '../workflows/workflowRunner.js'
-import { createWorkflowRegistryFromDirectory, type WorkflowRegistry } from '../workflows/workflowRegistry.js'
-import { WorkflowCompiler } from '../workflows/workflowCompiler.js'
-import { WorkflowDefinitionService } from '../workflows/workflowDefinitionService.js'
+import { BackgroundTaskRegistry } from '../automations/backgroundTaskRegistry.js'
+import { JobQueueService } from '../automations/jobQueueService.js'
+import { ScheduledTaskService } from '../automations/scheduledTaskService.js'
+import { AutomationRunner } from '../automations/automationRunner.js'
+import { createAutomationRegistryFromDirectory, type AutomationRegistry } from '../automations/automationRegistry.js'
+import { AutomationCompiler } from '../automations/automationCompiler.js'
+import { AutomationDefinitionService } from '../automations/automationDefinitionService.js'
+import { AutomationInvocationService } from '../automations/automationInvocationService.js'
 
 export interface AppContainer {
   env: Env
@@ -65,8 +67,9 @@ export interface AppContainer {
   modelRegistry: ModelAdapterRegistry
   runtime: OpenAIAgentsRuntime
   runTasks: RunTaskManager
-  workflowRegistry: WorkflowRegistry
-  workflowDefinitionService: WorkflowDefinitionService
+  automationRegistry: AutomationRegistry
+  automationDefinitionService: AutomationDefinitionService
+  automationInvocationService: AutomationInvocationService
   scheduledTaskService: ScheduledTaskService
   backgroundTasks: BackgroundTaskRegistry
   usageStats: UsageStatsService
@@ -137,29 +140,29 @@ export async function createAppContainer(input: { env: Env; projectRoot: string 
   const usageStats = new UsageStatsService(store, env)
   const backgroundTasks = new BackgroundTaskRegistry()
   const runTasks = new RunTaskManager(runtime, store, backgroundTasks)
-  const workflowRegistry = await createWorkflowRegistryFromDirectory(path.join(projectRoot, 'server', 'config', 'workflows'))
-  const workflowCompiler = new WorkflowCompiler(toolRegistry)
-  const workflowDefinitionService = new WorkflowDefinitionService({
+  const automationRegistry = await createAutomationRegistryFromDirectory(path.join(projectRoot, 'server', 'config', 'automations'))
+  const automationCompiler = new AutomationCompiler(toolRegistry)
+  const automationDefinitionService = new AutomationDefinitionService({
     store,
-    registry: workflowRegistry,
-    compiler: workflowCompiler,
+    registry: automationRegistry,
+    compiler: automationCompiler,
     security,
   })
   const jobQueue = new JobQueueService(env)
   const scheduledTaskService = new ScheduledTaskService({
     store,
-    definitions: workflowDefinitionService,
-    compiler: workflowCompiler,
+    definitions: automationDefinitionService,
+    compiler: automationCompiler,
     jobQueue,
     backgroundTasks,
     runTasks,
     usageStats,
     security,
   })
-  const workflowRunner = new WorkflowRunner({
+  const automationRunner = new AutomationRunner({
     store,
-    definitions: workflowDefinitionService,
-    compiler: workflowCompiler,
+    definitions: automationDefinitionService,
+    compiler: automationCompiler,
     toolRegistry,
     runTasks,
     modelRegistry,
@@ -172,11 +175,19 @@ export async function createAppContainer(input: { env: Env; projectRoot: string 
       await jobQueue.unscheduleTask(taskId, task?.queueJobId)
     },
   })
+  const automationInvocationService = new AutomationInvocationService({
+    store,
+    definitions: automationDefinitionService,
+    compiler: automationCompiler,
+    runner: automationRunner,
+  })
   await discoverAndLoad(managedLayers, { env, registry: toolRegistry, scheduledTaskService })
+  toolRegistry.register(createAutomationExecutionProvider(automationInvocationService))
   await validateWorkerContracts(env, toolRegistry)
-  await workflowDefinitionService.initialize()
-  await jobQueue.start((payload, queueJobId) => workflowRunner.executeQueuedJob(payload, queueJobId))
+  await automationDefinitionService.initialize()
+  await jobQueue.start((payload, queueJobId) => automationRunner.executeQueuedJob(payload, queueJobId))
   startedJobQueue = jobQueue
+  await scheduledTaskService.reconcileQueuedAutomationRuns()
   await scheduledTaskService.reconcileSchedules()
 
   return {
@@ -194,8 +205,9 @@ export async function createAppContainer(input: { env: Env; projectRoot: string 
     modelRegistry,
     runtime,
     runTasks,
-    workflowRegistry,
-    workflowDefinitionService,
+    automationRegistry,
+    automationDefinitionService,
+    automationInvocationService,
     scheduledTaskService,
     backgroundTasks,
     usageStats,

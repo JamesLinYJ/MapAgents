@@ -22,11 +22,11 @@ export function AppLoader() {
 
 export function BootScreen() {
   return (
-    <main className="dc-boot" aria-label="正在加载 GeoForge 工作台">
+    <main className="dc-boot" aria-label="正在加载地理智能工作台">
       <section className="dc-boot__shell">
         <div className="dc-boot__brand">
           <span aria-hidden="true">G</span>
-          <strong>GeoForge</strong>
+          <strong>地理智能工作台</strong>
           <small>气象空间智能平台</small>
         </div>
         <div className="dc-boot__copy">

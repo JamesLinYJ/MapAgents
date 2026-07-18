@@ -160,7 +160,7 @@ export class RunStore {
         parsedIntent: null,
         clarification: null,
         placeResolution: null,
-        executionPlan: null,
+        agentWorkflow: null,
         runLifecycle: { status: 'created', reason: null, updatedAt: null },
         failedStepId: null,
         failedTool: null,

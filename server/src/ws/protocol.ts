@@ -32,9 +32,9 @@ export const clientMsgType = z.enum([
   'file:list', 'file:delete',
   'layer:list', 'layer:update', 'layer:delete',
   'map-scene:update',
-  'workflow:list', 'workflow:validate', 'workflow:create', 'workflow:update',
-  'workflow:publish', 'workflow:disable', 'workflow:history',
-  'workflow:start', 'workflow:cancel', 'workflow:run:get', 'workflow:respond-approval',
+  'automation:list', 'automation:validate', 'automation:create', 'automation:update',
+  'automation:publish', 'automation:disable', 'automation:history',
+  'automation:start', 'automation:cancel', 'automation:run:get', 'automation:respond-approval',
   'scheduled-task:list', 'scheduled-task:create', 'scheduled-task:update', 'scheduled-task:delete',
   'background-task:list', 'background-task:promote', 'background-task:cancel',
 ])

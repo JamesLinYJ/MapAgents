@@ -16,7 +16,7 @@ describe('formatSchemaValidationError', () => {
     const result = formatSchemaValidationError('bootstrap', [
       { path: [], message: 'Required' },
     ])
-    expect(result).toContain('GeoForge 协议')
+    expect(result).toContain('平台协议')
     expect(result).toContain('bootstrap')
     expect(result).toContain('(根)')
     expect(result).toContain('Required')

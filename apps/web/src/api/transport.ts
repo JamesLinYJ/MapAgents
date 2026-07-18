@@ -39,7 +39,7 @@ export function formatSchemaValidationError(context: string, issues: SchemaParse
       return `${path}: ${issue.message}`
     })
     .join('；')
-  return `服务响应格式不符合 GeoForge 协议（${context}）：${detail}`
+  return `服务响应格式不符合平台协议（${context}）：${detail}`
 }
 
 // API 地址解析
@@ -63,7 +63,7 @@ let currentAuth: AuthMe | null = null
 
 export function setAuthContext(auth: AuthMe | null) {
   currentAuth = auth
-  wsClient.setCsrfToken(auth?.csrfToken ?? null)
+  wsClient.setAuthContext(auth?.user.userId ?? null, auth?.csrfToken ?? null)
 }
 
 // 错误消息格式化

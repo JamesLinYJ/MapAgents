@@ -829,6 +829,7 @@ function fakeAdapter(model: Model): ModelAdapter {
     displayName: 'Fake',
     defaultModel: 'fake-model',
     contextWindowTokens: 128_000,
+    agentToolSchemaMode: 'strict',
     isConfigured: () => true,
     capabilities: () => ['chat', 'stream'],
     createAgentModel: () => model,

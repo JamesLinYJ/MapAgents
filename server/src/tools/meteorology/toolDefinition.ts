@@ -38,8 +38,15 @@ export function tool(
   properties: Record<string, unknown>,
   handler: ToolDef['handler'],
   required: string[] = [],
+  options: Partial<Pick<ToolDef, 'executionSurfaces' | 'agentResultMode' | 'isReadOnly' | 'isDestructive' | 'requiresApproval'>> = {},
 ): ToolDef {
   const miniApp = miniAppMetadata(name)
+  const {
+    isReadOnly = true,
+    isDestructive = false,
+    requiresApproval = false,
+    ...executionOptions
+  } = options
   return {
     name,
     label,
@@ -47,8 +54,10 @@ export function tool(
     prompt: meteorologyToolPrompt(name),
     group: '气象',
     tags: ['meteorology'],
-    isReadOnly: name !== 'meteorological_report',
-    isDestructive: false,
+    isReadOnly,
+    isDestructive,
+    requiresApproval,
+    ...executionOptions,
     jsonSchema: { type: 'object', properties, required, ...(miniApp ? { 'x-mini-app': miniApp } : {}) },
     handler,
   }

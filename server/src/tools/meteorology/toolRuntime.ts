@@ -195,12 +195,13 @@ export function rasterImageDisplay(
   const coordinates = mapCoordinates(payload.coordinates, bounds)
   const range = valueRange(payload.valueRange)
   const unit = textValue(payload.unit) ?? textValue(payload.units)
-  const colorStops = precipitationColorStops(range)
+  const colorStops = precipitationColorStops(range, textValue(payload.variable))
   return {
     surfaces: ['map', 'download'],
     primarySurface: 'map',
     map: {
       title,
+      replacementGroup: null,
       bounds,
       crs: 'EPSG:4326',
       minZoom: 0,
@@ -239,16 +240,18 @@ export function rasterTileDisplay(
   artifact: MeteorologicalArtifactTarget,
   payload: Record<string, unknown>,
   title = artifact.name,
+  replacementGroup: string | null = null,
 ): ArtifactDisplay {
   const bounds = requireMapBounds(payload.bounds, `${title} bounds`)
   const range = valueRange(payload.valueRange)
   const unit = textValue(payload.unit) ?? textValue(payload.units)
-  const colorStops = precipitationColorStops(range)
+  const colorStops = precipitationColorStops(range, textValue(payload.variable))
   return {
     surfaces: ['map', 'download'],
     primarySurface: 'map',
     map: {
       title,
+      replacementGroup,
       bounds,
       crs: 'EPSG:4326',
       minZoom: 0,
@@ -317,6 +320,7 @@ export function geoJsonDisplay(
     primarySurface: 'map',
     map: {
       title,
+      replacementGroup: null,
       bounds,
       crs: 'EPSG:4326',
       minZoom: 0,
@@ -369,17 +373,23 @@ function valueRange(value: unknown): [number, number] {
   return max > min ? [min, max] : [min, min + 1]
 }
 
-function precipitationColorStops(range: [number, number]) {
+function precipitationColorStops(range: [number, number], variable: string | null) {
   const [min, max] = range
   const at = (ratio: number) => min + ((max - min) * ratio)
+  const transparentMinimum = min === 0 && isZeroTransparentMeteorologicalVariable(variable)
   return [
-    { value: min, color: '#f7fbff' },
+    { value: min, color: transparentMinimum ? '#f7fbff00' : '#f7fbff' },
     { value: at(0.2), color: '#9ecae1' },
     { value: at(0.4), color: '#41ab5d' },
     { value: at(0.6), color: '#fdd835' },
     { value: at(0.8), color: '#f57c00' },
     { value: max, color: '#b71c1c' },
   ]
+}
+
+function isZeroTransparentMeteorologicalVariable(variable: string | null): boolean {
+  if (!variable) return false
+  return /(?:^|_)(?:qpf(?:_\d+)?|precipitation|rainfall|rain|thunder)(?:$|_)/iu.test(variable)
 }
 
 function geoJsonBounds(value: unknown): MapBounds | null {

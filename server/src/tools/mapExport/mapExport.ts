@@ -70,6 +70,7 @@ export function createMapExportTool(runtimeRoot: string): ToolDef {
             primarySurface: 'map',
             map: {
               title: filename,
+              replacementGroup: null,
               bounds,
               crs: 'EPSG:4326',
               minZoom: 0,

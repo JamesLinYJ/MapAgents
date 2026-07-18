@@ -9,6 +9,7 @@
 // --------------------------------------------------------------------------
 
 import { describe, expect, it } from 'vitest'
+import { z } from 'zod'
 import { ToolRegistry } from './registry.js'
 import type { ToolContext, ToolProvider } from './types.js'
 import { parametersForAgentsSdk, parametersFromJsonSchema, stripNullObjectValues } from './schema.js'
@@ -124,9 +125,8 @@ describe('ToolRegistry contract', () => {
   })
 
   it('keeps runtime optional fields while exposing nullable fields to Agents SDK', () => {
-    // OpenAI strict tool schemas require all properties to be required; GeoForge handlers
-    // still use omission as the internal optional-argument contract. Compatible providers
-    // may omit nullable optional fields, so the SDK parser must accept both shapes.
+    // OpenAI strict tool schemas require every property to be required. Handlers still use
+    // omission internally, so the model sends null and the bridge removes null before execution.
     const schema = {
       type: 'object',
       properties: {
@@ -148,12 +148,32 @@ describe('ToolRegistry contract', () => {
     expect(parametersFromJsonSchema(schema).safeParse({ layerKey: 'districts', bbox: null }).success).toBe(false)
 
     const agentsParameters = parametersForAgentsSdk(schema)
-    expect(agentsParameters.safeParse({ layerKey: 'districts' }).success).toBe(true)
+    expect(agentsParameters.safeParse({ layerKey: 'districts' }).success).toBe(false)
     expect(agentsParameters.safeParse({
       layerKey: 'districts',
       bbox: null,
       options: { label: '区划', color: null },
     }).success).toBe(true)
+    expect(z.toJSONSchema(agentsParameters)).toMatchObject({
+      required: ['layerKey', 'bbox', 'options'],
+      properties: {
+        bbox: {
+          anyOf: [
+            { type: 'array' },
+            { type: 'null' },
+          ],
+        },
+        options: {
+          anyOf: [
+            {
+              required: ['label', 'color'],
+              type: 'object',
+            },
+            { type: 'null' },
+          ],
+        },
+      },
+    })
     expect(stripNullObjectValues({
       layerKey: 'districts',
       bbox: null,

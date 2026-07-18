@@ -1,4 +1,4 @@
-// 直接工具调用、Workflow 工具节点共享的持久执行路径。
+// 直接工具调用、Automation 工具节点共享的持久执行路径。
 // 权限与审批由调用方在进入本模块前完成；本模块只负责工具契约、运行历史和结果事实。
 
 import { ItemSink } from '../conversation/itemSink.js'
@@ -42,9 +42,16 @@ export async function executePersistedTool(
     auth: input.auth,
     state: values,
     resolveValueRef: refId => resolveRuntimeValueRef(values, refId),
+    listMeteorologicalDatasets: datasetInput => deps.store.listMeteorologicalDatasets({
+      sessionId: run.sessionId,
+      threadId: datasetInput?.scope === 'thread' ? run.threadId : null,
+      workspaceId: run.workspaceId,
+      filename: datasetInput?.filename ?? null,
+      ...(datasetInput?.limit === undefined ? {} : { limit: datasetInput.limit }),
+    }),
     resolveMeteorologicalDataset: datasetInput => deps.store.resolveMeteorologicalDataset({
       sessionId: run.sessionId,
-      threadId: run.threadId,
+      threadId: null,
       workspaceId: run.workspaceId,
       datasetId: datasetInput.datasetId ?? null,
       filename: datasetInput.filename ?? null,

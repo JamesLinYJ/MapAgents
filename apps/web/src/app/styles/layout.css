@@ -1093,6 +1093,7 @@ button.workbench-chrome__icon:hover,
   display: flex;
   flex-direction: column;
   gap: 8px;
+  overflow: hidden;
   padding-top: 8px;
 }
 
@@ -1108,6 +1109,7 @@ button.workbench-chrome__icon:hover,
 
 .workbench-recents__list {
   min-height: 0;
+  flex: 1 1 auto;
   display: grid;
   align-content: start;
   gap: 3px;
@@ -1165,6 +1167,8 @@ button.workbench-chrome__icon:hover,
 }
 
 .workbench-sidebar-footer {
+  min-height: 0;
+  flex: 0 0 auto;
   display: grid;
   gap: 8px;
   border-top: 1px solid rgb(15 23 42 / 0.08);
@@ -1174,10 +1178,16 @@ button.workbench-chrome__icon:hover,
 .workbench-footer-row {
   min-width: 0;
   display: grid;
-  gap: 2px;
+  grid-template-columns: 62px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
 }
 
 .workbench-footer-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: #8a8f94;
   font-size: 11px;
   font-weight: 700;
@@ -1694,6 +1704,35 @@ button.workbench-chrome__icon:hover,
 .workbench-mobile-scrim,
 .workbench-mobile-tabs {
   display: none;
+}
+
+@media (min-width: 901px) and (max-height: 820px) {
+  .workbench-sidebar {
+    gap: 8px;
+    padding-block: 12px;
+  }
+
+  .workbench-mode-tab {
+    min-height: 34px;
+  }
+
+  .workbench-sidebar-command,
+  .workbench-sidebar-item {
+    min-height: 32px;
+  }
+
+  .workbench-recents {
+    padding-top: 2px;
+  }
+
+  .workbench-sidebar-footer {
+    gap: 4px;
+    padding-top: 8px;
+  }
+
+  .workbench-footer-row--muted {
+    display: none;
+  }
 }
 
 @media (max-width: 1280px) {

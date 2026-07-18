@@ -2,18 +2,19 @@
   "id": "geo-platform-scheduled-wake-up",
   "name": "ScheduledWakeUp",
   "version": "1.0.0",
-  "author": "GeoForge",
-  "description": "系统定时唤醒工具，用于创建、查看、更新和删除 GeoForge 定时任务。",
+  "author": "系统内置",
+  "description": "系统定时唤醒工具，用于创建、查看、更新和删除定时任务。",
   "language": "typescript",
   "tools": [
     {
       "name": "ScheduledWakeUp",
       "label": "定时唤醒",
-      "description": "管理系统定时任务。v1 支持将 Workflow 作为定时目标。",
+      "description": "管理系统定时任务。当前版本支持将自动化流程作为定时目标。",
       "group": "system",
-      "tags": ["scheduler", "workflow", "system"],
+      "tags": ["scheduler", "automation", "system"],
       "isReadOnly": false,
       "isDestructive": false,
+      "requiresApproval": true,
       "jsonSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -29,12 +30,12 @@
           },
           "targetKind": {
             "type": "string",
-            "enum": ["workflow"],
-            "description": "定时目标类型。v1 只支持 workflow。"
+            "enum": ["automation"],
+            "description": "定时目标类型。当前版本只支持自动化流程。"
           },
           "targetId": {
             "type": "string",
-            "description": "目标 ID，例如 workflowId。"
+            "description": "目标自动化流程 ID。"
           },
           "title": {
             "type": "string",

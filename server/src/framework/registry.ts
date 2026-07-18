@@ -106,6 +106,8 @@ export class ToolRegistry {
         isReadOnly: t.isReadOnly,
         isDestructive: t.isDestructive,
         approvalRecommended: t.isDestructive || t.requiresApproval === true,
+        executionSurfaces: t.executionSurfaces ?? ['agent', 'automation', 'debug'],
+        agentResultMode: t.agentResultMode ?? 'continue',
         jsonSchema: ensureToolSchemas(t).jsonSchema,
       },
     }))
@@ -120,6 +122,9 @@ export class ToolRegistry {
     const result = await tool.handler(validatedArgs, ctx)
     if (!result.resultId || !result.source || !result.message || !isRecord(result.payload)) {
       throw new Error(`工具 "${name}" 返回了无效结果`)
+    }
+    if (tool.agentResultMode === 'return_direct' && !result.modelOutput?.trim()) {
+      throw new Error(`工具 "${name}" 声明直接返回，但没有提供 modelOutput`)
     }
     for (const artifact of result.artifacts ?? []) {
       if (!artifact.artifactId || !artifact.artifactType || !artifact.name || !artifact.uri || !artifact.relativePath) {

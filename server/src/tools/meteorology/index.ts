@@ -11,11 +11,14 @@
 import manifest from './manifest.json' with { type: 'json' }
 import type { ToolProvider } from '../../framework/types.js'
 import type { Env } from '../../framework/env.js'
+import { parseToolManifest } from '../../framework/schema.js'
 import { createMeteorologyTools } from './meteorologyTools.js'
+
+const toolManifest = parseToolManifest(manifest)
 
 export function createMeteorologyProvider(env: Env): ToolProvider {
   return {
-    manifest,
+    manifest: toolManifest,
     tools: () => createMeteorologyTools(env),
   }
 }

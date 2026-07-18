@@ -11,9 +11,9 @@ import {
   memoryFileRecordSchema,
   memorySearchResultSchema,
   scheduledTaskSchema,
-  workflowDefinitionSchema,
-  workflowRunRecordSchema,
-  workflowValidationResultSchema,
+  automationDefinitionSchema,
+  automationRunRecordSchema,
+  automationValidationResultSchema,
 } from '@geo-agent-platform/shared-types'
 
 export const unknownRecordSchema = z.record(z.string(), z.unknown())
@@ -29,17 +29,17 @@ export const memorySearchResponseSchema = z.object({
   total: z.number().int().nonnegative(),
 })
 
-export const workflowDiagnosticSchema = z.record(z.string(), z.unknown())
+export const automationDiagnosticSchema = z.record(z.string(), z.unknown())
 
-export const workflowListResponseSchema = z.object({
-  definitions: z.array(workflowDefinitionSchema),
-  diagnostics: z.array(workflowDiagnosticSchema),
-  validation: z.record(z.string(), workflowValidationResultSchema),
+export const automationListResponseSchema = z.object({
+  definitions: z.array(automationDefinitionSchema),
+  diagnostics: z.array(automationDiagnosticSchema),
+  validation: z.record(z.string(), automationValidationResultSchema),
 })
 
 export const scheduledTaskListResponseSchema = z.object({
   tasks: z.array(scheduledTaskSchema),
-  workflowRuns: z.array(workflowRunRecordSchema),
+  automationRuns: z.array(automationRunRecordSchema),
 })
 
 export const backgroundTaskListResponseSchema = z.object({

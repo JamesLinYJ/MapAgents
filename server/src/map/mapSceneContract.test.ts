@@ -8,7 +8,7 @@
 // --------------------------------------------------------------------------
 
 import { describe, expect, it } from 'vitest'
-import { mapSceneLayerSchema } from '../schemas/types.js'
+import { mapLayerDraftSchema, mapSceneLayerSchema } from '../schemas/types.js'
 
 describe('map scene contract', () => {
   it('validates and defaults persisted label presentation', () => {
@@ -30,5 +30,26 @@ describe('map scene contract', () => {
       haloColor: '#ffffff',
       haloWidth: 1.5,
     })
+  })
+
+  it('keeps layer replacement semantics explicit in the display contract', () => {
+    const draft = mapLayerDraftSchema.parse({
+      title: '三小时累计降水',
+      replacementGroup: 'meteorological-nowcast-precipitation',
+      bounds: [118, 29, 121, 31],
+      crs: 'EPSG:4326',
+      source: { kind: 'raster_tiles', tileJsonUrl: '/api/v1/map/layers/layer_1/tilejson' },
+      style: {
+        kind: 'continuous_raster',
+        dataRange: [0, 50],
+        renderRange: [0, 50],
+        colorStops: [{ value: 0, color: '#fff' }, { value: 50, color: '#700' }],
+      },
+      legend: null,
+      temporal: null,
+      capabilities: {},
+    })
+
+    expect(draft.replacementGroup).toBe('meteorological-nowcast-precipitation')
   })
 })

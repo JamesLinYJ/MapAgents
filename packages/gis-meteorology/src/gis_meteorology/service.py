@@ -149,7 +149,10 @@ class MeteorologicalDataService:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         image.save(output_path)
         _write_cog(cog_output_path, data, bounds)
-        value_range = _finite_range(data)
+        finite_range = _finite_range(data)
+        if finite_range is None:
+            raise ValueError("分析区域没有可用于制图的有限数值。")
+        value_range = {"min": finite_range[0], "max": finite_range[1]}
         west, south, east, north = bounds
         return {
             "variable": grid.variable,

@@ -97,22 +97,7 @@ export function LayerNodeView({
 
 function LayerLegend({ node }: { node: LayerTreeNode }) {
   if (node.layerKind === 'raster' || /\.(tif|tiff|png|jpg|jpeg)$/i.test(node.name)) {
-    return (
-      <div className="arcgis-layer-legend arcgis-layer-legend--raster">
-        <strong>RGB</strong>
-        {[
-          ['红色', 'R / Band 1', '#ff1d1d'],
-          ['绿色', 'G / Band 2', '#00f028'],
-          ['蓝色', 'B / Band 3', '#1947ff'],
-        ].map(([label, value, color]) => (
-          <span key={label}>
-            <i style={{ background: color }} />
-            <em>{label}：</em>
-            <b>{value}</b>
-          </span>
-        ))}
-      </div>
-    )
+    return <RasterLayerLegend node={node} />
   }
 
   return (
@@ -123,6 +108,69 @@ function LayerLegend({ node }: { node: LayerTreeNode }) {
       </span>
     </div>
   )
+}
+
+function RasterLayerLegend({ node }: { node: LayerTreeNode }) {
+  const legend = node.legend
+  if (!legend) {
+    return (
+      <div className="arcgis-layer-legend arcgis-layer-legend--raster">
+        <strong>{node.geometrySummary ?? '栅格图层'}</strong>
+        <span><b>当前图层未配置数值图例</b></span>
+      </div>
+    )
+  }
+
+  if (legend.kind === 'continuous') {
+    const gradient = `linear-gradient(90deg, ${legend.stops
+      .map(stop => `${stop.color} ${continuousStopPercent(stop.value, legend.range)}%`)
+      .join(', ')})`
+    return (
+      <div className="arcgis-layer-legend arcgis-layer-legend--raster">
+        <strong>{legend.title}{legend.unit ? `（${legend.unit}）` : ''}</strong>
+        <span className="arcgis-layer-legend__continuous">
+          <i style={{ background: gradient }} />
+          <b>{formatLegendNumber(legend.range[0])} – {formatLegendNumber(legend.range[1])}{legend.unit ? ` ${legend.unit}` : ''}</b>
+        </span>
+      </div>
+    )
+  }
+
+  const entries = legend.kind === 'classified'
+    ? legend.classes.map(item => ({
+        key: `${item.min}:${item.max}:${item.label}`,
+        label: item.label,
+        value: `${formatLegendNumber(item.min)} – ${formatLegendNumber(item.max)}${legend.unit ? ` ${legend.unit}` : ''}`,
+        color: item.color,
+      }))
+    : legend.categories.map(item => ({
+        key: String(item.value),
+        label: item.label,
+        value: String(item.value),
+        color: item.color,
+      }))
+  return (
+    <div className="arcgis-layer-legend arcgis-layer-legend--raster">
+      <strong>{legend.title}{legend.kind === 'classified' && legend.unit ? `（${legend.unit}）` : ''}</strong>
+      {entries.map(entry => (
+        <span key={entry.key}>
+          <i style={{ background: entry.color }} />
+          <em>{entry.label}：</em>
+          <b>{entry.value}</b>
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function continuousStopPercent(value: number, range: [number, number]): number {
+  const [minimum, maximum] = range
+  if (maximum <= minimum) return 0
+  return Math.max(0, Math.min(100, ((value - minimum) / (maximum - minimum)) * 100))
+}
+
+function formatLegendNumber(value: number): string {
+  return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(value)
 }
 
 export function LayerDetails({ node, compact = false }: { node: LayerTreeNode; compact?: boolean }) {

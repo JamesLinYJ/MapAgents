@@ -38,7 +38,7 @@ interface ConversationTimelineProps {
   uploadedLayerName?: string
   runCreatedAt?: string
   runStatus?: string
-  executionPlan?: ChatPanelProps['executionPlan']
+  agentWorkflow?: ChatPanelProps['agentWorkflow']
   progressTasks?: ChatPanelProps['tasks']
   onSelectArtifact: (id: string) => void
   onForkMessage?: (entryId: string) => void
@@ -59,7 +59,7 @@ export function ConversationTimeline({
   uploadedLayerName,
   runCreatedAt,
   runStatus,
-  executionPlan,
+  agentWorkflow,
   progressTasks,
   onSelectArtifact,
   onForkMessage,
@@ -138,8 +138,8 @@ export function ConversationTimeline({
   return (
     <m.div className="cc-chat-mode" layout>
       <m.div ref={timelineRef} onScroll={handleTimelineScroll} className="cc-timeline" aria-label="对话" aria-live="polite" variants={feedVariants} initial="hidden" animate="visible">
-        {executionPlan && executionPlan.steps.length > 0 && (
-          <PlanPanel plan={executionPlan} entryVariants={entryVariants} />
+        {agentWorkflow && agentWorkflow.steps.length > 0 && (
+          <PlanPanel plan={agentWorkflow} entryVariants={entryVariants} />
         )}
         {progressTasks && progressTasks.length > 0 && (
           <TaskPanel tasks={progressTasks} entryVariants={entryVariants} />
@@ -257,7 +257,7 @@ function DataReferenceCard({ references }: { references: DataReferenceSummary[] 
 }
 
 function PlanPanel({ plan, entryVariants }: {
-  plan: NonNullable<ChatPanelProps['executionPlan']>
+  plan: NonNullable<ChatPanelProps['agentWorkflow']>
   entryVariants: Variants
 }) {
   return (
@@ -268,21 +268,24 @@ function PlanPanel({ plan, entryVariants }: {
           <div className="cc-plan-panel__header">
             <span className="cc-plan-panel__icon"><AppIcon name="psychology" size={16} /></span>
             <span>
-              <strong>执行计划</strong>
-              <small>{plan.steps.length} 个步骤</small>
+              <strong>智能体工作流</strong>
+              <small>第 {plan.revision} 版 · {plan.steps.length} 个步骤</small>
             </span>
           </div>
           <div className="cc-plan-panel__goal">{plan.goal}</div>
           <div className="cc-plan-steps">
             {plan.steps.map((step, i) => (
-              <div key={i} className="cc-plan-step">
+              <div key={step.stepId} className={`cc-plan-step cc-plan-step--${step.status}`}>
                 <span className="cc-plan-step__num">{i + 1}</span>
                 <div className="cc-plan-step__body">
-                  <span className="cc-plan-step__tool">{step.tool}</span>
+                  <span className="cc-plan-step__tool">{step.title}</span>
+                  <small>{step.toolName ?? step.kind} · {workflowStepStatusLabel(step.status)}</small>
                   {step.args && Object.keys(step.args).length > 0 && (
                     <code className="cc-plan-step__args">{JSON.stringify(step.args)}</code>
                   )}
                   <span className="cc-plan-step__reason">{step.reason}</span>
+                  {step.resultSummary && <span className="cc-plan-step__reason">结果：{step.resultSummary}</span>}
+                  {step.errorMessage && <span className="cc-plan-step__reason">失败：{step.errorMessage}</span>}
                 </div>
               </div>
             ))}
@@ -291,6 +294,18 @@ function PlanPanel({ plan, entryVariants }: {
       </div>
     </m.div>
   )
+}
+
+function workflowStepStatusLabel(status: NonNullable<ChatPanelProps['agentWorkflow']>['steps'][number]['status']): string {
+  const labels: Record<typeof status, string> = {
+    pending: '待执行',
+    running: '执行中',
+    completed: '已完成',
+    failed: '失败',
+    blocked: '已阻塞',
+    skipped: '已跳过',
+  }
+  return labels[status]
 }
 
 function TaskPanel({ tasks, entryVariants }: {

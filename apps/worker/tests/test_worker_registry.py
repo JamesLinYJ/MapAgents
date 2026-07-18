@@ -32,7 +32,7 @@ class WorkerRegistryTests(unittest.TestCase):
         register_builtin_tools(first)
         register_builtin_tools(second)
 
-        self.assertEqual(first.catalog()["count"], 18)
+        self.assertEqual(first.catalog()["count"], 19)
         self.assertEqual(first.list_tools(), second.list_tools())
         self.assertIn("meteorological_inspect", first.list_tools())
         self.assertIn("render_radar_mosaic", first.list_tools())

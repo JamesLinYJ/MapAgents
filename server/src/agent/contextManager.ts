@@ -35,7 +35,7 @@ _用户要求、关键设计决定和约束。_
 # 文件、数据与工具
 _重要文件、数据集、图层、artifact、valueRef、工具或函数，以及为什么相关。_
 
-# 工作流
+# 自动化流程
 _常用命令、工具链、运行顺序和输出解释。_
 
 # 错误与修正
@@ -248,7 +248,7 @@ export async function rebuildThreadMemory(
 
   const sourceText = formatEntriesForSummary(stripCompactionReplay(eligibleChain)).slice(-80_000)
   const prompt = [
-    '请更新 GeoForge 线程会话记忆。只能使用给出的可见对话，不得推测。',
+    '请更新当前线程的会话记忆。只能使用给出的可见对话，不得推测。',
     '必须保留固定章节标题；每节内容应短而信息密集。',
     '不要把当前临时任务、运行日志流水账、可从仓库推导的代码结构或 AGENTS.md 已记录规则写成长期事实。',
     '涉及文件、函数、配置、图层、工具能力或数据源时，只记录当前对话已经明确验证过的状态；不要把记忆当成未来事实。',

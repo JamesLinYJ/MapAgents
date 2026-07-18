@@ -104,7 +104,7 @@ function AppShell() {
   } = useWorkspaceMapActivation(location.pathname)
 
   const {
-    run, agentState, intent, executionPlan,
+    run, agentState, intent, agentWorkflow,
     events, artifacts, isSubmitting, uiError,
     placeResolution,
     clearRun,
@@ -200,35 +200,35 @@ function AppShell() {
     isRuntimeConfigSubmitting,
     isToolCatalogSubmitting,
     isToolSubmitting,
-    isWorkflowSubmitting,
+    isAutomationSubmitting,
     promoteTask: handlePromoteBackgroundTask,
     removeCatalogEntry: handleDeleteToolCatalogEntry,
     removeScheduledTask: handleDeleteScheduledTask,
     runtimeConfig,
     runTool,
-    runWorkflow: handleStartWorkflow,
+    runAutomation: handleStartAutomation,
     saveCatalogEntry: handleUpsertToolCatalogEntry,
     saveRuntimeConfig: handleSaveRuntimeConfig,
     saveScheduledTask: handleSaveScheduledTask,
     setIsToolSubmitting,
     setToolRunResult,
     stopBackgroundTask: handleCancelBackgroundTask,
-    stopWorkflow: handleCancelWorkflow,
+    stopAutomation: handleCancelAutomation,
     systemComponents,
     scheduledTasks,
     toolCatalogEntries,
     toolRunResult,
     tokenUsageSummary,
-    workflowDefinitions,
-    workflowDiagnostics,
-    workflowValidation,
-    workflowRuns,
-    validateWorkflowDraft: handleValidateWorkflow,
-    createWorkflowDraft: handleCreateWorkflow,
-    updateWorkflowDraft: handleUpdateWorkflow,
-    publishWorkflowDraft: handlePublishWorkflow,
-    disableWorkflowDefinition: handleDisableWorkflow,
-    respondToWorkflowApproval: handleRespondWorkflowApproval,
+    automationDefinitions,
+    automationDiagnostics,
+    automationValidation,
+    automationRuns,
+    validateAutomationDraft: handleValidateAutomation,
+    createAutomationDraft: handleCreateAutomation,
+    updateAutomationDraft: handleUpdateAutomation,
+    publishAutomationDraft: handlePublishAutomation,
+    disableAutomationDefinition: handleDisableAutomation,
+    respondToAutomationApproval: handleRespondAutomationApproval,
   } = useToolingController({
     loadDiagnostics: location.pathname === '/debug' || panelMode === 'compute' || panelMode === 'config' || panelMode === 'tools',
     setUiError,
@@ -290,7 +290,7 @@ function AppShell() {
   const progressItems = buildProgressItems({
     runStatus: run?.status,
     intent,
-    executionPlan,
+    agentWorkflow,
     artifacts,
     events: deferredEvents,
   })
@@ -307,8 +307,8 @@ function AppShell() {
   const denialCounts = useMemo(() => extractDenialCounts(agentState), [agentState])
 
   const progressTasks = useMemo(
-    () => buildAgentTodoItems(agentState, executionPlan, run?.status),
-    [agentState, executionPlan, run?.status],
+    () => buildAgentTodoItems(agentState, agentWorkflow),
+    [agentState, agentWorkflow],
   )
 
   const dataReferences = useMemo(
@@ -581,14 +581,14 @@ function AppShell() {
                     toolCatalogEntries={toolCatalogEntries}
                     systemComponents={systemComponents}
                     tokenUsageSummary={tokenUsageSummary}
-                    workflowDefinitions={workflowDefinitions}
-                    workflowDiagnostics={workflowDiagnostics}
-                    workflowValidation={workflowValidation}
+                    automationDefinitions={automationDefinitions}
+                    automationDiagnostics={automationDiagnostics}
+                    automationValidation={automationValidation}
                     scheduledTasks={scheduledTasks}
-                    workflowRuns={workflowRuns}
+                    automationRuns={automationRuns}
                     backgroundTasks={backgroundTasks}
                     isToolSubmitting={isToolSubmitting}
-                    isWorkflowSubmitting={isWorkflowSubmitting}
+                    isAutomationSubmitting={isAutomationSubmitting}
                     isToolCatalogSubmitting={isToolCatalogSubmitting}
                     isRuntimeConfigSubmitting={isRuntimeConfigSubmitting}
                     onRunTool={(tool, args) => {
@@ -603,17 +603,29 @@ function AppShell() {
                     onSaveRuntimeConfig={(nextConfig) => {
                       void handleSaveRuntimeConfig(nextConfig)
                     }}
-                    onStartWorkflow={(payload) => {
-                      void handleStartWorkflow(payload)
+                    onStartAutomation={(payload) => {
+                      void handleStartAutomation(payload)
                     }}
-                    onValidateWorkflow={handleValidateWorkflow}
-                    onCreateWorkflow={handleCreateWorkflow}
-                    onUpdateWorkflow={handleUpdateWorkflow}
-                    onPublishWorkflow={handlePublishWorkflow}
-                    onDisableWorkflow={handleDisableWorkflow}
-                    onRespondWorkflowApproval={handleRespondWorkflowApproval}
-                    onCancelWorkflow={(workflowRunId) => {
-                      void handleCancelWorkflow(workflowRunId)
+                    onValidateAutomation={handleValidateAutomation}
+                    onCreateAutomation={handleCreateAutomation}
+                    onUpdateAutomation={handleUpdateAutomation}
+                    onPublishAutomation={handlePublishAutomation}
+                    onDisableAutomation={handleDisableAutomation}
+                    onRespondAutomationApproval={handleRespondAutomationApproval}
+                    onCancelAutomation={(automationRunId) => {
+                      void handleCancelAutomation(automationRunId)
+                    }}
+                    onOpenAutomationRun={(sessionId, runId, threadId) => {
+                      void hydrateRunState(runId).then((loadedRun) => {
+                        if (loadedRun.sessionId !== sessionId || (threadId && loadedRun.threadId !== threadId)) {
+                          throw new Error('Automation 交付运行归属与持久化导航目标不一致。')
+                        }
+                        setActiveNav('analysis')
+                        setPanelMode('summary')
+                        setActiveSidebarItem('assistant')
+                      }).catch((error) => {
+                        setUiError(formatUiError(error, 'Automation 交付运行加载失败，请稍后重试。'))
+                      })
                     }}
                     onSaveScheduledTask={(payload) => {
                       void handleSaveScheduledTask(payload)
@@ -680,7 +692,7 @@ function AppShell() {
                     compactionLevel={compactionLevel}
                     runStats={runStats}
                     denialCounts={denialCounts}
-                    executionPlan={executionPlan}
+                    agentWorkflow={agentWorkflow}
                     tasks={progressTasks}
                   />
                 }
@@ -816,7 +828,7 @@ function AppShell() {
                 events={deferredEvents}
                 items={deferredItems}
                 intent={intent}
-                executionPlan={executionPlan}
+                agentWorkflow={agentWorkflow}
                 agentState={agentState}
                 artifacts={artifacts}
                 artifactMetadata={artifactMetadata}

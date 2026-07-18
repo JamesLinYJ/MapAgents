@@ -16,14 +16,14 @@ import type {
   SystemComponentsStatus,
   TokenUsageSummary,
   ToolDescriptor,
-  WorkflowDefinition,
-  WorkflowRunRecord,
-  WorkflowValidationResult,
+  AutomationDefinition,
+  AutomationRunRecord,
+  AutomationValidationResult,
 } from '@geo-agent-platform/shared-types'
 import {
   cancelBackgroundTask,
-  cancelWorkflow,
-  createWorkflow,
+  cancelAutomation,
+  createAutomation,
   createScheduledTask,
   type ScheduledTaskCreatePayload,
   type ScheduledTaskUpdatePayload,
@@ -34,25 +34,26 @@ import {
   listScheduledTasks,
   listToolCatalogEntries,
   listTools,
-  listWorkflows,
+  listAutomations,
   promoteBackgroundTask,
   runTool,
-  startWorkflow,
-  type StartWorkflowPayload,
+  startAutomation,
+  type StartAutomationPayload,
   updateScheduledTask,
   updateRuntimeConfig,
   upsertToolCatalogEntry,
   deleteScheduledTask,
-  disableWorkflow,
-  publishWorkflow,
-  respondWorkflowApproval,
-  updateWorkflow,
-  validateWorkflow,
-  type WorkflowDraftPayload,
-  type WorkflowUpdatePayload,
+  disableAutomation,
+  publishAutomation,
+  respondAutomationApproval,
+  updateAutomation,
+  validateAutomation,
+  type AutomationDraftPayload,
+  type AutomationUpdatePayload,
 } from '../../api/client'
 import { getSystemComponents } from '../../api/client'
 import { formatUiError } from '../bootstrap'
+import { useAuthStore } from '../stores/authStore'
 
 interface ToolingControllerOptions {
   loadDiagnostics: boolean
@@ -63,34 +64,35 @@ interface ToolingControllerOptions {
 //
 // 各事实源独立吸收，单个持久化组件失败不会清空已经成功加载的工具描述。
 export function useToolingController({ loadDiagnostics, setUiError }: ToolingControllerOptions) {
+  const enabled = useAuthStore(state => state.status === 'authenticated')
   const [availableTools, setAvailableTools] = useState<ToolDescriptor[]>([])
   const [toolCatalogEntries, setToolCatalogEntries] = useState<Array<Record<string, unknown>>>([])
-  const [workflowDefinitions, setWorkflowDefinitions] = useState<WorkflowDefinition[]>([])
-  const [workflowDiagnostics, setWorkflowDiagnostics] = useState<Array<Record<string, unknown>>>([])
-  const [workflowValidation, setWorkflowValidation] = useState<Record<string, WorkflowValidationResult>>({})
+  const [automationDefinitions, setAutomationDefinitions] = useState<AutomationDefinition[]>([])
+  const [automationDiagnostics, setAutomationDiagnostics] = useState<Array<Record<string, unknown>>>([])
+  const [automationValidation, setAutomationValidation] = useState<Record<string, AutomationValidationResult>>({})
   const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([])
-  const [workflowRuns, setWorkflowRuns] = useState<WorkflowRunRecord[]>([])
+  const [automationRuns, setAutomationRuns] = useState<AutomationRunRecord[]>([])
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskInfo[]>([])
   const [tokenUsageSummary, setTokenUsageSummary] = useState<TokenUsageSummary>()
   const [runtimeConfig, setRuntimeConfig] = useState<AgentRuntimeConfig>()
   const [systemComponents, setSystemComponents] = useState<SystemComponentsStatus>()
   const [toolRunResult, setToolRunResult] = useState<Record<string, unknown> | null>(null)
   const [isToolSubmitting, setIsToolSubmitting] = useState(false)
-  const [isWorkflowSubmitting, setIsWorkflowSubmitting] = useState(false)
+  const [isAutomationSubmitting, setIsAutomationSubmitting] = useState(false)
   const [isToolCatalogSubmitting, setIsToolCatalogSubmitting] = useState(false)
   const [isRuntimeConfigSubmitting, setIsRuntimeConfigSubmitting] = useState(false)
 
-  const refreshWorkflowState = useCallback(async () => {
-    const [workflows, scheduled, background] = await Promise.all([
-      listWorkflows(),
+  const refreshAutomationState = useCallback(async () => {
+    const [automations, scheduled, background] = await Promise.all([
+      listAutomations(),
       listScheduledTasks(),
       listBackgroundTasks(),
     ])
-    setWorkflowDefinitions(workflows.definitions)
-    setWorkflowDiagnostics(workflows.diagnostics)
-    setWorkflowValidation(workflows.validation)
+    setAutomationDefinitions(automations.definitions)
+    setAutomationDiagnostics(automations.diagnostics)
+    setAutomationValidation(automations.validation)
     setScheduledTasks(scheduled.tasks)
-    setWorkflowRuns(scheduled.workflowRuns)
+    setAutomationRuns(scheduled.automationRuns)
     setBackgroundTasks(background.tasks)
   }, [])
 
@@ -99,11 +101,11 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
   }, [])
 
   const refresh = useCallback(async () => {
-    const [components, catalogEntries, loadedRuntimeConfig, workflows, scheduled, background, usage] = await Promise.allSettled([
+    const [components, catalogEntries, loadedRuntimeConfig, automations, scheduled, background, usage] = await Promise.allSettled([
       getSystemComponents(),
       listToolCatalogEntries(),
       getRuntimeConfig(),
-      listWorkflows(),
+      listAutomations(),
       listScheduledTasks(),
       listBackgroundTasks(),
       getTokenUsageSummary(),
@@ -112,40 +114,41 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
       if (components.status === 'fulfilled') setSystemComponents(components.value)
       if (catalogEntries.status === 'fulfilled') setToolCatalogEntries(catalogEntries.value ?? [])
       if (loadedRuntimeConfig.status === 'fulfilled') setRuntimeConfig(loadedRuntimeConfig.value)
-      if (workflows.status === 'fulfilled') {
-        setWorkflowDefinitions(workflows.value.definitions)
-        setWorkflowDiagnostics(workflows.value.diagnostics)
-        setWorkflowValidation(workflows.value.validation)
+      if (automations.status === 'fulfilled') {
+        setAutomationDefinitions(automations.value.definitions)
+        setAutomationDiagnostics(automations.value.diagnostics)
+        setAutomationValidation(automations.value.validation)
       }
       if (scheduled.status === 'fulfilled') {
         setScheduledTasks(scheduled.value.tasks)
-        setWorkflowRuns(scheduled.value.workflowRuns)
+        setAutomationRuns(scheduled.value.automationRuns)
       }
       if (background.status === 'fulfilled') setBackgroundTasks(background.value.tasks)
       if (usage.status === 'fulfilled') setTokenUsageSummary(usage.value)
     })
-    const rejected = [components, catalogEntries, loadedRuntimeConfig, workflows, scheduled, background, usage].find(result => result.status === 'rejected')
+    const rejected = [components, catalogEntries, loadedRuntimeConfig, automations, scheduled, background, usage].find(result => result.status === 'rejected')
     if (rejected?.status === 'rejected') throw rejected.reason
   }, [])
 
   useEffect(() => {
     // 对话时间线始终需要轻量工具描述来显示中文名称；完整诊断数据仍按需加载。
+    if (!enabled) return
     void refreshToolDescriptors().catch(error => setUiError(formatUiError(error, '工具名称加载失败。')))
-  }, [refreshToolDescriptors, setUiError])
+  }, [enabled, refreshToolDescriptors, setUiError])
 
   useEffect(() => {
-    // 配置、Workflow 和系统状态只在对应控制面可见时加载，不能占用首页关键路径。
-    if (!loadDiagnostics) return
+    // 配置、Automation 和系统状态只在对应控制面可见时加载，不能占用首页关键路径。
+    if (!enabled || !loadDiagnostics) return
     void refresh().catch(error => setUiError(formatUiError(error, '部分系统状态加载失败。')))
-  }, [loadDiagnostics, refresh, setUiError])
+  }, [enabled, loadDiagnostics, refresh, setUiError])
 
   useEffect(() => {
-    if (!loadDiagnostics) return
+    if (!enabled || !loadDiagnostics) return
     const timer = window.setInterval(() => {
-      void refreshWorkflowState().catch(error => setUiError(formatUiError(error, '工作流状态刷新失败。')))
+      void refreshAutomationState().catch(error => setUiError(formatUiError(error, '自动化流程状态刷新失败。')))
     }, 5_000)
     return () => window.clearInterval(timer)
-  }, [loadDiagnostics, refreshWorkflowState, setUiError])
+  }, [enabled, loadDiagnostics, refreshAutomationState, setUiError])
 
   const saveRuntimeConfig = useCallback(async (nextConfig: AgentRuntimeConfig) => {
     try {
@@ -190,117 +193,117 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
     }
   }, [refresh, setUiError])
 
-  const runWorkflow = useCallback(async (payload: StartWorkflowPayload) => {
+  const runAutomation = useCallback(async (payload: StartAutomationPayload) => {
     try {
       setUiError(undefined)
-      setIsWorkflowSubmitting(true)
-      await startWorkflow(payload)
+      setIsAutomationSubmitting(true)
+      await startAutomation(payload)
       await refresh()
     } catch (error) {
-      setUiError(formatUiError(error, 'Workflow 启动失败。'))
+      setUiError(formatUiError(error, '自动化流程启动失败。'))
     } finally {
-      setIsWorkflowSubmitting(false)
+      setIsAutomationSubmitting(false)
     }
   }, [refresh, setUiError])
 
-  const stopWorkflow = useCallback(async (workflowRunId: string) => {
+  const stopAutomation = useCallback(async (automationRunId: string) => {
     try {
       setUiError(undefined)
-      setIsWorkflowSubmitting(true)
-      await cancelWorkflow(workflowRunId)
+      setIsAutomationSubmitting(true)
+      await cancelAutomation(automationRunId)
       await refresh()
     } catch (error) {
-      setUiError(formatUiError(error, 'Workflow 取消失败。'))
+      setUiError(formatUiError(error, '自动化流程取消失败。'))
     } finally {
-      setIsWorkflowSubmitting(false)
+      setIsAutomationSubmitting(false)
     }
   }, [refresh, setUiError])
 
-  const validateWorkflowDraft = useCallback(async (payload: WorkflowDraftPayload) => {
+  const validateAutomationDraft = useCallback(async (payload: AutomationDraftPayload) => {
     setUiError(undefined)
-    return validateWorkflow(payload)
+    return validateAutomation(payload)
   }, [setUiError])
 
-  const createWorkflowDraft = useCallback(async (payload: WorkflowDraftPayload) => {
+  const createAutomationDraft = useCallback(async (payload: AutomationDraftPayload) => {
     try {
       setUiError(undefined)
-      setIsWorkflowSubmitting(true)
-      const definition = await createWorkflow(payload)
+      setIsAutomationSubmitting(true)
+      const definition = await createAutomation(payload)
       await refresh()
       return definition
     } catch (error) {
-      setUiError(formatUiError(error, 'Workflow 草稿创建失败。'))
+      setUiError(formatUiError(error, '自动化流程草稿创建失败。'))
       throw error
     } finally {
-      setIsWorkflowSubmitting(false)
+      setIsAutomationSubmitting(false)
     }
   }, [refresh, setUiError])
 
-  const updateWorkflowDraft = useCallback(async (payload: WorkflowUpdatePayload) => {
+  const updateAutomationDraft = useCallback(async (payload: AutomationUpdatePayload) => {
     try {
       setUiError(undefined)
-      setIsWorkflowSubmitting(true)
-      const definition = await updateWorkflow(payload)
+      setIsAutomationSubmitting(true)
+      const definition = await updateAutomation(payload)
       await refresh()
       return definition
     } catch (error) {
-      setUiError(formatUiError(error, 'Workflow 草稿保存失败。'))
+      setUiError(formatUiError(error, '自动化流程草稿保存失败。'))
       throw error
     } finally {
-      setIsWorkflowSubmitting(false)
+      setIsAutomationSubmitting(false)
     }
   }, [refresh, setUiError])
 
-  const publishWorkflowDraft = useCallback(async (workflowId: string, revision: number) => {
+  const publishAutomationDraft = useCallback(async (automationId: string, revision: number) => {
     try {
       setUiError(undefined)
-      setIsWorkflowSubmitting(true)
-      await publishWorkflow(workflowId, revision)
+      setIsAutomationSubmitting(true)
+      await publishAutomation(automationId, revision)
       await refresh()
     } catch (error) {
-      setUiError(formatUiError(error, 'Workflow 发布失败。'))
+      setUiError(formatUiError(error, '自动化流程发布失败。'))
       throw error
     } finally {
-      setIsWorkflowSubmitting(false)
+      setIsAutomationSubmitting(false)
     }
   }, [refresh, setUiError])
 
-  const disableWorkflowDefinition = useCallback(async (workflowId: string) => {
+  const disableAutomationDefinition = useCallback(async (automationId: string) => {
     try {
       setUiError(undefined)
-      setIsWorkflowSubmitting(true)
-      await disableWorkflow(workflowId)
+      setIsAutomationSubmitting(true)
+      await disableAutomation(automationId)
       await refresh()
     } catch (error) {
-      setUiError(formatUiError(error, 'Workflow 停用失败。'))
+      setUiError(formatUiError(error, '自动化流程停用失败。'))
       throw error
     } finally {
-      setIsWorkflowSubmitting(false)
+      setIsAutomationSubmitting(false)
     }
   }, [refresh, setUiError])
 
-  const respondToWorkflowApproval = useCallback(async (
-    workflowRunId: string,
+  const respondToAutomationApproval = useCallback(async (
+    automationRunId: string,
     approvalId: string,
     decision: 'approved' | 'rejected',
   ) => {
     try {
       setUiError(undefined)
-      setIsWorkflowSubmitting(true)
-      await respondWorkflowApproval(workflowRunId, approvalId, decision)
+      setIsAutomationSubmitting(true)
+      await respondAutomationApproval(automationRunId, approvalId, decision)
       await refresh()
     } catch (error) {
-      setUiError(formatUiError(error, 'Workflow 审批响应失败。'))
+      setUiError(formatUiError(error, '自动化流程审批响应失败。'))
       throw error
     } finally {
-      setIsWorkflowSubmitting(false)
+      setIsAutomationSubmitting(false)
     }
   }, [refresh, setUiError])
 
   const saveScheduledTask = useCallback(async (payload: ScheduledTaskCreatePayload | ScheduledTaskUpdatePayload) => {
     try {
       setUiError(undefined)
-      setIsWorkflowSubmitting(true)
+      setIsAutomationSubmitting(true)
       if ('taskId' in payload) {
         await updateScheduledTask(payload)
       } else {
@@ -310,33 +313,33 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
     } catch (error) {
       setUiError(formatUiError(error, '定时任务保存失败。'))
     } finally {
-      setIsWorkflowSubmitting(false)
+      setIsAutomationSubmitting(false)
     }
   }, [refresh, setUiError])
 
   const removeScheduledTask = useCallback(async (taskId: string) => {
     try {
       setUiError(undefined)
-      setIsWorkflowSubmitting(true)
+      setIsAutomationSubmitting(true)
       await deleteScheduledTask(taskId)
       await refresh()
     } catch (error) {
       setUiError(formatUiError(error, '定时任务删除失败。'))
     } finally {
-      setIsWorkflowSubmitting(false)
+      setIsAutomationSubmitting(false)
     }
   }, [refresh, setUiError])
 
   const stopBackgroundTask = useCallback(async (taskId: string) => {
     try {
       setUiError(undefined)
-      setIsWorkflowSubmitting(true)
+      setIsAutomationSubmitting(true)
       await cancelBackgroundTask(taskId)
       await refresh()
     } catch (error) {
       setUiError(formatUiError(error, '后台任务取消失败。'))
     } finally {
-      setIsWorkflowSubmitting(false)
+      setIsAutomationSubmitting(false)
     }
   }, [refresh, setUiError])
 
@@ -357,34 +360,34 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
     isToolCatalogSubmitting,
     isRuntimeConfigSubmitting,
     isToolSubmitting,
-    isWorkflowSubmitting,
+    isAutomationSubmitting,
     removeCatalogEntry,
     removeScheduledTask,
     runtimeConfig,
     runTool,
-    runWorkflow,
+    runAutomation,
     saveCatalogEntry,
     saveRuntimeConfig,
     saveScheduledTask,
     setIsToolSubmitting,
     setToolRunResult,
     stopBackgroundTask,
-    stopWorkflow,
+    stopAutomation,
     promoteTask,
     systemComponents,
     scheduledTasks,
     toolCatalogEntries,
     toolRunResult,
     tokenUsageSummary,
-    workflowDefinitions,
-    workflowDiagnostics,
-    workflowValidation,
-    workflowRuns,
-    validateWorkflowDraft,
-    createWorkflowDraft,
-    updateWorkflowDraft,
-    publishWorkflowDraft,
-    disableWorkflowDefinition,
-    respondToWorkflowApproval,
+    automationDefinitions,
+    automationDiagnostics,
+    automationValidation,
+    automationRuns,
+    validateAutomationDraft,
+    createAutomationDraft,
+    updateAutomationDraft,
+    publishAutomationDraft,
+    disableAutomationDefinition,
+    respondToAutomationApproval,
   }
 }

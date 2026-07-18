@@ -43,8 +43,12 @@ export function validateToolProvider(provider: ToolProvider): void {
         }
         const entry = provider.manifest.tools.find(candidate => candidate.name === tool.name);
         if (!entry) throw new Error(`工具 "${tool.name}" 未在 Provider manifest 中声明`);
-        if (entry.isReadOnly !== tool.isReadOnly || entry.isDestructive !== tool.isDestructive) {
-            throw new Error(`工具 "${tool.name}" 的读写/破坏性属性与 manifest 不一致`);
+        if (
+            entry.isReadOnly !== tool.isReadOnly
+            || entry.isDestructive !== tool.isDestructive
+            || (entry.requiresApproval ?? false) !== (tool.requiresApproval ?? false)
+        ) {
+            throw new Error(`工具 "${tool.name}" 的读写、破坏性或审批属性与 manifest 不一致`);
         }
         validateManifestParity(entry, tool);
     }
@@ -55,7 +59,15 @@ export function validateToolProvider(provider: ToolProvider): void {
 }
 function validateManifestParity(manifestTool: ToolManifestEntry, runtimeTool: ToolDef): void {
     // Manifest 是 UI、Agent 与运行时共享的公开契约；运行时实现不能悄悄扩展参数或改写描述。
-    const fields: Array<keyof ToolManifestEntry> = ['label', 'description', 'group', 'tags', 'jsonSchema'];
+    const fields: Array<keyof ToolManifestEntry> = [
+        'label',
+        'description',
+        'group',
+        'tags',
+        'executionSurfaces',
+        'agentResultMode',
+        'jsonSchema',
+    ];
     for (const field of fields) {
         if (stableJson(manifestTool[field]) !== stableJson(runtimeTool[field])) {
             throw new Error(`工具 "${runtimeTool.name}" 的 ${field} 与 manifest 不一致`);
@@ -79,6 +91,9 @@ function validateManifest(manifest: ToolManifest): void {
         names.add(tool.name);
         if (tool.jsonSchema.type !== 'object') {
             throw new Error(`Provider "${manifest.id}" 的工具 "${tool.name}" 缺少 object 参数 schema`);
+        }
+        if (tool.executionSurfaces?.length === 0) {
+            throw new Error(`Provider "${manifest.id}" 的工具 "${tool.name}" executionSurfaces 不能为空`);
         }
         validateJsonSchema(tool.jsonSchema, `${manifest.id}.${tool.name}.jsonSchema`);
     }

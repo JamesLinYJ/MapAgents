@@ -16,52 +16,31 @@
 import { useCallback, useEffect, useState } from 'react'
 import type {
   AnalysisRun,
-  AuthMe,
   ConversationItem,
   ThreadHistoryPage,
   WorkspaceBootstrapSnapshot,
 } from '@geo-agent-platform/shared-types'
 
 import { getAuthMe } from '../api/client'
-import { isResourceAccessError } from '../api/errors'
-import { formatUiError, retryAsync, transcriptEntriesToConversationItems } from './bootstrap'
+import { formatUiError, transcriptEntriesToConversationItems } from './bootstrap'
+import { useAuthStore, type AuthStatus } from './stores/authStore'
 
-export type AuthStatus = 'checking' | 'authenticated' | 'unauthenticated' | 'error'
+export type { AuthStatus }
 
 export interface WorkspaceBootstrapPointer {
   activeSessionId?: string
   activeThreadId?: string
   activeRunId?: string
-  sessionSource?: 'route' | 'query' | 'persisted'
-}
-
-export interface WorkspaceBootstrapLoadResult {
-  snapshot: WorkspaceBootstrapSnapshot
-  pointerRejected: boolean
+  sessionSource?: 'route' | 'query'
 }
 
 // URL 中的 session/thread/run 是分享指针，不是身份事实源。
-// 当分享指针不可读时，权限拒绝必须成立；前端随后回到当前用户默认工作区。
+// 根路径始终加载当前用户默认会话；显式 URL 指针不可读时保留权限错误。
 export async function loadBootstrapFromWorkspacePointer(
   pointer: WorkspaceBootstrapPointer,
   loadWorkspaceBootstrap: (sessionId?: string) => Promise<WorkspaceBootstrapSnapshot>,
-): Promise<WorkspaceBootstrapLoadResult> {
-  const sessionId = pointer.activeSessionId
-  try {
-    return {
-      snapshot: await loadWorkspaceBootstrap(sessionId),
-      pointerRejected: false,
-    }
-  } catch (error) {
-    const canDiscardStaleLocalPointer = pointer.sessionSource === 'persisted'
-      && Boolean(sessionId)
-      && isResourceAccessError(error)
-    if (!canDiscardStaleLocalPointer) throw error
-    return {
-      snapshot: await loadWorkspaceBootstrap(undefined),
-      pointerRejected: true,
-    }
-  }
+): Promise<WorkspaceBootstrapSnapshot> {
+  return loadWorkspaceBootstrap(pointer.activeSessionId)
 }
 
 export function useWorkspaceBootstrap({
@@ -91,24 +70,25 @@ export function useWorkspaceBootstrap({
   syncUrl: (sessionId: string, runId?: string, threadId?: string) => void
   syncWorkspaceUrl?: boolean
 }) {
-  const [authStatus, setAuthStatus] = useState<AuthStatus>('checking')
-  const [authMe, setAuthMe] = useState<AuthMe | null>(null)
+  const authStatus = useAuthStore(state => state.status)
+  const authMe = useAuthStore(state => state.authMe)
+  const clearAuthState = useAuthStore(state => state.clear)
+  const setAuthenticated = useAuthStore(state => state.setAuthenticated)
+  const setAuthStatus = useAuthStore(state => state.setStatus)
   const [authRefreshNonce, setAuthRefreshNonce] = useState(0)
 
   const retryAuth = useCallback(() => {
     setAuthStatus('checking')
     setAuthRefreshNonce(value => value + 1)
-  }, [])
+  }, [setAuthStatus])
 
   const clearAuth = useCallback(() => {
-    setAuthMe(null)
-    setAuthStatus('unauthenticated')
-  }, [])
+    clearAuthState()
+  }, [clearAuthState])
 
   useEffect(() => {
     if (disabled) {
       setAuthStatus('unauthenticated')
-      setAuthMe(null)
       return
     }
     // 首屏只吸收一次 workspace bootstrap；thread 摘要足以校验本地指针。
@@ -130,23 +110,16 @@ export function useWorkspaceBootstrap({
           return
         }
         if (disposed) return
-        setAuthMe(auth)
-        setAuthStatus('authenticated')
-        const { snapshot, pointerRejected } = await retryAsync(
-          () => loadBootstrapFromWorkspacePointer(workspacePointer, loadWorkspaceBootstrap),
-          2,
-          300,
-        )
+        setAuthenticated(auth)
+        const snapshot = await loadBootstrapFromWorkspacePointer(workspacePointer, loadWorkspaceBootstrap)
         if (disposed) return
         applyProviders(snapshot.providers)
         setUiError(undefined)
 
         const sessionRecord = snapshot.session
-        // localStorage 仅作为 UI 选中提示，不决定会话归属；被拒绝的分享指针不再参与恢复。
-        const effectiveSharedThreadId = pointerRejected ? undefined : sharedThreadId
-        const effectiveSharedRunId = pointerRejected ? undefined : sharedRunId
-        const hintedThreadId = effectiveSharedThreadId ?? workspacePointer.activeThreadId
-        const hintedRunId = effectiveSharedRunId ?? workspacePointer.activeRunId
+        // thread/run 选中提示按 session 隔离；数据库仍是归属和可访问性的事实源。
+        const hintedThreadId = sharedThreadId
+        const hintedRunId = sharedRunId
         const threadToRestore = hintedThreadId || undefined
         const runToRestore = hintedRunId || undefined
         const thread = threadToRestore
@@ -154,7 +127,7 @@ export function useWorkspaceBootstrap({
           : undefined
 
         if (threadToRestore && !thread) {
-          if (effectiveSharedThreadId) throw new Error('分享链接中的对话不属于当前会话。')
+          if (sharedThreadId) throw new Error('链接中的对话不属于当前会话。')
           clearActiveRunState()
           if (syncWorkspaceUrl) syncUrl(sessionRecord.id)
           return
@@ -178,9 +151,8 @@ export function useWorkspaceBootstrap({
             if (disposed) return
             setCanonicalThreadItems(restoredRun.threadId, transcriptEntriesToConversationItems(history.entries))
           }
-          if (pointerRejected && syncWorkspaceUrl) syncUrl(sessionRecord.id, restoredRun.id, restoredRun.threadId ?? undefined)
         } catch (error) {
-          if (effectiveSharedRunId || effectiveSharedThreadId) throw error
+          if (sharedRunId || sharedThreadId) throw error
           clearActiveRunState()
           if (syncWorkspaceUrl) syncUrl(sessionRecord.id)
         }
@@ -204,6 +176,8 @@ export function useWorkspaceBootstrap({
     readWorkspacePointer,
     setActiveThreadId,
     setCanonicalThreadItems,
+    setAuthenticated,
+    setAuthStatus,
     setUiError,
     syncUrl,
     syncWorkspaceUrl,

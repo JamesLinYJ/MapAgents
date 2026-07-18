@@ -9,16 +9,18 @@
 // --------------------------------------------------------------------------
 
 // 计划模式只改变运行约束，不执行业务写入。
-// exit_plan_mode 必须先经过 Agents SDK approval，批准后才会写回 executionPlan。
+// submit_agent_workflow 必须先经过 Agents SDK approval，批准后才会写回 agentWorkflow。
 import type { ToolDef } from '../../framework/types.js'
 import { makeId } from '../../utils/ids.js'
 import {
   ENTER_PLAN_MODE_DESCRIPTION,
   ENTER_PLAN_MODE_PROMPT,
-  EXIT_PLAN_MODE_DESCRIPTION,
-  EXIT_PLAN_MODE_PROMPT,
+  REVISE_AGENT_WORKFLOW_DESCRIPTION,
+  REVISE_AGENT_WORKFLOW_PROMPT,
   REQUEST_CLARIFICATION_DESCRIPTION,
   REQUEST_CLARIFICATION_PROMPT,
+  SUBMIT_AGENT_WORKFLOW_DESCRIPTION,
+  SUBMIT_AGENT_WORKFLOW_PROMPT,
 } from './prompts.js'
 
 export const requestClarificationTool: ToolDef = {
@@ -27,6 +29,7 @@ export const requestClarificationTool: ToolDef = {
   prompt: REQUEST_CLARIFICATION_PROMPT,
   group: '系统', tags: ['plan', 'system'],
   isReadOnly: true, isDestructive: false,
+  agentResultMode: 'return_direct',
 
   jsonSchema: {
     type: 'object',
@@ -43,12 +46,12 @@ export const requestClarificationTool: ToolDef = {
             label: { type: 'string', description: '选项按钮文本。' },
             description: { type: 'string', description: '选项说明。' },
           },
-          required: ['label'],
+            required: ['label', 'description'],
         },
       },
       allowFreeText: { type: 'boolean', description: '是否允许用户自由输入补充。' },
     },
-    required: ['question', 'reason'],
+    required: ['question', 'reason', 'options', 'allowFreeText'],
   },
 
   async handler(args, runtime) {
@@ -62,15 +65,17 @@ export const requestClarificationTool: ToolDef = {
         payload: {},
       }))
       : []
+    const question = String(args.question)
     return {
       message: '需要用户补充信息。',
+      modelOutput: question,
       payload: {
         runId: runtime.runId,
         clarification: {
           clarificationId: makeId('clarification'),
           kind: 'plan_requirement',
           reason: String(args.reason),
-          question: String(args.question),
+          question,
           options,
           selectedOptionId: null,
           allowFreeText: typeof args.allowFreeText === 'boolean' ? args.allowFreeText : true,
@@ -109,10 +114,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-export const exitPlanModeTool: ToolDef = {
-  name: 'exit_plan_mode', label: '退出计划模式',
-  description: EXIT_PLAN_MODE_DESCRIPTION,
-  prompt: EXIT_PLAN_MODE_PROMPT,
+export const submitAgentWorkflowTool: ToolDef = {
+  name: 'submit_agent_workflow', label: '提交智能体工作流',
+  description: SUBMIT_AGENT_WORKFLOW_DESCRIPTION,
+  prompt: SUBMIT_AGENT_WORKFLOW_PROMPT,
   group: '系统',  tags: ['plan', 'system'],
   isReadOnly: true, isDestructive: false, 
   requiresApproval: true,
@@ -120,10 +125,10 @@ export const exitPlanModeTool: ToolDef = {
   jsonSchema: {
     type: 'object',
     properties: {
-      plan: {
+      workflow: {
         type: 'object',
         additionalProperties: false,
-        description: '待用户批准的执行计划。',
+        description: '待用户批准的智能体工作流。',
         properties: {
           goal: { type: 'string', description: '本轮实施目标。' },
           steps: {
@@ -133,43 +138,82 @@ export const exitPlanModeTool: ToolDef = {
               type: 'object',
               additionalProperties: false,
               properties: {
-                id: { type: 'string', description: '步骤 ID，例如 step_1。' },
-                tool: { type: 'string', description: '预计使用的工具或 manual。' },
+                stepId: { type: 'string', description: '稳定步骤 ID，例如 step_1。' },
+                title: { type: 'string', description: '面向用户的步骤标题。' },
+                kind: { type: 'string', enum: ['analysis', 'tool', 'agent', 'automation', 'delivery'], description: '步骤执行类型。' },
+                toolName: { type: 'string', description: '实际执行该步骤的工具名。' },
+                ownerAgentId: { type: 'string', description: '负责步骤的 Agent ID；主智能体步骤固定填写 supervisor。' },
                 args: { type: 'object', additionalProperties: true, description: '预计工具参数；无法确定时使用空对象。' },
                 reason: { type: 'string', description: '为什么需要这一步。' },
+                dependsOn: { type: 'array', items: { type: 'string' }, description: '必须先完成的步骤 ID。' },
               },
-              required: ['id', 'tool', 'reason'],
+              required: ['stepId', 'title', 'kind', 'toolName', 'ownerAgentId', 'args', 'reason', 'dependsOn'],
             },
           },
         },
         required: ['goal', 'steps'],
       },
-      allowedPrompts: {
-        type: 'array',
-        description: '计划获批后建议允许的动作类别。',
-        items: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            tool: { type: 'string', description: '工具名称，例如 Bash。' },
-            prompt: { type: 'string', description: '动作类别，例如运行测试。' },
-          },
-          required: ['tool', 'prompt'],
-        },
-      },
     },
-    required: ['plan'],
+    required: ['workflow'],
   },
 
   async handler(args, runtime) {
     return {
-      message: '计划已批准，已退出计划模式。',
+      message: '智能体工作流已批准并开始执行。',
       payload: {
         planMode: false,
-        plan: args.plan,
-        allowedPrompts: Array.isArray(args.allowedPrompts) ? args.allowedPrompts : [],
+        agentWorkflowDraft: args.workflow,
         runId: runtime.runId,
       },
+      warnings: [], valueRefs: [],
+      resultId: makeId('result'), source: 'system',
+    }
+  },
+}
+
+export const reviseAgentWorkflowTool: ToolDef = {
+  name: 'revise_agent_workflow', label: '调整智能体工作流',
+  description: REVISE_AGENT_WORKFLOW_DESCRIPTION,
+  prompt: REVISE_AGENT_WORKFLOW_PROMPT,
+  group: '系统', tags: ['plan', 'workflow', 'system'],
+  isReadOnly: true, isDestructive: false,
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      workflow: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          goal: { type: 'string', description: '调整后的完整目标。' },
+          changeReason: { type: 'string', description: '必须调整执行路径的真实原因。' },
+          steps: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                stepId: { type: 'string', description: '稳定步骤 ID。' },
+                title: { type: 'string', description: '面向用户的步骤标题。' },
+                kind: { type: 'string', enum: ['analysis', 'tool', 'agent', 'automation', 'delivery'], description: '步骤执行类型。' },
+                toolName: { type: 'string', description: '实际执行该步骤的工具名。' },
+                ownerAgentId: { type: 'string', description: '负责步骤的 Agent ID；主智能体步骤固定填写 supervisor。' },
+                args: { type: 'object', additionalProperties: true, description: '预计工具参数。' },
+                reason: { type: 'string', description: '为什么需要这一步。' },
+                dependsOn: { type: 'array', items: { type: 'string' }, description: '必须先完成的步骤 ID。' },
+              },
+              required: ['stepId', 'title', 'kind', 'toolName', 'ownerAgentId', 'args', 'reason', 'dependsOn'],
+            },
+          },
+        },
+        required: ['goal', 'changeReason', 'steps'],
+      },
+    },
+    required: ['workflow'],
+  },
+  async handler(args, runtime) {
+    return {
+      message: '智能体工作流已根据新情况调整。',
+      payload: { agentWorkflowRevision: args.workflow, runId: runtime.runId },
       warnings: [], valueRefs: [],
       resultId: makeId('result'), source: 'system',
     }

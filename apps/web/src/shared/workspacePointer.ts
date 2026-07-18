@@ -12,20 +12,20 @@ export interface WorkspacePointer {
   activeSessionId?: string
   activeRunId?: string
   activeThreadId?: string
-  sessionSource?: 'route' | 'query' | 'persisted'
+  sessionSource?: 'route' | 'query'
 }
 
-const WORKSPACE_POINTER_KEY = 'geoforge.workspace.pointer.v1'
+const WORKSPACE_POINTER_KEY_PREFIX = 'workspace.pointer.v2.'
 
 // URL 指针是可分享的轻量定位信息，不是运行历史事实源。
 //
 // session/thread/run 的结构化事实来自 PostgreSQL；大对象和诊断载荷通过受控接口读取。
 export function readWorkspacePointer(search = window.location.search): WorkspacePointer {
   const params = new URLSearchParams(search)
-  const persisted = readPersistedPointer()
   const routeSessionId = readSessionIdFromPath(window.location.pathname)
   const querySessionId = normalizeParam(params.get('session'))
-  const activeSessionId = routeSessionId ?? querySessionId ?? persisted.activeSessionId
+  const activeSessionId = routeSessionId ?? querySessionId
+  const persisted = activeSessionId ? readPersistedPointer(activeSessionId) : {}
   return {
     activeSessionId,
     activeRunId: normalizeParam(params.get('run')) ?? persisted.activeRunId,
@@ -34,9 +34,7 @@ export function readWorkspacePointer(search = window.location.search): Workspace
       ? 'route'
       : querySessionId
         ? 'query'
-        : persisted.activeSessionId
-          ? 'persisted'
-          : undefined,
+        : undefined,
   }
 }
 
@@ -50,20 +48,19 @@ export function buildWorkspaceShareUrl(
 }
 
 export function syncCleanWorkspaceUrl(sessionId: string, runId?: string, threadId?: string) {
-  persistPointer({ activeSessionId: sessionId, activeRunId: runId, activeThreadId: threadId })
+  persistPointer(sessionId, { activeRunId: runId, activeThreadId: threadId })
   const url = new URL(window.location.href)
   url.pathname = `/session/${encodeURIComponent(sessionId)}`
   url.search = ''
   window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`)
 }
 
-function readPersistedPointer(): WorkspacePointer {
+function readPersistedPointer(sessionId: string): WorkspacePointer {
   try {
-    const raw = window.localStorage.getItem(WORKSPACE_POINTER_KEY)
+    const raw = window.localStorage.getItem(pointerStorageKey(sessionId))
     if (!raw) return {}
     const parsed = JSON.parse(raw) as Partial<WorkspacePointer>
     return {
-      activeSessionId: normalizeStoredParam(parsed.activeSessionId),
       activeRunId: normalizeStoredParam(parsed.activeRunId),
       activeThreadId: normalizeStoredParam(parsed.activeThreadId),
     }
@@ -72,12 +69,16 @@ function readPersistedPointer(): WorkspacePointer {
   }
 }
 
-function persistPointer(pointer: WorkspacePointer) {
+function persistPointer(sessionId: string, pointer: WorkspacePointer) {
   try {
-    window.localStorage.setItem(WORKSPACE_POINTER_KEY, JSON.stringify(pointer))
+    window.localStorage.setItem(pointerStorageKey(sessionId), JSON.stringify(pointer))
   } catch {
     // 浏览器禁用本地存储时，工作台仍保持当前内存态；刷新后回到默认会话。
   }
+}
+
+function pointerStorageKey(sessionId: string): string {
+  return `${WORKSPACE_POINTER_KEY_PREFIX}${encodeURIComponent(sessionId)}`
 }
 
 function normalizeParam(value: string | null): string | undefined {

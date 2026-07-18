@@ -29,7 +29,7 @@ export function AccountCenterPage({ authMe, onLogout }: AccountCenterPageProps) 
       <section className="account-shell">
         <header className="account-hero">
           <div>
-            <span className="account-eyebrow">GeoForge 账号</span>
+            <span className="account-eyebrow">工作台账号</span>
             <h1 id="account-page-title">{displayName}</h1>
             <p>查看当前登录身份、工作区成员关系、权限范围和数据处理说明。</p>
           </div>
@@ -98,8 +98,8 @@ export function AccountCenterPage({ authMe, onLogout }: AccountCenterPageProps) 
           <article className="account-panel">
             <PanelHead icon={<Fingerprint size={18} />} title="数据与隐私" />
             <p className="account-copy">
-              GeoForge 使用账号、工作区、运行记录、上传文件、工具调用和审计日志来提供气象分析、地图浏览、
-              Workflow、语音识别授权和安全管理功能。长期密钥不会进入浏览器；短期授权令牌和 CSRF 令牌仅用于当前会话。
+              本服务使用账号、工作区、运行记录、上传文件、工具调用和审计日志来提供气象分析、地图浏览、
+              自动化流程、语音识别授权和安全管理功能。长期密钥不会进入浏览器；短期授权令牌和 CSRF 令牌仅用于当前会话。
             </p>
             <div className="account-link-list">
               <Link to="/privacy">数据处理详情</Link>

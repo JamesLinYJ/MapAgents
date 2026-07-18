@@ -48,6 +48,46 @@ describe('nowcast tools', () => {
     expect(() => validateToolProvider(provider)).not.toThrow()
   })
 
+  it('lists the current session dataset catalog across upload-source threads', async () => {
+    const listMeteorologicalDatasets = vi.fn().mockResolvedValue([{
+      datasetId: 'dataset_1',
+      workspaceId: 'workspace_1',
+      createdByUserId: 'user_1',
+      visibility: 'workspace',
+      sessionId: 'session_1',
+      threadId: 'thread_upload',
+      filename: '202604091955_202604092000.nc',
+      originalFilename: '202604091955_202604092000.nc',
+      fileId: 'file_1',
+      fileRelativePath: 'objects/sha256/aa/hash.nc',
+      sizeBytes: 1024,
+      contentHash: 'hash',
+      mediaType: 'application/x-netcdf',
+      status: 'ready',
+      metadata: { source: 'upload', sourceRelativePath: '202604091955/202604091955_202604092000.nc' },
+      createdAt: '2026-04-09T19:55:00.000Z',
+      updatedAt: '2026-04-09T19:55:00.000Z',
+    }])
+    const toolContext = context()
+    toolContext.listMeteorologicalDatasets = listMeteorologicalDatasets
+    const tool = meteorologyTools.find(candidate => candidate.name === 'list_meteorological_files')!
+
+    const result = await tool.handler({}, toolContext)
+
+    expect(listMeteorologicalDatasets).toHaveBeenCalledWith({ scope: 'session', limit: 500 })
+    expect(result.payload.counts).toEqual({ dataset: 1, radar: 0, boundary: 0 })
+    expect(result.valueRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'meteorological_file',
+        value: expect.objectContaining({
+          datasetId: 'dataset_1',
+          relativePath: 'objects/sha256/aa/hash.nc',
+        }),
+      }),
+      expect.objectContaining({ kind: 'meteorological_file_collection' }),
+    ]))
+  })
+
   it('does not hide meteorology tools when the worker is temporarily unreachable during provider load', async () => {
     const fetch = vi.fn().mockRejectedValue(new Error('worker restarting'))
     vi.stubGlobal('fetch', fetch)

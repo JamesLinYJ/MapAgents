@@ -38,9 +38,9 @@ import type {
   ToolDescriptor,
   ToolValueRef,
   TokenUsageSummary,
-  WorkflowDefinition,
-  WorkflowRunRecord,
-  WorkflowValidationResult,
+  AutomationDefinition,
+  AutomationRunRecord,
+  AutomationValidationResult,
 } from '@geo-agent-platform/shared-types'
 
 import { StatusPill } from '../../shared/components/StatusPill'
@@ -61,11 +61,11 @@ import { SdkExtensionManagement, type SdkManagementView } from './SdkExtensionMa
 import type {
   ScheduledTaskCreatePayload,
   ScheduledTaskUpdatePayload,
-  StartWorkflowPayload,
-  WorkflowDraftPayload,
-  WorkflowUpdatePayload,
+  StartAutomationPayload,
+  AutomationDraftPayload,
+  AutomationUpdatePayload,
 } from '../../api/client'
-import { WorkflowManagementPanel } from './WorkflowManagementPanel'
+import { AutomationManagementPanel } from './AutomationManagementPanel'
 import { UsageManagementPanel } from './UsageManagementPanel'
 import {
   filterTools,
@@ -88,28 +88,29 @@ export interface ToolManagementPageProps {
   toolCatalogEntries: Array<Record<string, unknown>>
   systemComponents?: SystemComponentsStatus
   tokenUsageSummary?: TokenUsageSummary
-  workflowDefinitions: WorkflowDefinition[]
-  workflowDiagnostics: Array<Record<string, unknown>>
-  workflowValidation: Record<string, WorkflowValidationResult>
+  automationDefinitions: AutomationDefinition[]
+  automationDiagnostics: Array<Record<string, unknown>>
+  automationValidation: Record<string, AutomationValidationResult>
   scheduledTasks: ScheduledTask[]
-  workflowRuns: WorkflowRunRecord[]
+  automationRuns: AutomationRunRecord[]
   backgroundTasks: BackgroundTaskInfo[]
   isToolSubmitting: boolean
-  isWorkflowSubmitting: boolean
+  isAutomationSubmitting: boolean
   isToolCatalogSubmitting?: boolean
   isRuntimeConfigSubmitting?: boolean
   onRunTool: (tool: ToolDescriptor, args: Record<string, unknown>) => void
   onUpsertToolCatalogEntry: (tool: ToolDescriptor, payload: Record<string, unknown>, sortOrder?: number) => void
   onDeleteToolCatalogEntry: (tool: ToolDescriptor) => void
   onSaveRuntimeConfig?: (config: AgentRuntimeConfig) => void | Promise<void>
-  onStartWorkflow: (payload: StartWorkflowPayload) => void
-  onValidateWorkflow: (payload: WorkflowDraftPayload) => Promise<WorkflowValidationResult>
-  onCreateWorkflow: (payload: WorkflowDraftPayload) => Promise<WorkflowDefinition>
-  onUpdateWorkflow: (payload: WorkflowUpdatePayload) => Promise<WorkflowDefinition>
-  onPublishWorkflow: (workflowId: string, revision: number) => Promise<void>
-  onDisableWorkflow: (workflowId: string) => Promise<void>
-  onRespondWorkflowApproval: (workflowRunId: string, approvalId: string, decision: 'approved' | 'rejected') => Promise<void>
-  onCancelWorkflow: (workflowRunId: string) => void
+  onStartAutomation: (payload: StartAutomationPayload) => void
+  onValidateAutomation: (payload: AutomationDraftPayload) => Promise<AutomationValidationResult>
+  onCreateAutomation: (payload: AutomationDraftPayload) => Promise<AutomationDefinition>
+  onUpdateAutomation: (payload: AutomationUpdatePayload) => Promise<AutomationDefinition>
+  onPublishAutomation: (automationId: string, revision: number) => Promise<void>
+  onDisableAutomation: (automationId: string) => Promise<void>
+  onRespondAutomationApproval: (automationRunId: string, approvalId: string, decision: 'approved' | 'rejected') => Promise<void>
+  onCancelAutomation: (automationRunId: string) => void
+  onOpenAutomationRun: (sessionId: string, runId: string, threadId?: string) => void
   onSaveScheduledTask: (payload: ScheduledTaskCreatePayload | ScheduledTaskUpdatePayload) => void
   onDeleteScheduledTask: (taskId: string) => void
   onCancelBackgroundTask: (taskId: string) => void
@@ -117,9 +118,9 @@ export interface ToolManagementPageProps {
   onRefreshMemories?: () => void
 }
 
-type WorkflowManagementView = 'workflows' | 'scheduled' | 'background'
+type AutomationManagementView = 'automations' | 'scheduled' | 'background'
 type UsageManagementView = 'usage'
-type ToolManagementView = 'tools' | SdkManagementView | WorkflowManagementView | UsageManagementView
+type ToolManagementView = 'tools' | SdkManagementView | AutomationManagementView | UsageManagementView
 
 export function ToolManagementPage({
   tools,
@@ -134,28 +135,29 @@ export function ToolManagementPage({
   toolCatalogEntries,
   systemComponents,
   tokenUsageSummary,
-  workflowDefinitions,
-  workflowDiagnostics,
-  workflowValidation,
+  automationDefinitions,
+  automationDiagnostics,
+  automationValidation,
   scheduledTasks,
-  workflowRuns,
+  automationRuns,
   backgroundTasks,
   isToolSubmitting,
-  isWorkflowSubmitting,
+  isAutomationSubmitting,
   isToolCatalogSubmitting,
   isRuntimeConfigSubmitting,
   onRunTool,
   onUpsertToolCatalogEntry,
   onDeleteToolCatalogEntry,
   onSaveRuntimeConfig,
-  onStartWorkflow,
-  onValidateWorkflow,
-  onCreateWorkflow,
-  onUpdateWorkflow,
-  onPublishWorkflow,
-  onDisableWorkflow,
-  onRespondWorkflowApproval,
-  onCancelWorkflow,
+  onStartAutomation,
+  onValidateAutomation,
+  onCreateAutomation,
+  onUpdateAutomation,
+  onPublishAutomation,
+  onDisableAutomation,
+  onRespondAutomationApproval,
+  onCancelAutomation,
+  onOpenAutomationRun,
   onSaveScheduledTask,
   onDeleteScheduledTask,
   onCancelBackgroundTask,
@@ -185,7 +187,7 @@ export function ToolManagementPage({
   const skillCount = (runtimeConfig?.sdk.skills.skillPaths.length ?? 0) + (runtimeConfig?.sdk.skills.skillRoots.length ?? 0)
   const viewTabs: Array<{ id: ToolManagementView; label: string; count: number; description: string }> = [
     { id: 'tools', label: '内置工具', count: tools.length, description: 'Provider 工具与目录治理' },
-    { id: 'workflows', label: '工作流编排', count: workflowDefinitions.length, description: '可视化工具流、版本与运行审批' },
+    { id: 'automations', label: '自动化流程编排', count: automationDefinitions.length, description: '可视化工具流、版本与运行审批' },
     { id: 'scheduled', label: '定时任务', count: scheduledTasks.length, description: '定时唤醒与周期执行' },
     { id: 'background', label: '后台任务', count: backgroundTasks.length, description: '运行中任务观察' },
     { id: 'usage', label: '用量统计', count: tokenUsageSummary?.totals.runsWithUsage ?? 0, description: '输入 / 输出 / 缓存' },
@@ -202,7 +204,7 @@ export function ToolManagementPage({
             <Sparkles size={20} aria-hidden="true" />
           </div>
           <div>
-            <div className="panel__eyebrow">Agent Tool Registry</div>
+            <div className="panel__eyebrow">智能体工具注册表</div>
             <h1>工具与能力中心</h1>
             <p>
               管理 Agent 可调用的空间分析、气象计算与产品生成能力，并在同一工作区完成参数配置、运行验证和目录治理。
@@ -458,25 +460,26 @@ export function ToolManagementPage({
           </LiquidGlassSurface>
         </main>
         </div>
-      ) : activeView === 'workflows' || activeView === 'scheduled' || activeView === 'background' ? (
-        <WorkflowManagementPanel
+      ) : activeView === 'automations' || activeView === 'scheduled' || activeView === 'background' ? (
+        <AutomationManagementPanel
           view={activeView}
           tools={tools}
-          workflows={workflowDefinitions}
-          workflowDiagnostics={workflowDiagnostics}
-          workflowValidation={workflowValidation}
+          automations={automationDefinitions}
+          automationDiagnostics={automationDiagnostics}
+          automationValidation={automationValidation}
           scheduledTasks={scheduledTasks}
-          workflowRuns={workflowRuns}
+          automationRuns={automationRuns}
           backgroundTasks={backgroundTasks}
-          isSubmitting={isWorkflowSubmitting}
-          onStartWorkflow={onStartWorkflow}
-          onValidateWorkflow={onValidateWorkflow}
-          onCreateWorkflow={onCreateWorkflow}
-          onUpdateWorkflow={onUpdateWorkflow}
-          onPublishWorkflow={onPublishWorkflow}
-          onDisableWorkflow={onDisableWorkflow}
-          onRespondWorkflowApproval={onRespondWorkflowApproval}
-          onCancelWorkflow={onCancelWorkflow}
+          isSubmitting={isAutomationSubmitting}
+          onStartAutomation={onStartAutomation}
+          onValidateAutomation={onValidateAutomation}
+          onCreateAutomation={onCreateAutomation}
+          onUpdateAutomation={onUpdateAutomation}
+          onPublishAutomation={onPublishAutomation}
+          onDisableAutomation={onDisableAutomation}
+          onRespondAutomationApproval={onRespondAutomationApproval}
+          onCancelAutomation={onCancelAutomation}
+          onOpenAutomationRun={onOpenAutomationRun}
           onSaveScheduledTask={onSaveScheduledTask}
           onDeleteScheduledTask={onDeleteScheduledTask}
           onCancelBackgroundTask={onCancelBackgroundTask}

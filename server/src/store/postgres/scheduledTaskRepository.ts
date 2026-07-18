@@ -15,13 +15,13 @@ import {
   scheduledTaskSchema,
   type ScheduledTask,
   type ScheduledTaskStatus,
-} from '../../workflows/schemas.js'
+} from '../../automations/schemas.js'
 
 type ScheduledTaskRow = typeof platformScheduledTasks.$inferSelect
 
 export interface CreateScheduledTaskInput {
   taskId: string
-  targetKind: 'workflow'
+  targetKind: 'automation'
   targetId: string
   workspaceId: string
   createdByUserId: string
@@ -37,7 +37,7 @@ export interface CreateScheduledTaskInput {
 }
 
 export interface UpdateScheduledTaskInput {
-  targetKind?: 'workflow'
+  targetKind?: 'automation'
   targetId?: string
   title?: string
   prompt?: string

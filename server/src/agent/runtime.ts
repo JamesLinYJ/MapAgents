@@ -40,7 +40,6 @@ import {
 import { FileAgentsSession } from './fileAgentsSession.js'
 import { createAgentsTools, type AgentsExecutionContext } from './agentsToolBridge.js'
 import { ToolExecutionCoordinator } from './toolExecutionCoordinator.js'
-import { runDeterministicNowcast, shouldRunDeterministicNowcast } from './deterministicNowcastRunner.js'
 import { agentsSdkVersion, runtimeConfigDigest } from './agentsRuntimeMetadata.js'
 import type { AuthContext } from '../security/types.js'
 import {
@@ -54,7 +53,6 @@ import {
   requireString,
   requireThreadId,
   sdkNativeLedgerStatus,
-  serializeAgentEvent,
   toolResultText,
 } from './runtimeSdkProjection.js'
 import { resolveDecision } from './runtimeApprovals.js'
@@ -75,16 +73,15 @@ import { RuntimeTranscriptProjector } from './runtimeTranscriptProjector.js'
 import { RuntimeApprovalPersistence } from './runtimeApprovalPersistence.js'
 import { RunSteeringController } from './runSteeringController.js'
 import type { RunOptions, RuntimeAssembly } from './runtimeTypes.js'
+import { createSubAgentTools } from './subAgentToolFactory.js'
 
 export type { OpenAIAgentsRuntimeOptions, SandboxSessionFactory } from './runtimeSandbox.js'
 export type { RunOptions } from './runtimeTypes.js'
 
-const AGENT_TOOL_NAME = /^[a-zA-Z0-9_-]+$/u
-
 // OpenAIAgentsRuntime
 //
 // Runner 是单次 run 内编排的唯一状态机；本类只投影 SDK 事件并维护 GeoForge
-// 内容载荷存储、审批边界和确定性领域入口。
+// 内容载荷存储、审批边界和通用工具/Automation 入口。
 export class OpenAIAgentsRuntime {
   private readonly abortControllers = new Map<string, AbortController>()
   private readonly checkpoints: AgentsCheckpointService
@@ -116,7 +113,7 @@ export class OpenAIAgentsRuntime {
     if (!options.resume && options.executionMode === 'plan') {
       await this.store.updateRunState(options.runId, {
         planMode: true,
-        executionPlan: null,
+        agentWorkflow: null,
       })
     }
 
@@ -136,42 +133,6 @@ export class OpenAIAgentsRuntime {
     }
 
     try {
-      if (!options.resume && await shouldRunDeterministicNowcast(this.store, options.query, threadId)) {
-        const valueState = this.createThreadValueState(threadId, options.runId)
-        const coordinator = new ToolExecutionCoordinator({
-          store: this.store,
-          registry: this.toolRegistry,
-          adapter: null,
-          runId: options.runId,
-          sessionId: options.sessionId,
-          threadId,
-          turnId,
-          modelName: null,
-          inlineToolResultMaxChars: options.runtimeConfig.context.inlineToolResultMaxChars,
-          runtimeConfig: options.runtimeConfig,
-          auth: options.auth ?? null,
-          eventSink,
-          itemSink,
-          valueState,
-          signal: abort.signal,
-        })
-        await runDeterministicNowcast({
-          store: this.store,
-          coordinator,
-          eventSink,
-          itemSink,
-          runId: options.runId,
-          threadId,
-          turnId,
-          query: options.query,
-          signal: abort.signal,
-        })
-        abort.signal.throwIfAborted()
-        await finalizer.complete()
-        await this.maybeExtractLongTermMemories(options, threadId, eventSink)
-        return this.store.getRun(options.runId)
-      }
-
       await this.steering.open(options.runId)
       const assembly = await this.assembleRuntime(options, threadId, turnId, eventSink, itemSink, abort.signal)
       const resumeState = options.resume
@@ -258,6 +219,8 @@ export class OpenAIAgentsRuntime {
     this.abortControllers.set(runId, abort)
     const finalizer = new TurnFinalizer(eventSink, itemSink, status => this.store.completeRun(runId, status))
     try {
+      await this.store.updateRunStatus(runId, 'running')
+      await this.steering.open(runId)
       const assembly = await this.assembleRuntime(options, run.threadId, turnId, eventSink, itemSink, abort.signal, false)
       const state = await this.checkpoints.restore({
         runId: options.runId,
@@ -272,7 +235,6 @@ export class OpenAIAgentsRuntime {
       if (approved) state.approve(interruption)
       else state.reject(interruption, { message: '用户拒绝执行该工具。' })
 
-      await this.store.updateRunStatus(runId, 'running')
       const result = await this.executeSdkRun(options, assembly, state, abort.signal, eventSink, itemSink)
       approval.payload.consumed = true
       await this.store.updateRunState(runId, {
@@ -295,6 +257,7 @@ export class OpenAIAgentsRuntime {
       }
       return this.store.getRun(runId)
     } finally {
+      await this.steering.close(runId)
       this.abortControllers.delete(runId)
     }
   }
@@ -393,74 +356,24 @@ export class OpenAIAgentsRuntime {
       signal,
     })
     const approvalTools = new Set(options.runtimeConfig.supervisor.approvalInterruptTools)
-    const supervisorTools = createAgentsTools(this.toolRegistry, approvalTools)
-    const previousSubAgents = new Map(this.store.getRun(options.runId).state.subAgents.map(agent => [agent.agentId, agent]))
-    await this.store.updateRunState(options.runId, {
-      subAgents: options.runtimeConfig.subAgents.map(config => previousSubAgents.get(config.agentId) ?? ({
-        agentId: config.agentId,
-        name: config.name,
-        role: config.role,
-        status: 'pending',
-        summary: config.summary,
-        stepIds: [],
-        tools: config.tools,
-        currentStepId: null,
-        latestMessage: null,
-      })),
+    const supervisorTools = createAgentsTools(this.toolRegistry, approvalTools, {
+      schemaMode: adapter.agentToolSchemaMode,
     })
-    const subAgentTools = options.runtimeConfig.subAgents.map(config => {
-      if (!AGENT_TOOL_NAME.test(config.agentId)) throw new Error(`子 Agent id '${config.agentId}' 不能作为工具名`)
-      if (this.toolRegistry.get(config.agentId)) throw new Error(`子 Agent id '${config.agentId}' 与现有工具重名`)
-      const subModelName = config.model ?? selectedModel
-      const subModel = subModelName === selectedModel ? model : adapter.createAgentModel!(subModelName)
-      const subAgent = new Agent<AgentsExecutionContext>({
-        name: config.agentId,
-        instructions: config.systemPrompt ?? config.summary,
-        handoffDescription: config.summary,
-        model: subModel,
-        modelSettings: modelSettings(options.reasoning),
-        tools: createAgentsTools(this.toolRegistry, approvalTools, new Set(config.tools)),
-      })
-      return subAgent.asTool({
-        toolName: config.agentId,
-        toolDescription: config.summary,
-        customOutputExtractor: async output => {
-          for (const item of output.newItems) {
-            await this.store.appendAgentTranscript(options.runId, config.agentId, {
-              type: 'completed_item',
-              item: item.toJSON(),
-            })
-          }
-          const current = this.store.getRun(options.runId)
-          await this.store.updateRunState(options.runId, {
-            subAgents: current.state.subAgents.map(agentState => agentState.agentId === config.agentId
-              ? { ...agentState, status: 'completed', latestMessage: '子 Agent 已返回结果' }
-              : agentState),
-          })
-          eventSink.emit('step.completed', `${config.name} 已完成`, { agentId: config.agentId })
-          if (typeof output.finalOutput !== 'string' || !output.finalOutput.trim()) {
-            throw new Error(`子 Agent '${config.agentId}' 未返回文本结果`)
-          }
-          return output.finalOutput
-        },
-        onStream: async ({ event }) => {
-          await this.store.appendAgentTranscript(options.runId, config.agentId, serializeAgentEvent(event))
-          const current = this.store.getRun(options.runId)
-          const completed = event.type === 'run_item_stream_event' && event.name === 'message_output_created'
-          await this.store.updateRunState(options.runId, {
-            subAgents: current.state.subAgents.map(agentState => agentState.agentId === config.agentId
-              ? {
-                ...agentState,
-                status: completed ? 'completed' : 'running',
-                latestMessage: completed ? '子 Agent 已返回结果' : '子 Agent 正在执行',
-              }
-              : agentState),
-          })
-          eventSink.emit(completed ? 'step.completed' : 'step.started',
-            completed ? `${config.name} 已完成` : `${config.name} 正在执行`,
-            { agentId: config.agentId })
-        },
-      })
+    const returnDirectToolNames = this.toolRegistry.list()
+      .filter(tool => (tool.executionSurfaces?.includes('agent') ?? true) && tool.agentResultMode === 'return_direct')
+      .map(tool => tool.name)
+    const subAgentTools = await createSubAgentTools({
+      configs: options.runtimeConfig.subAgents,
+      selectedModel,
+      rootModel: model,
+      reasoning: options.reasoning,
+      adapter,
+      toolRegistry: this.toolRegistry,
+      approvalTools,
+      store: this.store,
+      runId: options.runId,
+      eventSink,
+      coordinator,
     })
     const sandboxIntegration = buildRuntimeSdkSandboxIntegration(options.runtimeConfig)
     const artifactDirectory = await prepareRunArtifactDirectory(this.store.runtimeRoot, options.runId)
@@ -503,7 +416,7 @@ export class OpenAIAgentsRuntime {
       model,
       modelSettings: modelSettings(options.reasoning),
       tools: [...supervisorTools, ...subAgentTools, ...sdkTools.tools],
-      toolUseBehavior: { stopAtToolNames: ['answer_nowcast_question', 'request_clarification'] },
+      toolUseBehavior: { stopAtToolNames: returnDirectToolNames },
       defaultManifest: sandboxManifest,
       capabilities: [...Capabilities.default(), ...sandboxIntegration.capabilities],
     })
@@ -512,7 +425,10 @@ export class OpenAIAgentsRuntime {
       tracingDisabled: true,
       traceIncludeSensitiveData: false,
       toolNotFoundBehavior: 'raise_error',
-      toolExecution: { maxFunctionToolConcurrency: 1, preApprovalInputGuardrails: true },
+      toolExecution: {
+        maxFunctionToolConcurrency: options.runtimeConfig.maxFunctionToolConcurrency,
+        preApprovalInputGuardrails: true,
+      },
     })
 
     let assembly: RuntimeAssembly | null = null
@@ -703,7 +619,11 @@ export class OpenAIAgentsRuntime {
           return outcome
         }
         if (this.store.getRun(options.runId).state.planMode) {
-          throw new Error('计划模式必须通过 request_clarification 或 exit_plan_mode 结束。')
+          throw new Error('计划模式必须通过 request_clarification 或 submit_agent_workflow 结束。')
+        }
+        const agentWorkflow = this.store.getRun(options.runId).state.agentWorkflow
+        if (agentWorkflow && agentWorkflow.status !== 'completed') {
+          throw new Error(`智能体工作流尚未完成，当前状态为 ${agentWorkflow.status}。必须完成或显式调整剩余步骤后再交付最终回答。`)
         }
         if (!projection.lastAssistantText || projection.lastAssistantText !== finalOutput) {
           const synthetic: AgentInputItem = {

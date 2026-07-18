@@ -12,7 +12,7 @@ import type { AnalysisRun } from '../schemas/types.js'
 import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import type { OpenAIAgentsRuntime, RunOptions } from './runtime.js'
 import { RunTaskManager } from './runTaskManager.js'
-import { BackgroundTaskRegistry } from '../workflows/backgroundTaskRegistry.js'
+import { BackgroundTaskRegistry } from '../automations/backgroundTaskRegistry.js'
 
 describe('RunTaskManager', () => {
   it('tracks a background run and calls completion callback after runtime finishes', async () => {
@@ -142,7 +142,7 @@ function testRun(id: string): AnalysisRun {
       contextReferences: [],
       contextResolution: null,
       runLifecycle: { status: 'created', reason: null, updatedAt: null },
-      executionPlan: null,
+      agentWorkflow: null,
       currentStep: 0,
       loopIteration: 0,
       loopPhase: 'idle',

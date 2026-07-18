@@ -15,7 +15,7 @@ export const TODO_WRITE_PROMPT = `更新当前运行中用户可见的 Todo 列�
 - 多步骤实现中同步当前进度，避免用户只看到零散工具调用。
 
 规则：
-- 仍处于计划模式时不要调用；先用 exit_plan_mode 提交计划并等待批准。
+- 仍处于计划模式时不要调用；先用 submit_agent_workflow 提交计划并等待批准。
 - Todo 要短、具体、面向动作。
 - 同一时间最多只能有一个 running。
 - 开始下一项前及时把已完成事项标记为 completed；失败事项用 failed，受阻事项用 blocked。`

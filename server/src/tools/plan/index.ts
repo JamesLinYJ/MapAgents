@@ -1,4 +1,4 @@
 import manifest from "./manifest.json" with { type: "json" };
-import { enterPlanModeTool, exitPlanModeTool, requestClarificationTool } from "./planTools.js";
-const provider = { manifest, tools: () => [requestClarificationTool, enterPlanModeTool, exitPlanModeTool] };
+import { enterPlanModeTool, requestClarificationTool, reviseAgentWorkflowTool, submitAgentWorkflowTool } from "./planTools.js";
+const provider = { manifest, tools: () => [requestClarificationTool, enterPlanModeTool, submitAgentWorkflowTool, reviseAgentWorkflowTool] };
 export default provider;

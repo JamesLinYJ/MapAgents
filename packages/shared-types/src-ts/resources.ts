@@ -135,7 +135,7 @@ export const toolDescriptorSchema = z.object({
   meta: z.record(z.string(), z.unknown()).prefault({}),
 })
 
-export const workflowNodeTypeSchema = z.enum([
+export const automationNodeTypeSchema = z.enum([
   'trigger',
   'tool',
   'agent',
@@ -144,59 +144,71 @@ export const workflowNodeTypeSchema = z.enum([
   'output',
 ])
 
-export const workflowBindingSchema = z.discriminatedUnion('source', [
+export const automationBindingSchema = z.discriminatedUnion('source', [
   z.object({ source: z.literal('literal'), value: z.unknown() }),
   z.object({ source: z.literal('input'), path: z.string().min(1) }),
   z.object({ source: z.literal('node'), nodeId: z.string().min(1), path: z.string().min(1) }),
+  z.object({
+    source: z.literal('value_ref'),
+    nodeId: z.string().min(1),
+    kind: z.string().min(1),
+    path: z.string().min(1).default('refId'),
+  }),
 ])
 
-export const workflowRetryPolicySchema = z.object({
+export const automationRetryPolicySchema = z.object({
   maxAttempts: z.number().int().min(1).max(5).default(1),
   backoffSeconds: z.number().int().min(0).max(300).default(0),
 })
 
-const workflowNodeBaseSchema = z.object({
+export const automationAgentInvocationSchema = z.object({
+  enabled: z.boolean().default(false),
+  description: z.string().default(''),
+  examples: z.array(z.string().min(1)).max(12).default([]),
+}).strict()
+
+const automationNodeBaseSchema = z.object({
   nodeId: z.string().min(1),
   label: z.string().min(1),
   description: z.string().default(''),
   position: z.object({ x: z.number(), y: z.number() }),
 })
 
-export const workflowTriggerNodeSchema = workflowNodeBaseSchema.extend({
+export const automationTriggerNodeSchema = automationNodeBaseSchema.extend({
   type: z.literal('trigger'),
   config: z.object({}),
 })
 
-export const workflowToolNodeSchema = workflowNodeBaseSchema.extend({
+export const automationToolNodeSchema = automationNodeBaseSchema.extend({
   type: z.literal('tool'),
   config: z.object({
     toolName: z.string().min(1),
-    arguments: z.record(z.string(), workflowBindingSchema).prefault({}),
+    arguments: z.record(z.string(), automationBindingSchema).prefault({}),
     approvalMode: z.enum(['auto', 'always']).default('auto'),
-    retry: workflowRetryPolicySchema.default({ maxAttempts: 1, backoffSeconds: 0 }),
+    retry: automationRetryPolicySchema.default({ maxAttempts: 1, backoffSeconds: 0 }),
   }),
 })
 
-export const workflowAgentNodeSchema = workflowNodeBaseSchema.extend({
+export const automationAgentNodeSchema = automationNodeBaseSchema.extend({
   type: z.literal('agent'),
   config: z.object({
     promptTemplate: z.string().min(1),
     executionMode: z.enum(['auto', 'plan']).default('auto'),
     reasoning: z.boolean().default(true),
-    retry: workflowRetryPolicySchema.default({ maxAttempts: 1, backoffSeconds: 0 }),
+    retry: automationRetryPolicySchema.default({ maxAttempts: 1, backoffSeconds: 0 }),
   }),
 })
 
-export const workflowConditionNodeSchema = workflowNodeBaseSchema.extend({
+export const automationConditionNodeSchema = automationNodeBaseSchema.extend({
   type: z.literal('condition'),
   config: z.object({
-    left: workflowBindingSchema,
+    left: automationBindingSchema,
     operator: z.enum(['equals', 'not_equals', 'greater_than', 'greater_or_equal', 'less_than', 'less_or_equal', 'contains', 'exists', 'is_true']),
-    right: workflowBindingSchema.nullable().default(null),
+    right: automationBindingSchema.nullable().default(null),
   }),
 })
 
-export const workflowApprovalNodeSchema = workflowNodeBaseSchema.extend({
+export const automationApprovalNodeSchema = automationNodeBaseSchema.extend({
   type: z.literal('approval'),
   config: z.object({
     title: z.string().min(1),
@@ -205,23 +217,23 @@ export const workflowApprovalNodeSchema = workflowNodeBaseSchema.extend({
   }),
 })
 
-export const workflowOutputNodeSchema = workflowNodeBaseSchema.extend({
+export const automationOutputNodeSchema = automationNodeBaseSchema.extend({
   type: z.literal('output'),
   config: z.object({
-    outputs: z.record(z.string(), workflowBindingSchema).prefault({}),
+    outputs: z.record(z.string(), automationBindingSchema).prefault({}),
   }),
 })
 
-export const workflowNodeSchema = z.discriminatedUnion('type', [
-  workflowTriggerNodeSchema,
-  workflowToolNodeSchema,
-  workflowAgentNodeSchema,
-  workflowConditionNodeSchema,
-  workflowApprovalNodeSchema,
-  workflowOutputNodeSchema,
+export const automationNodeSchema = z.discriminatedUnion('type', [
+  automationTriggerNodeSchema,
+  automationToolNodeSchema,
+  automationAgentNodeSchema,
+  automationConditionNodeSchema,
+  automationApprovalNodeSchema,
+  automationOutputNodeSchema,
 ])
 
-export const workflowEdgePortSchema = z.enum([
+export const automationEdgePortSchema = z.enum([
   'default',
   'success',
   'error',
@@ -231,18 +243,18 @@ export const workflowEdgePortSchema = z.enum([
   'rejected',
 ])
 
-export const workflowEdgeSchema = z.object({
+export const automationEdgeSchema = z.object({
   edgeId: z.string().min(1),
   sourceNodeId: z.string().min(1),
   targetNodeId: z.string().min(1),
-  sourcePort: workflowEdgePortSchema.default('default'),
+  sourcePort: automationEdgePortSchema.default('default'),
 })
 
-export const workflowGraphSchema = z.object({
+export const automationGraphSchema = z.object({
   schemaVersion: z.literal(1).default(1),
   entryNodeId: z.string().min(1),
-  nodes: z.array(workflowNodeSchema).min(2),
-  edges: z.array(workflowEdgeSchema).min(1),
+  nodes: z.array(automationNodeSchema).min(2),
+  edges: z.array(automationEdgeSchema).min(1),
   viewport: z.object({
     x: z.number(),
     y: z.number(),
@@ -250,8 +262,8 @@ export const workflowGraphSchema = z.object({
   }).default({ x: 0, y: 0, zoom: 1 }),
 })
 
-export const workflowDefinitionSchema = z.object({
-  workflowId: z.string().min(1),
+export const automationDefinitionSchema = z.object({
+  automationId: z.string().min(1),
   name: z.string().min(1),
   description: z.string(),
   version: z.string().min(1),
@@ -268,12 +280,17 @@ export const workflowDefinitionSchema = z.object({
   requiresApproval: z.boolean().default(false),
   timeoutSeconds: z.number().int().positive().default(900),
   outputType: z.string().default('conversation'),
-  graph: workflowGraphSchema,
+  agentInvocation: automationAgentInvocationSchema.default({
+    enabled: false,
+    description: '',
+    examples: [],
+  }),
+  graph: automationGraphSchema,
   createdAt: z.string().nullable().default(null),
   updatedAt: z.string().nullable().default(null),
 })
 
-export const workflowValidationIssueSchema = z.object({
+export const automationValidationIssueSchema = z.object({
   severity: z.enum(['error', 'warning']),
   code: z.string(),
   message: z.string(),
@@ -282,26 +299,26 @@ export const workflowValidationIssueSchema = z.object({
   path: z.string().nullable().default(null),
 })
 
-export const workflowValidationResultSchema = z.object({
+export const automationValidationResultSchema = z.object({
   valid: z.boolean(),
-  issues: z.array(workflowValidationIssueSchema),
+  issues: z.array(automationValidationIssueSchema),
   topologicalOrder: z.array(z.string()),
   requiredTools: z.array(z.string()),
 })
 
-export const workflowVersionRecordSchema = z.object({
-  workflowId: z.string(),
+export const automationVersionRecordSchema = z.object({
+  automationId: z.string(),
   revision: z.number().int().positive(),
   lifecycle: z.enum(['draft', 'published', 'archived']),
-  definition: workflowDefinitionSchema,
+  definition: automationDefinitionSchema,
   createdByUserId: z.string().nullable().default(null),
   createdAt: z.string(),
   publishedAt: z.string().nullable().default(null),
 })
 
-export const workflowNodeRunSchema = z.object({
+export const automationNodeRunSchema = z.object({
   nodeId: z.string(),
-  nodeType: workflowNodeTypeSchema,
+  nodeType: automationNodeTypeSchema,
   label: z.string(),
   status: z.enum(['pending', 'running', 'waiting_approval', 'completed', 'skipped', 'failed', 'cancelled']),
   attempt: z.number().int().nonnegative().default(0),
@@ -311,7 +328,7 @@ export const workflowNodeRunSchema = z.object({
   output: z.record(z.string(), z.unknown()).prefault({}),
 })
 
-export const workflowApprovalRequestSchema = z.object({
+export const automationApprovalRequestSchema = z.object({
   approvalId: z.string(),
   nodeId: z.string(),
   title: z.string(),
@@ -325,7 +342,7 @@ export const workflowApprovalRequestSchema = z.object({
 
 export const scheduledTaskSchema = z.object({
   taskId: z.string(),
-  targetKind: z.enum(['workflow']),
+  targetKind: z.enum(['automation']),
   targetId: z.string(),
   workspaceId: z.string(),
   createdByUserId: z.string(),
@@ -347,21 +364,21 @@ export const scheduledTaskSchema = z.object({
   updatedAt: z.string(),
 })
 
-export const workflowRunRecordSchema = z.object({
-  workflowRunId: z.string(),
-  workflowId: z.string(),
+export const automationRunRecordSchema = z.object({
+  automationRunId: z.string(),
+  automationId: z.string(),
   scheduledTaskId: z.string().nullable().default(null),
   workspaceId: z.string(),
   createdByUserId: z.string(),
   runId: z.string().nullable().default(null),
-  workflowRevision: z.number().int().positive().default(1),
+  automationRevision: z.number().int().positive().default(1),
   status: z.enum(['queued', 'running', 'waiting_approval', 'completed', 'failed', 'cancelled']).default('queued'),
   currentStep: z.string().nullable().default(null),
-  triggerKind: z.enum(['manual', 'schedule']).default('manual'),
+  triggerKind: z.enum(['manual', 'schedule', 'agent']).default('manual'),
   errorMessage: z.string().nullable().default(null),
   metadata: z.record(z.string(), z.unknown()).prefault({}),
-  nodeRuns: z.array(workflowNodeRunSchema).default([]),
-  pendingApproval: workflowApprovalRequestSchema.nullable().default(null),
+  nodeRuns: z.array(automationNodeRunSchema).default([]),
+  pendingApproval: automationApprovalRequestSchema.nullable().default(null),
   outputs: z.record(z.string(), z.unknown()).prefault({}),
   startedAt: z.string(),
   completedAt: z.string().nullable().default(null),
@@ -454,20 +471,21 @@ export type SystemComponentsStatus = z.infer<typeof systemComponentsStatusSchema
 export type ToolParameterOption = z.infer<typeof toolParameterOptionSchema>
 export type ToolParameterDescriptor = z.infer<typeof toolParameterDescriptorSchema>
 export type ToolDescriptor = z.infer<typeof toolDescriptorSchema>
-export type WorkflowNodeType = z.infer<typeof workflowNodeTypeSchema>
-export type WorkflowBinding = z.infer<typeof workflowBindingSchema>
-export type WorkflowRetryPolicy = z.infer<typeof workflowRetryPolicySchema>
-export type WorkflowNode = z.infer<typeof workflowNodeSchema>
-export type WorkflowEdge = z.infer<typeof workflowEdgeSchema>
-export type WorkflowGraph = z.infer<typeof workflowGraphSchema>
-export type WorkflowDefinition = z.infer<typeof workflowDefinitionSchema>
-export type WorkflowValidationIssue = z.infer<typeof workflowValidationIssueSchema>
-export type WorkflowValidationResult = z.infer<typeof workflowValidationResultSchema>
-export type WorkflowVersionRecord = z.infer<typeof workflowVersionRecordSchema>
-export type WorkflowNodeRun = z.infer<typeof workflowNodeRunSchema>
-export type WorkflowApprovalRequest = z.infer<typeof workflowApprovalRequestSchema>
+export type AutomationNodeType = z.infer<typeof automationNodeTypeSchema>
+export type AutomationBinding = z.infer<typeof automationBindingSchema>
+export type AutomationRetryPolicy = z.infer<typeof automationRetryPolicySchema>
+export type AutomationAgentInvocation = z.infer<typeof automationAgentInvocationSchema>
+export type AutomationNode = z.infer<typeof automationNodeSchema>
+export type AutomationEdge = z.infer<typeof automationEdgeSchema>
+export type AutomationGraph = z.infer<typeof automationGraphSchema>
+export type AutomationDefinition = z.infer<typeof automationDefinitionSchema>
+export type AutomationValidationIssue = z.infer<typeof automationValidationIssueSchema>
+export type AutomationValidationResult = z.infer<typeof automationValidationResultSchema>
+export type AutomationVersionRecord = z.infer<typeof automationVersionRecordSchema>
+export type AutomationNodeRun = z.infer<typeof automationNodeRunSchema>
+export type AutomationApprovalRequest = z.infer<typeof automationApprovalRequestSchema>
 export type ScheduledTask = z.infer<typeof scheduledTaskSchema>
-export type WorkflowRunRecord = z.infer<typeof workflowRunRecordSchema>
+export type AutomationRunRecord = z.infer<typeof automationRunRecordSchema>
 export type BackgroundTaskInfo = z.infer<typeof backgroundTaskInfoSchema>
 export type TokenUsageTotals = z.infer<typeof tokenUsageTotalsSchema>
 export type TokenUsageBucket = z.infer<typeof tokenUsageBucketSchema>

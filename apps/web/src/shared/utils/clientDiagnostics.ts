@@ -21,10 +21,10 @@ export interface ClientDiagnosticPayload {
 export function reportClientDiagnostic(level: ClientDiagnosticLevel, payload: ClientDiagnosticPayload): void {
   const sanitized = sanitizeClientDiagnostic(payload)
   if (level === 'error') {
-    console.error('[GeoForge]', sanitized)
+    console.error('[地理智能工作台]', sanitized)
     return
   }
-  console.warn('[GeoForge]', sanitized)
+  console.warn('[地理智能工作台]', sanitized)
 }
 
 export function sanitizeClientDiagnostic(value: unknown, depth = 0): unknown {

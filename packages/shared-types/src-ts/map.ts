@@ -32,7 +32,7 @@ export const mapImageCoordinatesSchema = z.tuple([
 
 const relativeResourceUrlSchema = z.string().trim().min(1).refine(
   value => value.startsWith('/'),
-  { message: '地图资源必须使用 GeoForge 同源相对地址' },
+  { message: '地图资源必须使用同源相对地址' },
 )
 
 export const mapLayerSourceSchema = z.discriminatedUnion('kind', [
@@ -216,6 +216,7 @@ export const mapLayerLabelSchema = z.object({
 
 export const mapLayerDraftSchema = z.object({
   title: z.string().trim().min(1),
+  replacementGroup: z.string().trim().min(1).nullable().default(null),
   bounds: mapBoundsSchema,
   crs: z.string().trim().min(1),
   minZoom: z.number().min(0).max(24).default(0),

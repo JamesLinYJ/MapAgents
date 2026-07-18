@@ -39,7 +39,10 @@ describe('MapTileGateway', () => {
     expect(url.pathname).toBe('/cog/tiles/WebMercatorQuad/5/25/13.png')
     expect(url.searchParams.get('url')).toBe('file:///data/artifacts/run_1/rain.tif')
     expect(url.searchParams.get('rescale')).toBe('0,50')
-    expect(Object.keys(JSON.parse(url.searchParams.get('colormap') ?? '{}'))).toHaveLength(256)
+    const colormap = JSON.parse(url.searchParams.get('colormap') ?? '{}') as Record<string, number[]>
+    expect(Object.keys(colormap)).toHaveLength(256)
+    expect(colormap['0']?.[3]).toBe(0)
+    expect(colormap['255']?.[3]).toBe(255)
   })
 })
 
@@ -60,7 +63,7 @@ function manifest(sourceKind: 'vector_tiles' | 'raster_tiles') {
       ? { kind: 'polygon', opacity: 0.7, colorField: null, categories: [], color: '#1976d2', outlineColor: '#0d47a1', outlineWidth: 1 }
       : {
           kind: 'continuous_raster', rangeMode: 'data', dataRange: [0, 50], renderRange: [0, 50], opacity: 0.9,
-          colorStops: [{ value: 0, color: '#f7fbff' }, { value: 50, color: '#b71c1c' }],
+          colorStops: [{ value: 0, color: '#f7fbff00' }, { value: 50, color: '#b71c1c' }],
         },
     legend: null, temporal: null,
     capabilities: { query: true, labels: false, style: true, temporal: false, opacity: true, download: true },

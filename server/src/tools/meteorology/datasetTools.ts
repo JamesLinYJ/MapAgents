@@ -80,7 +80,10 @@ export function createDatasetMeteorologyTools(deps: MeteorologyToolDeps): ToolDe
     tool('meteorological_report', '生成气象报告', '使用显式模型解读引用生成 DOCX 报告', {
       dataset_ref: refParameter('数据集引用'),
       interpretation_ref: refParameter('模型解读引用'),
-    }, withMeteorologyDeps(deps, generateReport), ['dataset_ref', 'interpretation_ref']),
+    }, withMeteorologyDeps(deps, generateReport), ['dataset_ref', 'interpretation_ref'], {
+      isReadOnly: false,
+      requiresApproval: true,
+    }),
   ]
 }
 

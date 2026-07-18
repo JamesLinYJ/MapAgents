@@ -14,9 +14,10 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { ToolResult, ValueRef } from '../framework/types.js'
-import type { ArtifactRef, ClarificationState, DecisionRequest, ExecutionPlan, TodoItem, ToolValueRef } from '../schemas/types.js'
+import type { ArtifactRef, ClarificationState, DecisionRequest, AgentWorkflow, TodoItem, ToolValueRef } from '../schemas/types.js'
 import type { ToolExecutionStore } from '../store/runtimePorts.js'
 import { makeId, nowUtc } from '../utils/ids.js'
+import { createAgentWorkflow, reviseAgentWorkflow } from '../agent/agentWorkflowState.js'
 
 export async function persistToolExecutionResult(
   store: ToolExecutionStore,
@@ -48,7 +49,7 @@ export async function persistToolExecutionResult(
   const generatedArtifacts = await createGeoArtifacts(result, runId, store.runtimeRoot)
   const artifacts = dedupeArtifacts([...explicitArtifacts, ...generatedArtifacts])
   const controlState = {
-    ...planControlState(result.payload),
+    ...agentWorkflowControlState(result.payload, run.state.agentWorkflow),
     ...clarificationControlState(result.payload, run.state.decisions),
     ...todoControlState(result.payload),
   }
@@ -82,15 +83,24 @@ export async function persistToolExecutionResult(
   for (const artifact of artifacts) await store.persistArtifact(artifact)
 }
 
-// 计划模式是运行状态，不是普通工具 payload。
-// enter/exit 工具返回控制字段后，必须在同一条持久化路径内写回 run state。
-function planControlState(payload: Record<string, unknown>): Partial<{
+// 智能体工作流由系统工具提交或修订。结构和依赖图在领域状态机中验证，
+// 不允许持久化层用缺省值修补模型生成的无效计划。
+function agentWorkflowControlState(
+  payload: Record<string, unknown>,
+  current: AgentWorkflow | null,
+): Partial<{
   planMode: boolean
-  executionPlan: ExecutionPlan | null
+  agentWorkflow: AgentWorkflow
 }> {
-  const updates: Partial<{ planMode: boolean; executionPlan: ExecutionPlan | null }> = {}
+  const updates: Partial<{ planMode: boolean; agentWorkflow: AgentWorkflow }> = {}
   if (typeof payload.planMode === 'boolean') updates.planMode = payload.planMode
-  if (isRecord(payload.plan)) updates.executionPlan = normalizeExecutionPlan(payload.plan)
+  if (isRecord(payload.agentWorkflowDraft)) {
+    updates.agentWorkflow = createAgentWorkflow(payload.agentWorkflowDraft)
+  }
+  if (isRecord(payload.agentWorkflowRevision)) {
+    if (!current) throw new Error('当前运行没有可以调整的智能体工作流。')
+    updates.agentWorkflow = reviseAgentWorkflow(current, payload.agentWorkflowRevision)
+  }
   return updates
 }
 
@@ -146,26 +156,6 @@ function clarificationControlState(
 function upsertDecision(decisions: DecisionRequest[], decision: DecisionRequest): DecisionRequest[] {
   const next = decisions.filter(item => item.decisionId !== decision.decisionId)
   return [...next, decision]
-}
-
-function normalizeExecutionPlan(value: Record<string, unknown>): ExecutionPlan {
-  const steps = Array.isArray(value.steps)
-    ? value.steps.map((step, index) => normalizePlanStep(step, index))
-    : []
-  return {
-    goal: typeof value.goal === 'string' && value.goal.trim() ? value.goal.trim() : '执行已批准计划',
-    steps,
-  }
-}
-
-function normalizePlanStep(value: unknown, index: number): ExecutionPlan['steps'][number] {
-  const raw = isRecord(value) ? value : {}
-  return {
-    id: typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : `plan_step_${index + 1}`,
-    tool: typeof raw.tool === 'string' && raw.tool.trim() ? raw.tool.trim() : 'manual',
-    args: isRecord(raw.args) ? raw.args : {},
-    reason: typeof raw.reason === 'string' && raw.reason.trim() ? raw.reason.trim() : '按计划执行',
-  }
 }
 
 // todo_write 的 payload 是运行状态更新，不是普通文本结果。统一在工具持久化
@@ -244,6 +234,7 @@ async function writeGeoArtifact(
       primarySurface: 'map',
       map: {
         title: name,
+        replacementGroup: null,
         bounds: requireGeoJsonBounds(geojson),
         crs: 'EPSG:4326',
         minZoom: 0,

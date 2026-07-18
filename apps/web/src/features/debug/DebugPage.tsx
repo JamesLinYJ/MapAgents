@@ -23,7 +23,7 @@ import type {
   AnalysisRun,
   ArtifactRef,
   ConversationItem,
-  ExecutionPlan,
+  AgentWorkflow,
   LayerDescriptor,
   ModelProviderDescriptor,
   RunEvent,
@@ -80,7 +80,7 @@ export interface DebugPageProps {
   events: RunEvent[]
   items: ConversationItem[]
   intent?: UserIntent
-  executionPlan?: ExecutionPlan
+  agentWorkflow?: AgentWorkflow
   agentState?: AgentState
   artifacts: ArtifactRef[]
   artifactMetadata: Record<string, Record<string, unknown>>
@@ -130,7 +130,7 @@ export function DebugPage({
   events,
   items,
   intent,
-  executionPlan,
+  agentWorkflow,
   agentState,
   artifacts,
   artifactMetadata,
@@ -182,14 +182,14 @@ export function DebugPage({
         query,
         runStatus,
         intent,
-        executionPlan,
+        agentWorkflow,
         todos: todoItems,
         subAgents,
         approvals,
         toolCalls,
         events,
       }),
-    [approvals, events, executionPlan, intent, query, runStatus, subAgents, todoItems, toolCalls],
+    [approvals, events, agentWorkflow, intent, query, runStatus, subAgents, todoItems, toolCalls],
   )
   const transcriptHeadline = useMemo(() => pickConversationHeadline(items, runStatus), [items, runStatus])
   const assistantSummary = transcriptHeadline.title === '回答' ? transcriptHeadline.body : undefined
@@ -847,7 +847,7 @@ export function DebugPage({
               <div className="panel__subheader">
                 <span>执行计划</span>
               </div>
-              <pre className="debug-pre">{executionPlan ? JSON.stringify(executionPlan, null, 2) : '暂无数据'}</pre>
+              <pre className="debug-pre">{agentWorkflow ? JSON.stringify(agentWorkflow, null, 2) : '暂无数据'}</pre>
             </div>
             <div className="panel__section panel__section--grow">
               <div className="panel__subheader">

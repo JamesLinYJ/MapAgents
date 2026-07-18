@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest'
 import type { ConversationItem } from './schemas/types.js'
 import { PlatformPersistenceFacade } from './store/platformPersistenceFacade.js'
 import { PersistenceFacadeTestHarness } from '../test-support/persistenceFacadeHarness.js'
+import { automationDefinitionSchema } from './automations/schemas.js'
 
 describe('conversation architecture', () => {
   it('keeps shared protocol schemas modular and server parsing on the shared contract', async () => {
@@ -433,22 +434,22 @@ describe('conversation architecture', () => {
       .rejects.toMatchObject({ code: 'ENOENT' })
   })
 
-  it('keeps workflow persistence split by definition, schedule, and run ownership', async () => {
+  it('keeps automation persistence split by definition, schedule, and run ownership', async () => {
     const postgresRoot = path.join(process.cwd(), 'src/store/postgres')
-    const facadeSource = await readFile(path.join(postgresRoot, 'workflowStore.ts'), 'utf8')
-    const definitionSource = await readFile(path.join(postgresRoot, 'workflowDefinitionRepository.ts'), 'utf8')
+    const facadeSource = await readFile(path.join(postgresRoot, 'automationStore.ts'), 'utf8')
+    const definitionSource = await readFile(path.join(postgresRoot, 'automationDefinitionRepository.ts'), 'utf8')
     const scheduleSource = await readFile(path.join(postgresRoot, 'scheduledTaskRepository.ts'), 'utf8')
-    const runSource = await readFile(path.join(postgresRoot, 'workflowRunRepository.ts'), 'utf8')
+    const runSource = await readFile(path.join(postgresRoot, 'automationRunRepository.ts'), 'utf8')
 
-    expect(facadeSource.includes('new WorkflowDefinitionRepository')).toBe(true)
+    expect(facadeSource.includes('new AutomationDefinitionRepository')).toBe(true)
     expect(facadeSource.includes('new ScheduledTaskRepository')).toBe(true)
-    expect(facadeSource.includes('new WorkflowRunRepository')).toBe(true)
+    expect(facadeSource.includes('new AutomationRunRepository')).toBe(true)
     expect(facadeSource.includes("from '../../db/schema.js'")).toBe(false)
     expect(facadeSource.includes('this.db.')).toBe(false)
-    expect(definitionSource.includes('platformWorkflowDefinitions')).toBe(true)
-    expect(definitionSource.includes('platformWorkflowVersions')).toBe(true)
+    expect(definitionSource.includes('platformAutomationDefinitions')).toBe(true)
+    expect(definitionSource.includes('platformAutomationVersions')).toBe(true)
     expect(scheduleSource.includes('platformScheduledTasks')).toBe(true)
-    expect(runSource.includes('platformWorkflowRuns')).toBe(true)
+    expect(runSource.includes('platformAutomationRuns')).toBe(true)
   })
 
   it('models artifact publication as an explicit cross-resource transaction', async () => {
@@ -1014,7 +1015,6 @@ describe('conversation architecture', () => {
     const productionFiles = [
       'server/src/agent/runtime.ts',
       'server/src/agent/contextManager.ts',
-      'server/src/agent/deterministicNowcastRunner.ts',
       'server/src/agent/toolExecutionCoordinator.ts',
       'server/src/agent/runTaskManager.ts',
       'server/src/memory/service.ts',
@@ -1029,6 +1029,26 @@ describe('conversation architecture', () => {
       expect(source.includes("from '../store/platformPersistenceFacade.js'"), relativePath).toBe(false)
       expect(source.includes("from '../store/runtimePorts.js'"), relativePath).toBe(true)
     }
+  })
+
+  it('keeps short-nowcast orchestration in the generic Automation boundary', async () => {
+    const root = path.resolve(process.cwd(), '..')
+    const dedicatedRunner = path.join(root, 'server/src/agent/deterministicNowcastRunner.ts')
+    const runtimeSource = await readFile(path.join(root, 'server/src/agent/runtime.ts'), 'utf8')
+    const automation = automationDefinitionSchema.parse(JSON.parse(await readFile(
+      path.join(root, 'server/config/automations/meteorological_nowcast_monitor.json'),
+      'utf8',
+    )))
+
+    await expect(stat(dedicatedRunner)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(runtimeSource).not.toContain('shouldRunDeterministicNowcast')
+    expect(runtimeSource).not.toContain('runDeterministicNowcast')
+    expect(automation.defaultParameters.horizonMinutes).toBe(180)
+    expect(automation.agentInvocation.enabled).toBe(true)
+    expect(automation.graph.nodes.some(node => node.type === 'agent')).toBe(false)
+    expect(automation.graph.nodes.some(node => node.type === 'tool' && node.config.toolName === 'answer_nowcast_question')).toBe(true)
+    const output = automation.graph.nodes.find(node => node.type === 'output')
+    expect(output?.type === 'output' && Object.hasOwn(output.config.outputs, 'answer')).toBe(true)
   })
 
   it('replays completed conversation items from the PostgreSQL repository', async () => {

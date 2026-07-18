@@ -2753,27 +2753,27 @@
     @apply inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-900 text-[11px] font-semibold text-white;
   }
 
-  .tool-mini-app__workflow {
+  .tool-mini-app__automation {
     @apply mt-4 grid grid-cols-1 gap-2;
   }
 
-  .tool-mini-app__workflow-step {
+  .tool-mini-app__automation-step {
     @apply flex items-start gap-3 rounded-2xl border border-white/50 bg-white/35 p-3 text-slate-500;
   }
 
-  .tool-mini-app__workflow-step.is-done {
+  .tool-mini-app__automation-step.is-done {
     @apply border-emerald-200/80 bg-emerald-50/55 text-emerald-700;
   }
 
-  .tool-mini-app__workflow-step strong {
+  .tool-mini-app__automation-step strong {
     @apply block text-[13px] text-slate-800;
   }
 
-  .tool-mini-app__workflow-step p {
+  .tool-mini-app__automation-step p {
     @apply mt-0.5 text-[12px] leading-5 text-slate-600;
   }
 
-  .tool-mini-app__workflow-step span {
+  .tool-mini-app__automation-step span {
     @apply mt-1 inline-flex rounded-full border border-white/60 bg-white/70 px-2 py-0.5 text-[11px] font-semibold text-slate-600;
   }
 

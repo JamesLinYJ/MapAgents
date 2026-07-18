@@ -17,7 +17,7 @@ import type {
   AgentState,
   AnalysisRun,
   ArtifactRef,
-  ExecutionPlan,
+  AgentWorkflow,
   LayerDescriptor,
   RunEvent,
   UserIntent,
@@ -415,13 +415,12 @@ function normalizeBudgetStatus(status: string | undefined, used: number, max: nu
 
 export function buildAgentTodoItems(
   agentState: AgentState | undefined,
-  executionPlan: ExecutionPlan | undefined,
-  runStatus?: AnalysisRun['status'],
+  agentWorkflow: AgentWorkflow | undefined,
 ): ProgressTodoItem[] {
   // Todo 面板只投影后端事实源。
   //
   // 优先使用 todo_write 写回的 AgentState.todos；如果计划模式只提交了
-  // executionPlan，则把计划步骤作为只读任务清单展示，不额外发明进度。
+  // agentWorkflow，则把计划步骤作为只读任务清单展示，不额外发明进度。
   const rawTodos = agentState?.todos ?? []
   if (rawTodos.length) {
     return rawTodos
@@ -439,16 +438,15 @@ export function buildAgentTodoItems(
       .filter((item) => item.content.trim())
   }
 
-  const steps = executionPlan?.steps ?? []
+  const steps = agentWorkflow?.steps ?? []
   if (!steps.length) {
     return []
   }
-  const completed = runStatus === 'completed'
   return steps.map((step, index) => ({
-    id: step.id || `plan-step:${index + 1}`,
-    content: step.reason || step.tool || `计划步骤 ${index + 1}`,
-    status: completed ? 'completed' : index === 0 && runStatus === 'running' ? 'running' : 'pending',
-    activeForm: step.tool ? `准备调用 ${step.tool}` : '准备执行计划步骤',
+    id: step.stepId || `agent-workflow-step:${index + 1}`,
+    content: step.title || step.reason || `工作流步骤 ${index + 1}`,
+    status: normalizeTodoStatus(step.status),
+    activeForm: step.toolName ? `正在执行 ${step.toolName}` : step.title,
   }))
 }
 
@@ -461,13 +459,13 @@ export function normalizeTodoStatus(status: string) {
 export function buildProgressItems({
   runStatus,
   intent,
-  executionPlan,
+  agentWorkflow,
   artifacts,
   events,
 }: {
   runStatus?: AnalysisRun['status']
   intent?: UserIntent
-  executionPlan?: ExecutionPlan
+  agentWorkflow?: AgentWorkflow
   artifacts: ArtifactRef[]
   events: RunEvent[]
 }) {
@@ -497,10 +495,10 @@ export function buildProgressItems({
       id: 'prepare',
       title: '准备数据',
       description:
-        executionPlan?.steps.length
-          ? `已经整理出 ${executionPlan.steps.length} 个分析步骤。`
+        agentWorkflow?.steps.length
+          ? `已经整理出 ${agentWorkflow.steps.length} 个分析步骤。`
           : '会按当前目录、上传图层或外部来源准备数据。',
-      status: executionPlan?.steps.length ? ('done' as const) : hasWorkStarted ? ('active' as const) : ('pending' as const),
+      status: agentWorkflow?.steps.length ? ('done' as const) : hasWorkStarted ? ('active' as const) : ('pending' as const),
     },
     {
       id: 'analyze',

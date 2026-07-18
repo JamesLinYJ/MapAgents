@@ -9,7 +9,7 @@
 // --------------------------------------------------------------------------
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { LayerDescriptor, MapLayerStyle, MapSceneLayer } from '@geo-agent-platform/shared-types'
+import type { LayerDescriptor, MapLegend, MapLayerStyle, MapSceneLayer } from '@geo-agent-platform/shared-types'
 import type { SceneRenderLayer } from '../map/useMapScene'
 import { isRecord } from '../../shared/utils/guards'
 
@@ -33,6 +33,7 @@ export interface LayerTreeNode {
   managedLayerKey?: string
   featureCount?: number
   geometrySummary?: string
+  legend?: MapLegend | null
   children?: LayerTreeNode[]
   expanded?: boolean
   labelEnabled?: boolean
@@ -398,6 +399,7 @@ function toLayerTreeNode(
     managedLayerKey: manifest.managedLayerKey ?? undefined,
     featureCount: reference?.featureCount ?? (manifest.source.kind === 'geojson' ? manifest.source.featureCount : undefined),
     geometrySummary: reference?.geometryType ?? manifest.style.kind,
+    legend: manifest.legend,
     labelEnabled: Boolean(scene.label),
     labelField: scene.label?.field && fieldNames.includes(scene.label.field) ? scene.label.field : fieldNames[0],
   }

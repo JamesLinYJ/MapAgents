@@ -13,7 +13,7 @@ import type {
   AgentState,
   AnalysisRun,
   ArtifactRef,
-  ExecutionPlan,
+  AgentWorkflow,
   RunEvent,
   UserIntent,
   ConversationItem,
@@ -36,7 +36,7 @@ export interface RunState {
   run?: AnalysisRun
   agentState?: AgentState
   intent?: UserIntent
-  executionPlan?: ExecutionPlan
+  agentWorkflow?: AgentWorkflow
   events: RunEvent[]
   artifacts: ArtifactRef[]
   isSubmitting: boolean
@@ -80,7 +80,7 @@ function mergeConversationItems(current: ConversationItem[], incoming: Conversat
 // 或由 effect 同步派生 React 本身已经能表达的状态。
 
 export type RunAction =
-  | { type: 'SET_RUN'; run: AnalysisRun; agentState: AgentState; intent?: UserIntent; plan?: ExecutionPlan; artifacts: ArtifactRef[] }
+  | { type: 'SET_RUN'; run: AnalysisRun; agentState: AgentState; intent?: UserIntent; plan?: AgentWorkflow; artifacts: ArtifactRef[] }
   | { type: 'CLEAR_RUN' }
   | { type: 'APPEND_EVENT'; event: RunEvent }
   | { type: 'SET_EVENTS'; events: RunEvent[] }
@@ -88,7 +88,7 @@ export type RunAction =
   | { type: 'SET_SUBMITTING'; value: boolean }
   | { type: 'SET_ERROR'; error?: string }
   | { type: 'SET_INTENT'; intent: UserIntent }
-  | { type: 'SET_PLAN'; plan: ExecutionPlan }
+  | { type: 'SET_PLAN'; plan: AgentWorkflow }
   | { type: 'APPEND_ARTIFACT'; artifact: ArtifactRef }
   | { type: 'SET_ITEMS'; items: ConversationItem[] }
   | { type: 'SET_PLACE_RESOLUTION'; placeResolution: RunState['placeResolution'] }
@@ -105,7 +105,7 @@ export function runReducer(state: RunState, action: RunAction): RunState {
         run: action.run,
         agentState: action.agentState,
         intent: action.intent,
-        executionPlan: action.plan,
+        agentWorkflow: action.plan,
         artifacts: action.artifacts ?? [],
         placeResolution: action.agentState.placeResolution ?? null,
         isSubmitting: isDifferentRun ? isRunning : isRunning ? state.isSubmitting : false,
@@ -148,7 +148,7 @@ export function runReducer(state: RunState, action: RunAction): RunState {
     case 'SET_INTENT':
       return { ...state, intent: action.intent }
     case 'SET_PLAN':
-      return { ...state, executionPlan: action.plan }
+      return { ...state, agentWorkflow: action.plan }
     case 'APPEND_ARTIFACT':
       return {
         ...state,
@@ -178,7 +178,7 @@ export function useRunState() {
       run: snapshot.run,
       agentState: snapshot.run.state,
       intent: snapshot.run.state.parsedIntent ?? undefined,
-      plan: snapshot.run.state.executionPlan ?? undefined,
+      plan: snapshot.run.state.agentWorkflow ?? undefined,
       artifacts: snapshot.run.state.artifacts,
     })
     dispatch({ type: 'SET_ITEMS', items: snapshot.items })
@@ -203,7 +203,7 @@ export function useRunState() {
       run: latestRun,
       agentState: latestRun.state,
       intent: latestRun.state.parsedIntent ?? undefined,
-      plan: latestRun.state.executionPlan ?? undefined,
+      plan: latestRun.state.agentWorkflow ?? undefined,
       artifacts: latestRun.state.artifacts,
     })
   }, [])
@@ -234,7 +234,7 @@ export function useRunState() {
     dispatch({ type: 'SET_INTENT', intent })
   }, [])
 
-  const setPlan = useCallback((plan: ExecutionPlan) => {
+  const setPlan = useCallback((plan: AgentWorkflow) => {
     dispatch({ type: 'SET_PLAN', plan })
   }, [])
 
@@ -295,7 +295,7 @@ export function useRunState() {
     run: state.run,
     agentState: state.agentState,
     intent: state.intent,
-    executionPlan: state.executionPlan,
+    agentWorkflow: state.agentWorkflow,
     events: state.events,
     artifacts: state.artifacts,
     isSubmitting: state.isSubmitting,

@@ -31,7 +31,7 @@ describe('voice bar rendering', () => {
     expect(html).toContain('cc-voice-bar')
     expect(html).toContain('语音播报')
     expect(html).toContain('/api/v1/results/artifact_voice/file')
-    expect(html).toContain('你好，GeoForge 语音条测试。')
+    expect(html).toContain('你好，语音条测试。')
   })
 })
 
@@ -53,9 +53,9 @@ const speechEntry: ConversationEntry = {
       voice: 'zh-CN-XiaoxiaoNeural',
     }),
     toolName: 'text_to_speech',
-    commandText: JSON.stringify({ text: '你好，GeoForge 语音条测试。' }),
+    commandText: JSON.stringify({ text: '你好，语音条测试。' }),
     details: {
-      args: { text: '你好，GeoForge 语音条测试。' },
+      args: { text: '你好，语音条测试。' },
       result: {
         operation: 'text_to_speech',
         uri: '/api/v1/results/artifact_voice/file',

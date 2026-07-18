@@ -12,6 +12,7 @@ export function createAnthropicAdapter(opts: AnthropicOptions): ModelAdapter {
     provider: 'anthropic',
     displayName: opts.displayName ?? 'Anthropic',
     defaultModel: opts.defaultModel,
+    agentToolSchemaMode: 'compatible',
     isConfigured: () => Boolean(opts.apiKey && opts.defaultModel),
     capabilities: () => ['chat', 'structured'],
     async chat(prompt: string, kwargs?: Record<string, unknown>): Promise<Record<string, unknown>> {

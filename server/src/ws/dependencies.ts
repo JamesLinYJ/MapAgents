@@ -23,9 +23,9 @@ import type { OpenAIAgentsRuntime } from '../agent/runtime.js'
 import type { RunTaskManager } from '../agent/runTaskManager.js'
 import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import type { SecurityServices } from '../security/routes.js'
-import type { ScheduledTaskService } from '../workflows/scheduledTaskService.js'
-import type { WorkflowDefinitionService } from '../workflows/workflowDefinitionService.js'
-import type { BackgroundTaskRegistry } from '../workflows/backgroundTaskRegistry.js'
+import type { ScheduledTaskService } from '../automations/scheduledTaskService.js'
+import type { AutomationDefinitionService } from '../automations/automationDefinitionService.js'
+import type { BackgroundTaskRegistry } from '../automations/backgroundTaskRegistry.js'
 import type { UsageStatsService } from '../usage/usageStatsService.js'
 import type { MapStore } from '../store/postgres/mapStore.js'
 
@@ -41,7 +41,7 @@ export interface WsDependencies {
   runtime: OpenAIAgentsRuntime
   runTasks: RunTaskManager
   scheduledTaskService: ScheduledTaskService
-  workflowDefinitionService: WorkflowDefinitionService
+  automationDefinitionService: AutomationDefinitionService
   backgroundTasks: BackgroundTaskRegistry
   usageStats: UsageStatsService
   mapStore: MapStore

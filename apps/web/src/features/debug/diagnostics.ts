@@ -10,7 +10,7 @@
 
 import type {
   ApprovalRequest,
-  ExecutionPlan,
+  AgentWorkflow,
   LoopTraceEntry,
   RunEvent,
   SubAgentState,
@@ -118,7 +118,7 @@ export function buildSupervisorStages({
   query,
   runStatus,
   intent,
-  executionPlan,
+  agentWorkflow,
   todos,
   subAgents,
   approvals,
@@ -128,7 +128,7 @@ export function buildSupervisorStages({
   query: string
   runStatus?: string
   intent?: UserIntent
-  executionPlan?: ExecutionPlan
+  agentWorkflow?: AgentWorkflow
   todos: TodoItem[]
   subAgents: SubAgentState[]
   approvals: ApprovalRequest[]
@@ -151,8 +151,8 @@ export function buildSupervisorStages({
     {
       id: 'plan',
       title: '规划执行',
-      description: executionPlan?.steps.length ? `${executionPlan.steps.length} 个步骤：${executionPlan.goal}` : '尚未形成执行计划。',
-      status: executionPlan?.steps.length ? 'completed' : runStatus === 'running' ? 'running' : 'pending',
+      description: agentWorkflow?.steps.length ? `${agentWorkflow.steps.length} 个步骤：${agentWorkflow.goal}` : '尚未形成执行计划。',
+      status: agentWorkflow?.steps.length ? 'completed' : runStatus === 'running' ? 'running' : 'pending',
     },
     {
       id: 'tools',

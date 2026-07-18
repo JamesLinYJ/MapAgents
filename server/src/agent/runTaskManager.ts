@@ -10,14 +10,14 @@ import type { AnalysisRun } from '../schemas/types.js'
 import type { RunLookupStore } from '../store/runtimePorts.js'
 import { errorLogPayload, logger } from '../observability/logger.js'
 import type { OpenAIAgentsRuntime, RunOptions } from './runtime.js'
-import type { BackgroundTaskRegistry } from '../workflows/backgroundTaskRegistry.js'
+import type { BackgroundTaskRegistry } from '../automations/backgroundTaskRegistry.js'
 
 export interface RunTaskCompletionTarget {
   onComplete?: (runId: string) => Promise<void> | void
 }
 
 // RunTaskManager 是所有“后台 run”的唯一启动入口。WS、未来的定时任务和
-// workflow 调度器都只创建 run 事实，再委托这里执行，避免散落 fire-and-forget。
+// automation 调度器都只创建 run 事实，再委托这里执行，避免散落 fire-and-forget。
 export class RunTaskManager {
   private readonly activeTasks = new Map<string, Promise<AnalysisRun>>()
 

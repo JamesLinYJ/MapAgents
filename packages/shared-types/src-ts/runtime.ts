@@ -233,6 +233,7 @@ export const runtimeSdkConfigSchema = z.object({
 export const agentRuntimeConfigSchema = z.object({
   loopTraceLimit: z.number().default(80),
   maxTurns: z.number().default(50),
+  maxFunctionToolConcurrency: z.number().int().min(1).max(16).default(4),
   sandbox: runtimeSandboxConfigSchema.default({ backend: 'docker', dockerImage: 'node:22-bookworm-slim' }),
   sdk: runtimeSdkConfigSchema.default({
     mcp: { enabled: false, connectTimeoutMs: 10_000, closeTimeoutMs: 2_000, servers: [] },

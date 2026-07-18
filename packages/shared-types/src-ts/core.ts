@@ -6,6 +6,7 @@ import { artifactDisplaySchema } from './map.js'
 
 export const eventTypeSchema = z.enum([
   'intent.parsed', 'plan.ready', 'step.started', 'step.completed',
+  'agent_workflow.created', 'agent_workflow.revised', 'agent_workflow.completed',
   'artifact.created', 'subagent.created', 'subagent.updated',
   'loop.updated', 'todo.updated', 'tool.started', 'tool.completed',
   'clarification.required', 'approval.required', 'warning.raised',
@@ -94,16 +95,91 @@ export const userIntentSchema = z.object({
   clarificationOptions: z.array(clarificationOptionSchema).default([]),
 })
 
-export const planStepSchema = z.object({
-  id: z.string(),
-  tool: z.string(),
+export const agentWorkflowStepKindSchema = z.enum(['analysis', 'tool', 'agent', 'automation', 'delivery'])
+export const agentWorkflowStepStatusSchema = z.enum([
+  'pending', 'running', 'completed', 'failed', 'blocked', 'skipped',
+])
+export const agentWorkflowStatusSchema = z.enum([
+  'awaiting_approval', 'running', 'adjusting', 'completed', 'failed', 'cancelled',
+])
+
+export const agentWorkflowStepDraftSchema = z.object({
+  stepId: z.string().min(1),
+  title: z.string().min(1),
+  kind: agentWorkflowStepKindSchema,
+  toolName: z.string().min(1),
+  ownerAgentId: z.string().min(1).default('supervisor'),
   args: z.record(z.string(), z.unknown()).prefault({}),
-  reason: z.string(),
+  reason: z.string().min(1),
+  dependsOn: z.array(z.string()).default([]),
+}).superRefine((step, context) => {
+  if (step.kind === 'automation' && step.toolName !== 'execute_automation') {
+    context.addIssue({
+      code: 'custom',
+      path: ['toolName'],
+      message: 'Automation 步骤必须通过 execute_automation 执行。',
+    })
+  }
+  if (step.kind === 'agent' && (!step.ownerAgentId || step.ownerAgentId !== step.toolName)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['ownerAgentId'],
+      message: '子智能体步骤的 ownerAgentId 必须与 Agent 工具名一致。',
+    })
+  }
+  if (step.kind !== 'agent' && step.ownerAgentId !== 'supervisor') {
+    context.addIssue({
+      code: 'custom',
+      path: ['ownerAgentId'],
+      message: "非子智能体步骤的 ownerAgentId 必须为 'supervisor'。",
+    })
+  }
 })
 
-export const executionPlanSchema = z.object({
-  goal: z.string(),
-  steps: z.array(planStepSchema).default([]),
+export const agentWorkflowStepSchema = agentWorkflowStepDraftSchema.safeExtend({
+  status: agentWorkflowStepStatusSchema.default('pending'),
+  attempt: z.number().int().nonnegative().default(0),
+  resultSummary: z.string().nullable().default(null),
+  errorMessage: z.string().nullable().default(null),
+  startedAt: z.string().nullable().default(null),
+  completedAt: z.string().nullable().default(null),
+})
+
+export const agentWorkflowDraftSchema = z.object({
+  goal: z.string().min(1),
+  steps: z.array(agentWorkflowStepDraftSchema).min(1),
+})
+
+export const agentWorkflowRevisionSchema = agentWorkflowDraftSchema.extend({
+  changeReason: z.string().min(1),
+})
+
+export const agentWorkflowSchema = z.object({
+  agentWorkflowId: z.string().min(1),
+  revision: z.number().int().positive(),
+  goal: z.string().min(1),
+  status: agentWorkflowStatusSchema,
+  changeReason: z.string().nullable().default(null),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  approvedAt: z.string().nullable().default(null),
+  completedAt: z.string().nullable().default(null),
+  steps: z.array(agentWorkflowStepSchema).min(1),
+}).superRefine((workflow, context) => {
+  const ids = new Set(workflow.steps.map(step => step.stepId))
+  if (ids.size !== workflow.steps.length) {
+    context.addIssue({ code: 'custom', path: ['steps'], message: '智能体工作流步骤 ID 必须唯一。' })
+  }
+  workflow.steps.forEach((step, index) => {
+    for (const dependency of step.dependsOn) {
+      if (!ids.has(dependency)) {
+        context.addIssue({ code: 'custom', path: ['steps', index, 'dependsOn'], message: `依赖步骤 '${dependency}' 不存在。` })
+      }
+      if (dependency === step.stepId) {
+        context.addIssue({ code: 'custom', path: ['steps', index, 'dependsOn'], message: '步骤不能依赖自身。' })
+      }
+    }
+  })
 })
 
 export const toolValueRefSchema = z.object({
@@ -281,7 +357,7 @@ export const agentStateSchema = z.object({
   contextReferences: z.array(contextReferenceSchema).default([]),
   contextResolution: contextResolutionSchema.nullable().default(null),
   runLifecycle: runLifecycleSchema.default({ status: 'created', reason: null, updatedAt: null }),
-  executionPlan: executionPlanSchema.nullable().default(null),
+  agentWorkflow: agentWorkflowSchema.nullable().default(null),
   currentStep: z.number().default(0),
   loopIteration: z.number().default(0),
   loopPhase: z.string().default('idle'),
@@ -363,8 +439,10 @@ export type DecisionRequest = z.infer<typeof decisionRequestSchema>
 export type PlaceSearchCandidate = z.infer<typeof placeSearchCandidateSchema>
 export type PlaceResolution = z.infer<typeof placeResolutionSchema>
 export type UserIntent = z.infer<typeof userIntentSchema>
-export type PlanStep = z.infer<typeof planStepSchema>
-export type ExecutionPlan = z.infer<typeof executionPlanSchema>
+export type AgentWorkflowStep = z.infer<typeof agentWorkflowStepSchema>
+export type AgentWorkflowDraft = z.infer<typeof agentWorkflowDraftSchema>
+export type AgentWorkflowRevision = z.infer<typeof agentWorkflowRevisionSchema>
+export type AgentWorkflow = z.infer<typeof agentWorkflowSchema>
 export type ToolValueRef = z.infer<typeof toolValueRefSchema>
 export type ToolCall = z.infer<typeof toolCallSchema>
 export type ContextReference = z.infer<typeof contextReferenceSchema>

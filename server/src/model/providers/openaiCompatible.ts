@@ -13,7 +13,7 @@ import type {
   ChatCompletionCreateParamsNonStreaming,
   ChatCompletionMessageParam,
 } from 'openai/resources/chat/completions/completions'
-import type { ModelAdapter } from '../registry.js'
+import type { AgentToolSchemaMode, ModelAdapter } from '../registry.js'
 import { abortSignalWithTimeout } from '../../utils/abort.js'
 import { CompatibleChatCompletionsModel } from '../compatibleChatCompletionsModel.js'
 
@@ -23,6 +23,7 @@ export interface OpenAIOptions {
   defaultModel: string
   subagentModel?: string
   displayName?: string
+  toolSchemaMode: AgentToolSchemaMode
 }
 export function createOpenAIAdapter(opts: OpenAIOptions): ModelAdapter {
   const baseUrl = opts.baseUrl.replace(/\/$/, '')
@@ -34,6 +35,7 @@ export function createOpenAIAdapter(opts: OpenAIOptions): ModelAdapter {
     defaultModel: opts.defaultModel,
     ...(opts.subagentModel ? { subagentModel: opts.subagentModel } : {}),
     contextWindowTokens: inferContextWindow(opts.defaultModel),
+    agentToolSchemaMode: opts.toolSchemaMode,
 
     isConfigured(): boolean {
       return Boolean(baseUrl && opts.apiKey && opts.defaultModel)

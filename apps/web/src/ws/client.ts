@@ -37,8 +37,12 @@ class WebSocketControlClient {
   private readonly pending = new Map<string, PendingRequest>()
   private readonly listeners = new Set<Listener>()
   private csrfToken: string | null = null
+  private authenticatedUserId: string | null = null
 
   async send(type: WsControlCommand, payload: Record<string, unknown>): Promise<WsControlResponse> {
+    if (!this.authenticatedUserId) {
+      throw new Error('请先登录后再使用实时控制功能。')
+    }
     await this.ensureOpen()
     if (!this.socket || this.socket.readyState !== ReconnectingWebSocket.OPEN) {
       throw new Error('WebSocket 当前未连接，本次写命令没有发送。')
@@ -71,12 +75,17 @@ class WebSocketControlClient {
 
   on(listener: Listener): () => void {
     this.listeners.add(listener)
-    void this.ensureOpen().catch(() => undefined)
+    if (this.authenticatedUserId) void this.ensureOpen().catch(() => undefined)
     return () => this.listeners.delete(listener)
   }
 
-  setCsrfToken(token: string | null): void {
+  setAuthContext(userId: string | null, token: string | null): void {
+    const identityChanged = this.authenticatedUserId !== userId
+    const tokenChanged = this.csrfToken !== token
+    this.authenticatedUserId = userId
     this.csrfToken = token
+    if (identityChanged || tokenChanged) this.resetConnection('认证上下文已更新。')
+    if (userId && this.listeners.size > 0) void this.ensureOpen().catch(() => undefined)
   }
 
   private async ensureOpen(): Promise<void> {
@@ -85,12 +94,12 @@ class WebSocketControlClient {
 
     useConnectionStore.getState().setWsConnecting()
     const socket = this.socket ?? this.createSocket()
-    this.connectPromise = new Promise<void>((resolve, reject) => {
+    const connectionPromise = new Promise<void>((resolve, reject) => {
       const cleanupWait = () => {
         clearTimeout(timer)
         socket.removeEventListener('open', handleOpen)
         socket.removeEventListener('close', handleTerminalClose)
-        this.connectPromise = null
+        if (this.connectPromise === connectionPromise) this.connectPromise = null
       }
       const handleOpen = () => {
         cleanupWait()
@@ -109,8 +118,18 @@ class WebSocketControlClient {
       socket.addEventListener('open', handleOpen)
       socket.addEventListener('close', handleTerminalClose)
     })
+    this.connectPromise = connectionPromise
 
     return this.connectPromise
+  }
+
+  private resetConnection(reason: string): void {
+    this.rejectPending(reason)
+    this.connectPromise = null
+    const socket = this.socket
+    this.socket = null
+    if (socket) socket.close(1000, reason)
+    useConnectionStore.getState().setWsDisconnected(reason)
   }
 
   private createSocket(): ReconnectingWebSocket {

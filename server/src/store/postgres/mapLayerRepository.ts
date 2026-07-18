@@ -92,6 +92,7 @@ function mapManifestRow(row: typeof platformMapLayers.$inferSelect): MapLayerMan
     artifactId: row.artifactId,
     managedLayerKey: row.managedLayerKey,
     title: row.title,
+    replacementGroup: row.replacementGroup,
     status: row.status,
     errorMessage: row.errorMessage,
     bounds: row.boundsJson,

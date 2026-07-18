@@ -32,13 +32,13 @@ import { MeteorologicalStore } from './postgres/meteorologicalStore.js'
 import { RuntimeConfigStore } from './postgres/runtimeConfigStore.js'
 import { ToolCatalogStore, type ToolCatalogEntry } from './postgres/toolCatalogStore.js'
 import {
-  WorkflowStore,
+  AutomationStore,
   type CreateScheduledTaskInput,
-  type CreateWorkflowRunInput,
+  type CreateAutomationRunInput,
   type UpdateScheduledTaskInput,
-  type UpdateWorkflowRunInput,
-} from './postgres/workflowStore.js'
-import type { ScheduledTask, WorkflowDefinition, WorkflowRunRecord, WorkflowVersionRecord } from '../workflows/schemas.js'
+  type UpdateAutomationRunInput,
+} from './postgres/automationStore.js'
+import type { ScheduledTask, AutomationDefinition, AutomationRunRecord, AutomationVersionRecord } from '../automations/schemas.js'
 import {
   PostgresConversationPersistence,
 } from './postgres/conversationPersistence.js'
@@ -77,7 +77,7 @@ export class PlatformPersistenceFacade {
   private readonly meteorologicalStore: MeteorologicalStore
   private readonly runtimeConfigStore: RuntimeConfigStore
   private readonly toolCatalogStore: ToolCatalogStore
-  private readonly workflowStore: WorkflowStore
+  private readonly automationStore: AutomationStore
   private readonly snapshotRepository: ConversationSnapshotRepository
   private readonly runInputRepository: RunInputRepository
 
@@ -134,7 +134,7 @@ export class PlatformPersistenceFacade {
     this.meteorologicalStore = new MeteorologicalStore(db)
     this.runtimeConfigStore = new RuntimeConfigStore(db)
     this.toolCatalogStore = new ToolCatalogStore(db)
-    this.workflowStore = new WorkflowStore(db)
+    this.automationStore = new AutomationStore(db)
   }
 
   // --- Sessions ---
@@ -190,84 +190,88 @@ export class PlatformPersistenceFacade {
     await this.toolCatalogStore.delete(toolKind, toolName)
   }
 
-  async syncWorkflowDefinitions(definitions: WorkflowDefinition[]): Promise<void> {
-    await this.workflowStore.syncDefinitions(definitions)
+  async syncAutomationDefinitions(definitions: AutomationDefinition[]): Promise<void> {
+    await this.automationStore.syncDefinitions(definitions)
   }
 
-  async listWorkflowDefinitions(workspaceId: string): Promise<WorkflowDefinition[]> {
-    return this.workflowStore.listDefinitions(workspaceId)
+  async listAutomationDefinitions(workspaceId: string): Promise<AutomationDefinition[]> {
+    return this.automationStore.listDefinitions(workspaceId)
   }
 
-  async getWorkflowDefinition(workflowId: string): Promise<WorkflowDefinition | null> {
-    return this.workflowStore.getDefinition(workflowId)
+  async getAutomationDefinition(automationId: string): Promise<AutomationDefinition | null> {
+    return this.automationStore.getDefinition(automationId)
   }
 
-  async getWorkflowDefinitionVersion(workflowId: string, revision: number): Promise<WorkflowDefinition | null> {
-    return this.workflowStore.getDefinitionVersion(workflowId, revision)
+  async getAutomationDefinitionVersion(automationId: string, revision: number): Promise<AutomationDefinition | null> {
+    return this.automationStore.getDefinitionVersion(automationId, revision)
   }
 
-  async getPublishedWorkflowDefinition(workflowId: string): Promise<WorkflowDefinition | null> {
-    return this.workflowStore.getPublishedDefinition(workflowId)
+  async getPublishedAutomationDefinition(automationId: string): Promise<AutomationDefinition | null> {
+    return this.automationStore.getPublishedDefinition(automationId)
   }
 
-  async listWorkflowDefinitionVersions(workflowId: string): Promise<WorkflowVersionRecord[]> {
-    return this.workflowStore.listDefinitionVersions(workflowId)
+  async listAutomationDefinitionVersions(automationId: string): Promise<AutomationVersionRecord[]> {
+    return this.automationStore.listDefinitionVersions(automationId)
   }
 
-  async createWorkflowDefinition(definition: WorkflowDefinition): Promise<WorkflowDefinition> {
-    return this.workflowStore.createDefinition(definition)
+  async createAutomationDefinition(definition: AutomationDefinition): Promise<AutomationDefinition> {
+    return this.automationStore.createDefinition(definition)
   }
 
-  async saveWorkflowDefinitionRevision(definition: WorkflowDefinition, expectedRevision: number): Promise<WorkflowDefinition> {
-    return this.workflowStore.saveDefinitionRevision(definition, expectedRevision)
+  async saveAutomationDefinitionRevision(definition: AutomationDefinition, expectedRevision: number): Promise<AutomationDefinition> {
+    return this.automationStore.saveDefinitionRevision(definition, expectedRevision)
   }
 
-  async publishWorkflowDefinition(workflowId: string, revision: number): Promise<WorkflowDefinition> {
-    return this.workflowStore.publishDefinition(workflowId, revision)
+  async publishAutomationDefinition(automationId: string, revision: number): Promise<AutomationDefinition> {
+    return this.automationStore.publishDefinition(automationId, revision)
   }
 
-  async disableWorkflowDefinition(workflowId: string): Promise<WorkflowDefinition> {
-    return this.workflowStore.disableDefinition(workflowId)
+  async disableAutomationDefinition(automationId: string): Promise<AutomationDefinition> {
+    return this.automationStore.disableDefinition(automationId)
   }
 
   async listScheduledTasks(workspaceId: string): Promise<ScheduledTask[]> {
-    return this.workflowStore.listScheduledTasks(workspaceId)
+    return this.automationStore.listScheduledTasks(workspaceId)
   }
 
   async listActiveScheduledTasks(): Promise<ScheduledTask[]> {
-    return this.workflowStore.listActiveScheduledTasks()
+    return this.automationStore.listActiveScheduledTasks()
   }
 
   async getScheduledTask(taskId: string): Promise<ScheduledTask | null> {
-    return this.workflowStore.getScheduledTask(taskId)
+    return this.automationStore.getScheduledTask(taskId)
   }
 
   async createScheduledTask(input: CreateScheduledTaskInput): Promise<ScheduledTask> {
-    return this.workflowStore.createScheduledTask(input)
+    return this.automationStore.createScheduledTask(input)
   }
 
   async updateScheduledTask(taskId: string, input: UpdateScheduledTaskInput): Promise<ScheduledTask> {
-    return this.workflowStore.updateScheduledTask(taskId, input)
+    return this.automationStore.updateScheduledTask(taskId, input)
   }
 
   async deleteScheduledTask(taskId: string): Promise<ScheduledTask> {
-    return this.workflowStore.markScheduledTaskDeleted(taskId)
+    return this.automationStore.markScheduledTaskDeleted(taskId)
   }
 
-  async createWorkflowRunRecord(input: CreateWorkflowRunInput): Promise<WorkflowRunRecord> {
-    return this.workflowStore.createWorkflowRun(input)
+  async createAutomationRunRecord(input: CreateAutomationRunInput): Promise<AutomationRunRecord> {
+    return this.automationStore.createAutomationRun(input)
   }
 
-  async getWorkflowRunRecord(workflowRunId: string): Promise<WorkflowRunRecord | null> {
-    return this.workflowStore.getWorkflowRun(workflowRunId)
+  async getAutomationRunRecord(automationRunId: string): Promise<AutomationRunRecord | null> {
+    return this.automationStore.getAutomationRun(automationRunId)
   }
 
-  async updateWorkflowRunRecord(workflowRunId: string, input: UpdateWorkflowRunInput): Promise<WorkflowRunRecord> {
-    return this.workflowStore.updateWorkflowRun(workflowRunId, input)
+  async updateAutomationRunRecord(automationRunId: string, input: UpdateAutomationRunInput): Promise<AutomationRunRecord> {
+    return this.automationStore.updateAutomationRun(automationRunId, input)
   }
 
-  async listWorkflowRuns(workspaceId: string, scheduledTaskId?: string | null): Promise<WorkflowRunRecord[]> {
-    return this.workflowStore.listWorkflowRuns(workspaceId, scheduledTaskId)
+  async listAutomationRuns(workspaceId: string, scheduledTaskId?: string | null): Promise<AutomationRunRecord[]> {
+    return this.automationStore.listAutomationRuns(workspaceId, scheduledTaskId)
+  }
+
+  async listQueuedAutomationRuns(): Promise<AutomationRunRecord[]> {
+    return this.automationStore.listQueuedAutomationRuns()
   }
 
   async listMeteorologicalDatasets(filters: {

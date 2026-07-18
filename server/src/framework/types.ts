@@ -2,6 +2,9 @@ import type { z } from 'zod'
 import type { AgentRuntimeConfig, ArtifactDisplay, MeteorologicalDatasetRecord } from '../schemas/types.js'
 import type { AuthContext } from '../security/types.js'
 
+export type ToolExecutionSurface = 'agent' | 'automation' | 'debug'
+export type AgentToolResultMode = 'continue' | 'return_direct'
+
 export interface ToolManifest {
     id: string;
     name: string;
@@ -22,6 +25,9 @@ export interface ToolManifestEntry {
     tags: string[];
     isReadOnly: boolean;
     isDestructive: boolean;
+    requiresApproval?: boolean;
+    executionSurfaces?: ToolExecutionSurface[];
+    agentResultMode?: AgentToolResultMode;
     jsonSchema: Record<string, unknown>;
 }
 export interface ToolDef {
@@ -34,6 +40,8 @@ export interface ToolDef {
     isReadOnly: boolean;
     isDestructive: boolean;
     requiresApproval?: boolean;
+    executionSurfaces?: ToolExecutionSurface[];
+    agentResultMode?: AgentToolResultMode;
     parameters?: z.ZodObject;
     jsonSchema?: Record<string, unknown>;
     handler: ToolHandler;
@@ -55,6 +63,11 @@ export interface ToolContext {
         datasetId?: string | null;
         filename?: string | null;
     }): Promise<MeteorologicalDatasetRecord | null>;
+    listMeteorologicalDatasets?(input?: {
+        scope?: 'session' | 'thread';
+        filename?: string | null;
+        limit?: number;
+    }): Promise<MeteorologicalDatasetRecord[]>;
     invokeStructuredModel(prompt: string): Promise<Record<string, unknown>>;
     log(level: 'info' | 'warn' | 'error', message: string): void;
 }
@@ -64,6 +77,7 @@ export interface ToolResult {
     warnings: string[];
     resultId: string;
     source: string;
+    modelOutput?: string;
     valueRefs?: ValueRef[];
     artifacts?: ToolArtifact[];
     provenance?: Record<string, unknown>;

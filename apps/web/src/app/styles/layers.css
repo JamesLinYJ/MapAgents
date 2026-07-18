@@ -339,6 +339,12 @@
   color: #1f2937;
 }
 
+.arcgis-layer-legend__continuous i {
+  width: min(132px, 48%);
+  height: 12px;
+  border-radius: 2px;
+}
+
 .arcgis-layer-panel__empty {
   display: grid;
   gap: 4px;

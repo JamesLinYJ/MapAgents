@@ -1,10 +1,10 @@
 {
   "id": "geo-platform-plan",
-  "name": "计划模式",
-  "version": "1.0.0",
+  "name": "智能体规划",
+  "version": "2.0.0",
   "author": "geo-agent-platform",
   "language": "typescript",
-  "description": "只读计划模式",
+  "description": "智能体工作流的澄清、提交和调整工具",
   "tools": [
     {
       "name": "request_clarification",
@@ -14,17 +14,12 @@
       "tags": ["plan", "system"],
       "isReadOnly": true,
       "isDestructive": false,
+      "agentResultMode": "return_direct",
       "jsonSchema": {
         "type": "object",
         "properties": {
-          "question": {
-            "type": "string",
-            "description": "向用户提出的澄清问题。"
-          },
-          "reason": {
-            "type": "string",
-            "description": "为什么必须先澄清。"
-          },
+          "question": { "type": "string", "description": "向用户提出的澄清问题。" },
+          "reason": { "type": "string", "description": "为什么必须先澄清。" },
           "options": {
             "type": "array",
             "description": "可选的快捷选项。",
@@ -32,24 +27,15 @@
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "label": {
-                  "type": "string",
-                  "description": "选项按钮文本。"
-                },
-                "description": {
-                  "type": "string",
-                  "description": "选项说明。"
-                }
+                "label": { "type": "string", "description": "选项按钮文本。" },
+                "description": { "type": "string", "description": "选项说明。" }
               },
-              "required": ["label"]
+              "required": ["label", "description"]
             }
           },
-          "allowFreeText": {
-            "type": "boolean",
-            "description": "是否允许用户自由输入补充。"
-          }
+          "allowFreeText": { "type": "boolean", "description": "是否允许用户自由输入补充。" }
         },
-        "required": ["question", "reason"]
+        "required": ["question", "reason", "options", "allowFreeText"]
       }
     },
     {
@@ -62,35 +48,28 @@
       "isDestructive": false,
       "jsonSchema": {
         "type": "object",
-        "properties": {
-          "reason": {
-            "type": "string",
-            "description": "进入计划模式的原因"
-          }
-        },
+        "properties": { "reason": { "type": "string", "description": "进入计划模式的原因" } },
         "required": []
       }
     },
     {
-      "name": "exit_plan_mode",
-      "label": "退出计划模式",
-      "description": "提交结构化执行计划并请求用户批准；批准后退出只读计划模式。",
+      "name": "submit_agent_workflow",
+      "label": "提交智能体工作流",
+      "description": "提交结构化智能体工作流并请求用户批准；批准后在同一运行中开始执行。",
       "group": "系统",
       "tags": ["plan", "system"],
       "isReadOnly": true,
       "isDestructive": false,
+      "requiresApproval": true,
       "jsonSchema": {
         "type": "object",
         "properties": {
-          "plan": {
+          "workflow": {
             "type": "object",
             "additionalProperties": false,
-            "description": "待用户批准的执行计划。",
+            "description": "待用户批准的智能体工作流。",
             "properties": {
-              "goal": {
-                "type": "string",
-                "description": "本轮实施目标。"
-              },
+              "goal": { "type": "string", "description": "本轮实施目标。" },
               "steps": {
                 "type": "array",
                 "description": "按执行顺序排列的计划步骤。",
@@ -98,51 +77,65 @@
                   "type": "object",
                   "additionalProperties": false,
                   "properties": {
-                    "id": {
-                      "type": "string",
-                      "description": "步骤 ID，例如 step_1。"
-                    },
-                    "tool": {
-                      "type": "string",
-                      "description": "预计使用的工具或 manual。"
-                    },
-                    "args": {
-                      "type": "object",
-                      "additionalProperties": true,
-                      "description": "预计工具参数；无法确定时使用空对象。"
-                    },
-                    "reason": {
-                      "type": "string",
-                      "description": "为什么需要这一步。"
-                    }
+                    "stepId": { "type": "string", "description": "稳定步骤 ID，例如 step_1。" },
+                    "title": { "type": "string", "description": "面向用户的步骤标题。" },
+                    "kind": { "type": "string", "enum": ["analysis", "tool", "agent", "automation", "delivery"], "description": "步骤执行类型。" },
+                    "toolName": { "type": "string", "description": "实际执行该步骤的工具名。" },
+                    "ownerAgentId": { "type": "string", "description": "负责步骤的 Agent ID；主智能体步骤固定填写 supervisor。" },
+                    "args": { "type": "object", "additionalProperties": true, "description": "预计工具参数；无法确定时使用空对象。" },
+                    "reason": { "type": "string", "description": "为什么需要这一步。" },
+                    "dependsOn": { "type": "array", "items": { "type": "string" }, "description": "必须先完成的步骤 ID。" }
                   },
-                  "required": ["id", "tool", "reason"]
+                  "required": ["stepId", "title", "kind", "toolName", "ownerAgentId", "args", "reason", "dependsOn"]
                 }
               }
             },
             "required": ["goal", "steps"]
-          },
-          "allowedPrompts": {
-            "type": "array",
-            "description": "计划获批后建议允许的动作类别。",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "tool": {
-                  "type": "string",
-                  "description": "工具名称，例如 Bash。"
-                },
-                "prompt": {
-                  "type": "string",
-                  "description": "动作类别，例如运行测试。"
-                }
-              },
-              "required": ["tool", "prompt"]
-            }
           }
         },
-        "required": ["plan"]
+        "required": ["workflow"]
+      }
+    },
+    {
+      "name": "revise_agent_workflow",
+      "label": "调整智能体工作流",
+      "description": "根据新证据、工具失败或用户引导修订当前智能体工作流。",
+      "group": "系统",
+      "tags": ["plan", "workflow", "system"],
+      "isReadOnly": true,
+      "isDestructive": false,
+      "jsonSchema": {
+        "type": "object",
+        "properties": {
+          "workflow": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "goal": { "type": "string", "description": "调整后的完整目标。" },
+              "changeReason": { "type": "string", "description": "必须调整执行路径的真实原因。" },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "stepId": { "type": "string", "description": "稳定步骤 ID。" },
+                    "title": { "type": "string", "description": "面向用户的步骤标题。" },
+                    "kind": { "type": "string", "enum": ["analysis", "tool", "agent", "automation", "delivery"], "description": "步骤执行类型。" },
+                    "toolName": { "type": "string", "description": "实际执行该步骤的工具名。" },
+                    "ownerAgentId": { "type": "string", "description": "负责步骤的 Agent ID；主智能体步骤固定填写 supervisor。" },
+                    "args": { "type": "object", "additionalProperties": true, "description": "预计工具参数。" },
+                    "reason": { "type": "string", "description": "为什么需要这一步。" },
+                    "dependsOn": { "type": "array", "items": { "type": "string" }, "description": "必须先完成的步骤 ID。" }
+                  },
+                  "required": ["stepId", "title", "kind", "toolName", "ownerAgentId", "args", "reason", "dependsOn"]
+                }
+              }
+            },
+            "required": ["goal", "changeReason", "steps"]
+          }
+        },
+        "required": ["workflow"]
       }
     }
   ]

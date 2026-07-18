@@ -80,6 +80,13 @@ export interface AgentRuntimeStore {
   readConversationObject(reference: ContentRef): Promise<Uint8Array>
   appendToolValue(runId: string, value: ToolValueRef): Promise<void>
   persistArtifact(artifact: ArtifactRef): Promise<void>
+  listMeteorologicalDatasets(filters: {
+    sessionId?: string | null
+    threadId?: string | null
+    filename?: string | null
+    workspaceId?: string | null
+    limit?: number
+  }): Promise<MeteorologicalDatasetRecord[]>
   resolveMeteorologicalDataset(filters: {
     sessionId: string
     threadId?: string | null
@@ -116,14 +123,11 @@ export type ToolExecutionStore = Pick<AgentRuntimeStore,
   | 'appendToolValue'
   | 'appendTranscript'
   | 'getRun'
+  | 'listMeteorologicalDatasets'
   | 'persistArtifact'
   | 'putConversationObject'
   | 'resolveMeteorologicalDataset'
   | 'runtimeRoot'
   | 'saveRunCheckpoint'
   | 'updateRunState'
->
-
-export type DeterministicNowcastStore = Pick<AgentRuntimeStore,
-  'appendTranscript' | 'runtimeRoot'
 >

@@ -29,6 +29,7 @@ import { z } from 'zod'
 
 import { signOutWithBetterAuth } from './authClient'
 import { csrfHeaders, requestJson, setAuthContext } from './transport'
+import { isGeoForgeTransportError } from './errors'
 
 const adminUserListSchema = z.array(platformUserSchema)
 const adminWorkspaceListSchema = z.array(platformWorkspaceSchema)
@@ -42,9 +43,14 @@ export async function logout(): Promise<void> {
 }
 
 export async function getAuthMe(): Promise<AuthMe> {
-  const auth = await requestJson<AuthMe>('/api/v1/auth/me', undefined, 30_000, authMeSchema)
-  setAuthContext(auth)
-  return auth
+  try {
+    const auth = await requestJson<AuthMe>('/api/v1/auth/me', undefined, 30_000, authMeSchema)
+    setAuthContext(auth)
+    return auth
+  } catch (error) {
+    if (isGeoForgeTransportError(error) && error.code === 'unauthorized') setAuthContext(null)
+    throw error
+  }
 }
 
 export interface PublicShareRequest {

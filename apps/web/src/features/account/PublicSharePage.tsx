@@ -126,7 +126,7 @@ export function PublicSharePage({ shareId: explicitShareId }: PublicSharePagePro
         <div className="share-shell share-shell--state">
           <strong>无法打开分享</strong>
           <p>{errorMessage ?? '分享不存在或已失效。'}</p>
-          <Link to="/">返回 GeoForge</Link>
+          <Link to="/">返回工作台</Link>
         </div>
       </main>
     )
@@ -138,7 +138,7 @@ export function PublicSharePage({ shareId: explicitShareId }: PublicSharePagePro
         <header className="share-hero">
           <div>
             <span className="account-eyebrow">公开只读分享</span>
-            <h1 id="share-title">{snapshot.selectedThread?.title ?? 'GeoForge 对话分享'}</h1>
+            <h1 id="share-title">{snapshot.selectedThread?.title ?? '对话分享'}</h1>
             <p>任何获得链接的人都可以阅读此对话。此页面不允许继续对话、上传文件、运行工具或修改工作区数据。</p>
           </div>
           <div className="share-hero__meta" aria-label="分享状态">

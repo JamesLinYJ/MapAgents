@@ -84,7 +84,7 @@ export function ChatPanel(props: ChatPanelProps) {
     compactionLevel,
     runStats,
     denialCounts,
-    executionPlan,
+    agentWorkflow,
     tasks: progressTasks,
   } = props
 
@@ -297,7 +297,7 @@ export function ChatPanel(props: ChatPanelProps) {
                     uploadedLayerName={uploadedLayerName}
                     runCreatedAt={runCreatedAt}
                     runStatus={runStatus}
-                    executionPlan={executionPlan}
+                    agentWorkflow={agentWorkflow}
                     progressTasks={progressTasks}
                     onSelectArtifact={onSelectArtifact}
                     onForkMessage={onForkMessage}

@@ -38,7 +38,7 @@ export const SPATIAL_ANALYSIS_PROMPT = `用于执行确定性的 GeoJSON 几何�
 export const MAP_EXPORT_PROMPT = `用于把 GeoJSON 结果持久化为可下载 artifact。
 
 使用规则：
-- 只有用户要求导出、下载、保存地图数据，或工作流明确需要持久化 artifact 时使用。
+- 只有用户要求导出、下载、保存地图数据，或自动化流程明确需要持久化 artifact 时使用。
 - geojson 输入必须来自已校验 GeoJSON 或前序工具结果；不要导出未校验文本或猜测几何。
 - filename 只用于展示；不要包含绝对路径、路径穿越或本地文件系统假设。
 - 本工具会创建 artifact，应视为有副作用动作。计划模式中只能写入获批计划，不能在只读探索阶段调用。`

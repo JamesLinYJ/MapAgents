@@ -16,12 +16,15 @@ import { createAnthropicAdapter } from './providers/anthropic.js'
 import { createGeminiAdapter } from './providers/gemini.js'
 import { createOllamaAdapter } from './providers/ollama.js'
 
+export type AgentToolSchemaMode = 'strict' | 'compatible'
+
 export interface ModelAdapter {
   readonly provider: string
   readonly displayName: string
   readonly defaultModel: string | null
   readonly subagentModel?: string
   readonly contextWindowTokens?: number
+  readonly agentToolSchemaMode: AgentToolSchemaMode
 
   isConfigured(): boolean
   capabilities(): string[]
@@ -47,6 +50,7 @@ export class ModelAdapterRegistry {
       apiKey: env.OPENAI_API_KEY ?? '',
       defaultModel: (env.OPENAI_MODEL ?? dmf('openai_compatible')),
       ...(env.OPENAI_SUBAGENT_MODEL ? { subagentModel: env.OPENAI_SUBAGENT_MODEL } : {}),
+      toolSchemaMode: env.OPENAI_TOOL_SCHEMA_MODE,
     }))
     this.register(createAnthropicAdapter({
       baseUrl: env.ANTHROPIC_BASE_URL ?? '',
@@ -91,7 +95,7 @@ export class ModelAdapterRegistry {
   descriptors(): ModelProviderDescriptor[] {
     return [...this.adapters.values()].map(a => {
       const labels = a.createAgentModel
-        ? ['agents_sdk_live_supervisor', 'agents_sdk_chat_completions']
+        ? ['agents_sdk_live_supervisor', 'agents_sdk_chat_completions', `tool_schema_${a.agentToolSchemaMode}`]
         : []
 
       return {

@@ -61,7 +61,7 @@ _用户要求、关键设计决定和约束。_
 # 文件与函数
 _重要文件、函数、工具或数据引用，以及为什么相关。_
 
-# 工作流
+# 自动化流程
 _常用命令、运行顺序和输出解释。_
 
 # 错误与修正
@@ -164,7 +164,7 @@ export async function searchMemories(
   }
   const manifest = formatMemoryManifest(records)
   const output = await selector([
-    '你正在为 GeoForge 选择与用户问题相关的记忆文件。',
+    '你正在为当前工作台选择与用户问题相关的记忆文件。',
     `最多返回 ${runtime.config.memoryRelevantLimit} 个 relativePath；不确定时不要返回。`,
     '只返回 JSON：{"selected_memories":["path.md"]}。',
     '',
@@ -218,7 +218,7 @@ export async function rebuildSessionMemory(
   const source = formatTranscriptForSessionMemory(eligibleChain).slice(-80_000)
   if (!force && !source.trim()) return current
   const prompt = [
-    '请更新 GeoForge 线程会话记忆。只能使用给出的可见对话，不得推测。',
+    '请更新当前线程的会话记忆。只能使用给出的可见对话，不得推测。',
     '必须保留固定章节标题；每节内容应短而信息密集。',
     '',
     `当前模板或旧记忆：\n${current.generatedContent || SESSION_MEMORY_TEMPLATE}`,
@@ -328,7 +328,7 @@ function memoryPolicyPrompt(runtime: MemoryRuntime, toolsAvailable: boolean): st
         '如果用户要求记住、忘记或回忆，说明记忆工具当前不可用，需要启用 geo-platform-memory Provider 后再执行。',
       ]
   return [
-    '# GeoForge 记忆系统',
+    '# 长期记忆系统',
     '',
     `你有持久化文件记忆系统。私有记忆目录：\`${runtime.paths.privateDir}\`；团队记忆目录：\`${runtime.paths.teamDir}\`。`,
     '`MEMORY.md` 只是索引，不能保存正文。正文必须写入独立 Markdown 文件，且 frontmatter 必须包含 name、description、type。',
@@ -484,7 +484,7 @@ async function executeMemoryExtractorOperations(
 function buildExtractionPrompt(runtime: MemoryRuntime, entries: TranscriptEntry[], existing: MemoryFileRecord[]): string {
   const manifest = formatMemoryManifest(existing)
   return [
-    '你是 GeoForge 记忆提取子任务。只根据下面最近对话提取长期有用记忆。',
+    '你是记忆提取子任务。只根据下面最近对话提取长期有用记忆。',
     '这是受限 fork 语义：你只能请求 read_memory、search_memory、write_memory、forget_memory 四类记忆工具操作。',
     '不能请求任何 GIS、气象、文件导出、shell、项目源码读取、外部网络或业务副作用工具。',
     '如果本轮没有长期价值，返回 {"operations":[]}。',
@@ -512,7 +512,7 @@ function buildExtractionFollowupPrompt(
   observations: MemoryExtractorObservation[],
 ): string {
   return [
-    '你是 GeoForge 记忆提取子任务的第二阶段。下面是第一阶段记忆工具观察结果。',
+    '你是记忆提取子任务的第二阶段。下面是第一阶段记忆工具观察结果。',
     '现在只能输出 write_memory 或 forget_memory；如果无需写入或删除，返回 {"operations":[]}。',
     '仍然只允许保存长期有用、不可从仓库或 Git 推导的事实；MEMORY.md 仍然只是索引。',
     '不要保存已经写在 AGENTS.md、工具提示词、测试或项目文档里的规则；用户要求忽略记忆时不写入。',
@@ -631,7 +631,7 @@ function buildDreamPrompt(runtime: MemoryRuntime, records: MemoryFileRecord[]): 
     record.content ?? '',
   ].join('\n')).join('\n\n---\n\n')
   return [
-    '你是 GeoForge 长期记忆整理子任务。你的目标是合并重复、删除过期或低价值记忆，并保持 topic file 精炼。',
+    '你是长期记忆整理子任务。你的目标是合并重复、删除过期或低价值记忆，并保持主题文件精炼。',
     '只能输出 JSON，不要输出 Markdown 说明。',
     '允许操作：',
     '- upserts：写入或更新 topic file。更新已有文件时必须带 relativePath。',

@@ -52,7 +52,7 @@ describe('createAgentsTools', () => {
       }),
     }]))
 
-    const [tool] = createAgentsTools(registry, new Set())
+    const [tool] = createAgentsTools(registry, new Set(), { schemaMode: 'strict' })
     const properties = tool.parameters.properties as Record<string, Record<string, unknown>>
 
     expect(tool.description).toContain('dataset_ref 只接受 meteorological_dataset')
@@ -60,7 +60,65 @@ describe('createAgentsTools', () => {
     expect(properties.dataset_ref.description).toContain('允许的 valueRef kind: meteorological_dataset')
     expect(properties.dataset_ref.description).toContain('禁止传入其它 kind')
   })
+
+  it('exposes only tools declared for the Agent execution surface', () => {
+    const registry = new ToolRegistry()
+    registry.register(providerFromTools([
+      testTool('agent_visible', ['agent', 'debug']),
+      testTool('automation_internal', ['automation', 'debug']),
+    ]))
+
+    expect(createAgentsTools(registry, new Set(), { schemaMode: 'strict' }).map(tool => tool.name)).toEqual(['agent_visible'])
+    expect(() => createAgentsTools(registry, new Set(), {
+      schemaMode: 'strict',
+      allowedToolNames: new Set(['automation_internal']),
+    }))
+      .toThrow('非 Agent 执行表面工具')
+  })
+
+  it('keeps optional fields optional for compatible Chat Completions models', () => {
+    const registry = new ToolRegistry()
+    registry.register(providerFromTools([{
+      ...testTool('agent_visible', ['agent']),
+      jsonSchema: {
+        type: 'object',
+        properties: {
+          dataset_ref: { type: 'string' },
+          variable: { type: 'string' },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+    }]))
+
+    const [tool] = createAgentsTools(registry, new Set(), { schemaMode: 'compatible' })
+
+    expect(tool.strict).toBe(false)
+    expect(tool.parameters).toMatchObject({
+      type: 'object',
+      required: [],
+      additionalProperties: true,
+    })
+  })
 })
+
+function testTool(name: string, executionSurfaces: ToolDef['executionSurfaces']): ToolDef {
+  return {
+    name,
+    label: name === 'agent_visible' ? '可见测试工具' : '自动化流程内部工具',
+    description: '测试执行表面隔离。',
+    prompt: '仅用于测试工具执行表面。',
+    group: '测试',
+    tags: ['test'],
+    isReadOnly: true,
+    isDestructive: false,
+    ...(executionSurfaces ? { executionSurfaces } : {}),
+    jsonSchema: { type: 'object', properties: {}, required: [], additionalProperties: false },
+    handler: async () => ({
+      message: '完成', payload: {}, warnings: [], resultId: `result_${name}`, source: 'test',
+    }),
+  }
+}
 
 function providerFromTools(tools: ToolDef[]): ToolProvider {
   return {

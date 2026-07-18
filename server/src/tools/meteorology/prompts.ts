@@ -12,11 +12,12 @@
 // 输入来源、禁止事项和下游 valueRef 流向，避免把业务链路藏进系统 prompt。
 
 export const METEOROLOGY_TOOL_PROMPTS: Record<string, string> = {
-  list_meteorological_files: `用于列出当前线程可用的气象相关上传文件，并生成数据集、雷达和边界文件集合引用。
+  list_meteorological_files: `用于列出当前会话可用的气象相关上传数据集，并生成数据集、雷达和边界文件集合引用。
 
 使用规则：
 - 气象数据、天气雷达组网产品、短时临近预报、风险区划图或面雨量表任务都应先调用本工具。
-- 本工具只读取当前线程文件索引，不访问外部数据源。
+- 本工具只读取 PostgreSQL 中当前会话的数据集目录，不扫描宿主文件系统，也不访问外部数据源。
+- threadId 仅表示上传来源；同一会话中的后续对话可以继续使用这些数据集。
 - 返回的 meteorological_file_collection、radar_file_collection 和 meteorological_boundary_collection 是后续工具的规范入口。
 - 没有找到所需文件时，说明缺少上传数据并请求用户补充，不要编造文件名或路径。`,
 
@@ -55,8 +56,8 @@ export const METEOROLOGY_TOOL_PROMPTS: Record<string, string> = {
   meteorological_inspect: `用于检查单个气象数据文件的变量、维度、时次、层级、单位和制图能力。
 
 使用规则：
-- 用户说“刚上传的 NetCDF/NC 文件/气象数据”时，优先直接调用本工具；未提供 dataset_ref 时会解析当前 thread 最新上传的数据集。
-- dataset_ref 可以来自 list_meteorological_files 返回的 meteorological_file，也可以传 latest_upload 表示当前 thread 最新上传。
+- 用户说“刚上传的 NetCDF/NC 文件/气象数据”时，优先直接调用本工具；未提供 dataset_ref 时会解析当前会话最新上传的数据集。
+- dataset_ref 可以来自 list_meteorological_files 返回的 meteorological_file，也可以传 latest_upload 表示当前会话最新上传。
 - 在渲染栅格、统计、阈值区域、等值线、风险区划图或报告前，必须先检查数据集。
 - 后续工具应使用本工具返回的 meteorological_dataset、meteorological_variable、time_index、level_index 等 valueRef。
 - 不要凭文件名猜测变量名、单位、时次或层级。`,
@@ -108,6 +109,14 @@ export const METEOROLOGY_TOOL_PROMPTS: Record<string, string> = {
 - 不能用元数据摘要或手写长文本替代 interpretation_ref。
 - 这是报告生成动作，应按审批敏感工具处理。
 - 报告事实必须来自数据集检查、统计、渲染和模型解读引用，不要补写未验证结论。`,
+
+  meteorological_nowcast_report: `用于从一条已经完成的短临自动化运行生成确定性 DOCX 报告。
+
+使用规则：
+- 先调用 list_automation_runs，再调用 read_automation_run，automation_run_ref 只能使用后者返回的 automation_run_output valueRef。
+- 本工具直接读取自动化输出中的全部时次统计、诊断、移动信息和关联地图产物，不需要也不接受单帧数据集或模型解读。
+- 峰值、代表时次和 36 帧明细由报告生成器确定性计算；不要先手工抄写或改写数值。
+- 这是文件生成动作，应按审批敏感工具处理。`,
 
   define_rainfall_risk_thresholds: `用于保存短时强降水风险区划图使用的阈值和调色板。
 
@@ -179,7 +188,7 @@ export const METEOROLOGY_TOOL_PROMPTS: Record<string, string> = {
 
 使用规则：
 - nowcast_analysis_ref 必须来自 meteorological_precipitation_nowcast。
-- 本工具用于需要可复用 forecast_text_ref 的工作流，不替代 answer_nowcast_question 的最终问答交付。
+- 本工具用于需要可复用 forecast_text_ref 的自动化流程，不替代 answer_nowcast_question 的最终问答交付。
 - 文本必须严格基于分析事实，不得增加未计算的降水等级、影响区域或时间段。
 - 后续报告或展示应传 forecast_text_ref，而不是复制长文本。`,
 

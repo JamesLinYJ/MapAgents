@@ -65,10 +65,10 @@ function completeSecurityTables(): Record<string, string[]> {
     platform_rbac_policies: ['policy_id', 'ptype', 'v0', 'v1', 'v2', 'v3', 'v4', 'v5'],
     platform_audit_events: ['audit_event_id', 'actor_user_id', 'workspace_id', 'action', 'object_type', 'object_id', 'outcome', 'metadata_json', 'created_at'],
     platform_artifacts: ['artifact_id', 'run_id', 'artifact_type', 'name', 'uri', 'metadata_json', 'content_relative_path', 'created_at', 'workspace_id', 'created_by_user_id', 'visibility'],
-    platform_workflow_definitions: ['workflow_id', 'workspace_id', 'created_by_user_id', 'name', 'description', 'version', 'revision', 'published_revision', 'source', 'lifecycle', 'enabled', 'parameters_schema_json', 'default_parameters_json', 'required_tools_json', 'requires_approval', 'timeout_seconds', 'output_type', 'definition_json', 'created_at', 'updated_at'],
-    platform_workflow_versions: ['workflow_id', 'revision', 'lifecycle', 'definition_json', 'created_by_user_id', 'created_at', 'published_at'],
+    platform_automation_definitions: ['automation_id', 'workspace_id', 'created_by_user_id', 'name', 'description', 'version', 'revision', 'published_revision', 'source', 'lifecycle', 'enabled', 'parameters_schema_json', 'default_parameters_json', 'required_tools_json', 'requires_approval', 'timeout_seconds', 'output_type', 'definition_json', 'created_at', 'updated_at'],
+    platform_automation_versions: ['automation_id', 'revision', 'lifecycle', 'definition_json', 'created_by_user_id', 'created_at', 'published_at'],
     platform_scheduled_tasks: ['task_id', 'target_kind', 'target_id', 'workspace_id', 'created_by_user_id', 'title', 'prompt', 'parameters_json', 'cron', 'timezone', 'recurring', 'enabled', 'status', 'last_fired_at', 'next_fire_at', 'last_run_id', 'queue_job_id', 'failure_count', 'last_error_message', 'created_at', 'updated_at'],
-    platform_workflow_runs: ['workflow_run_id', 'workflow_id', 'workflow_revision', 'scheduled_task_id', 'workspace_id', 'created_by_user_id', 'run_id', 'status', 'current_step', 'trigger_kind', 'error_message', 'metadata_json', 'node_runs_json', 'pending_approval_json', 'outputs_json', 'started_at', 'completed_at'],
+    platform_automation_runs: ['automation_run_id', 'automation_id', 'automation_revision', 'scheduled_task_id', 'workspace_id', 'created_by_user_id', 'run_id', 'status', 'current_step', 'trigger_kind', 'error_message', 'metadata_json', 'node_runs_json', 'pending_approval_json', 'outputs_json', 'started_at', 'completed_at'],
   }
 }
 
@@ -239,10 +239,10 @@ describe('ensureSecurityTables', () => {
         platform_rbac_policies: ['policy_id', 'ptype', 'v0', 'v1', 'v2', 'v3', 'v4', 'v5'],
         platform_audit_events: ['audit_event_id', 'actor_user_id', 'workspace_id', 'action', 'object_type', 'object_id', 'outcome', 'metadata_json', 'created_at'],
         platform_artifacts: ['artifact_id', 'run_id', 'artifact_type', 'name', 'uri', 'metadata_json', 'content_relative_path', 'created_at', 'workspace_id', 'created_by_user_id', 'visibility'],
-        platform_workflow_definitions: ['workflow_id', 'workspace_id', 'created_by_user_id', 'name', 'description', 'version', 'revision', 'published_revision', 'source', 'lifecycle', 'enabled', 'parameters_schema_json', 'default_parameters_json', 'required_tools_json', 'requires_approval', 'timeout_seconds', 'output_type', 'definition_json', 'created_at', 'updated_at'],
-        platform_workflow_versions: ['workflow_id', 'revision', 'lifecycle', 'definition_json', 'created_by_user_id', 'created_at', 'published_at'],
+        platform_automation_definitions: ['automation_id', 'workspace_id', 'created_by_user_id', 'name', 'description', 'version', 'revision', 'published_revision', 'source', 'lifecycle', 'enabled', 'parameters_schema_json', 'default_parameters_json', 'required_tools_json', 'requires_approval', 'timeout_seconds', 'output_type', 'definition_json', 'created_at', 'updated_at'],
+        platform_automation_versions: ['automation_id', 'revision', 'lifecycle', 'definition_json', 'created_by_user_id', 'created_at', 'published_at'],
         platform_scheduled_tasks: ['task_id', 'target_kind', 'target_id', 'workspace_id', 'created_by_user_id', 'title', 'prompt', 'parameters_json', 'cron', 'timezone', 'recurring', 'enabled', 'status', 'last_fired_at', 'next_fire_at', 'last_run_id', 'queue_job_id', 'failure_count', 'last_error_message', 'created_at', 'updated_at'],
-        platform_workflow_runs: ['workflow_run_id', 'workflow_id', 'workflow_revision', 'scheduled_task_id', 'workspace_id', 'created_by_user_id', 'run_id', 'status', 'current_step', 'trigger_kind', 'error_message', 'metadata_json', 'node_runs_json', 'pending_approval_json', 'outputs_json', 'started_at', 'completed_at'],
+        platform_automation_runs: ['automation_run_id', 'automation_id', 'automation_revision', 'scheduled_task_id', 'workspace_id', 'created_by_user_id', 'run_id', 'status', 'current_step', 'trigger_kind', 'error_message', 'metadata_json', 'node_runs_json', 'pending_approval_json', 'outputs_json', 'started_at', 'completed_at'],
       },
     })
     await expect(ensureSecurityTables(db)).rejects.toThrow(/缺少表/)

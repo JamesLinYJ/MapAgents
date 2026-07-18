@@ -294,8 +294,8 @@ export function SdkExtensionManagement({
           <section className="panel sdk-config-panel">
             <div className="panel__header">
               <div>
-                <div className="panel__eyebrow">Server Registry</div>
-                <h2>MCP Server</h2>
+                <div className="panel__eyebrow">服务注册表</div>
+                <h2>MCP 服务</h2>
               </div>
               <button type="button" className="toolbar-button toolbar-button--primary" onClick={addMcpServer}>
                 <Plus size={15} aria-hidden="true" />
@@ -422,7 +422,7 @@ export function SdkExtensionManagement({
           </div>
           <div className="panel__section sdk-rule-list">
             <RuleItem icon={CheckCircle2} title="入口文件严格为 SKILL.md" body="大小写错误会被明确拒绝，避免 Windows/macOS 上的隐式兼容污染运行时。" />
-            <RuleItem icon={FolderCog} title="只导入明确目录" body="GeoForge 会读取 SKILL.md、scripts、references、assets 并交给 SDK skills capability，不把宿主绝对路径注入 prompt。" />
+            <RuleItem icon={FolderCog} title="只导入明确目录" body="平台会读取 SKILL.md、scripts、references、assets 并交给 SDK skills capability，不把宿主绝对路径注入提示词。" />
             <RuleItem icon={KeyRound} title="不是权限绕过入口" body="Skill 脚本进入 sandbox workspace 后仍受工具审批、文件沙箱和运行模式约束。" />
           </div>
         </section>

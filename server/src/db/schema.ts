@@ -8,7 +8,8 @@
 //   作者:       JamesLinYJ
 // --------------------------------------------------------------------------
 
-import { boolean, customType, pgTable, text, timestamp, jsonb, index, integer, primaryKey, uniqueIndex, type AnyPgColumn } from 'drizzle-orm/pg-core'
+import { sql } from 'drizzle-orm'
+import { boolean, check, customType, foreignKey, pgTable, text, timestamp, jsonb, index, integer, primaryKey, uniqueIndex, type AnyPgColumn } from 'drizzle-orm/pg-core'
 
 const geometry4326 = customType<{ data: string; driverData: string }>({
   dataType() {
@@ -361,6 +362,7 @@ export const platformMapLayers = pgTable('platform_map_layers', {
   artifactId: text('artifact_id').references(() => platformArtifacts.artifactId, { onDelete: 'cascade' }),
   managedLayerKey: text('managed_layer_key'),
   title: text('title').notNull(),
+  replacementGroup: text('replacement_group'),
   sourceType: text('source_type').notNull().default('artifact'),
   geometryType: text('geometry_type').notNull().default('unknown'),
   srid: integer('srid').notNull().default(4326),
@@ -393,6 +395,7 @@ export const platformMapLayers = pgTable('platform_map_layers', {
   artifactIdx: uniqueIndex('idx_platform_map_layers_artifact_unique').on(table.artifactId),
   managedLayerIdx: uniqueIndex('idx_platform_map_layers_managed_unique').on(table.managedLayerKey),
   threadUpdatedIdx: index('idx_platform_map_layers_thread_updated').on(table.threadId, table.updatedAt),
+  threadReplacementIdx: index('idx_platform_map_layers_thread_replacement').on(table.threadId, table.replacementGroup, table.updatedAt),
   workspaceUpdatedIdx: index('idx_platform_map_layers_workspace_updated').on(table.workspaceId, table.updatedAt),
 }))
 
@@ -479,8 +482,8 @@ export const platformMeteorologicalJobs = pgTable('platform_meteorological_jobs'
   sessionUpdatedIdx: index('idx_meteorological_jobs_session_updated').on(table.sessionId, table.updatedAt),
 }))
 
-export const platformWorkflowDefinitions = pgTable('platform_workflow_definitions', {
-  workflowId: text('workflow_id').primaryKey(),
+export const platformAutomationDefinitions = pgTable('platform_automation_definitions', {
+  automationId: text('automation_id').primaryKey(),
   workspaceId: text('workspace_id').references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
   createdByUserId: text('created_by_user_id').references(() => platformUsers.userId, { onDelete: 'set null' }),
   name: text('name').notNull(),
@@ -501,12 +504,17 @@ export const platformWorkflowDefinitions = pgTable('platform_workflow_definition
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
-  workspaceUpdatedIdx: index('idx_workflow_definitions_workspace_updated').on(table.workspaceId, table.updatedAt),
-  sourceLifecycleIdx: index('idx_workflow_definitions_source_lifecycle').on(table.source, table.lifecycle),
+  workspaceUpdatedIdx: index('idx_automation_definitions_workspace_updated').on(table.workspaceId, table.updatedAt),
+  sourceLifecycleIdx: index('idx_automation_definitions_source_lifecycle').on(table.source, table.lifecycle),
+  sourceCheck: check('platform_automation_definitions_source_check', sql`${table.source} IN ('builtin', 'workspace')`),
+  lifecycleCheck: check('platform_automation_definitions_lifecycle_check', sql`${table.lifecycle} IN ('draft', 'published', 'disabled')`),
+  revisionCheck: check('platform_automation_definitions_revision_check', sql`${table.revision} > 0`),
+  timeoutCheck: check('platform_automation_definitions_timeout_check', sql`${table.timeoutSeconds} > 0`),
+  ownershipCheck: check('platform_automation_definitions_ownership_check', sql`(${table.source} = 'builtin' AND ${table.workspaceId} IS NULL) OR (${table.source} = 'workspace' AND ${table.workspaceId} IS NOT NULL)`),
 }))
 
-export const platformWorkflowVersions = pgTable('platform_workflow_versions', {
-  workflowId: text('workflow_id').notNull().references(() => platformWorkflowDefinitions.workflowId, { onDelete: 'cascade' }),
+export const platformAutomationVersions = pgTable('platform_automation_versions', {
+  automationId: text('automation_id').notNull().references(() => platformAutomationDefinitions.automationId, { onDelete: 'cascade' }),
   revision: integer('revision').notNull(),
   lifecycle: text('lifecycle').notNull(),
   definitionJson: jsonb('definition_json').notNull().$type<Record<string, unknown>>(),
@@ -514,14 +522,16 @@ export const platformWorkflowVersions = pgTable('platform_workflow_versions', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   publishedAt: timestamp('published_at', { withTimezone: true }),
 }, (table) => ({
-  pk: primaryKey({ columns: [table.workflowId, table.revision], name: 'platform_workflow_versions_pk' }),
-  lifecycleIdx: index('idx_workflow_versions_lifecycle').on(table.workflowId, table.lifecycle),
+  pk: primaryKey({ columns: [table.automationId, table.revision], name: 'platform_automation_versions_pk' }),
+  lifecycleIdx: index('idx_automation_versions_lifecycle').on(table.automationId, table.lifecycle),
+  lifecycleCheck: check('platform_automation_versions_lifecycle_check', sql`${table.lifecycle} IN ('draft', 'published', 'archived')`),
+  revisionCheck: check('platform_automation_versions_revision_check', sql`${table.revision} > 0`),
 }))
 
 export const platformScheduledTasks = pgTable('platform_scheduled_tasks', {
   taskId: text('task_id').primaryKey(),
   targetKind: text('target_kind').notNull(),
-  targetId: text('target_id').notNull(),
+  targetId: text('target_id').notNull().references(() => platformAutomationDefinitions.automationId, { onDelete: 'restrict' }),
   workspaceId: text('workspace_id').notNull().references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
   createdByUserId: text('created_by_user_id').notNull().references(() => platformUsers.userId, { onDelete: 'restrict' }),
   title: text('title').notNull(),
@@ -543,12 +553,15 @@ export const platformScheduledTasks = pgTable('platform_scheduled_tasks', {
 }, (table) => ({
   workspaceNextIdx: index('idx_scheduled_tasks_workspace_next').on(table.workspaceId, table.nextFireAt),
   targetIdx: index('idx_scheduled_tasks_target').on(table.targetKind, table.targetId),
+  targetKindCheck: check('platform_scheduled_tasks_target_kind_check', sql`${table.targetKind} = 'automation'`),
+  statusCheck: check('platform_scheduled_tasks_status_check', sql`${table.status} IN ('active', 'paused', 'missed', 'failed', 'deleted')`),
+  failureCountCheck: check('platform_scheduled_tasks_failure_count_check', sql`${table.failureCount} >= 0`),
 }))
 
-export const platformWorkflowRuns = pgTable('platform_workflow_runs', {
-  workflowRunId: text('workflow_run_id').primaryKey(),
-  workflowId: text('workflow_id').notNull().references(() => platformWorkflowDefinitions.workflowId, { onDelete: 'restrict' }),
-  workflowRevision: integer('workflow_revision').notNull(),
+export const platformAutomationRuns = pgTable('platform_automation_runs', {
+  automationRunId: text('automation_run_id').primaryKey(),
+  automationId: text('automation_id').notNull(),
+  automationRevision: integer('automation_revision').notNull(),
   scheduledTaskId: text('scheduled_task_id').references(() => platformScheduledTasks.taskId, { onDelete: 'set null' }),
   workspaceId: text('workspace_id').notNull().references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
   createdByUserId: text('created_by_user_id').notNull().references(() => platformUsers.userId, { onDelete: 'restrict' }),
@@ -564,6 +577,13 @@ export const platformWorkflowRuns = pgTable('platform_workflow_runs', {
   startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
   completedAt: timestamp('completed_at', { withTimezone: true }),
 }, (table) => ({
-  workspaceStartedIdx: index('idx_workflow_runs_workspace_started').on(table.workspaceId, table.startedAt),
-  scheduledTaskStartedIdx: index('idx_workflow_runs_scheduled_task_started').on(table.scheduledTaskId, table.startedAt),
+  workspaceStartedIdx: index('idx_automation_runs_workspace_started').on(table.workspaceId, table.startedAt),
+  scheduledTaskStartedIdx: index('idx_automation_runs_scheduled_task_started').on(table.scheduledTaskId, table.startedAt),
+  definitionRevisionFk: foreignKey({
+    columns: [table.automationId, table.automationRevision],
+    foreignColumns: [platformAutomationVersions.automationId, platformAutomationVersions.revision],
+    name: 'platform_automation_runs_definition_revision_fk',
+  }).onDelete('restrict'),
+  statusCheck: check('platform_automation_runs_status_check', sql`${table.status} IN ('queued', 'running', 'waiting_approval', 'completed', 'failed', 'cancelled')`),
+  triggerKindCheck: check('platform_automation_runs_trigger_kind_check', sql`${table.triggerKind} IN ('manual', 'schedule', 'agent')`),
 }))

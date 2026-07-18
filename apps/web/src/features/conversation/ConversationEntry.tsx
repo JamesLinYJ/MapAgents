@@ -233,7 +233,7 @@ function ApprovalCard({ entry }: { entry: ConversationEntry }) {
           <span>请先审阅计划。批准后系统才会退出只读计划模式并继续执行。</span>
         </div>
         <div className="cc-plan-document">
-          <div className="cc-plan-document__eyebrow">GeoForge Plan</div>
+          <div className="cc-plan-document__eyebrow">智能体工作流</div>
           <h2>{plan.goal}</h2>
           <section>
             <h3>执行步骤</h3>

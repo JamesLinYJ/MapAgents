@@ -25,30 +25,19 @@ describe('loadBootstrapFromWorkspacePointer', () => {
       return snapshot(sessionId ?? 'session_default')
     })
 
-    expect(result.pointerRejected).toBe(false)
-    expect(result.snapshot.session.id).toBe('session_shared')
+    expect(result.session.id).toBe('session_shared')
     expect(calls).toEqual(['session_shared'])
   })
 
-  it('失效的本地 session 选中提示会被显式清理', async () => {
+  it('根路径不携带历史用户的 session 指针', async () => {
     const calls: Array<string | undefined> = []
-    const result = await loadBootstrapFromWorkspacePointer({
-      activeSessionId: 'session_foreign',
-      sessionSource: 'persisted',
-    }, async sessionId => {
+    const result = await loadBootstrapFromWorkspacePointer({}, async sessionId => {
       calls.push(sessionId)
-      if (sessionId === 'session_foreign') {
-        throw new GeoForgeTransportError('无权访问该会话。', {
-          transport: 'websocket',
-          code: 'forbidden',
-        })
-      }
       return snapshot(sessionId ?? 'session_default')
     })
 
-    expect(result.pointerRejected).toBe(true)
-    expect(result.snapshot.session.id).toBe('session_default')
-    expect(calls).toEqual(['session_foreign', undefined])
+    expect(result.session.id).toBe('session_default')
+    expect(calls).toEqual([undefined])
   })
 
   it('显式 URL session 不可访问时保留权限错误', async () => {

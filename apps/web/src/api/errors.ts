@@ -9,7 +9,7 @@ import { isRecord } from '../shared/utils/guards'
 //   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
-export const API_UNAVAILABLE_MESSAGE = 'GeoForge API 未连接，请启动 Node API 服务。'
+export const API_UNAVAILABLE_MESSAGE = '工作台 API 未连接，请启动 Node API 服务。'
 
 export type TransportKind = 'http' | 'websocket'
 
