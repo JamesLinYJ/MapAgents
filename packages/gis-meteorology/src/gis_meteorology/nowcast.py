@@ -98,6 +98,7 @@ class MeteorologicalSequence:
             "variable": self.variable,
             "bounds": self.bounds,
             "issueTime": self.issue_time.isoformat() if self.issue_time else None,
+            "timeZone": _timezone_label(self.issue_time),
             "datasets": [
                 {
                     "datasetId": item.dataset_id,
@@ -124,12 +125,33 @@ class NowcastSequenceService:
         sequence_id: str,
         datasets: list[dict[str, Any]],
         profile: NowcastProductProfile | None = None,
+        horizon_minutes: int | None = None,
     ) -> MeteorologicalSequence:
         profile = profile or NowcastProductProfile()
         items = [self._dataset_item(raw, index) for index, raw in enumerate(datasets)]
         if not items:
             raise ValueError("创建短时临近预报序列至少需要一个 NC 数据集。")
         items.sort(key=lambda item: (item.valid_time or datetime.max, item.filename, item.dataset_id))
+        if horizon_minutes is not None:
+            if horizon_minutes < 5 or horizon_minutes > 360:
+                raise ValueError("短时临近预报时效必须在 5 到 360 分钟之间。")
+            available_leads = [item.lead_minutes for item in items if item.lead_minutes is not None]
+            if len(available_leads) != len(items):
+                raise ValueError("按时效创建短时临近预报序列时，每个数据集都必须包含可解析的预报时效。")
+            maximum_lead = max(available_leads)
+            if maximum_lead < horizon_minutes:
+                raise ValueError(
+                    f"短时临近预报数据仅覆盖 {maximum_lead} 分钟，不能满足 {horizon_minutes} 分钟时效。"
+                )
+            items = [item for item in items if item.lead_minutes is not None and item.lead_minutes <= horizon_minutes]
+            if not items:
+                raise ValueError(f"短时临近预报序列没有 {horizon_minutes} 分钟时效内的数据。")
+            covered_lead = max(item.lead_minutes for item in items if item.lead_minutes is not None)
+            if covered_lead < horizon_minutes:
+                raise ValueError(
+                    f"短时临近预报数据在目标范围内仅覆盖 {covered_lead} 分钟，"
+                    f"不能满足 {horizon_minutes} 分钟时效。"
+                )
         normalized = [self._replace_index(item, index) for index, item in enumerate(items)]
         variables = self._available_variables(normalized[0])
         variable = profile.choose_precipitation_variable(variables)
@@ -143,6 +165,7 @@ class NowcastSequenceService:
             "datasetCount": len(sequence.datasets),
             "variable": sequence.variable,
             "issueTime": sequence.issue_time.isoformat() if sequence.issue_time else None,
+            "timeZone": _timezone_label(sequence.issue_time),
             "validTimes": [item.valid_time.isoformat() if item.valid_time else None for item in sequence.datasets],
             "leadMinutes": [item.lead_minutes for item in sequence.datasets],
             "bounds": sequence.bounds,
@@ -280,58 +303,83 @@ class NowcastTextService:
             rainy = [r for r in regions if (r.get("diagnosis") or {}).get("hasRain")]
             if not rainy:
                 return {
-                    "answer": "未来三小时不会下雨，您可以放心出门。",
-                    "basis": [f"分析变量：{facts.get('variable')}", f"分析区域：{len(regions)} 个区县", "诊断：全区域无降雨"],
+                    "answer": "各分析区域在预报时段内未检出达到有效阈值的降雨。",
+                    "basis": [
+                        f"分析变量：{facts.get('variable')}",
+                        f"分析区域：{len(regions)} 个区县",
+                        "诊断：所有区域均未达到有效降雨阈值",
+                    ],
                     "confidence": 0.72, "warnings": warnings,
                 }
             basis_parts = [f"分析变量：{facts.get('variable')}", f"分析区域：{len(regions)} 个区县"]
-            sorted_rainy = sorted(rainy, key=lambda r: (r.get("diagnosis") or {}).get("onsetLeadMinutes") or 999)
+            sorted_rainy = sorted(rainy, key=_region_onset_sort_key)
             # 按起雨时间分组，生成带时间转移的叙述
             time_groups: dict[int, list[dict[str, Any]]] = {}
             for r in sorted_rainy:
-                onset = (r.get("diagnosis") or {}).get("onsetLeadMinutes") or 0
-                bucket = onset // 15 * 15
+                onset = (r.get("diagnosis") or {}).get("onsetLeadMinutes")
+                bucket = int(onset) // 15 * 15 if onset is not None else 999
                 time_groups.setdefault(bucket, []).append(r)
             parts: list[str] = []
             sorted_buckets = sorted(time_groups.keys())
-            for idx, bucket in enumerate(sorted_buckets):
+            for bucket in sorted_buckets:
                 group = time_groups[bucket]
                 labels = "、".join(r.get("label", "?") for r in group)
-                first_diag = group[0].get("diagnosis") or {}
-                onset = first_diag.get("onsetLeadMinutes")
-                peak_level = _rain_level_label(first_diag.get("peakLevel"))
-                # 起雨按时间桶合并；增强时刻仍按各区县自己的诊断分组，
-                # 避免脱离区域名称单独输出“雨量变大”。
-                if idx == 0:
-                    parts.append(f"{_lead_phrase(onset)}{labels}将下{peak_level}")
-                else:
-                    parts.append(f"{_lead_phrase(onset)}{labels}也将出现降雨")
+                onsets = sorted(
+                    int(onset)
+                    for region in group
+                    if (onset := (region.get("diagnosis") or {}).get("onsetLeadMinutes")) is not None
+                )
+                parts.append(f"{_lead_window_phrase(onsets)}{labels}开始出现达到有效阈值的降雨")
                 for region in group:
                     diagnosis = region.get("diagnosis") or {}
                     basis_parts.append(
                         f"{region.get('label', '?')}：起雨 {diagnosis.get('onsetLeadMinutes')} 分钟，"
                         f"峰值 {diagnosis.get('peakLeadMinutes')} 分钟，趋势 {diagnosis.get('trend')}"
                     )
-                peak_groups: dict[int, list[str]] = {}
+                # 峰值时刻和等级独立于起雨时刻，不能用峰值等级描述刚起雨的强度。
+                peak_groups: dict[tuple[int, str], list[str]] = {}
                 for region in group:
                     diagnosis = region.get("diagnosis") or {}
                     peak = diagnosis.get("peakLeadMinutes")
-                    if peak is not None and peak != diagnosis.get("onsetLeadMinutes"):
-                        peak_groups.setdefault(int(peak), []).append(str(region.get("label") or "?"))
-                for peak, peak_labels in sorted(peak_groups.items()):
-                    parts.append(f"{_lead_phrase(peak)}{'、'.join(peak_labels)}雨量变大")
-                # 在最后一个组中补充趋势和移动
-                if idx == len(sorted_buckets) - 1:
-                    trends = set((r.get("diagnosis") or {}).get("trend") for r in sorted_rainy)
-                    if "intensifying" in trends:
-                        parts.append("未来三小时持续降雨且雨势增强")
-                    elif "continuous" in trends or len(trends) > 1:
-                        parts.append("未来三小时持续降雨")
-                    elif "weakening" in trends:
-                        parts.append("雨势逐步减弱")
-                    elif "ending" in trends:
-                        last_end = max(((r.get("diagnosis") or {}).get("endLeadMinutes") or 0) for r in sorted_rainy)
-                        parts.append(f"{_lead_phrase(last_end)}雨量渐停")
+                    if peak is not None:
+                        peak_level = _rain_level_label(diagnosis.get("peakLevel"))
+                        peak_groups.setdefault((int(peak), peak_level), []).append(str(region.get("label") or "?"))
+                for (peak, peak_level), peak_labels in sorted(peak_groups.items()):
+                    parts.append(
+                        f"{_lead_phrase(peak)}{'、'.join(peak_labels)}降雨强度达到峰值，"
+                        f"峰值等级为{peak_level}"
+                    )
+
+            # 趋势必须绑定具体区县，不能把任一区县的趋势扩大成全域结论。
+            trend_groups: dict[str, list[dict[str, Any]]] = {}
+            for region in sorted_rainy:
+                trend = str((region.get("diagnosis") or {}).get("trend") or "unknown")
+                trend_groups.setdefault(trend, []).append(region)
+            trend_phrases = {
+                "intensifying": "起雨后雨势持续增强",
+                "continuous": "起雨后持续至预报末端，整体雨势变化不大",
+                "weakening": "起雨后雨势逐步减弱",
+            }
+            for trend in ("intensifying", "continuous", "weakening"):
+                group = trend_groups.get(trend) or []
+                if group:
+                    labels = "、".join(str(region.get("label") or "?") for region in group)
+                    parts.append(f"{labels}{trend_phrases[trend]}")
+            ending_groups: dict[int, list[str]] = {}
+            for region in trend_groups.get("ending") or []:
+                diagnosis = region.get("diagnosis") or {}
+                end = diagnosis.get("endLeadMinutes")
+                if end is None:
+                    parts.append(f"{region.get('label') or '?'}起雨后雨势逐步减弱")
+                else:
+                    ending_groups.setdefault(int(end), []).append(str(region.get("label") or "?"))
+            for end, labels in sorted(ending_groups.items()):
+                parts.append(f"{_lead_phrase(end)}{'、'.join(labels)}降雨结束")
+
+            dry = [region for region in regions if not (region.get("diagnosis") or {}).get("hasRain")]
+            if dry:
+                dry_labels = "、".join(str(region.get("label") or "?") for region in dry)
+                parts.append(f"{dry_labels}在预报时段内未检出达到有效阈值的降雨")
             if movement.get("direction"):
                 # 找出降雨区移动方向上的目标区域
                 direction_district_hint = _lookup_downstream_district(regions, movement)
@@ -342,7 +390,6 @@ class NowcastTextService:
             return {"answer": "；".join(parts) + "。", "basis": basis_parts, "confidence": 0.78, "warnings": warnings}
         # 单区域/单地点问题
         diagnosis = target.get("diagnosis") or {}
-        mv = diagnosis if isinstance(diagnosis, dict) and movement else movement
         answer = format_diagnosis_answer(target.get("label") or "当前区域", diagnosis, movement)
         basis = [
             f"分析变量：{facts.get('variable')}",
@@ -615,27 +662,26 @@ def format_diagnosis_answer(
     movement: dict[str, Any],
 ) -> str:
     if not diagnosis.get("hasRain"):
-        return "未来3小时不会下雨，您可以放心出门。"
+        return f"{label}在预报时段内未检出达到有效阈值的降雨。"
     onset = diagnosis.get("onsetLeadMinutes")
     peak = diagnosis.get("peakLeadMinutes")
     end = diagnosis.get("endLeadMinutes")
     trend = diagnosis.get("trend")
     peak_level = _rain_level_label(diagnosis.get("peakLevel"))
     parts: list[str] = []
-    # 起雨时间与雨量（onsetLevel 通常不可用，只描述峰值雨量）
-    parts.append(f"{_lead_phrase(onset)}将下{peak_level}")
-    # 峰值时间与变化
-    if peak is not None and peak != onset:
-        parts.append(f"{_lead_phrase(peak)}雨量变大")
+    parts.append(f"{_lead_phrase(onset)}{label}开始出现达到有效阈值的降雨")
+    # 峰值时次只代表高分位强度的最大值，不等同于起雨强度或区域平均雨势增强。
+    if peak is not None:
+        parts.append(f"{_lead_phrase(peak)}{label}降雨强度达到峰值，峰值等级为{peak_level}")
     # 趋势与结束
     if trend == "ending" and end is not None:
         parts.append(f"{_lead_phrase(end)}雨量渐停")
     elif trend == "weakening":
-        parts.append("雨势逐步减弱")
+        parts.append("起雨后雨势逐步减弱")
     elif trend == "intensifying":
-        parts.append("雨势持续增强")
+        parts.append("起雨后雨势持续增强")
     elif trend == "continuous":
-        parts.append("未来3小时持续下雨")
+        parts.append("起雨后持续至预报末端，整体雨势变化不大")
     return "，".join(parts) + "。"
 
 
@@ -694,6 +740,17 @@ def _parse_datetime(value: str) -> datetime | None:
     return None
 
 
+def _timezone_label(value: datetime | None) -> str | None:
+    if value is None or value.tzinfo is None or value.utcoffset() is None:
+        return None
+    offset_minutes = int(value.utcoffset().total_seconds() // 60)
+    if offset_minutes == 0:
+        return "UTC"
+    sign = "+" if offset_minutes > 0 else "-"
+    hours, minutes = divmod(abs(offset_minutes), 60)
+    return f"UTC{sign}{hours:02d}:{minutes:02d}"
+
+
 def _lookup_downstream_district(regions: list[dict[str, Any]], movement: dict[str, Any]) -> str | None:
     direction = movement.get("direction", "")
     distance = movement.get("distanceKm")
@@ -727,9 +784,26 @@ def _lead_phrase(minutes: Any) -> str:
     return f"{value}分钟后"
 
 
+def _lead_window_phrase(minutes: list[int]) -> str:
+    if not minutes:
+        return "未来"
+    first = min(minutes)
+    last = max(minutes)
+    if first == last:
+        return _lead_phrase(first)
+    return f"{first}至{last}分钟后"
+
+
+def _region_onset_sort_key(region: dict[str, Any]) -> int:
+    onset = (region.get("diagnosis") or {}).get("onsetLeadMinutes")
+    return int(onset) if onset is not None else 999
+
+
 def _is_generic_nowcast_question(question: str) -> bool:
     compact = re.sub(r"[？?。！!\s]", "", question)
-    return compact in {"接下来天气怎么样", "接下来天气如何", "未来天气怎么样", "全市天气怎么样", "当前区域天气怎么样"}
+    exact_questions = {"接下来天气怎么样", "接下来天气如何", "未来天气怎么样"}
+    generic_scope_markers = ("全市", "各区县", "各区", "各县", "全部区域", "所有区域", "当前区域", "整体")
+    return compact in exact_questions or any(marker in compact for marker in generic_scope_markers)
 
 
 def _rain_level_label(level: Any) -> str:

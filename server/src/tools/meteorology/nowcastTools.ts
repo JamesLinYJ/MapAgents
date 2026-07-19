@@ -11,6 +11,7 @@
 import type { ToolContext, ToolDef, ToolResult, ValueRef } from '../../framework/types.js'
 import { makeId } from '../../utils/ids.js'
 import {
+  numberParameter,
   refParameter,
   textParameter,
   tool,
@@ -45,6 +46,7 @@ export function createNowcastMeteorologyTools(deps: MeteorologyToolDeps): ToolDe
     tool('create_nowcast_sequence', '创建短时临近预报序列', '从当前线程气象文件集合创建短时临近预报序列引用；仅用于短时临近预报问答、连续时次分析和区域累计面雨量排行表，不作为短时强降水风险区划图 dataset_ref', {
       file_collection_ref: refParameter('文件集合引用'),
       variable_ref: refParameter('变量引用'),
+      horizon_minutes: { ...numberParameter('预报时效（分钟）'), type: 'integer', minimum: 5, maximum: 360 },
     }, withMeteorologyDeps(deps, createNowcastSequence), ['file_collection_ref'], AUTOMATION_TOOL_OPTIONS),
     tool('inspect_nowcast_sequence', '检查短时临近预报序列', '检查短时临近预报序列每个时次的数据集', {
       sequence_ref: refParameter('短时临近预报序列引用'),
@@ -77,7 +79,15 @@ async function createNowcastSequence(args: Record<string, unknown>, ctx: ToolCon
   const collection = refObject(requiredRefKind(ctx, args, 'file_collection_ref', ['meteorological_file_collection']).value)
   if (!Array.isArray(collection.files) || collection.files.length < 2) throw new Error('短时临近预报序列至少需要两个气象文件')
   const variable = optionalRefValue(ctx, args, 'variable_ref', 'name')
-  const worker = await deps.callWorker('create_nowcast_sequence', { files: collection.files, variable }, ctx.signal)
+  const horizonMinutes = args.horizon_minutes === undefined ? undefined : Number(args.horizon_minutes)
+  if (horizonMinutes !== undefined && (!Number.isInteger(horizonMinutes) || horizonMinutes < 5 || horizonMinutes > 360)) {
+    throw new Error('horizon_minutes 必须是 5 到 360 之间的整数')
+  }
+  const worker = await deps.callWorker('create_nowcast_sequence', {
+    files: collection.files,
+    variable,
+    horizon_minutes: horizonMinutes,
+  }, ctx.signal)
   const ref: ValueRef = {
     refId: makeId('ref'), kind: 'nowcast_sequence', label: '短时临近预报（短临）气象序列',
     value: worker.payload,

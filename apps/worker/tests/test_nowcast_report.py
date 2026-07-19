@@ -27,9 +27,174 @@ from worker_app.path_sandbox import WorkerPathSandbox
 from worker_app.tool_context import WorkerToolContext
 from worker_app.tool_registry import WorkerToolRegistry
 from worker_app.tools import register_builtin_tools
+from gis_meteorology import NowcastSequenceService, NowcastTextService
 
 
 class NowcastReportTests(unittest.TestCase):
+    def test_sequence_horizon_selects_only_requested_lead_times(self) -> None:
+        datasets = [
+            {
+                "dataset_id": f"dataset_{lead}",
+                "filename": f"202604091955_20260409{19 + (55 + lead) // 60:02d}{(55 + lead) % 60:02d}.nc",
+                "path": Path(f"lead_{lead}.nc"),
+                "metadata": {"variables": [{"name": "QPF"}]},
+            }
+            for lead in range(5, 181, 5)
+        ]
+
+        sequence = NowcastSequenceService().create_sequence(
+            sequence_id="sequence_60_minutes",
+            datasets=datasets,
+            horizon_minutes=60,
+        )
+
+        self.assertEqual(len(sequence.datasets), 12)
+        self.assertEqual(sequence.datasets[-1].lead_minutes, 60)
+        self.assertEqual(sequence.to_payload()["issueTime"], "2026-04-09T19:55:00")
+        self.assertEqual(sequence.to_payload()["datasets"][0]["validTime"], "2026-04-09T20:00:00")
+        self.assertIsNone(sequence.to_payload()["timeZone"])
+
+        inspection = NowcastSequenceService().inspect_sequence(sequence)
+        self.assertEqual(inspection["validTimes"][0], "2026-04-09T20:00:00")
+        self.assertIsNone(inspection["timeZone"])
+
+    def test_sequence_horizon_fails_when_data_does_not_cover_requested_duration(self) -> None:
+        datasets = [{
+            "dataset_id": "dataset_5",
+            "filename": "202604091955_202604092000.nc",
+            "path": Path("lead_5.nc"),
+            "metadata": {"variables": [{"name": "QPF"}]},
+        }]
+
+        with self.assertRaisesRegex(ValueError, "仅覆盖 5 分钟"):
+            NowcastSequenceService().create_sequence(
+                sequence_id="sequence_too_short",
+                datasets=datasets,
+                horizon_minutes=60,
+            )
+
+    def test_sequence_horizon_fails_when_only_later_frame_exceeds_requested_duration(self) -> None:
+        datasets = [
+            {
+                "dataset_id": "dataset_5",
+                "filename": "202604091955_202604092000.nc",
+                "path": Path("lead_5.nc"),
+                "metadata": {"variables": [{"name": "QPF"}]},
+            },
+            {
+                "dataset_id": "dataset_65",
+                "filename": "202604091955_202604092100.nc",
+                "path": Path("lead_65.nc"),
+                "metadata": {"variables": [{"name": "QPF"}]},
+            },
+        ]
+
+        with self.assertRaisesRegex(ValueError, "目标范围内仅覆盖 5 分钟"):
+            NowcastSequenceService().create_sequence(
+                sequence_id="sequence_gap_at_horizon",
+                datasets=datasets,
+                horizon_minutes=60,
+            )
+
+    def test_continuous_rain_does_not_claim_that_area_wide_rainfall_increases(self) -> None:
+        draft = NowcastTextService().build_draft_answer(
+            question="西湖区未来三小时降雨如何？",
+            facts={
+                "variable": "QPF",
+                "warnings": [],
+                "movement": {"available": False, "direction": None},
+                "regions": [{
+                    "regionId": "xihu",
+                    "label": "西湖区",
+                    "diagnosis": {
+                        "hasRain": True,
+                        "trend": "continuous",
+                        "onsetLeadMinutes": 5,
+                        "peakLeadMinutes": 150,
+                        "endLeadMinutes": None,
+                        "peakLevel": "moderate",
+                    },
+                }],
+            },
+        )
+
+        self.assertNotIn("雨量变大", draft["answer"])
+        self.assertIn("西湖区降雨强度达到峰值", draft["answer"])
+        self.assertIn("峰值等级为中雨", draft["answer"])
+        self.assertIn("整体雨势变化不大", draft["answer"])
+
+    def test_generic_answer_scopes_each_trend_and_lists_dry_regions(self) -> None:
+        draft = NowcastTextService().build_draft_answer(
+            question="杭州各区县未来三小时降雨如何？",
+            facts={
+                "variable": "QPF",
+                "warnings": [],
+                "movement": {"available": False, "direction": None},
+                "regions": [
+                    {
+                        "regionId": "shangcheng",
+                        "label": "上城区",
+                        "diagnosis": {
+                            "hasRain": True,
+                            "trend": "intensifying",
+                            "onsetLeadMinutes": 5,
+                            "peakLeadMinutes": 180,
+                            "endLeadMinutes": None,
+                            "peakLevel": "moderate",
+                        },
+                    },
+                    {
+                        "regionId": "tonglu",
+                        "label": "桐庐县",
+                        "diagnosis": {
+                            "hasRain": True,
+                            "trend": "continuous",
+                            "onsetLeadMinutes": 70,
+                            "peakLeadMinutes": 140,
+                            "endLeadMinutes": None,
+                            "peakLevel": "light",
+                        },
+                    },
+                    {
+                        "regionId": "chunan",
+                        "label": "淳安县",
+                        "diagnosis": {
+                            "hasRain": False,
+                            "trend": "dry",
+                            "onsetLeadMinutes": None,
+                            "peakLeadMinutes": None,
+                            "endLeadMinutes": None,
+                            "peakLevel": "none",
+                        },
+                    },
+                ],
+            },
+        )
+
+        self.assertNotIn("未来三小时持续降雨且雨势增强", draft["answer"])
+        self.assertIn("5分钟后上城区开始出现达到有效阈值的降雨", draft["answer"])
+        self.assertIn("上城区起雨后雨势持续增强", draft["answer"])
+        self.assertIn("桐庐县起雨后持续至预报末端，整体雨势变化不大", draft["answer"])
+        self.assertIn("淳安县在预报时段内未检出达到有效阈值的降雨", draft["answer"])
+
+    def test_dry_answer_does_not_make_outdoor_safety_promise(self) -> None:
+        draft = NowcastTextService().build_draft_answer(
+            question="杭州各区县未来三小时降雨如何？",
+            facts={
+                "variable": "QPF",
+                "warnings": [],
+                "movement": {"available": False, "direction": None},
+                "regions": [{
+                    "regionId": "xihu",
+                    "label": "西湖区",
+                    "diagnosis": {"hasRain": False, "trend": "dry"},
+                }],
+            },
+        )
+
+        self.assertNotIn("放心出门", draft["answer"])
+        self.assertEqual(draft["answer"], "各分析区域在预报时段内未检出达到有效阈值的降雨。")
+
     def test_report_uses_persisted_timeline_and_computes_global_peak(self) -> None:
         registry = WorkerToolRegistry()
         register_builtin_tools(registry)

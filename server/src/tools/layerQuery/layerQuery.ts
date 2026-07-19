@@ -32,6 +32,7 @@ export function createLayerQueryTool(managedLayers: ManagedLayerService): ToolDe
                 bbox: { type: 'array' },
                 limit: { type: 'integer' },
                 properties: { type: 'array' },
+                requireComplete: { type: 'boolean', description: '为 true 时，若查询结果少于图层总要素数则硬失败。' },
             },
             required: ['layerKey'],
         },
@@ -39,9 +40,14 @@ export function createLayerQueryTool(managedLayers: ManagedLayerService): ToolDe
             const layerKey = String(args.layerKey);
             const bbox = parseBbox(args.bbox);
             const limit = typeof args.limit === 'number' ? args.limit : 100;
+            const requireComplete = args.requireComplete === true;
             const selectedProperties = Array.isArray(args.properties) ? new Set(args.properties.map(String)) : null;
             const rows = await managedLayers.queryFeatures(layerKey, bbox, limit);
             const totalCount = await managedLayers.featureCount(layerKey);
+            const complete = rows.length >= totalCount;
+            if (requireComplete && !complete) {
+                throw new Error(`图层 '${layerKey}' 共 ${totalCount} 个要素，本次只读取 ${rows.length} 个，不能作为完整分析范围。`);
+            }
             const featureCollection: GeoJsonFeatureCollection = {
                 type: 'FeatureCollection',
                 features: rows.map(row => ({
@@ -54,8 +60,8 @@ export function createLayerQueryTool(managedLayers: ManagedLayerService): ToolDe
             };
             return {
                 message: `读取 ${rows.length} / ${totalCount} 个要素`,
-                payload: { layerKey, totalCount, featureCollection },
-                warnings: [],
+                payload: { layerKey, totalCount, returnedCount: rows.length, complete, featureCollection },
+                warnings: complete ? [] : [`图层 '${layerKey}' 查询结果已截断：${rows.length} / ${totalCount} 个要素。`],
                 resultId: makeId('result'),
                 source: 'postgis',
                 valueRefs: [{ refId: makeId('ref'), kind: 'feature_collection', label: `${layerKey} 查询结果`, value: featureCollection }],

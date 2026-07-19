@@ -333,6 +333,12 @@ export class OpenAIAgentsRuntime {
 
     const valueState = this.createThreadValueState(threadId, options.runId)
     let coordinator: ToolExecutionCoordinator
+    let supervisorAgent: Agent<AgentsExecutionContext> | null = null
+    const applyPlanModeModelBoundary = (enabled: boolean): void => {
+      if (!supervisorAgent) return
+      supervisorAgent.modelSettings = modelSettings(options.reasoning, enabled)
+      supervisorAgent.resetToolChoice = !enabled
+    }
     const context: AgentsExecutionContext = {
       runId: options.runId,
       prepareToolCall: (toolName, args, callId) => coordinator.prepare(toolName, args, callId),
@@ -354,6 +360,7 @@ export class OpenAIAgentsRuntime {
       itemSink,
       valueState,
       signal,
+      onPlanModeChanged: applyPlanModeModelBoundary,
     })
     const approvalTools = new Set(options.runtimeConfig.supervisor.approvalInterruptTools)
     const supervisorTools = createAgentsTools(this.toolRegistry, approvalTools, {
@@ -414,12 +421,14 @@ export class OpenAIAgentsRuntime {
       name: options.runtimeConfig.supervisor.name,
       instructions: systemPrompt,
       model,
-      modelSettings: modelSettings(options.reasoning),
+      modelSettings: modelSettings(options.reasoning, run.state.planMode),
+      resetToolChoice: !run.state.planMode,
       tools: [...supervisorTools, ...subAgentTools, ...sdkTools.tools],
       toolUseBehavior: { stopAtToolNames: returnDirectToolNames },
       defaultManifest: sandboxManifest,
       capabilities: [...Capabilities.default(), ...sandboxIntegration.capabilities],
     })
+    supervisorAgent = agent
     const runner = new Runner({
       model,
       tracingDisabled: true,
@@ -468,15 +477,22 @@ export class OpenAIAgentsRuntime {
         }
         await flushPendingSessionAssistantMessage()
         if (item.type === 'function_call_result') {
-          const exists = (await this.store.activeTranscript(threadId))
+          const transcript = await this.store.activeTranscript(threadId)
+          const exists = transcript
             .some(entry => entry.kind === 'tool_result' && entry.payload.callId === item.callId)
           if (exists) continue
           const content = toolResultText(item.output)
           const isSubAgent = options.runtimeConfig.subAgents.some(config => config.agentId === item.name)
           const isSandboxNativeTool = !this.transcriptProjector.isPlatformManagedTool(item.name, options.runtimeConfig)
+          const platformTool = this.toolRegistry.get(item.name)
+          const failedCheckpoint = transcript.some(entry => (
+            entry.kind === 'checkpoint'
+            && entry.payload.callId === item.callId
+            && entry.payload.ledgerStatus === 'failed'
+          ))
           const ledgerStatus = isSandboxNativeTool
             ? sdkNativeLedgerStatus(item.status)
-            : (isSubAgent ? 'completed' : 'rejected')
+            : (isSubAgent ? 'completed' : failedCheckpoint ? 'failed' : 'rejected')
           await this.store.appendTranscript({
             threadId,
             runId: options.runId,
@@ -485,7 +501,7 @@ export class OpenAIAgentsRuntime {
             payload: {
               callId: item.callId,
               name: item.name,
-              label: isSubAgent ? '子智能体任务' : '沙箱工具调用',
+              label: isSubAgent ? '子智能体任务' : isSandboxNativeTool ? '沙箱工具调用' : platformTool?.label ?? item.name,
               summary: content,
               content,
               contentRef: null,
@@ -624,6 +640,11 @@ export class OpenAIAgentsRuntime {
         const agentWorkflow = this.store.getRun(options.runId).state.agentWorkflow
         if (agentWorkflow && agentWorkflow.status !== 'completed') {
           throw new Error(`智能体工作流尚未完成，当前状态为 ${agentWorkflow.status}。必须完成或显式调整剩余步骤后再交付最终回答。`)
+        }
+        const incompleteTodos = this.store.getRun(options.runId).state.todos
+          .filter(todo => todo.status === 'pending' || todo.status === 'running')
+        if (incompleteTodos.length) {
+          throw new Error(`运行仍有未完成 Todo：${incompleteTodos.map(todo => todo.title).join('、')}。请先更新为完成、失败或受阻状态。`)
         }
         if (!projection.lastAssistantText || projection.lastAssistantText !== finalOutput) {
           const synthetic: AgentInputItem = {

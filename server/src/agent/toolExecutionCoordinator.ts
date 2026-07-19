@@ -13,6 +13,7 @@ import type { ToolContext, ToolResult, ValueRef } from '../framework/types.js'
 import type { ModelAdapter } from '../model/registry.js'
 import type { ToolExecutionStore } from '../store/runtimePorts.js'
 import type { AuthContext } from '../security/types.js'
+import type { AgentWorkflowStep, TodoItem } from '../schemas/types.js'
 import { persistToolExecutionResult, resolveRuntimeValueRef } from '../tools/resultPersistence.js'
 import { makeId } from '../utils/ids.js'
 import { ItemSink } from '../conversation/itemSink.js'
@@ -40,6 +41,7 @@ interface CoordinatorOptions {
   itemSink: ItemSink
   valueState: Map<string, unknown>
   signal: AbortSignal
+  onPlanModeChanged?: (enabled: boolean) => void
 }
 
 // ToolExecutionCoordinator
@@ -181,6 +183,9 @@ export class ToolExecutionCoordinator {
           args,
           result,
         )
+        if (typeof result.payload.planMode === 'boolean') {
+          this.options.onPlanModeChanged?.(result.payload.planMode)
+        }
         this.emitAgentWorkflowControlEvent(toolName)
         await this.completeClaimedAgentWorkflowStep(callId, result.message)
         for (const ref of result.valueRefs ?? []) this.options.valueState.set(ref.refId, ref)
@@ -219,6 +224,13 @@ export class ToolExecutionCoordinator {
       await this.enqueueResultMutation(async () => {
         await this.failClaimedAgentWorkflowStep(callId, message)
         await this.appendLedger(callId, toolName, 'failed', message)
+        await this.appendToolFailure(callId, toolName, message)
+        const run = this.options.store.getRun(this.options.runId)
+        await this.options.store.updateRunState(this.options.runId, {
+          warnings: [...run.state.warnings, `工具“${this.toolLabel(toolName)}”调用失败：${message}`],
+          errors: [...run.state.errors, message],
+          failedTool: toolName,
+        })
         if (itemId) this.options.itemSink.completeItem(itemId, {
           callId,
           name: toolName,
@@ -291,7 +303,12 @@ export class ToolExecutionCoordinator {
         throw new Error(`工具 '${toolName}' 不在当前智能体工作流的可执行步骤中。请先调用 revise_agent_workflow 显式调整工作流。`)
       }
       const next = startAgentWorkflowStep(workflow, { stepId: step.stepId })
-      await this.options.store.updateRunState(this.options.runId, { agentWorkflow: next })
+      const nextStep = next.steps.find(item => item.stepId === step.stepId)
+      if (!nextStep) throw new Error(`工具开始时智能体工作流步骤 '${step.stepId}' 不存在。`)
+      await this.options.store.updateRunState(this.options.runId, {
+        agentWorkflow: next,
+        todos: projectWorkflowStepToTodos(run.state.todos, nextStep),
+      })
       this.claimedWorkflowSteps.set(callId, step.stepId)
       this.options.eventSink.emit('step.started', step.title, {
         agentWorkflowId: next.agentWorkflowId,
@@ -313,7 +330,12 @@ export class ToolExecutionCoordinator {
       const step = workflow.steps.find(item => item.stepId === stepId)
       if (!step) throw new Error(`工具完成时智能体工作流步骤 '${stepId}' 不存在。`)
       const next = completeAgentWorkflowStep(workflow, { stepId, resultSummary: summary })
-      await this.options.store.updateRunState(this.options.runId, { agentWorkflow: next })
+      const nextStep = next.steps.find(item => item.stepId === stepId)
+      if (!nextStep) throw new Error(`工具完成时智能体工作流步骤 '${stepId}' 不存在。`)
+      await this.options.store.updateRunState(this.options.runId, {
+        agentWorkflow: next,
+        todos: projectWorkflowStepToTodos(run.state.todos, nextStep),
+      })
       this.claimedWorkflowSteps.delete(callId)
       this.options.eventSink.emit('step.completed', step.title, {
         agentWorkflowId: next.agentWorkflowId,
@@ -338,7 +360,12 @@ export class ToolExecutionCoordinator {
       const workflow = run.state.agentWorkflow
       if (!workflow) return
       const next = failAgentWorkflowStep(workflow, { stepId, errorMessage: message })
-      await this.options.store.updateRunState(this.options.runId, { agentWorkflow: next })
+      const nextStep = next.steps.find(item => item.stepId === stepId)
+      if (!nextStep) throw new Error(`工具失败时智能体工作流步骤 '${stepId}' 不存在。`)
+      await this.options.store.updateRunState(this.options.runId, {
+        agentWorkflow: next,
+        todos: projectWorkflowStepToTodos(run.state.todos, nextStep),
+      })
       this.claimedWorkflowSteps.delete(callId)
       this.options.eventSink.emit('warning.raised', `步骤执行失败：${message}`, {
         agentWorkflowId: next.agentWorkflowId,
@@ -464,6 +491,25 @@ export class ToolExecutionCoordinator {
     })
   }
 
+  private async appendToolFailure(callId: string, toolName: string, message: string): Promise<void> {
+    await this.options.store.appendTranscript({
+      threadId: this.options.threadId,
+      runId: this.options.runId,
+      turnId: this.options.turnId,
+      kind: 'tool_result',
+      payload: {
+        callId,
+        name: toolName,
+        label: this.toolLabel(toolName),
+        summary: message,
+        content: message,
+        contentRef: null,
+        ledgerStatus: 'failed',
+        resultId: null,
+      },
+    })
+  }
+
   private async appendLedger(
     callId: string,
     toolName: string,
@@ -484,6 +530,11 @@ export class ToolExecutionCoordinator {
       },
     })
   }
+}
+
+function projectWorkflowStepToTodos(todos: TodoItem[], step: AgentWorkflowStep): TodoItem[] {
+  const status = step.status === 'skipped' ? 'completed' : step.status
+  return todos.map(todo => todo.stepId === step.stepId ? { ...todo, status } : todo)
 }
 
 const AGENT_WORKFLOW_CONTROL_TOOLS = new Set([

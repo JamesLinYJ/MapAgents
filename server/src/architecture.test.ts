@@ -12,9 +12,11 @@ import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import type { ToolDef } from './framework/types.js'
 import type { ConversationItem } from './schemas/types.js'
 import { PlatformPersistenceFacade } from './store/platformPersistenceFacade.js'
 import { PersistenceFacadeTestHarness } from '../test-support/persistenceFacadeHarness.js'
+import { AutomationCompiler } from './automations/automationCompiler.js'
 import { automationDefinitionSchema } from './automations/schemas.js'
 
 describe('conversation architecture', () => {
@@ -1043,12 +1045,50 @@ describe('conversation architecture', () => {
     await expect(stat(dedicatedRunner)).rejects.toMatchObject({ code: 'ENOENT' })
     expect(runtimeSource).not.toContain('shouldRunDeterministicNowcast')
     expect(runtimeSource).not.toContain('runDeterministicNowcast')
+    expect(automation.revision).toBe(4)
     expect(automation.defaultParameters.horizonMinutes).toBe(180)
+    expect(automation.defaultParameters.regionLayerKey).toBe('hangzhou_districts')
     expect(automation.agentInvocation.enabled).toBe(true)
     expect(automation.graph.nodes.some(node => node.type === 'agent')).toBe(false)
     expect(automation.graph.nodes.some(node => node.type === 'tool' && node.config.toolName === 'answer_nowcast_question')).toBe(true)
+    const scope = automation.graph.nodes.find(node => node.nodeId === 'query_scope')
+    expect(scope?.type === 'tool' && scope.config.toolName === 'query_layer').toBe(true)
+    if (!scope || scope.type !== 'tool') throw new Error('短临 Automation 缺少完整区划查询节点')
+    expect(scope.config.arguments).toMatchObject({
+      layerKey: { source: 'input', path: 'parameters.regionLayerKey' },
+      requireComplete: { source: 'literal', value: true },
+    })
+    const sequence = automation.graph.nodes.find(node => node.nodeId === 'create_sequence')
+    if (!sequence || sequence.type !== 'tool') throw new Error('短临 Automation 缺少序列创建节点')
+    expect(sequence.config.arguments.horizon_minutes).toEqual({
+      source: 'input',
+      path: 'parameters.horizonMinutes',
+    })
+    const nowcast = automation.graph.nodes.find(node => node.nodeId === 'nowcast')
+    if (!nowcast || nowcast.type !== 'tool') throw new Error('短临 Automation 缺少降水分析节点')
+    expect(nowcast.config.arguments.scope_ref).toMatchObject({
+      source: 'value_ref',
+      nodeId: 'query_scope',
+      kind: 'feature_collection',
+    })
     const output = automation.graph.nodes.find(node => node.type === 'output')
     expect(output?.type === 'output' && Object.hasOwn(output.config.outputs, 'answer')).toBe(true)
+    expect(output?.type === 'output' && Object.hasOwn(output.config.outputs, 'warnings')).toBe(true)
+    const automationTool = (name: string): ToolDef => ({
+      name,
+      label: name,
+      description: name,
+      prompt: name,
+      group: '验收',
+      tags: [],
+      isReadOnly: true,
+      isDestructive: false,
+      executionSurfaces: ['automation'],
+      jsonSchema: { type: 'object', properties: {} },
+      handler: async () => ({ message: '完成', payload: {}, warnings: [], resultId: 'result', source: 'test' }),
+    })
+    expect(new AutomationCompiler({ get: name => automationTool(name) }).validate(automation))
+      .toMatchObject({ valid: true })
   })
 
   it('replays completed conversation items from the PostgreSQL repository', async () => {

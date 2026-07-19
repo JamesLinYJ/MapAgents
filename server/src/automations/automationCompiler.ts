@@ -131,6 +131,7 @@ export class AutomationCompiler {
     validateReachability(definition.graph.entryNodeId, nodesById, outgoing, issues)
     validateBindings(definition.graph.nodes, nodesById, incoming, issues)
     validateParameterSchema(this.ajv, definition, issues)
+    validateRequiredParameterBindings(definition, issues)
     validateAgentInvocation(definition, this.tools, issues)
 
     const requiredTools = collectRequiredTools(definition.graph)
@@ -410,6 +411,51 @@ function validateParameterSchema(
     }
   } catch (error) {
     issues.push(issue('error', 'parameter_schema_invalid', `参数 Schema 无效：${errorMessage(error)}`))
+  }
+}
+
+function validateRequiredParameterBindings(
+  definition: AutomationDefinition,
+  issues: AutomationValidationIssue[],
+): void {
+  const required = Array.isArray(definition.parametersSchema.required)
+    ? definition.parametersSchema.required.filter((item): item is string => typeof item === 'string')
+    : []
+  if (!required.length) return
+
+  const consumed = new Set<string>()
+  let consumesAll = false
+  const consumePath = (path: string): void => {
+    if (path === 'parameters') {
+      consumesAll = true
+      return
+    }
+    if (!path.startsWith('parameters.')) return
+    const parameterName = path.slice('parameters.'.length).split('.')[0]
+    if (parameterName) consumed.add(parameterName)
+  }
+
+  for (const node of definition.graph.nodes) {
+    for (const binding of bindingsOf(node)) {
+      if (binding.source === 'input') consumePath(binding.path)
+      if (binding.source === 'node' && binding.nodeId === definition.graph.entryNodeId) consumePath(binding.path)
+    }
+    if (node.type === 'agent') {
+      for (const parameterName of required) {
+        if (node.config.promptTemplate.includes(`input.parameters.${parameterName}`)) consumed.add(parameterName)
+      }
+    }
+  }
+
+  if (consumesAll) return
+  for (const parameterName of required) {
+    if (consumed.has(parameterName)) continue
+    issues.push(issue(
+      'error',
+      'required_parameter_unused',
+      `必填 Automation 参数 '${parameterName}' 没有绑定到任何节点，运行时传入该参数不会影响结果。`,
+      { path: `parametersSchema.required.${parameterName}` },
+    ))
   }
 }
 

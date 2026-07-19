@@ -107,6 +107,21 @@ describe('AutomationCompiler', () => {
     expect(result.issues).toContainEqual(expect.objectContaining({ code: 'tool_argument_required', nodeId: 'inspect' }))
   })
 
+  it('rejects required parameters that are declared but never consumed', () => {
+    const value = definition()
+    const node = value.graph.nodes.find(item => item.nodeId === 'inspect')
+    if (!node || node.type !== 'tool') throw new Error('fixture missing tool node')
+    node.config.arguments.dataset_id = { source: 'literal', value: 'fixed_dataset' }
+
+    const result = compiler().validate(value)
+
+    expect(result.valid).toBe(false)
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: 'required_parameter_unused',
+      path: 'parametersSchema.required.datasetId',
+    }))
+  })
+
   it('rejects bindings to nodes that are not upstream dependencies', () => {
     const value = definition()
     const output = value.graph.nodes.find(item => item.nodeId === 'output')

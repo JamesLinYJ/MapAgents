@@ -149,6 +149,7 @@ export const METEOROLOGY_TOOL_PROMPTS: Record<string, string> = {
 - 仅用于短时临近预报问答、连续时次趋势分析和区域累计面雨量排行表。
 - 不要把 nowcast_sequence 作为 render_rainfall_risk_map 的 dataset_ref。
 - file_collection_ref 应来自 list_meteorological_files。
+- horizon_minutes 有明确预报时效时必须传入；序列只保留该时效内的帧，数据覆盖不足会硬失败。
 - variable_ref 只有用户或检查结果明确变量时才传入；不明确时先 inspect_nowcast_sequence 或澄清。`,
 
   inspect_nowcast_sequence: `用于检查短时临近预报序列中每个时次的数据集状态。
@@ -157,6 +158,7 @@ export const METEOROLOGY_TOOL_PROMPTS: Record<string, string> = {
 - sequence_ref 必须来自 create_nowcast_sequence。
 - 在分析连续时次趋势、选择代表时次或定位缺失数据前使用。
 - 本工具只检查序列，不回答天气问题、不生成地图。
+- issueTime 是起报时间，validTimes 才是各帧有效时次；timeZone 为空时不得把时间标注成 UTC、本地时间或其它时区。
 - 后续分析必须继续传 nowcast_sequence 或本工具返回的相关 valueRef。`,
 
   prepare_nowcast_scope: `用于根据短时临近预报问题准备区划或地点范围。

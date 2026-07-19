@@ -9,9 +9,12 @@
 // --------------------------------------------------------------------------
 
 import manifest from './manifest.json' with { type: 'json' }
-import type { ToolContext, ToolDef, ToolProvider, ToolResult } from '../../framework/types.js'
+import type { ToolArtifact, ToolContext, ToolDef, ToolProvider, ToolResult } from '../../framework/types.js'
 import { parseToolManifest } from '../../framework/schema.js'
-import type { AutomationInvocationService } from '../../automations/automationInvocationService.js'
+import type {
+  AttachedAutomationResult,
+  AutomationInvocationService,
+} from '../../automations/automationInvocationService.js'
 import { makeId } from '../../utils/ids.js'
 import {
   EXECUTE_AUTOMATION_PROMPT,
@@ -110,14 +113,33 @@ export function createAutomationExecutionProvider(service: AutomationInvocationS
           runId: context.runId,
           signal: context.signal,
         })
+        const warnings = automationWarnings(executed.outputs)
+        const deliveryArtifacts = executed.artifacts.map(automationArtifact)
+        const artifactSummary = deliveryArtifacts.map(artifact => ({
+          artifactId: artifact.artifactId,
+          artifactType: artifact.artifactType,
+          name: artifact.name,
+          uri: artifact.uri,
+        }))
+        const deliveryLines = [
+          executed.answer,
+          ...(warnings.length ? [`范围或数据警告：${warnings.join('；')}`] : []),
+          ...(artifactSummary.length
+            ? ['可核验产物：', ...artifactSummary.map(artifact => `- ${artifact.name}：${artifact.uri}`)]
+            : []),
+          `自动化运行记录：${executed.automationRunId}`,
+        ]
         return {
           ...result(`自动化流程“${executed.automationId}”执行完成。`, {
             automationRunId: executed.automationRunId,
             automationId: executed.automationId,
             answer: executed.answer,
             outputs: executed.outputs,
+            artifacts: artifactSummary,
           }),
-          modelOutput: `${executed.answer}\n\n自动化运行记录：${executed.automationRunId}`,
+          warnings,
+          artifacts: deliveryArtifacts,
+          modelOutput: deliveryLines.join('\n'),
           valueRefs: [{
             refId: makeId('ref'),
             kind: 'automation_run',
@@ -176,4 +198,32 @@ function requiredString(value: unknown, field: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function automationWarnings(outputs: Record<string, unknown>): string[] {
+  const direct = Array.isArray(outputs.warnings) ? outputs.warnings : []
+  const analysis = isRecord(outputs.analysis) && Array.isArray(outputs.analysis.warnings)
+    ? outputs.analysis.warnings
+    : []
+  return [...new Set([...direct, ...analysis]
+    .filter((warning): warning is string => typeof warning === 'string' && Boolean(warning.trim()))
+    .map(warning => warning.trim()))]
+}
+
+function automationArtifact(artifact: AttachedAutomationResult['artifacts'][number]): ToolArtifact {
+  const relativePath = typeof artifact.metadata.relativePath === 'string'
+    ? artifact.metadata.relativePath.trim()
+    : ''
+  if (!relativePath) {
+    throw new Error(`Automation 产物 '${artifact.artifactId}' 缺少 relativePath，不能进入工具交付边界。`)
+  }
+  return {
+    artifactId: artifact.artifactId,
+    artifactType: artifact.artifactType,
+    name: artifact.name,
+    uri: artifact.uri,
+    display: structuredClone(artifact.display),
+    relativePath,
+    metadata: structuredClone(artifact.metadata),
+  }
 }

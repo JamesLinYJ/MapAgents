@@ -238,6 +238,42 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     }
   })
 
+  it('rejects completion while a visible Todo is still pending or running', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-incomplete-todo-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, 'Todo 完成边界')
+      const run = await store.createRun(session.id, '完成当前任务', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: testRuntimeConfig(),
+      })
+      await store.updateRunState(run.id, {
+        todos: [{
+          todoId: 'todo_1',
+          title: '执行尚未完成的步骤',
+          status: 'running',
+          description: null,
+          activeForm: '正在执行',
+          ownerAgentId: 'supervisor',
+          stepId: null,
+        }],
+      })
+      const model = scriptedModel(() => ({ text: '任务已经完成。' }))
+
+      const failed = await testRuntime(store, new ToolRegistry(), registryWith(fakeAdapter(model))).run({
+        ...runOptions(run, thread.id),
+      })
+
+      expect(failed.status).toBe('failed')
+      expect(failed.state.errors.at(-1)).toContain('运行仍有未完成 Todo')
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
   it('asks for clarification instead of completing a greeting in explicit plan mode', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-greeting-'))
     try {
@@ -418,6 +454,17 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         title: '批准这个智能体工作流？',
       }))
       expect(waiting.state.approvals[0].payload.args).toMatchObject({ workflow })
+      await store.updateRunState(run.id, {
+        todos: [{
+          todoId: 'todo_step_1',
+          title: '交付风险区划说明',
+          status: 'pending',
+          description: null,
+          activeForm: '正在交付风险区划说明',
+          ownerAgentId: 'supervisor',
+          stepId: 'step_1',
+        }],
+      })
       await store.flushConversationStore()
 
       const restoredStore = harness.create(root)
@@ -433,6 +480,9 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         revision: 1,
         steps: [expect.objectContaining({ stepId: 'step_1', status: 'completed' })],
       })
+      expect(completed.state.todos).toEqual([
+        expect.objectContaining({ stepId: 'step_1', status: 'completed' }),
+      ])
       expect(completed.state.approvals[0].payload.consumed).toBe(true)
       expect(completed.state.decisions).toContainEqual(expect.objectContaining({
         decisionId: waiting.state.approvals[0].approvalId,
@@ -851,10 +901,10 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     expect(result.run.status).toBe('completed')
     expect(result.items.some(item => item.itemType === 'reasoning' && item.body === '我先分析一下。')).toBe(false)
     expect(result.items.some(item => item.itemType === 'message' && item.body === '我先分析一下。')).toBe(true)
-    expect(result.items.some(item => item.itemType === 'message' && item.body === '未来3小时不会下雨，您可以放心出门。')).toBe(true)
+    expect(result.items.some(item => item.itemType === 'message' && item.body === '预报时段内未检出达到有效阈值的降雨。')).toBe(true)
     const preambleIndex = result.items.findIndex(item => item.itemType === 'message' && item.body === '我先分析一下。')
     const toolIndex = result.items.findIndex(item => item.itemType === 'function_call' && item.name === 'deliver_test_response')
-    const finalIndex = result.items.findIndex(item => item.itemType === 'message' && item.body === '未来3小时不会下雨，您可以放心出门。')
+    const finalIndex = result.items.findIndex(item => item.itemType === 'message' && item.body === '预报时段内未检出达到有效阈值的降雨。')
     expect(preambleIndex).toBeLessThan(toolIndex)
     expect(toolIndex).toBeLessThan(finalIndex)
     const transcriptToolIndex = result.transcript.findIndex(entry => entry.kind === 'tool_call' && entry.payload.name === 'deliver_test_response')
@@ -864,7 +914,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       && entry.payload.callId === 'answer_call'
     ))
     const transcriptResultIndex = result.transcript.findIndex(entry => entry.kind === 'tool_result' && entry.payload.name === 'deliver_test_response')
-    const transcriptFinalIndex = result.transcript.findIndex(entry => entry.kind === 'message' && entry.payload.content === '未来3小时不会下雨，您可以放心出门。')
+    const transcriptFinalIndex = result.transcript.findIndex(entry => entry.kind === 'message' && entry.payload.content === '预报时段内未检出达到有效阈值的降雨。')
     expect(result.transcript[transcriptPreambleIndex].payload.content).toBe('我先分析一下。')
     expect(transcriptToolIndex).toBeLessThan(transcriptResultIndex)
     expect(transcriptToolIndex).toBeLessThan(transcriptPreambleIndex)
@@ -1244,8 +1294,8 @@ function directResponseProvider(): ToolProvider {
     ...definition,
     agentResultMode: 'return_direct',
     handler: async () => ({
-      ...result('answer', [], { answer: '未来3小时不会下雨，您可以放心出门。' }),
-      modelOutput: '未来3小时不会下雨，您可以放心出门。',
+      ...result('answer', [], { answer: '预报时段内未检出达到有效阈值的降雨。' }),
+      modelOutput: '预报时段内未检出达到有效阈值的降雨。',
     }),
   }])
 }

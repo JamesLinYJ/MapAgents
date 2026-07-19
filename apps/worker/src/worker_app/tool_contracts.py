@@ -218,6 +218,7 @@ class MeteorologicalNowcastReportRequest(StrictWorkerRequest):
 class CreateNowcastSequenceRequest(StrictWorkerRequest):
     files: list[FileReference] = Field(..., min_length=1)
     variable: str | None = Field(None, min_length=1)
+    horizon_minutes: int | None = Field(None, ge=5, le=360)
 
 
 class InspectNowcastSequenceRequest(StrictWorkerRequest):

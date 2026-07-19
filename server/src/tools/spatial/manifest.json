@@ -1,7 +1,7 @@
 {
   "id": "geo-platform-spatial",
   "name": "空间分析",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "author": "geo-agent-platform",
   "language": "typescript",
   "description": "PostGIS 查询、Turf.js 空间分析、图层创建与地图导出",
@@ -39,7 +39,8 @@
           "layerKey": { "type": "string" },
           "bbox": { "type": "array" },
           "limit": { "type": "integer" },
-          "properties": { "type": "array" }
+          "properties": { "type": "array" },
+          "requireComplete": { "type": "boolean", "description": "为 true 时，若查询结果少于图层总要素数则硬失败。" }
         },
         "required": ["layerKey"]
       }

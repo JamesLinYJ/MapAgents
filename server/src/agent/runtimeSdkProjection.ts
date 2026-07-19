@@ -22,9 +22,10 @@ import type {
 import type { TranscriptEntry } from '../schemas/types.js'
 import type { ConversationChatMessage } from './contextManager.js'
 
-export function modelSettings(reasoning = true): ModelSettings {
+export function modelSettings(reasoning = true, planMode = false): ModelSettings {
   return {
     parallelToolCalls: false,
+    toolChoice: planMode ? 'required' : 'auto',
     ...(reasoning ? { reasoning: { effort: 'high' as const } } : {}),
     retry: {
       maxRetries: 1,

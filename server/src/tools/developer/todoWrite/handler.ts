@@ -33,9 +33,7 @@ function normalizeTodo(value: unknown, index: number) {
   if (!isRecord(value)) throw new Error(`todos[${index}] 必须是对象`)
   const title = typeof value.title === 'string' && value.title.trim()
     ? value.title.trim()
-    : typeof value.content === 'string' && value.content.trim()
-      ? value.content.trim()
-      : ''
+    : ''
   if (!title) throw new Error(`todos[${index}].title 不能为空`)
   const rawStatus = typeof value.status === 'string' ? value.status : 'pending'
   if (!TODO_STATUSES.has(rawStatus)) throw new Error(`todos[${index}].status 不受支持：${rawStatus}`)

@@ -1,7 +1,7 @@
 {
   "id": "geo-platform-meteorology",
   "name": "气象分析",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "geo-agent-platform",
   "language": "typescript",
   "description": "气象数据、短时临近预报（短临）降水与第三方气象制图工具",
@@ -909,6 +909,13 @@
             "title": "变量引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
             "x-source": "value_ref"
+          },
+          "horizon_minutes": {
+            "type": "integer",
+            "title": "预报时效（分钟）",
+            "x-source": "number",
+            "minimum": 5,
+            "maximum": 360
           }
         },
         "required": [

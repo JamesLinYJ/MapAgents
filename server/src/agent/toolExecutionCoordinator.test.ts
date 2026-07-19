@@ -111,6 +111,80 @@ describe('ToolExecutionCoordinator', () => {
     })
     expect(conversationItems[0]?.metadata).toMatchObject({ toolLabel: '检查数据集' })
   })
+
+  it('persists a failed platform tool result immediately with its real label', async () => {
+    const transcriptWrites: Array<Record<string, unknown>> = []
+    let warnings: string[] = []
+    let errors: string[] = []
+    let failedTool: string | null = null
+    const store = {
+      runtimeRoot: 'C:/runtime',
+      activeTranscript: vi.fn(async () => []),
+      appendTranscript: vi.fn(async (input: Record<string, unknown>) => {
+        transcriptWrites.push(input)
+        return { entryId: `entry_${transcriptWrites.length}` }
+      }),
+      saveRunCheckpoint: vi.fn(async () => undefined),
+      getRun: vi.fn(() => ({
+        workspaceId: 'workspace_1',
+        state: { planMode: false, agentWorkflow: null, todos: [], warnings, errors },
+      })),
+      updateRunState: vi.fn(async (_runId: string, updates: {
+        warnings?: string[]
+        errors?: string[]
+        failedTool?: string | null
+      }) => {
+        warnings = updates.warnings ?? warnings
+        errors = updates.errors ?? errors
+        failedTool = updates.failedTool ?? failedTool
+        return undefined
+      }),
+    } as unknown as ToolExecutionStore
+    const registry = new ToolRegistry()
+    const provider = testProvider()
+    const failingTool = provider.tools()[0]
+    if (!failingTool) throw new Error('测试工具缺失')
+    registry.register({
+      ...provider,
+      manifest: {
+        ...provider.manifest,
+        id: 'test-failing-inspection',
+      },
+      tools: () => [{
+        ...failingTool,
+        handler: async () => { throw new Error('数据集参数无效') },
+      }],
+    })
+    const coordinator = new ToolExecutionCoordinator({
+      store,
+      registry,
+      adapter: null,
+      runId: 'run_1',
+      sessionId: 'session_1',
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      inlineToolResultMaxChars: 4_000,
+      eventSink: new RunEventSink(async () => undefined, 'run_1', 'thread_1'),
+      itemSink: new ItemSink(async () => undefined, 'run_1', 'thread_1'),
+      valueState: new Map(),
+      signal: new AbortController().signal,
+    })
+
+    await expect(coordinator.executeDirect('inspect_dataset', { datasetId: 'bad' }))
+      .rejects.toThrow('数据集参数无效')
+
+    expect(transcriptWrites).toContainEqual(expect.objectContaining({
+      kind: 'tool_result',
+      payload: expect.objectContaining({
+        name: 'inspect_dataset',
+        label: '检查数据集',
+        ledgerStatus: 'failed',
+      }),
+    }))
+    expect(warnings).toContain('工具“检查数据集”调用失败：数据集参数无效')
+    expect(errors).toContain('数据集参数无效')
+    expect(failedTool).toBe('inspect_dataset')
+  })
 })
 
 function testProvider(): ToolProvider {

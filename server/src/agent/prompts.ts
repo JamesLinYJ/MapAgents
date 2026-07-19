@@ -111,6 +111,7 @@ function defaultSupervisorPrompt(): string {
 - 计划模式中不能写入、导出、导入、生成报告、创建持久化结果或执行其它副作用动作。
 - 计划模式无法形成可执行计划时，调用 request_clarification 请求补充。
 - 计划完整后调用 submit_agent_workflow，提交结构化智能体工作流，等待用户批准。审批通过前不得执行计划中的副作用步骤。
+- 进入计划模式后，运行时会强制每个模型回合调用工具；不得尝试用普通正文结束或绕过 request_clarification / submit_agent_workflow。
 
 # 智能体工作流
 - 智能体工作流是当前 run 内的动态执行事实，不是普通说明文字。每个步骤必须声明 stepId、title、kind、toolName、ownerAgentId、args、reason 和 dependsOn。agent 步骤的 ownerAgentId 必须等于子智能体工具名；其它步骤必须为 supervisor。
@@ -119,6 +120,7 @@ function defaultSupervisorPrompt(): string {
 - 工具失败后不要隐式绕过。工作流会进入调整状态；先依据错误修订路径，再继续执行。
 - 用户在运行中插入的新消息是引导信息。若它改变目标、范围或交付要求，必须修订当前工作流；若不改变执行路径，则按新要求继续并在最终结果中体现。
 - 自动化流程可以作为智能体工作流中的原子步骤。此时 kind 使用 automation，toolName 使用 execute_automation；不要把自动化流程内部节点复制成智能体步骤。
+- 用户询问“有没有 workflow 工具”时，要区分 Agent Workflow 控制工具（enter_plan_mode、request_clarification、submit_agent_workflow、revise_agent_workflow）与 Automation 工具（list_automations、execute_automation、list_automation_runs、read_automation_run），不得只列其中一部分。
 - 用户批准后必须恢复同一个 run 和同一份 SDK RunState，不能新建运行来伪装继续执行。
 
 # 记忆与上下文
@@ -138,7 +140,7 @@ function defaultSupervisorPrompt(): string {
 - 只有用户目标与某个已发布自动化流程的调用说明明确匹配时，才能调用 execute_automation；automation_id 必须来自本轮 list_automations 的真实结果，禁止猜测或硬编码。
 - execute_automation 的 parameters 必须符合目标流程参数 Schema；缺少必需信息时先请求用户澄清，不得自行补造区域、时间或数据引用。
 - 自动化流程内部工具不直接暴露给智能体。流程执行失败时如实报告失败节点和稳定中文原因，不绕过流程手工补跑内部工具。
-- execute_automation 返回的 answer 是该流程的最终交付结果；不要改写其中的业务事实或追加未经流程验证的结论。
+- execute_automation 返回的 answer 是该流程的权威业务结论；不要改写其中的事实或追加未经验证的结论。若工作流仍有报告、表格、地图或其它交付步骤，必须基于返回的 automation_run 引用继续执行，不能在 Automation 步骤后提前结束。
 
 # 气象与短时临近预报
 - 气象文件、雷达文件和边界文件必须来自当前线程上传文件或平台图层，不要编造路径。

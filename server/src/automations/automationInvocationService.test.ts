@@ -69,6 +69,7 @@ describe('AutomationInvocationService', () => {
     expect(result).toMatchObject({
       automationId: 'automation_agent_test',
       answer: '未来三小时降水趋势稳定。',
+      artifacts: [expect.objectContaining({ artifactId: 'artifact_map' })],
     })
     expect(fixture.created).toHaveLength(1)
     expect(fixture.created[0]).toMatchObject({
@@ -237,6 +238,16 @@ function createService(input: {
       outputs: { answer: '未来三小时降水趋势稳定。' },
       startedAt: new Date().toISOString(),
       completedAt: new Date().toISOString(),
+      nodeRuns: [{
+        nodeId: 'answer',
+        nodeType: 'tool',
+        label: '生成回答',
+        status: 'completed',
+        attempt: 1,
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        output: { artifacts: [{ artifactId: 'artifact_map' }] },
+      }],
     })
   ))
   const runner: AutomationInvocationRunner = { executeAttached }
@@ -279,7 +290,10 @@ function definition(): AutomationDefinition {
           nodeId: 'answer', type: 'tool', label: '生成回答', description: '', position: { x: 200, y: 0 },
           config: {
             toolName: 'produce_answer',
-            arguments: { prompt: { source: 'input', path: 'prompt' } },
+            arguments: {
+              prompt: { source: 'input', path: 'prompt' },
+              horizon_minutes: { source: 'input', path: 'parameters.horizonMinutes' },
+            },
             approvalMode: 'auto',
             retry: { maxAttempts: 1, backoffSeconds: 0 },
           },
@@ -310,8 +324,8 @@ function answerTool(): ToolDef {
     executionSurfaces: ['automation'],
     jsonSchema: {
       type: 'object',
-      properties: { prompt: { type: 'string' } },
-      required: ['prompt'],
+      properties: { prompt: { type: 'string' }, horizon_minutes: { type: 'number' } },
+      required: ['prompt', 'horizon_minutes'],
       additionalProperties: false,
     },
     handler: async () => ({

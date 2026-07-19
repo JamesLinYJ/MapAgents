@@ -73,6 +73,7 @@ export interface AttachedAutomationResult {
   automationId: string
   answer: string
   outputs: Record<string, unknown>
+  artifacts: ArtifactRef[]
 }
 
 export interface AttachedAutomationContext {
@@ -227,11 +228,14 @@ export class AutomationInvocationService {
     if (typeof answer !== 'string' || !answer.trim()) {
       throw new Error(`Automation“${definition.name}”没有返回可交付的 answer。`)
     }
+    const artifactIds = automationArtifactIds(completed)
+    const completedRun = this.deps.store.getRun(input.runId)
     return {
       automationRunId,
       automationId: definition.automationId,
       answer: answer.trim(),
       outputs: structuredClone(completed.outputs),
+      artifacts: structuredClone(completedRun.state.artifacts.filter(artifact => artifactIds.has(artifact.artifactId))),
     }
   }
 

@@ -82,7 +82,23 @@ describe('geo tools', () => {
 
     expect(result.source).toBe('postgis')
     expect(result.payload.totalCount).toBe(2)
+    expect(result.payload.complete).toBe(true)
     expect(collection.features[0].properties).toEqual({ name: 'A' })
+  })
+
+  it('hard-fails when a caller requires a complete layer but the query is truncated', async () => {
+    const managedLayers = {
+      featureCount: async () => 13,
+      queryFeatures: async () => [
+        { geometry: point(120, 30), properties: { name: '上城区' } },
+      ],
+    } as unknown as ManagedLayerService
+
+    await expect(createLayerQueryTool(managedLayers).handler({
+      layerKey: 'hangzhou_districts',
+      limit: 1,
+      requireComplete: true,
+    }, runtime())).rejects.toThrow('不能作为完整分析范围')
   })
 
   it('creates both layer and feature_collection refs for downstream tools', async () => {

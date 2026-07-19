@@ -122,7 +122,7 @@ describe('geo-platform-developer-tools', () => {
   it('normalizes todo_write payload for run-state persistence', async () => {
     const result = await todoWriteTool.handler({
       todos: [
-        { content: '检查气象工具 prompt', status: 'running' },
+        { title: '检查气象工具 prompt', status: 'running' },
         { title: '补充 GIS 前端验收', status: 'pending' },
       ],
     }, runtime())
@@ -131,6 +131,13 @@ describe('geo-platform-developer-tools', () => {
       expect.objectContaining({ title: '检查气象工具 prompt', status: 'running' }),
       expect.objectContaining({ title: '补充 GIS 前端验收', status: 'pending' }),
     ])
+  })
+
+  it('declares title as required in the todo_write boundary schema', () => {
+    expect(todoWriteTool.jsonSchema.required).toEqual(['todos'])
+    const properties = todoWriteTool.jsonSchema.properties as Record<string, Record<string, unknown>>
+    const todos = properties.todos
+    expect((todos?.items as Record<string, unknown>)?.required).toEqual(['title', 'status'])
   })
 })
 

@@ -1,7 +1,7 @@
 {
   "id": "geo-platform-automation-execution",
   "name": "自动化流程执行",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "OpenAI Codex",
   "language": "typescript",
   "description": "查询并执行允许由智能体调用的已发布自动化流程。",
@@ -25,13 +25,13 @@
     {
       "name": "execute_automation",
       "label": "执行会话自动化流程",
-      "description": "在当前对话运行中执行一条已发布的确定性自动化流程，并直接交付输出节点的回答。",
+      "description": "在当前对话运行中执行一条已发布的确定性自动化流程，并返回输出节点的权威回答与产物供后续交付步骤使用。",
       "group": "自动化流程",
       "tags": ["automation", "system"],
       "isReadOnly": false,
       "isDestructive": false,
       "executionSurfaces": ["agent", "debug"],
-      "agentResultMode": "return_direct",
+      "agentResultMode": "continue",
       "jsonSchema": {
         "type": "object",
         "additionalProperties": false,

@@ -19,7 +19,8 @@ export const EXECUTE_AUTOMATION_PROMPT = `在当前对话和当前智能体运�
 - automation_id 必须来自 list_automations 的结果。
 - prompt 应保留用户原始目标、时间范围、空间范围和输出要求，不得擅自改写业务含义。
 - parameters 只填写用户明确指定或 Schema 明确要求的值；未指定项使用自动化流程自身默认参数。
-- 工具直接返回自动化流程输出节点的 answer；不要在调用前自行执行该流程的内部工具。`
+- 工具返回自动化流程输出节点的权威 answer、警告、关联产物和运行引用；不要在调用前自行执行该流程的内部工具。
+- 若用户只需要流程结论，保持 answer 的业务事实不变后交付；若用户还要求报告、表格或其它产物，继续用 automation_run 引用读取持久结果并执行后续交付工具，不得提前结束整个 Agent Workflow。`
 
 export const LIST_AUTOMATION_RUNS_PROMPT = `列出当前会话或当前对话中已经持久化的自动化运行记录。
 

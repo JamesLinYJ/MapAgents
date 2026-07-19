@@ -16,7 +16,7 @@ from typing import Any
 from uuid import uuid4
 
 from worker_app.path_sandbox import WorkerPathSandbox, referenced_filename, sequence_items
-from worker_app.request_args import optional_text
+from worker_app.request_args import optional_int, optional_text
 
 
 def create_nowcast_sequence(args: dict[str, Any], sandbox: WorkerPathSandbox) -> Any:
@@ -40,6 +40,7 @@ def create_nowcast_sequence(args: dict[str, Any], sandbox: WorkerPathSandbox) ->
         sequence_id=f"sequence_{uuid4().hex}",
         datasets=datasets,
         profile=profile,
+        horizon_minutes=optional_int(args, "horizon_minutes"),
     )
 
 

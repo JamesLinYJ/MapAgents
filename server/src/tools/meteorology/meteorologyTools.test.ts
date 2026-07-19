@@ -140,7 +140,7 @@ describe('nowcast tools', () => {
     stubRuntimeEnv()
     const fetchMock = stubWorkerFetch([
       {
-        answer: '15分钟后将下小雨，30分钟后雨量变大。',
+        answer: '15分钟后开始出现达到有效阈值的降雨，30分钟后降雨强度达到峰值。',
         basis: [],
       },
       {
@@ -188,7 +188,7 @@ describe('nowcast tools', () => {
     expect(workerToolBody(fetchMock, 1)).toMatchObject({
       args: { file_relative_path: 'uploads/peak.nc', variable: 'QPF', bbox: [119, 29, 121, 31] },
     })
-    expect(result.payload.answer).toBe('15分钟后将下小雨，30分钟后雨量变大。')
+    expect(result.payload.answer).toBe('15分钟后开始出现达到有效阈值的降雨，30分钟后降雨强度达到峰值。')
     expect(result.payload.map).toMatchObject({ reason: '降雨峰值时次', leadMinutes: 30 })
     expect(result.artifacts?.[0]).toMatchObject({
       artifactType: 'raster_png',

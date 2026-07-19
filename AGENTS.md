@@ -488,8 +488,8 @@ WS 控制面必须使用命令注册表，而不是单个 `handleMessage()` 大�
 ### 6.4 计划模式
 
 - 计划模式是硬运行时边界——不仅在 prompt 层面，在 `ToolExecutionCoordinator` 层面强制
-- 计划模式期间，只允许只读工具和 `exit_plan_mode`。其他一切工具调用被拒绝并给出明确错误
-- 计划模式必须通过 `request_clarification` 或 `exit_plan_mode` 退出，否则 run 失败
+- 计划模式期间，只允许只读工具、`enter_plan_mode`、`request_clarification` 和 `submit_agent_workflow`。其他一切工具调用被拒绝并给出明确错误
+- 计划模式必须通过 `request_clarification` 或 `submit_agent_workflow` 结束，否则 run 失败；`submit_agent_workflow` 只有在用户批准后才退出计划模式并执行步骤
 
 ### 6.5 确定性旁路
 
