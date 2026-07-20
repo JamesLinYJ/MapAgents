@@ -20,6 +20,7 @@ export interface AgentsExecutionContext {
   isSdkExtensionEnabled(): boolean
   isToolEnabled(toolName: string): boolean
   validateToolCall(toolName: string, args: Record<string, unknown>): string | null
+  formatToolFailureForModel(toolName: string, message: string): string
   rejectPreparedToolCall(toolName: string, callId: string, message: string): Promise<void>
   prepareToolCall(toolName: string, args: Record<string, unknown>, callId: string): Promise<void>
   executeTool(toolName: string, args: Record<string, unknown>, callId: string): Promise<string>
@@ -76,13 +77,13 @@ export function createAgentsTools(
       await context.prepareToolCall(definition.name, args, callId)
       return context.executeTool(definition.name, args, callId)
     }
-    const errorFunction = (_context: RunContext, error: unknown): string => {
+    const errorFunction = (runContext: RunContext, error: unknown): string => {
       const message = error instanceof Error ? error.message : String(error)
       // 策略性错误（plan mode、审批拒绝等）应传播而非让模型重试
       if (/计划模式|禁止执行|无权|未授权/.test(message)) {
         throw error instanceof Error ? error : new Error(message)
       }
-      return `工具调用失败：${message}。请检查参数类型和必需字段后重试。`
+      return requireContext(runContext).formatToolFailureForModel(definition.name, message)
     }
     const workflowGuardrails = AGENT_WORKFLOW_DEFINITION_TOOLS.has(definition.name)
       ? [{
@@ -152,6 +153,7 @@ function requireContext(runContext?: RunContext<unknown>): AgentsExecutionContex
     || typeof context.isSdkExtensionEnabled !== 'function'
     || typeof context.isToolEnabled !== 'function'
     || typeof context.validateToolCall !== 'function'
+    || typeof context.formatToolFailureForModel !== 'function'
     || typeof context.rejectPreparedToolCall !== 'function'
     || typeof context.prepareToolCall !== 'function'
     || typeof context.executeTool !== 'function') {

@@ -88,6 +88,19 @@ describe('nowcast tools', () => {
     ]))
   })
 
+  it('can isolate a just-uploaded batch to the current thread', async () => {
+    const listMeteorologicalDatasets = vi.fn().mockResolvedValue([])
+    const toolContext = context()
+    toolContext.listMeteorologicalDatasets = listMeteorologicalDatasets
+    const tool = meteorologyTools.find(candidate => candidate.name === 'list_meteorological_files')!
+
+    const result = await tool.handler({ scope: 'thread' }, toolContext)
+
+    expect(listMeteorologicalDatasets).toHaveBeenCalledWith({ scope: 'thread', limit: 500 })
+    expect(result.payload).toMatchObject({ scope: 'thread', counts: { dataset: 0, radar: 0, boundary: 0 } })
+    expect(result.message).toContain('当前对话')
+  })
+
   it('does not hide meteorology tools when the worker is temporarily unreachable during provider load', async () => {
     const fetch = vi.fn().mockRejectedValue(new Error('worker restarting'))
     vi.stubGlobal('fetch', fetch)

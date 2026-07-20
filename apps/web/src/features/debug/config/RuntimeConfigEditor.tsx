@@ -701,6 +701,7 @@ export function RuntimeConfigEditor({ runtimeConfig, onSaveRuntimeConfig }: Runt
                         systemPrompt: '',
                         model: null,
                         tools: [],
+                        maxTurns: 12,
                         timeoutMs: 120_000,
                       },
                     ],
@@ -777,6 +778,19 @@ export function RuntimeConfigEditor({ runtimeConfig, onSaveRuntimeConfig }: Runt
                         value={agent.model ?? ''}
                         onChange={(event) => setDraft(updateSubAgent(draft, index, {
                           model: event.target.value.trim() || null,
+                        }))}
+                      />
+                    </label>
+                    <label className="tool-field">
+                      <span className="composer__label">最大运行轮次</span>
+                      <input
+                        className="composer__input"
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={agent.maxTurns}
+                        onChange={(event) => setDraft(updateSubAgent(draft, index, {
+                          maxTurns: Math.min(100, Math.max(1, Number(event.target.value) || 1)),
                         }))}
                       />
                     </label>

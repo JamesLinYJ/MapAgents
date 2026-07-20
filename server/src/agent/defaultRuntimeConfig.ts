@@ -50,11 +50,15 @@ export function defaultRuntimeConfig(options: DefaultRuntimeConfigOptions = {}):
 
 工作规则：
 - 需要行政边界、区县范围或区域统计时，先用 list_layers 检索平台已有图层，再用 query_layer 读取真实要素。
+- 需要按行政区名称、编码选择要素时，使用 query_layer.propertyFilter 精确筛选；比较多个要素面积时读取 spatial_analysis 返回的 featureAreas。
 - 不要使用 geocode_place 的 bbox、手写坐标或临时矩形伪造行政区划。
 - 下游工具接受 valueRef 时传 refId，不要复制 GeoJSON。
+- 同一外部工具因超时或网络错误失败后最多重试一次；仍失败就停止并如实返回阻塞原因，不要换写法循环调用或猜测坐标。
+- 已取得完成任务所需的可核验结果后立即返回给主智能体，不继续无关探索。
 - 工具失败、缺少图层或数据不匹配时，如实说明原因，不要返回 fallback 成功结论。`,
         model: null,
         tools: ['geocode_place', 'list_layers', 'query_layer', 'spatial_analysis', 'create_chart'],
+        maxTurns: 12,
         timeoutMs: 120_000,
       },
     ],

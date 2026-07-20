@@ -2,8 +2,8 @@
   "automationId": "meteorological_nowcast_monitor",
   "name": "气象短临监测",
   "description": "按确定性工具链建立文件序列、校验时次并分析降水趋势，最后生成中文结论。",
-  "version": "3.4.0",
-  "revision": 5,
+  "version": "3.5.0",
+  "revision": 6,
   "enabled": true,
   "agentInvocation": {
     "enabled": true,
@@ -34,7 +34,7 @@
     "viewport": { "x": 0, "y": 0, "zoom": 0.85 },
     "nodes": [
       { "nodeId": "trigger", "type": "trigger", "label": "监测触发", "description": "接收短临监测目标。", "position": { "x": 20, "y": 120 }, "config": {} },
-      { "nodeId": "list_files", "type": "tool", "label": "列出气象文件", "description": "取得当前线程真实文件集合。", "position": { "x": 280, "y": 120 }, "config": { "toolName": "list_meteorological_files", "arguments": {}, "approvalMode": "auto", "retry": { "maxAttempts": 2, "backoffSeconds": 2 } } },
+      { "nodeId": "list_files", "type": "tool", "label": "列出气象文件", "description": "取得当前线程真实文件集合。", "position": { "x": 280, "y": 120 }, "config": { "toolName": "list_meteorological_files", "arguments": { "scope": { "source": "literal", "value": "thread" } }, "approvalMode": "auto", "retry": { "maxAttempts": 2, "backoffSeconds": 2 } } },
       { "nodeId": "query_scope", "type": "tool", "label": "读取完整区划", "description": "从平台图层读取目标区域的完整行政区划要素；范围被截断时硬失败。", "position": { "x": 280, "y": 320 }, "config": { "toolName": "query_layer", "arguments": { "layerKey": { "source": "input", "path": "parameters.regionLayerKey" }, "limit": { "source": "literal", "value": 100 }, "properties": { "source": "literal", "value": ["name", "adcode"] }, "requireComplete": { "source": "literal", "value": true } }, "approvalMode": "auto", "retry": { "maxAttempts": 2, "backoffSeconds": 2 } } },
       { "nodeId": "create_sequence", "type": "tool", "label": "创建短临序列", "description": "按用户指定时效从文件集合建立连续时次序列。", "position": { "x": 560, "y": 120 }, "config": { "toolName": "create_nowcast_sequence", "arguments": { "file_collection_ref": { "source": "value_ref", "nodeId": "list_files", "kind": "meteorological_file_collection", "path": "refId" }, "horizon_minutes": { "source": "input", "path": "parameters.horizonMinutes" } }, "approvalMode": "auto", "retry": { "maxAttempts": 2, "backoffSeconds": 2 } } },
       { "nodeId": "inspect_sequence", "type": "tool", "label": "校验短临序列", "description": "验证时次、变量和文件可读性。", "position": { "x": 850, "y": 120 }, "config": { "toolName": "inspect_nowcast_sequence", "arguments": { "sequence_ref": { "source": "value_ref", "nodeId": "create_sequence", "kind": "nowcast_sequence", "path": "refId" } }, "approvalMode": "auto", "retry": { "maxAttempts": 1, "backoffSeconds": 0 } } },

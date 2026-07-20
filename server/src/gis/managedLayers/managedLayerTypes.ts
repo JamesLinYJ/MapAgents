@@ -12,6 +12,19 @@ import type { GeoJsonFeature, GeoJsonFeatureCollection, Geometry } from '../geoj
 
 export type LayerBounds = [number, number, number, number]
 
+export type LayerPropertyValue = string | number | boolean
+
+export interface LayerPropertyFilter {
+  property: string
+  values: LayerPropertyValue[]
+}
+
+export interface LayerFeatureQuery {
+  bbox?: LayerBounds
+  propertyFilter?: LayerPropertyFilter
+  limit?: number
+}
+
 export interface StoredFeature {
   geometry: Geometry
   properties: Record<string, unknown>

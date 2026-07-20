@@ -28,6 +28,7 @@ export const runtimeSubAgentConfigSchema = z.object({
   systemPrompt: z.string().nullable().default(null),
   model: z.string().nullable().default(null),
   tools: z.array(z.string()).default([]),
+  maxTurns: z.number().int().positive().max(100).default(12),
   timeoutMs: z.number().int().positive().max(2_147_483_647).default(120_000),
 })
 

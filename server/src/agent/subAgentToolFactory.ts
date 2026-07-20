@@ -8,7 +8,15 @@
 //   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
-import { Agent, invokeFunctionTool, type Model, type Tool } from '@openai/agents'
+import {
+  Agent,
+  extractAllTextOutput,
+  MaxTurnsExceededError,
+  ToolTimeoutError,
+  invokeFunctionTool,
+  type Model,
+  type Tool,
+} from '@openai/agents'
 import { z } from 'zod'
 
 import type { ToolRegistry } from '../framework/registry.js'
@@ -70,6 +78,12 @@ export async function createSubAgentTools(
     if (!AGENT_TOOL_NAME.test(config.agentId)) throw new Error(`子 Agent id '${config.agentId}' 不能作为工具名`)
     if (options.toolRegistry.get(config.agentId)) throw new Error(`子 Agent id '${config.agentId}' 与现有工具重名`)
     const subModelName = config.model ?? options.selectedModel
+    const maxTurnsFailureMessage = `${config.name}已达到最大运行轮次 ${config.maxTurns}，为避免循环调用已停止。`
+    const maxTurnsFailureOutput = JSON.stringify({
+      type: 'geoforge_subagent_failure',
+      code: 'max_turns_exceeded',
+      message: maxTurnsFailureMessage,
+    })
     const subModel = subModelName === options.selectedModel
       ? options.rootModel
       : options.adapter.createAgentModel!(subModelName)
@@ -90,6 +104,7 @@ export async function createSubAgentTools(
       isSdkExtensionEnabled: () => false,
       isToolEnabled: toolName => options.coordinator.isToolEnabledForSubAgent(config.agentId, toolName),
       validateToolCall: (toolName, args) => options.coordinator.validateToolCall(toolName, args),
+      formatToolFailureForModel: (toolName, message) => options.coordinator.formatToolFailureForModel(toolName, message),
       rejectPreparedToolCall: (toolName, callId, message) => options.coordinator.rejectPreparedToolCall(toolName, callId, message),
       prepareToolCall: (toolName, args, callId) => options.coordinator.prepare(toolName, args, callId),
       executeTool: (toolName, args, callId) => options.coordinator.executeForSubAgent(
@@ -103,18 +118,28 @@ export async function createSubAgentTools(
       toolName: config.agentId,
       toolDescription: config.summary,
       isEnabled: () => options.coordinator.isExternalAgentEnabled(config.agentId),
-      runOptions: { context: subAgentExecutionContext },
+      runOptions: {
+        context: subAgentExecutionContext,
+        maxTurns: config.maxTurns,
+        // Agent-as-tool 会把受支持的 run 错误投影为最终输出；使用明确的内部失败载荷，
+        // 再由外层工作流包装器恢复为硬失败，避免主智能体把轮次超限当成成功结果。
+        errorHandlers: {
+          maxTurns: () => ({ finalOutput: maxTurnsFailureOutput, includeInHistory: true }),
+        },
+      },
       customOutputExtractor: async output => {
         for (const item of output.newItems) {
+          if (item.type === 'message_output_item' && item.content === maxTurnsFailureOutput) continue
           await options.store.appendAgentTranscript(options.runId, config.agentId, {
             type: 'completed_item',
             item: item.toJSON(),
           })
         }
-        if (typeof output.finalOutput !== 'string' || !output.finalOutput.trim()) {
+        const outputText = extractAllTextOutput(output.newItems).trim()
+        if (!outputText) {
           throw new Error(`子 Agent '${config.agentId}' 未返回文本结果`)
         }
-        return output.finalOutput
+        return outputText
       },
       onStream: async ({ event }) => {
         await options.store.appendAgentTranscript(options.runId, config.agentId, serializeAgentEvent(event))
@@ -160,6 +185,7 @@ export async function createSubAgentTools(
             input,
             details,
           })
+          if (output === maxTurnsFailureOutput) throw new Error(maxTurnsFailureMessage)
           await options.coordinator.completeExternalAgentStep(callId, `${config.name} 已完成`)
           await mutateState(() => updateSubAgentState(options, config.agentId, current => ({
             ...current,
@@ -174,7 +200,7 @@ export async function createSubAgentTools(
           })
           return output
         } catch (error) {
-          const message = errorMessage(error)
+          const message = subAgentFailureMessage(error, config)
           await options.coordinator.failExternalAgentStep(callId, message)
           await mutateState(() => updateSubAgentState(options, config.agentId, current => ({
             ...current,
@@ -187,11 +213,24 @@ export async function createSubAgentTools(
             status: 'failed',
             stepId: workflowStepId,
           })
-          throw error
+          throw new Error(message, { cause: error })
         }
       },
     }
   })
+}
+
+function subAgentFailureMessage(
+  error: unknown,
+  config: AgentRuntimeConfig['subAgents'][number],
+): string {
+  if (error instanceof MaxTurnsExceededError) {
+    return `${config.name}已达到最大运行轮次 ${config.maxTurns}，为避免循环调用已停止。`
+  }
+  if (error instanceof ToolTimeoutError) {
+    return `${config.name}超过单次调用时限 ${config.timeoutMs}ms，已停止。`
+  }
+  return errorMessage(error)
 }
 
 function parseSubAgentInvocation(agentId: string, input: string): Record<string, unknown> {

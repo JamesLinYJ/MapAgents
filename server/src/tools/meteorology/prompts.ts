@@ -12,12 +12,13 @@
 // 输入来源、禁止事项和下游 valueRef 流向，避免把业务链路藏进系统 prompt。
 
 export const METEOROLOGY_TOOL_PROMPTS: Record<string, string> = {
-  list_meteorological_files: `用于列出当前会话可用的气象相关上传数据集，并生成数据集、雷达和边界文件集合引用。
+  list_meteorological_files: `用于按当前会话或当前线程列出气象相关上传数据集，并生成数据集、雷达和边界文件集合引用。
 
 使用规则：
 - 气象数据、天气雷达组网产品、短时临近预报、风险区划图或面雨量表任务都应先调用本工具。
 - 本工具只读取 PostgreSQL 中当前会话的数据集目录，不扫描宿主文件系统，也不访问外部数据源。
-- threadId 仅表示上传来源；同一会话中的后续对话可以继续使用这些数据集。
+- 用户说“刚上传”“这一批”或 Automation 声明当前线程输入时，scope 必须使用 thread，避免混入同一会话其它对话的旧文件。
+- 用户明确要复用之前对话的数据，或未限定上传批次时，scope 使用 session；同一会话中的后续对话无需复制对象文件。
 - 返回的 meteorological_file_collection、radar_file_collection 和 meteorological_boundary_collection 是后续工具的规范入口。
 - 没有找到所需文件时，说明缺少上传数据并请求用户补充，不要编造文件名或路径。`,
 

@@ -218,6 +218,7 @@ describe('runtime SDK integrations', () => {
       isSdkExtensionEnabled: () => sdkExtensionEnabled,
       isToolEnabled: () => true,
       validateToolCall: () => null,
+      formatToolFailureForModel: (_toolName, message) => message,
       rejectPreparedToolCall: async () => {},
       prepareToolCall: async () => {},
       executeTool: async () => 'ok',

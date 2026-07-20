@@ -12,7 +12,7 @@
     {
       "name": "list_meteorological_files",
       "label": "列出气象文件",
-      "description": "列出当前会话可用的通用气象数据集",
+      "description": "按当前会话或当前线程列出可用的通用气象数据集",
       "group": "气象",
       "tags": [
         "meteorology"
@@ -22,7 +22,14 @@
       "planModeAccess": "discovery",
       "jsonSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "scope": {
+            "type": "string",
+            "title": "数据集范围；session 可跨对话复用，thread 只包含当前对话上传的数据",
+            "enum": ["session", "thread"],
+            "x-source": "text"
+          }
+        },
         "required": []
       }
     },

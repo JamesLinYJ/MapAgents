@@ -101,7 +101,7 @@ export class UsageStatsService {
       warnings.push(`有 ${totals.cacheHitUnreportedRuns} 个运行没有返回缓存命中明细；缓存命中统计只汇总 provider 明确报告的字段。`)
     }
     if (usageRuns.some(run => run.contextEstimatedTokens > 0)) {
-      warnings.push('上下文估算 token 来自本地上下文装配器，只用于容量判断，不等同于 provider 账单。')
+      warnings.push('上下文估算词元来自本地上下文装配器，只用于容量判断，不等同于 provider 账单。')
     }
     return {
       workspaceId,

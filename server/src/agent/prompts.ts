@@ -102,6 +102,7 @@ export function buildPlanningCapabilityCatalog(
       `- ${agent.agentId}（子智能体 ${agent.name}）：${singleLine(agent.summary)}`,
       '调用参数 {input: string 必填}',
       `授权工具 [${agent.tools.join(', ') || '无'}]`,
+      `最大运行轮次 ${agent.maxTurns}`,
       `单次调用超时 ${agent.timeoutMs}ms`,
     ].join('；'))
   return [

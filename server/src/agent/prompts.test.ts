@@ -162,6 +162,7 @@ describe('system prompt', () => {
     expect(catalog).toContain('layerKey: string 必填')
     expect(catalog).toContain('resultRef: string valueRef<feature_collection> 可选')
     expect(catalog).toContain('授权工具 [geocode_place, list_layers, query_layer, spatial_analysis, create_chart]')
+    expect(catalog).toContain('最大运行轮次 12')
     expect(catalog).toContain('单次调用超时 120000ms')
   })
 })

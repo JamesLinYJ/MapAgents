@@ -17,12 +17,13 @@ export const REQUEST_CLARIFICATION_DESCRIPTION = '计划模式中请求用户补
 export const REQUEST_CLARIFICATION_PROMPT = `计划模式的本轮对话无法形成可审批计划时，必须使用本工具请求用户补充信息。
 
 使用场景：
-- 用户只发送寒暄、测试语句或笼统要求，当前没有可规划目标。
-- 用户要求生成计划，但没有说明任务目标。
+- 用户表达了待执行意图，但要求过于笼统，当前没有可规划目标。
+- 用户要求生成计划，但没有说明要完成什么任务。
 - 缺少必要范围、数据源、地点、变量、输出格式或审批边界。
 - 用户退回工作流但没有提供原因，需要询问要修改的目标、范围、数据、执行路径或交付形式。此时不要先调用其它发现或业务工具。
 
 使用本工具后，本轮应停止并等待用户补充；不要编造默认目标，不要用普通正文冒充澄清状态。
+纯信息问答、寒暄、能力说明，或用户明确要求不调用工具时不要使用本工具，直接用普通正文回答。
 快捷选项不得建议绕过 Automation、审批、权限、真实数据或其它系统硬边界；不能把被硬规则禁止的路径包装成“替代方案”。
 不要用本工具询问“计划是否可以”，计划审批必须通过 submit_agent_workflow。`
 
@@ -41,7 +42,7 @@ export const ENTER_PLAN_MODE_PROMPT = `在执行任务前进入计划模式，�
 - 结构化工作流会自动投影步骤进度与 Todo；不要调用 todo_write 复制工作流步骤。todo_write 只用于没有结构化工作流的独立任务清单。
 - 缺少目标、范围、数据或输出要求时，必须调用 request_clarification 等待用户补充。
 - 计划准备好后，必须调用 submit_agent_workflow，提交结构化智能体工作流供用户审批。
-- 纯信息问答或用户明确要求不调用工具时可以直接回答；有待执行目标时必须以 request_clarification 或 submit_agent_workflow 结束。`
+- 纯信息问答、寒暄、能力说明或用户明确要求不调用工具时可以直接回答；有待执行目标时必须以 request_clarification 或 submit_agent_workflow 结束。`
 
 export const SUBMIT_AGENT_WORKFLOW_DESCRIPTION = '提交结构化智能体工作流并请求用户批准；批准后在同一运行中开始执行。'
 

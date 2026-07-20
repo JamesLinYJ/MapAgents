@@ -79,6 +79,10 @@ import { RuntimeApprovalPersistence } from './runtimeApprovalPersistence.js'
 import { RunSteeringController } from './runSteeringController.js'
 import type { RunOptions, RuntimeAssembly, StreamProjectionState } from './runtimeTypes.js'
 import { createSubAgentTools } from './subAgentToolFactory.js'
+import {
+  createPlanModeTerminalGuardrail,
+  planModeTerminalGuardrailMessage,
+} from './runtimeOutputGuardrails.js'
 
 export type { OpenAIAgentsRuntimeOptions, SandboxSessionFactory } from './runtimeSandbox.js'
 export type { RunOptions } from './runtimeTypes.js'
@@ -168,7 +172,7 @@ export class OpenAIAgentsRuntime {
       await this.maybeExtractLongTermMemories(options, threadId, eventSink)
       return this.store.getRun(options.runId)
     } catch (error) {
-      const message = errorMessage(error)
+      const message = planModeTerminalGuardrailMessage(error) ?? errorMessage(error)
       logger.error({ message }, 'run failed')
       if (abort.signal.aborted) {
         await finalizer.cancel()
@@ -304,7 +308,7 @@ export class OpenAIAgentsRuntime {
       await this.maybeExtractLongTermMemories(options, run.threadId, eventSink)
       return this.store.getRun(runId)
     } catch (error) {
-      const message = errorMessage(error)
+      const message = planModeTerminalGuardrailMessage(error) ?? errorMessage(error)
       if (abort.signal.aborted) {
         await finalizer.cancel()
       } else {
@@ -441,6 +445,7 @@ export class OpenAIAgentsRuntime {
       isSdkExtensionEnabled: () => coordinator.isSdkExtensionEnabled(),
       isToolEnabled: toolName => coordinator.isToolEnabled(toolName),
       validateToolCall: (toolName, args) => coordinator.validateToolCall(toolName, args),
+      formatToolFailureForModel: (toolName, message) => coordinator.formatToolFailureForModel(toolName, message),
       rejectPreparedToolCall: (toolName, callId, message) => coordinator.rejectPreparedToolCall(toolName, callId, message),
       prepareToolCall: (toolName, args, callId) => coordinator.prepare(toolName, args, callId),
       executeTool: (toolName, args, callId) => coordinator.executeForModel(toolName, args, callId),
@@ -530,6 +535,17 @@ export class OpenAIAgentsRuntime {
       resetToolChoice: true,
       tools: visibleExplicitTools(explicitTools, coordinator.isSdkExtensionEnabled()),
       toolUseBehavior: { stopAtToolNames: returnDirectToolNames },
+      outputGuardrails: [createPlanModeTerminalGuardrail({
+        hasTerminalViolation: () => {
+          const state = this.store.getRun(options.runId).state
+          const pendingClarification = state.clarification !== null
+            && !state.clarification.selectedOptionId
+          return coordinator.enteredPlanModeDuringRun()
+            && state.planMode
+            && !pendingClarification
+            && state.agentWorkflow === null
+        },
+      })],
       defaultManifest: sandboxManifest,
       capabilities: [
         ...coreSandboxCapabilities,
@@ -541,7 +557,12 @@ export class OpenAIAgentsRuntime {
       model,
       tracingDisabled: true,
       traceIncludeSensitiveData: false,
-      toolNotFoundBehavior: 'raise_error',
+      // Agents SDK 原生地把模型臆造的未知工具转回模型，而不是让协议错误覆盖
+      // 已经落盘的业务失败。格式化器同时重申结构化工作流的调整边界。
+      toolNotFoundBehavior: 'return_error_to_model',
+      toolErrorFormatter: ({ kind, toolName }) => kind === 'tool_not_found'
+        ? coordinator.formatUnavailableToolForModel(toolName)
+        : undefined,
       toolExecution: {
         maxFunctionToolConcurrency: options.runtimeConfig.maxFunctionToolConcurrency,
         preApprovalInputGuardrails: true,

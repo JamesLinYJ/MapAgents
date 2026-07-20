@@ -67,8 +67,10 @@ export function createMeteorologyTools(env: Env): ToolDef[] {
   tool(
     'list_meteorological_files',
     '列出气象文件',
-    '列出当前会话可用的通用气象数据集',
-    {},
+    '按当前会话或当前线程列出可用的通用气象数据集',
+    {
+      scope: selectParameter('数据集范围；session 可跨对话复用，thread 只包含当前对话上传的数据', ['session', 'thread']),
+    },
     listMeteorologicalFiles,
     [],
     { planModeAccess: 'discovery' },
@@ -100,11 +102,12 @@ export function createMeteorologyTools(env: Env): ToolDef[] {
   ]
 }
 
-async function listMeteorologicalFiles(_args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+async function listMeteorologicalFiles(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
   if (!ctx.listMeteorologicalDatasets) throw new Error('气象数据集目录服务未配置')
-  // 数据集是会话资源，threadId 只记录上传来源。按数据库更新时间保留同一来源路径的最新条目，
-  // 后续对话无需复制对象文件即可继续使用本会话上传的数据。
-  const entries = (await ctx.listMeteorologicalDatasets({ scope: 'session', limit: 500 }))
+  const scope = meteorologicalDatasetScope(args.scope)
+  // session 用于跨对话复用，thread 用于把“刚上传的一批”严格隔离在当前对话。
+  // 两种范围都按数据库更新时间保留同一来源路径的最新条目。
+  const entries = (await ctx.listMeteorologicalDatasets({ scope, limit: 500 }))
     .filter(entry => entry.status === 'ready')
     .filter(entry => METEOROLOGICAL_FILE_SUFFIXES.some(suffix => entry.filename.toLowerCase().endsWith(suffix)))
     .filter((entry, index, all) => all.findIndex(candidate => datasetSourceKey(candidate) === datasetSourceKey(entry)) === index)
@@ -148,7 +151,8 @@ async function listMeteorologicalFiles(_args: Record<string, unknown>, ctx: Tool
     label: `${boundaryFiles.length} 个边界文件`,
     value: { files: boundaryFiles },
   } : null
-  return result('list_meteorological_files', `找到 ${entries.length} 个气象相关文件`, {
+  return result('list_meteorological_files', `在${scope === 'thread' ? '当前对话' : '当前会话'}找到 ${entries.length} 个气象相关文件`, {
+    scope,
     files: entries.map(entry => ({
       datasetId: entry.datasetId,
       name: entry.filename,
@@ -164,6 +168,12 @@ async function listMeteorologicalFiles(_args: Record<string, unknown>, ctx: Tool
     ...(radarCollection ? [radarCollection] : []),
     ...(boundaryCollection ? [boundaryCollection] : []),
   ])
+}
+
+function meteorologicalDatasetScope(value: unknown): 'session' | 'thread' {
+  if (value === undefined || value === 'session') return 'session'
+  if (value === 'thread') return 'thread'
+  throw new Error('scope 只允许 session 或 thread。')
 }
 
 function datasetSourceRelativePath(entry: { metadata: Record<string, unknown> }): string | null {

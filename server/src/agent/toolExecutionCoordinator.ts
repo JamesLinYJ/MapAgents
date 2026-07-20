@@ -60,11 +60,41 @@ export class ToolExecutionCoordinator {
   private workflowMutation: Promise<void> = Promise.resolve()
   private resultMutation: Promise<void> = Promise.resolve()
   private checkpointMutation: Promise<void> = Promise.resolve()
+  private enteredPlanMode = false
 
   constructor(private readonly options: CoordinatorOptions) {}
 
   isExecutionEnabled(): boolean {
     return !this.options.store.getRun(this.options.runId).state.planMode
+  }
+
+  enteredPlanModeDuringRun(): boolean {
+    return this.enteredPlanMode
+  }
+
+  formatToolFailureForModel(toolName: string, message: string): string {
+    const state = this.options.store.getRun(this.options.runId).state
+    if (state.agentWorkflow?.status === 'adjusting' && state.failedTool === toolName) {
+      return [
+        `工具“${this.toolLabel(toolName)}”执行失败：${message}`,
+        '当前智能体工作流已进入调整状态。',
+        '不得重试失败步骤、绕过 Automation，或调用未批准的内部及替代工具。',
+        '若有错误证据支持的新路径，必须调用 revise_agent_workflow 提交完整修订并重新审批；若缺少用户数据或选择，必须调用 request_clarification。',
+      ].join(' ')
+    }
+    return `工具调用失败：${message}。请检查参数类型和必需字段后重试。`
+  }
+
+  formatUnavailableToolForModel(toolName: string): string {
+    const workflow = this.options.store.getRun(this.options.runId).state.agentWorkflow
+    if (workflow?.status === 'adjusting') {
+      return [
+        `工具 '${toolName}' 不在当前可用工具列表中。`,
+        '当前智能体工作流正在等待调整，不得猜测工具名、绕过失败步骤或调用 Automation 内部工具。',
+        '下一步只能调用 revise_agent_workflow 提交完整修订并重新审批，或调用 request_clarification 请求必要的用户输入。',
+      ].join(' ')
+    }
+    return `工具 '${toolName}' 不在当前可用工具列表中。请只使用本轮公开的确切工具名；不存在合适能力时如实说明限制。`
   }
 
   // MCP、Skill 与沙箱工具还没有进入结构化工作流的步骤契约。普通执行可用，
@@ -167,7 +197,11 @@ export class ToolExecutionCoordinator {
       }
       return result.modelOutput.trim()
     }
-    return formatToolResultForModel(result, this.options.inlineToolResultMaxChars)
+    return formatToolResultForModel(
+      result,
+      this.options.inlineToolResultMaxChars,
+      this.options.store.getRun(this.options.runId).state.planMode,
+    )
   }
 
   async executeDirect(toolName: string, args: Record<string, unknown>): Promise<ToolResult> {
@@ -218,7 +252,11 @@ export class ToolExecutionCoordinator {
       }
       return result.modelOutput.trim()
     }
-    return formatToolResultForModel(result, this.options.inlineToolResultMaxChars)
+    return formatToolResultForModel(
+      result,
+      this.options.inlineToolResultMaxChars,
+      this.options.store.getRun(this.options.runId).state.planMode,
+    )
   }
 
   private async execute(
@@ -249,6 +287,9 @@ export class ToolExecutionCoordinator {
           result,
         )
         if (typeof result.payload.planMode === 'boolean') {
+          if (toolName === 'enter_plan_mode' && result.payload.planMode) {
+            this.enteredPlanMode = true
+          }
           this.options.onPlanModeChanged?.(result.payload.planMode)
         }
         this.emitAgentWorkflowControlEvent(toolName)
@@ -800,7 +841,7 @@ function hasDependencyCycle(dependencies: ReadonlyMap<string, string[]>): boolea
   return [...dependencies.keys()].some(visit)
 }
 
-export function formatToolResultForModel(result: ToolResult, maxChars: number): string {
+export function formatToolResultForModel(result: ToolResult, maxChars: number, planMode = false): string {
   const base = {
     message: result.message,
     valueRefs: summarizeValueRefs(result.valueRefs ?? []),
@@ -810,6 +851,13 @@ export function formatToolResultForModel(result: ToolResult, maxChars: number): 
       name: artifact.name,
       uri: artifact.uri,
     })),
+    ...(planMode ? {
+      planningContract: {
+        status: 'active',
+        terminalTools: ['request_clarification', 'submit_agent_workflow'],
+        requirement: '存在待执行目标时，本轮必须调用一个 terminalTools 工具；普通 assistant 正文不能结束规划。',
+      },
+    } : {}),
   }
   const full = JSON.stringify({ ...base, payload: result.payload })
   if (full.length <= maxChars) return full

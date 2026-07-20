@@ -22,6 +22,7 @@ export const QUERY_LAYER_PROMPT = `用于从已注册 PostGIS 图层读取真实
 使用规则：
 - 只在 list_layers 返回所需 layerKey 后使用。
 - bbox 只能用于缩小已知查询范围，不能用来创建或替代边界。
+- 按名称、编码等已知属性选择要素时，用 propertyFilter 精确筛选；多个目标放入 values，一次查询完成，不要改用地理编码或猜测 bbox。
 - 只需要名称、ID 或统计字段时，用 properties 限制返回属性。
 - 返回的 feature_collection valueRef 是后续空间分析和气象边界工具的首选输入。
 - 不要猜测 layerKey 调用本工具。list_layers 没有命中时，应请求澄清或说明缺少数据并停止。`
@@ -32,6 +33,7 @@ export const SPATIAL_ANALYSIS_PROMPT = `用于执行确定性的 GeoJSON 几何�
 - 输入必须是真实 GeoJSON。前序工具已经返回 valueRef 时直接传 refId；只有用户明确提供的小型几何才传内联对象。
 - 路网通行路线用 route_planner；地点解析用 geocode_place；几何距离、面积、包含、缓冲、相交、合并和派生几何用本工具。
 - 任务需要行政边界时，不要从地名或地理编码 bbox 伪造 GeoJSON。
+- area 接收 FeatureCollection 时同时返回每个要素的 featureAreas；比较多个行政区面积时，先用 query_layer.propertyFilter 一次筛出目标，再按属性读取各自面积。
 - 操作要精确选择：area/length/distance 产出标量，buffer/centroid/bbox/destination/midpoint 产出派生几何，intersects/contains/within 判断关系，intersect/union/difference 做面叠加。
 - 面向用户总结时保留单位和不确定性。若返回 GeoJSON valueRef，后续工具传 ref，不要复制原始几何。`
 

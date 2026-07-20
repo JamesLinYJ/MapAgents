@@ -94,7 +94,23 @@ export function createSpatialAnalysisTool(): ToolDef {
       switch (operation) {
         case 'area': {
           const areaSqm = area(source)
-          return success('面积计算完成', { operation, areaSqm, areaSqKm: areaSqm / 1_000_000 })
+          const featureAreas = source.type === 'FeatureCollection'
+            ? source.features.map((feature, index) => {
+                const featureAreaSqm = area(feature)
+                return {
+                  index,
+                  properties: feature.properties ?? {},
+                  areaSqm: featureAreaSqm,
+                  areaSqKm: featureAreaSqm / 1_000_000,
+                }
+              })
+            : undefined
+          return success('面积计算完成', {
+            operation,
+            areaSqm,
+            areaSqKm: areaSqm / 1_000_000,
+            ...(featureAreas ? { featureAreas } : {}),
+          })
         }
         case 'length': {
           const result = length(requireLineFeature(source, 'sourceGeojson'), { units })

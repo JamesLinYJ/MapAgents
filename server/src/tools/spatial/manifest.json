@@ -39,9 +39,25 @@
         "properties": {
           "layerKey": { "type": "string" },
           "bbox": { "type": "array" },
-          "limit": { "type": "integer" },
-          "properties": { "type": "array" },
-          "requireComplete": { "type": "boolean", "description": "为 true 时，若查询结果少于图层总要素数则硬失败。" }
+          "limit": { "type": "integer", "minimum": 1, "maximum": 1000 },
+          "properties": { "type": "array", "items": { "type": "string" } },
+          "propertyFilter": {
+            "type": "object",
+            "description": "按单个属性的一个或多个精确值筛选；筛选在 limit 之前由 PostGIS 执行。",
+            "properties": {
+              "property": { "type": "string", "description": "属性字段名，例如 name 或 adcode。" },
+              "values": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 50,
+                "items": { "anyOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }] },
+                "description": "允许匹配的精确属性值；多个值使用 OR 语义。"
+              }
+            },
+            "required": ["property", "values"],
+            "additionalProperties": false
+          },
+          "requireComplete": { "type": "boolean", "description": "为 true 时，若查询结果少于筛选后匹配要素数则硬失败。" }
         },
         "required": ["layerKey"]
       }

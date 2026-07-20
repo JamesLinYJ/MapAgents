@@ -56,6 +56,27 @@ describe('formatToolResultForModel', () => {
     })
     expect(JSON.stringify(formatted)).not.toContain('lead_059.nc')
   })
+
+  it('keeps the planning terminal contract visible in summarized tool results', () => {
+    const result: ToolResult = {
+      message: '计划发现完成',
+      payload: { rows: Array.from({ length: 100 }, (_, index) => ({ index, value: 'x'.repeat(50) })) },
+      warnings: [],
+      resultId: 'result_planning',
+      source: 'test',
+      valueRefs: [],
+    }
+
+    const formatted = JSON.parse(formatToolResultForModel(result, 400, true)) as Record<string, unknown>
+
+    expect(formatted).toMatchObject({
+      planningContract: {
+        status: 'active',
+        terminalTools: ['request_clarification', 'submit_agent_workflow'],
+      },
+    })
+    expect(JSON.stringify(formatted)).toContain('普通 assistant 正文不能结束规划')
+  })
 })
 
 describe('ToolExecutionCoordinator', () => {
@@ -410,6 +431,40 @@ describe('ToolExecutionCoordinator', () => {
     expect(coordinator.isToolEnabled('todo_write')).toBe(false)
   })
 
+  it('gives the model an explicit recovery contract after a workflow step fails', async () => {
+    const provider = testProvider()
+    const base = provider.tools()[0]
+    if (!base) throw new Error('测试工具缺失')
+    const workflow = createAgentWorkflow({
+      goal: '检查数据集',
+      steps: [{
+        stepId: 'step_1',
+        title: '检查数据集',
+        kind: 'tool',
+        toolName: 'inspect_dataset',
+        ownerAgentId: 'supervisor',
+        args: { datasetId: 'broken' },
+        reason: '验证失败后的恢复边界',
+        dependsOn: [],
+      }],
+    })
+    const { coordinator } = coordinatorHarness({
+      ...provider,
+      tools: () => [{
+        ...base,
+        handler: async () => { throw new Error('数据集缺少预报时效') },
+      }],
+    }, false, [], workflow)
+
+    await expect(coordinator.executeDirect('inspect_dataset', { datasetId: 'broken' }))
+      .rejects.toThrow('数据集缺少预报时效')
+
+    expect(coordinator.formatToolFailureForModel('inspect_dataset', '数据集缺少预报时效'))
+      .toContain('必须调用 revise_agent_workflow')
+    expect(coordinator.formatUnavailableToolForModel('meteorological_inspect'))
+      .toContain('不得猜测工具名、绕过失败步骤或调用 Automation 内部工具')
+  })
+
   it('opens a subagent internal tool only while its approved agent step is running', async () => {
     const workflow = createAgentWorkflow({
       goal: '委托检查数据集',
@@ -497,6 +552,7 @@ function coordinatorHarness(
     todos: [],
     warnings: [],
     errors: [],
+    failedTool: null as string | null,
     toolValueRefs: [],
     artifacts: [],
     toolResults: [],

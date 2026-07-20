@@ -117,6 +117,7 @@ describe('createAgentsTools', () => {
       isSdkExtensionEnabled: () => executionEnabled,
       isToolEnabled: toolName => executionEnabled || toolName === 'catalog_lookup',
       validateToolCall: () => null,
+      formatToolFailureForModel: (_toolName, message) => message,
       rejectPreparedToolCall: async () => {},
       prepareToolCall: async () => {},
       executeTool: async () => 'ok',

@@ -264,6 +264,51 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     }
   })
 
+  it('rejects a plain-text terminal after dynamically entering plan mode', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-dynamic-plan-terminal-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '动态计划模式终态边界')
+      const run = await store.createRun(session.id, '帮我做一张风险区划图', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: testRuntimeConfig(),
+      })
+      const tools = new ToolRegistry()
+      tools.register(planProvider)
+      const requests: ModelRequest[] = []
+      let turns = 0
+      const model = scriptedModel(request => {
+        requests.push(request)
+        turns += 1
+        if (turns === 1) {
+          return {
+            toolCalls: [{
+              id: 'call_enter_plan_mode',
+              name: 'enter_plan_mode',
+              arguments: JSON.stringify({ reason: '需要先规划' }),
+            }],
+          }
+        }
+        return { text: '请先上传数据，我再继续。' }
+      })
+
+      const failed = await testRuntime(store, tools, registryWith(fakeAdapter(model))).run(runOptions(run, thread.id))
+
+      expect(failed.status).toBe('failed')
+      expect(failed.state.planMode).toBe(true)
+      expect(failed.state.agentWorkflow).toBeNull()
+      expect(failed.state.errors.at(-1)).toContain('计划模式不能以普通正文结束')
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.systemInstructions).toContain('必须调用 request_clarification')
+      expect(JSON.stringify(requests[1])).toContain('planningContract')
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
   it('rejects completion while a visible Todo is still pending or running', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-incomplete-todo-'))
     try {
@@ -300,7 +345,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     }
   })
 
-  it('asks for clarification instead of completing a greeting in explicit plan mode', async () => {
+  it('answers a greeting directly in explicit plan mode without manufacturing a clarification', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-greeting-'))
     try {
       const store = createTestPersistenceFacade(root)
@@ -314,45 +359,23 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       })
       const tools = new ToolRegistry()
       tools.register(planProvider)
-      const model = scriptedModel(() => ({
-        toolCalls: [{
-          id: 'call_clarify_greeting',
-          name: 'request_clarification',
-          arguments: JSON.stringify({
-            question: '你好，请告诉我你想让我为哪个任务制定计划？',
-            reason: '用户只发送问候，没有可规划目标。',
-            options: [
-              { label: '风险区划图', description: '规划生成短时强降水风险区划图的步骤。' },
-              { label: '数据检查', description: '规划检查已有图层或气象数据的步骤。' },
-            ],
-            allowFreeText: true,
-          }),
-        }],
-      }))
+      const model = scriptedModel(() => ({ text: '你好！有什么可以帮你分析？' }))
 
-      const waiting = await testRuntime(store, tools, registryWith(fakeAdapter(model))).run({
+      const completed = await testRuntime(store, tools, registryWith(fakeAdapter(model))).run({
         ...runOptions(run, thread.id),
         executionMode: 'plan',
       })
 
-      expect(waiting.state.errors).toEqual([])
-      expect(waiting.status).toBe('clarification_needed')
-      expect(waiting.state.planMode).toBe(true)
-      expect(waiting.state.clarification).toMatchObject({
-        kind: 'plan_requirement',
-        question: '你好，请告诉我你想让我为哪个任务制定计划？',
-        reason: '用户只发送问候，没有可规划目标。',
-      })
-      expect(waiting.state.clarification?.options).toHaveLength(2)
-      expect(waiting.state.decisions).toContainEqual(expect.objectContaining({
-        decisionId: waiting.state.clarification?.clarificationId,
-        kind: 'clarification',
-        status: 'pending',
-        question: '你好，请告诉我你想让我为哪个任务制定计划？',
+      expect(completed.status).toBe('completed')
+      expect(completed.state.planMode).toBe(true)
+      expect(completed.state.clarification).toBeNull()
+      expect(completed.state.decisions).toEqual([])
+      expect(completed.state.errors).toEqual([])
+      const transcript = await store.activeTranscript(thread.id)
+      expect(transcript).toContainEqual(expect.objectContaining({
+        kind: 'message',
+        payload: expect.objectContaining({ role: 'assistant', content: '你好！有什么可以帮你分析？' }),
       }))
-      expect(waiting.state.errors).toEqual([])
-      const items = await store.listItems(run.id)
-      expect(items.some(item => item.itemType === 'result' && item.metadata?.resultType === 'clarification_needed')).toBe(true)
     } finally {
       await removeTempRoot(root)
     }
@@ -922,6 +945,83 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     }
   })
 
+  it('recovers from a model-invented tool after workflow failure without hiding the root cause', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-missing-tool-recovery-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '失败后未知工具恢复')
+      const config = testRuntimeConfig()
+      const run = await store.createRun(session.id, '检查数据并在缺少输入时询问用户', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: config,
+      })
+      const tools = new ToolRegistry()
+      tools.register(planProvider)
+      tools.register(providerFromTools('missing-tool-recovery', [{
+        ...toolDefinition('unstable_inspect', []),
+        handler: async () => { throw new Error('主数据源校验失败') },
+      }]))
+      const workflow = {
+        goal: '检查主数据源',
+        steps: [workflowStep('step_inspect', '检查主数据源', 'unstable_inspect')],
+      }
+      const model = scriptedModel(request => {
+        if (hasToolResultNamed(request, 'meteorological_inspect')) {
+          return {
+            toolCalls: [{
+              id: 'call_missing_input',
+              name: 'request_clarification',
+              arguments: JSON.stringify({
+                question: '主数据源校验失败。请上传包含可解析预报时效的数据后再继续。',
+                reason: '现有输入无法形成可靠的替代执行路径。',
+                options: [],
+                allowFreeText: true,
+              }),
+            }],
+          }
+        }
+        if (hasToolResultNamed(request, 'unstable_inspect')) {
+          return {
+            toolCalls: [{
+              id: 'call_invented_tool',
+              name: 'meteorological_inspect',
+              arguments: '{}',
+            }],
+          }
+        }
+        if (hasToolResultNamed(request, 'submit_agent_workflow')) {
+          return { toolCalls: [{ id: 'call_unstable', name: 'unstable_inspect', arguments: '{}' }] }
+        }
+        return {
+          toolCalls: [{
+            id: 'call_initial_plan',
+            name: 'submit_agent_workflow',
+            arguments: JSON.stringify({ workflow }),
+          }],
+        }
+      })
+      const runtime = testRuntime(store, tools, registryWith(fakeAdapter(model)))
+      const waiting = await runtime.run({ ...runOptions(run, thread.id), runtimeConfig: config, executionMode: 'plan' })
+      const approval = waiting.state.approvals[0]
+      if (!approval) throw new Error('测试没有生成智能体工作流审批。')
+
+      const clarification = await runtime.resolveApproval(run.id, approval.approvalId, true)
+
+      expect(clarification.status).toBe('clarification_needed')
+      expect(clarification.state.clarification).toMatchObject({
+        question: '主数据源校验失败。请上传包含可解析预报时效的数据后再继续。',
+      })
+      expect(clarification.state.agentWorkflow?.status).toBe('adjusting')
+      expect(clarification.state.errors).toContain('主数据源校验失败')
+      expect(clarification.state.errors.join('\n')).not.toContain('Tool meteorological_inspect not found')
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
   it('injects user steering into the active run and revises the workflow before continuing', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-agent-workflow-steering-'))
     const releaseCollection = deferredSignal()
@@ -1160,6 +1260,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         systemPrompt: '你是空间子智能体。',
         model: null,
         tools: ['query_layer'],
+        maxTurns: 12,
         timeoutMs: 120_000,
       }]
       const tools = new ToolRegistry()
@@ -1300,6 +1401,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         systemPrompt: '你是超时测试子智能体。',
         model: null,
         tools: [],
+        maxTurns: 12,
         timeoutMs: 25,
       }]
       const workflow = {
@@ -1355,12 +1457,12 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const failed = await runtime.resolveApproval(run.id, approval.approvalId, true)
 
       expect(failed.status).toBe('failed')
-      expect(failed.state.errors.join('\n')).toContain("Tool 'slow_analyst' timed out after 25ms")
+      expect(failed.state.errors.join('\n')).toContain('慢速分析助手超过单次调用时限 25ms，已停止。')
       expect(failed.state.subAgents).toContainEqual(expect.objectContaining({
         agentId: 'slow_analyst',
         status: 'failed',
         currentStepId: null,
-        latestMessage: expect.stringContaining('timed out after 25ms'),
+        latestMessage: '慢速分析助手超过单次调用时限 25ms，已停止。',
       }))
       expect(failed.state.agentWorkflow).toMatchObject({
         status: 'adjusting',
@@ -1370,6 +1472,103 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         item.itemType === 'function_call' && item.name === 'slow_analyst'
       ))
       expect(subAgentCallUpdates.map(item => item.status)).toEqual(['running', 'failed'])
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
+  it('uses the SDK maxTurns boundary to stop a looping subagent', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-subagent-max-turns-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '子 Agent 轮次上限测试')
+      const config = testRuntimeConfig()
+      config.subAgents = [{
+        agentId: 'looping_analyst',
+        name: '循环分析助手',
+        role: 'analyst',
+        summary: '测试子智能体轮次硬边界',
+        systemPrompt: '你是轮次上限测试子智能体。',
+        model: null,
+        tools: ['query_layer'],
+        maxTurns: 2,
+        timeoutMs: 120_000,
+      }]
+      const tools = new ToolRegistry()
+      tools.register(planProvider)
+      let queryCalls = 0
+      tools.register(providerFromTools('subagent-max-turn-tools', [{
+        ...toolDefinition('query_layer', ['query']),
+        handler: async () => {
+          queryCalls += 1
+          return result('query', [], { rows: [] })
+        },
+      }]))
+      const workflow = {
+        goal: '验证循环子智能体会被 SDK 轮次边界停止',
+        steps: [{
+          stepId: 'step_looping_agent',
+          title: '调用循环分析助手',
+          kind: 'agent' as const,
+          toolName: 'looping_analyst',
+          ownerAgentId: 'looping_analyst',
+          args: { input: '持续查询' },
+          reason: '验证最大运行轮次边界',
+          dependsOn: [],
+        }],
+      }
+      let subAgentCallId = 0
+      const model = scriptedModel(request => {
+        if (request.systemInstructions?.includes('轮次上限测试子智能体')) {
+          subAgentCallId += 1
+          return {
+            toolCalls: [{
+              id: `looping_query_${subAgentCallId}`,
+              name: 'query_layer',
+              arguments: '{"query":"继续查询"}',
+            }],
+          }
+        }
+        if (hasToolResultNamed(request, 'submit_agent_workflow')) {
+          return { toolCalls: [{ id: 'call_looping_agent', name: 'looping_analyst', arguments: '{"input":"持续查询"}' }] }
+        }
+        return {
+          toolCalls: [{
+            id: 'call_looping_plan',
+            name: 'submit_agent_workflow',
+            arguments: JSON.stringify({ workflow }),
+          }],
+        }
+      })
+      const run = await store.createRun(session.id, '请验证子智能体轮次边界', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: config,
+      })
+      const runtime = testRuntime(store, tools, registryWith(fakeAdapter(model)))
+      const waiting = await runtime.run({
+        ...runOptions(run, thread.id), runtimeConfig: config, executionMode: 'plan',
+      })
+      const approval = waiting.state.approvals[0]
+      if (!approval) throw new Error('测试没有生成智能体工作流审批。')
+
+      const failed = await runtime.resolveApproval(run.id, approval.approvalId, true)
+
+      expect(failed.status).toBe('failed')
+      expect(queryCalls).toBe(2)
+      expect(failed.state.errors.join('\n')).toContain('循环分析助手已达到最大运行轮次 2，为避免循环调用已停止。')
+      expect(failed.state.subAgents).toContainEqual(expect.objectContaining({
+        agentId: 'looping_analyst',
+        status: 'failed',
+        currentStepId: null,
+        latestMessage: '循环分析助手已达到最大运行轮次 2，为避免循环调用已停止。',
+      }))
+      expect(failed.state.agentWorkflow).toMatchObject({
+        status: 'adjusting',
+        steps: [expect.objectContaining({ stepId: 'step_looping_agent', status: 'failed' })],
+      })
     } finally {
       await removeTempRoot(root)
     }

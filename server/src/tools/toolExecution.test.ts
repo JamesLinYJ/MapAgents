@@ -91,6 +91,55 @@ describe('geo tools', () => {
     expect(collection.features[0].properties).toEqual({ name: 'A' })
   })
 
+  it('filters named features before limit and checks completeness against matched rows', async () => {
+    const observedQueries: unknown[] = []
+    const managedLayers = {
+      queryFeatures: async (_layerKey: string, query: unknown) => {
+        observedQueries.push(query)
+        return [
+          { geometry: point(120.1, 30.2), properties: { name: '西湖区', adcode: '330106' } },
+          { geometry: point(119.9, 30.4), properties: { name: '余杭区', adcode: '330110' } },
+        ]
+      },
+      featureCount: async (_layerKey: string, query?: { propertyFilter?: unknown }) => (
+        query?.propertyFilter ? 2 : 13
+      ),
+    } as unknown as ManagedLayerService
+
+    const result = await createLayerQueryTool(managedLayers).handler({
+      layerKey: 'hangzhou_districts',
+      propertyFilter: { property: 'name', values: ['西湖区', '余杭区'] },
+      properties: ['name'],
+      requireComplete: true,
+    }, runtime())
+    const collection = result.payload.featureCollection as { features: Array<{ properties: Record<string, unknown> }> }
+
+    expect(observedQueries).toEqual([{
+      propertyFilter: { property: 'name', values: ['西湖区', '余杭区'] },
+      limit: 100,
+    }])
+    expect(result.message).toBe('读取 2 / 2 个匹配要素（图层共 13 个）')
+    expect(result.payload).toMatchObject({
+      totalCount: 2,
+      sourceTotalCount: 13,
+      matchedCount: 2,
+      returnedCount: 2,
+      complete: true,
+    })
+    expect(collection.features.map(feature => feature.properties)).toEqual([
+      { name: '西湖区' },
+      { name: '余杭区' },
+    ])
+  })
+
+  it('rejects malformed property filters at the tool boundary', async () => {
+    const managedLayers = {} as ManagedLayerService
+    await expect(createLayerQueryTool(managedLayers).handler({
+      layerKey: 'hangzhou_districts',
+      propertyFilter: { property: 'name', values: [] },
+    }, runtime())).rejects.toThrow('propertyFilter.values 必须包含 1 到 50 个值')
+  })
+
   it('hard-fails when a caller requires a complete layer but the query is truncated', async () => {
     const managedLayers = {
       featureCount: async () => 13,
@@ -147,6 +196,40 @@ describe('geo tools', () => {
 
     expect(result.source).toBe('turf')
     expect(result.payload.areaSqm).toBeGreaterThan(0)
+  })
+
+  it('returns per-feature areas for a filtered feature collection', async () => {
+    const result = await createSpatialAnalysisTool().handler({
+      operation: 'area',
+      sourceGeojson: {
+        type: 'FeatureCollection',
+        features: [
+          {
+            type: 'Feature',
+            geometry: {
+              type: 'Polygon',
+              coordinates: [[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]],
+            },
+            properties: { name: '甲区' },
+          },
+          {
+            type: 'Feature',
+            geometry: {
+              type: 'Polygon',
+              coordinates: [[[0, 0], [0, 2], [2, 2], [2, 0], [0, 0]]],
+            },
+            properties: { name: '乙区' },
+          },
+        ],
+      },
+    }, runtime())
+
+    expect(result.payload.featureAreas).toEqual([
+      expect.objectContaining({ index: 0, properties: { name: '甲区' }, areaSqKm: expect.any(Number) }),
+      expect.objectContaining({ index: 1, properties: { name: '乙区' }, areaSqKm: expect.any(Number) }),
+    ])
+    const featureAreas = result.payload.featureAreas as Array<{ areaSqKm: number }>
+    expect(featureAreas[1]!.areaSqKm).toBeGreaterThan(featureAreas[0]!.areaSqKm)
   })
 
   it('passes query_layer GeoJSON valueRefs into analysis, layer creation, and export', async () => {

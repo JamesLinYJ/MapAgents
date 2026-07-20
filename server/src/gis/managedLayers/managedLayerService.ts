@@ -15,7 +15,7 @@ import { ManagedLayerRepository } from './managedLayerRepository.js'
 import { ManagedLayerSceneProjection } from './managedLayerSceneProjection.js'
 import type {
   ImportGeoJsonLayerInput,
-  LayerBounds,
+  LayerFeatureQuery,
   LayerMetadataPatch,
   StoredFeature,
 } from './managedLayerTypes.js'
@@ -23,7 +23,7 @@ import { PostGisHealthProbe, type PostGisHealthStatus } from './postGisHealthPro
 
 export type {
   ImportGeoJsonLayerInput,
-  LayerBounds,
+  LayerFeatureQuery,
   LayerMetadataPatch,
   StoredFeature,
 } from './managedLayerTypes.js'
@@ -77,14 +77,14 @@ export class ManagedLayerService {
     return this.layers.geocode(query)
   }
 
-  async queryFeatures(layerKey: string, bbox?: LayerBounds, limit = 100): Promise<StoredFeature[]> {
+  async queryFeatures(layerKey: string, query: LayerFeatureQuery = {}): Promise<StoredFeature[]> {
     const mapLayerId = await this.layers.requireManagedMapLayerId(layerKey)
-    return this.features.queryFeatures(mapLayerId, bbox, limit)
+    return this.features.queryFeatures(mapLayerId, query)
   }
 
-  async featureCount(layerKey: string): Promise<number> {
+  async featureCount(layerKey: string, query: Omit<LayerFeatureQuery, 'limit'> = {}): Promise<number> {
     const mapLayerId = await this.layers.requireManagedMapLayerId(layerKey)
-    return this.features.featureCount(mapLayerId)
+    return this.features.featureCount(mapLayerId, query)
   }
 
   importGeoJsonLayer(input: ImportGeoJsonLayerInput): Promise<LayerDescriptor> {
