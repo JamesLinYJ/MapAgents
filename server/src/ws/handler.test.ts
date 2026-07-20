@@ -352,7 +352,8 @@ describe('WebSocket run subscriptions', () => {
       optionId: 'approve',
     }, 'approval_decision'))
 
-    expect(isRecord(response) ? response.status : null).toBe('completed')
+    expect(isRecord(response) ? response.status : null).toBe('queued')
+    await waitForRunSettled(store, run.id)
     expect(executions).toBe(1)
     const latest = store.getRun(run.id)
     expect(latest.state.approvals[0].payload.consumed).toBe(true)

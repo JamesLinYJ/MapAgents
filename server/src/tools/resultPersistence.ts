@@ -27,7 +27,6 @@ export async function persistToolExecutionResult(
   args: Record<string, unknown>,
   result: ToolResult,
 ): Promise<void> {
-  const run = store.getRun(runId)
   const refs: ToolValueRef[] = (result.valueRefs ?? []).map(ref => ({
     ...ref,
     sourceTool: toolName,
@@ -48,16 +47,13 @@ export async function persistToolExecutionResult(
   }))
   const generatedArtifacts = await createGeoArtifacts(result, runId, store.runtimeRoot)
   const artifacts = dedupeArtifacts([...explicitArtifacts, ...generatedArtifacts])
-  const controlState = {
-    ...agentWorkflowControlState(result.payload, run.state.agentWorkflow),
-    ...clarificationControlState(result.payload, run.state.decisions),
+  await store.mutateRunState(runId, state => ({
+    toolValueRefs: dedupeValueRefs([...state.toolValueRefs, ...refs]),
+    artifacts: dedupeArtifacts([...state.artifacts, ...artifacts]),
+    ...agentWorkflowControlState(result.payload, state.agentWorkflow),
+    ...clarificationControlState(result.payload, state.decisions),
     ...todoControlState(result.payload),
-  }
-  await store.updateRunState(runId, {
-    toolValueRefs: dedupeValueRefs([...run.state.toolValueRefs, ...refs]),
-    artifacts: dedupeArtifacts([...run.state.artifacts, ...artifacts]),
-    ...controlState,
-    toolResults: [...run.state.toolResults, {
+    toolResults: [...state.toolResults, {
       stepId: makeId('step'),
       tool: toolName,
       toolLabel,
@@ -76,7 +72,7 @@ export async function persistToolExecutionResult(
       featureCount: null,
       valueRefs: refs,
     }],
-  })
+  }))
   // value 与 Artifact 元数据写入 PostgreSQL 事实源。按结果声明顺序持久化，
   // 避免 Promise.all 让同一次工具调用的记录顺序依赖调度时机。
   for (const ref of refs) await store.appendToolValue(runId, ref)

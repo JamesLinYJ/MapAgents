@@ -12,9 +12,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { ItemSink } from '../conversation/itemSink.js'
 import { ToolRegistry } from '../framework/registry.js'
 import type { ToolProvider, ToolResult } from '../framework/types.js'
+import type { AgentWorkflow } from '../schemas/types.js'
 import type { ToolExecutionStore } from '../store/runtimePorts.js'
-import { formatToolResultForModel, ToolExecutionCoordinator } from './toolExecutionCoordinator.js'
+import { formatToolResultForModel, ToolExecutionCoordinator, validateAgentWorkflowDraft } from './toolExecutionCoordinator.js'
 import { RunEventSink } from './turnRunner.js'
+import { createAgentWorkflow } from './agentWorkflowState.js'
 
 describe('formatToolResultForModel', () => {
   it('keeps valueRefs visible while summarizing oversized payloads', () => {
@@ -57,6 +59,98 @@ describe('formatToolResultForModel', () => {
 })
 
 describe('ToolExecutionCoordinator', () => {
+  it('opens SDK extensions only for unstructured execution without an active workflow', () => {
+    let planMode = false
+    let agentWorkflow: Record<string, unknown> | null = null
+    const store = {
+      getRun: () => ({ state: { planMode, agentWorkflow } }),
+    } as unknown as ToolExecutionStore
+    const coordinator = new ToolExecutionCoordinator({
+      store,
+      registry: new ToolRegistry(),
+      adapter: null,
+      runId: 'run_extension_boundary',
+      sessionId: 'session_1',
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      inlineToolResultMaxChars: 4_000,
+      eventSink: new RunEventSink(async () => undefined, 'run_extension_boundary', 'thread_1'),
+      itemSink: new ItemSink(() => undefined, 'run_extension_boundary', 'thread_1'),
+      valueState: new Map(),
+      signal: new AbortController().signal,
+    })
+
+    expect(coordinator.isSdkExtensionEnabled()).toBe(true)
+    planMode = true
+    expect(coordinator.isSdkExtensionEnabled()).toBe(false)
+    planMode = false
+    agentWorkflow = { status: 'running' }
+    expect(coordinator.isSdkExtensionEnabled()).toBe(false)
+  })
+
+  it('rejects unknown tools and cyclic dependencies in workflow drafts', () => {
+    const registry = new ToolRegistry()
+    registry.register(testProvider())
+    const step = (stepId: string, toolName: string, dependsOn: string[] = []) => ({
+      stepId,
+      title: stepId,
+      kind: 'tool',
+      toolName,
+      ownerAgentId: 'supervisor',
+      args: {},
+      reason: '测试计划契约',
+      dependsOn,
+    })
+
+    expect(validateAgentWorkflowDraft({
+      workflow: { goal: '错误工具', steps: [step('step_1', 'render_map')] },
+    }, registry, [])).toContain("未注册的 Agent 工具 'render_map'")
+    expect(validateAgentWorkflowDraft({
+      workflow: {
+        goal: '循环依赖',
+        steps: [
+          step('step_1', 'inspect_dataset', ['step_2']),
+          step('step_2', 'inspect_dataset', ['step_1']),
+        ],
+      },
+    }, registry, [])).toContain('步骤依赖形成了循环')
+  })
+
+  it('validates planned argument shapes and subagent tool permissions before approval', () => {
+    const registry = new ToolRegistry()
+    registry.register(testProvider())
+    const baseStep = {
+      stepId: 'step_1',
+      title: '检查数据集',
+      kind: 'tool',
+      toolName: 'inspect_dataset',
+      ownerAgentId: 'supervisor',
+      reason: '验证预计参数',
+      dependsOn: [],
+    }
+
+    expect(validateAgentWorkflowDraft({
+      workflow: { goal: '错误参数', steps: [{ ...baseStep, args: { unknown: true } }] },
+    }, registry, [])).toContain('预计参数不符合')
+    expect(validateAgentWorkflowDraft({
+      workflow: { goal: '动态参数稍后补充', steps: [{ ...baseStep, args: {} }] },
+    }, registry, [])).toBeNull()
+
+    const agentStep = {
+      ...baseStep,
+      kind: 'agent',
+      toolName: 'spatial_analyst',
+      ownerAgentId: 'spatial_analyst',
+      args: { input: '请调用 inspect_dataset 完成检查' },
+    }
+    expect(validateAgentWorkflowDraft({
+      workflow: { goal: '越权委托', steps: [agentStep] },
+    }, registry, [{ agentId: 'spatial_analyst', tools: [] }])).toContain("未授权工具 'inspect_dataset'")
+    expect(validateAgentWorkflowDraft({
+      workflow: { goal: '合法委托', steps: [agentStep] },
+    }, registry, [{ agentId: 'spatial_analyst', tools: ['inspect_dataset'] }])).toBeNull()
+  })
+
   it('persists the Chinese tool label with transcript and conversation items', async () => {
     const transcriptWrites: Array<Record<string, unknown>> = []
     const conversationItems: Array<{ metadata: Record<string, unknown> }> = []
@@ -129,6 +223,20 @@ describe('ToolExecutionCoordinator', () => {
         workspaceId: 'workspace_1',
         state: { planMode: false, agentWorkflow: null, todos: [], warnings, errors },
       })),
+      mutateRunState: vi.fn(async (_runId: string, mutation: (state: {
+        planMode: boolean
+        agentWorkflow: null
+        todos: never[]
+        warnings: string[]
+        errors: string[]
+      }) => Record<string, unknown>) => {
+        const state = { planMode: false, agentWorkflow: null, todos: [], warnings, errors }
+        const updates = mutation(state)
+        warnings = Array.isArray(updates.warnings) ? updates.warnings as string[] : warnings
+        errors = Array.isArray(updates.errors) ? updates.errors as string[] : errors
+        failedTool = typeof updates.failedTool === 'string' ? updates.failedTool : failedTool
+        return { workspaceId: 'workspace_1', state: { ...state, ...updates } }
+      }),
       updateRunState: vi.fn(async (_runId: string, updates: {
         warnings?: string[]
         errors?: string[]
@@ -185,7 +293,252 @@ describe('ToolExecutionCoordinator', () => {
     expect(errors).toContain('数据集参数无效')
     expect(failedTool).toBe('inspect_dataset')
   })
+
+  it('blocks unmarked read-only business tools before a plan is approved', async () => {
+    const { coordinator } = coordinatorHarness(testProvider(), true)
+
+    expect(coordinator.isToolEnabled('inspect_dataset')).toBe(false)
+    await expect(coordinator.executeDirect('inspect_dataset', { datasetId: 'dataset_1' }))
+      .rejects.toThrow("计划模式禁止执行未声明为规划发现或计划控制的工具 'inspect_dataset'")
+  })
+
+  it('allows only explicitly declared discovery tools while planning', async () => {
+    const provider = testProvider()
+    const base = provider.tools()[0]
+    if (!base) throw new Error('测试工具缺失')
+    const discoveryTool = { ...base, planModeAccess: 'discovery' as const }
+    const { coordinator } = coordinatorHarness({
+      ...provider,
+      manifest: {
+        ...provider.manifest,
+        tools: [{
+          ...provider.manifest.tools[0]!,
+          planModeAccess: 'discovery',
+        }],
+      },
+      tools: () => [discoveryTool],
+    }, true)
+
+    expect(coordinator.isToolEnabled('inspect_dataset')).toBe(true)
+    await expect(coordinator.executeDirect('inspect_dataset', { datasetId: 'dataset_1' }))
+      .resolves.toMatchObject({ message: '检查完成' })
+  })
+
+  it('hides discovery tools after an unexplained workflow rejection', () => {
+    const provider = testProvider()
+    const base = provider.tools()[0]
+    if (!base) throw new Error('测试工具缺失')
+    const discoveryTool = { ...base, planModeAccess: 'discovery' as const }
+    const clarificationTool = {
+      ...base,
+      name: 'request_clarification',
+      label: '请求澄清',
+      planModeAccess: 'control' as const,
+    }
+    const { coordinator } = coordinatorHarness({
+      ...provider,
+      manifest: {
+        ...provider.manifest,
+        tools: [
+          { ...provider.manifest.tools[0]!, planModeAccess: 'discovery' },
+          { ...provider.manifest.tools[0]!, name: 'request_clarification', label: '请求澄清', planModeAccess: 'control' },
+        ],
+      },
+      tools: () => [discoveryTool, clarificationTool],
+    }, true, [{
+      action: 'submit_agent_workflow',
+      status: 'rejected',
+      payload: { consumed: false },
+    }])
+
+    expect(coordinator.isToolEnabled('inspect_dataset')).toBe(false)
+    expect(coordinator.isToolEnabled('request_clarification')).toBe(true)
+  })
+
+  it('exposes only ready workflow steps and recovery controls after approval', () => {
+    const provider = testProvider()
+    const base = provider.tools()[0]
+    if (!base) throw new Error('测试工具缺失')
+    const controls = [
+      ['request_clarification', '请求澄清'],
+      ['revise_agent_workflow', '调整智能体工作流'],
+      ['todo_write', '更新任务清单'],
+    ].map(([name, label]) => ({
+      ...base,
+      name: name!,
+      label: label!,
+      planModeAccess: 'control' as const,
+    }))
+    const workflow = createAgentWorkflow({
+      goal: '检查数据集',
+      steps: [{
+        stepId: 'step_1',
+        title: '检查数据集',
+        kind: 'tool',
+        toolName: 'inspect_dataset',
+        ownerAgentId: 'supervisor',
+        args: { datasetId: 'dataset_1' },
+        reason: '验证运行边界',
+        dependsOn: [],
+      }],
+    })
+    const { coordinator } = coordinatorHarness({
+      ...provider,
+      manifest: {
+        ...provider.manifest,
+        tools: [
+          provider.manifest.tools[0]!,
+          ...controls.map(tool => ({
+            name: tool.name,
+            label: tool.label,
+            description: tool.description,
+            group: tool.group,
+            tags: tool.tags,
+            isReadOnly: tool.isReadOnly,
+            isDestructive: tool.isDestructive,
+            planModeAccess: tool.planModeAccess,
+            jsonSchema: tool.jsonSchema!,
+          })),
+        ],
+      },
+      tools: () => [base, ...controls],
+    }, false, [], workflow)
+
+    expect(coordinator.isToolEnabled('inspect_dataset')).toBe(true)
+    expect(coordinator.isToolEnabled('request_clarification')).toBe(true)
+    expect(coordinator.isToolEnabled('revise_agent_workflow')).toBe(true)
+    expect(coordinator.isToolEnabled('todo_write')).toBe(false)
+  })
+
+  it('opens a subagent internal tool only while its approved agent step is running', async () => {
+    const workflow = createAgentWorkflow({
+      goal: '委托检查数据集',
+      steps: [{
+        stepId: 'step_agent',
+        title: '委托空间智能体',
+        kind: 'agent',
+        toolName: 'spatial_analyst',
+        ownerAgentId: 'spatial_analyst',
+        args: { input: '检查数据集' },
+        reason: '验证子智能体工具边界',
+        dependsOn: [],
+      }],
+    })
+    const { coordinator } = coordinatorHarness(testProvider(), false, [], workflow)
+
+    expect(coordinator.isExternalAgentEnabled('spatial_analyst')).toBe(true)
+    expect(coordinator.isToolEnabledForSubAgent('spatial_analyst', 'inspect_dataset')).toBe(false)
+    await coordinator.beginExternalAgentStep(
+      'spatial_analyst',
+      { input: '检查数据集' },
+      'call_subagent',
+    )
+    expect(coordinator.isExternalAgentEnabled('spatial_analyst')).toBe(false)
+    expect(coordinator.isToolEnabledForSubAgent('spatial_analyst', 'inspect_dataset')).toBe(true)
+  })
+
+  it('rejects artifacts returned by a planning discovery tool', async () => {
+    const provider = testProvider()
+    const base = provider.tools()[0]
+    if (!base) throw new Error('测试工具缺失')
+    const discoveryTool = {
+      ...base,
+      planModeAccess: 'discovery' as const,
+      handler: async () => ({
+        message: '错误地产生了业务结果',
+        payload: {},
+        warnings: [],
+        resultId: 'result_unsafe_discovery',
+        source: 'test',
+        valueRefs: [{
+          refId: 'ref_unsafe_geojson',
+          kind: 'feature_collection',
+          label: '不应生成的结果',
+          value: { type: 'FeatureCollection', features: [] },
+        }],
+      }),
+    }
+    const { coordinator } = coordinatorHarness({
+      ...provider,
+      manifest: {
+        ...provider.manifest,
+        tools: [{ ...provider.manifest.tools[0]!, planModeAccess: 'discovery' }],
+      },
+      tools: () => [discoveryTool],
+    }, true)
+
+    await expect(coordinator.executeDirect('inspect_dataset', { datasetId: 'dataset_1' }))
+      .rejects.toThrow("规划发现工具 'inspect_dataset' 返回了业务结果或 Artifact")
+  })
+
+  it('blocks subagents until the submitted workflow is approved', async () => {
+    const { coordinator } = coordinatorHarness(testProvider(), true)
+
+    expect(coordinator.isExecutionEnabled()).toBe(false)
+    await expect(coordinator.beginExternalAgentStep(
+      'spatial_analyst',
+      { input: '分析当前图层' },
+      'call_subagent',
+    )).rejects.toThrow("计划模式禁止调用子智能体 'spatial_analyst'")
+  })
 })
+
+function coordinatorHarness(
+  provider: ToolProvider,
+  planMode: boolean,
+  approvals: Array<{ action: string; status: string; payload: Record<string, unknown> }> = [],
+  agentWorkflow: AgentWorkflow | null = null,
+): {
+  coordinator: ToolExecutionCoordinator
+} {
+  let state = {
+    planMode,
+    agentWorkflow,
+    todos: [],
+    warnings: [],
+    errors: [],
+    toolValueRefs: [],
+    artifacts: [],
+    toolResults: [],
+    decisions: [],
+    approvals,
+  }
+  let transcriptSequence = 0
+  const store = {
+    runtimeRoot: 'C:/runtime',
+    activeTranscript: vi.fn(async () => []),
+    appendTranscript: vi.fn(async () => ({ entryId: `entry_${++transcriptSequence}` })),
+    saveRunCheckpoint: vi.fn(async () => undefined),
+    appendToolValue: vi.fn(async () => undefined),
+    persistArtifact: vi.fn(async () => undefined),
+    getRun: vi.fn(() => ({ workspaceId: 'workspace_1', state })),
+    mutateRunState: vi.fn(async (_runId: string, mutation: (current: typeof state) => Partial<typeof state>) => {
+      state = { ...state, ...mutation(state) }
+      return { workspaceId: 'workspace_1', state }
+    }),
+    updateRunState: vi.fn(async (_runId: string, updates: Partial<typeof state>) => {
+      state = { ...state, ...updates }
+    }),
+  } as unknown as ToolExecutionStore
+  const registry = new ToolRegistry()
+  registry.register(provider)
+  return {
+    coordinator: new ToolExecutionCoordinator({
+      store,
+      registry,
+      adapter: null,
+      runId: 'run_plan_boundary',
+      sessionId: 'session_1',
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      inlineToolResultMaxChars: 4_000,
+      eventSink: new RunEventSink(async () => undefined, 'run_plan_boundary', 'thread_1'),
+      itemSink: new ItemSink(async () => undefined, 'run_plan_boundary', 'thread_1'),
+      valueState: new Map(),
+      signal: new AbortController().signal,
+    }),
+  }
+}
 
 function testProvider(): ToolProvider {
   const definition = {

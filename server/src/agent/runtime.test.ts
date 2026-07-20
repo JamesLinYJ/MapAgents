@@ -24,6 +24,7 @@ import type { Env } from '../framework/env.js'
 import { ToolRegistry } from '../framework/registry.js'
 import type { ToolDef, ToolProvider, ToolResult, ValueRef } from '../framework/types.js'
 import { ModelAdapterRegistry, type ModelAdapter } from '../model/registry.js'
+import type { ConversationItem } from '../schemas/types.js'
 import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import { createTestPersistenceFacade, PersistenceFacadeTestHarness } from '../../test-support/persistenceFacadeHarness.js'
 import planProvider from '../tools/plan/index.js'
@@ -137,6 +138,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         ...runOptions(run, thread.id),
         runtimeConfig: config,
       })
+      expect(waiting.state.errors).toEqual([])
       expect(waiting.status).toBe('waiting_approval')
       expect(executions).toBe(0)
       expect(waiting.state.approvals).toHaveLength(1)
@@ -171,7 +173,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     }
   })
 
-  it('starts explicit plan mode as a hard read-only boundary', async () => {
+  it('exposes only declared discovery tools in explicit plan mode', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-boundary-'))
     try {
       const store = createTestPersistenceFacade(root)
@@ -184,34 +186,52 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         runtimeConfigSnapshot: testRuntimeConfig(),
       })
       let executions = 0
+      let visibleTools: string[] = []
       const tools = new ToolRegistry()
-      tools.register(providerFromTools('plan-boundary-writer', [{
-        ...toolDefinition('write_layer', ['value']),
-        isReadOnly: false,
-        handler: async () => {
-          executions += 1
-          return result('write', [], { ok: true })
+      tools.register(providerFromTools('plan-boundary-tools', [
+        {
+          ...toolDefinition('lookup_context', ['query']),
+          planModeAccess: 'discovery',
+          handler: async () => result('lookup', [], { ok: true }),
         },
-      }]))
-      const model = scriptedModel(() => ({
-        toolCalls: [{ id: 'call_write', name: 'write_layer', arguments: '{"value":"x"}' }],
-      }))
+        {
+          ...toolDefinition('query_layer', ['query']),
+          handler: async () => {
+            executions += 1
+            return result('query', [], { ok: true })
+          },
+        },
+        {
+          ...toolDefinition('write_layer', ['value']),
+          isReadOnly: false,
+          handler: async () => {
+            executions += 1
+            return result('write', [], { ok: true })
+          },
+        },
+      ]))
+      const model = scriptedModel(request => {
+        visibleTools = request.tools.map(tool => tool.name)
+        return { text: '我会先整理计划。' }
+      })
 
-      const failed = await testRuntime(store, tools, registryWith(fakeAdapter(model))).run({
+      const completed = await testRuntime(store, tools, registryWith(fakeAdapter(model))).run({
         ...runOptions(run, thread.id),
         executionMode: 'plan',
       })
 
-      expect(failed.status).toBe('failed')
+      expect(completed.status).toBe('completed')
       expect(executions).toBe(0)
-      expect(failed.state.planMode).toBe(true)
-      expect(failed.state.errors.at(-1)).toContain('计划模式禁止执行写入或副作用工具')
+      expect(completed.state.planMode).toBe(true)
+      expect(visibleTools).toContain('lookup_context')
+      expect(visibleTools).not.toContain('query_layer')
+      expect(visibleTools).not.toContain('write_layer')
     } finally {
       await removeTempRoot(root)
     }
   })
 
-  it('rejects text-only completion while the run is still in plan mode', async () => {
+  it('allows text-only planning discussion without representing it as approved execution', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-text-only-'))
     try {
       const store = createTestPersistenceFacade(root)
@@ -225,14 +245,20 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       })
       const model = scriptedModel(() => ({ text: '计划：第一步检查，第二步执行。' }))
 
-      const failed = await testRuntime(store, new ToolRegistry(), registryWith(fakeAdapter(model))).run({
+      const completed = await testRuntime(store, new ToolRegistry(), registryWith(fakeAdapter(model))).run({
         ...runOptions(run, thread.id),
         executionMode: 'plan',
       })
 
-      expect(failed.status).toBe('failed')
-      expect(failed.state.planMode).toBe(true)
-      expect(failed.state.errors.at(-1)).toContain('计划模式必须通过 request_clarification 或 submit_agent_workflow')
+      expect(completed.status).toBe('completed')
+      expect(completed.state.planMode).toBe(true)
+      expect(completed.state.agentWorkflow).toBeNull()
+      expect(completed.state.errors).toEqual([])
+      const transcript = await store.activeTranscript(thread.id)
+      expect(transcript).toContainEqual(expect.objectContaining({
+        kind: 'message',
+        payload: expect.objectContaining({ role: 'assistant', content: '计划：第一步检查，第二步执行。' }),
+      }))
     } finally {
       await removeTempRoot(root)
     }
@@ -497,6 +523,142 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     }
   })
 
+  it('preserves a replacement workflow approval after the previous plan is rejected', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-reapproval-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '计划退回后重新审批')
+      const config = testRuntimeConfig()
+      const run = await store.createRun(session.id, '生成杭州市行政区划地图', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: config,
+      })
+      const tools = new ToolRegistry()
+      tools.register(planProvider)
+      tools.register(directResponseProvider())
+      const workflow = (title: string) => ({
+        goal: '生成杭州市行政区划地图',
+        steps: [workflowStep('step_delivery', title, 'deliver_test_response')],
+      })
+      let modelTurn = 0
+      const model = scriptedModel(() => {
+        modelTurn += 1
+        if (modelTurn === 1 || modelTurn === 2) {
+          return {
+            toolCalls: [{
+              id: `call_plan_${modelTurn}`,
+              name: 'submit_agent_workflow',
+              arguments: JSON.stringify({
+                workflow: workflow(modelTurn === 1 ? '交付初版地图' : '交付修订地图'),
+              }),
+            }],
+          }
+        }
+        return {
+          toolCalls: [{
+            id: 'call_delivery_after_reapproval',
+            name: 'deliver_test_response',
+            arguments: '{"question":"行政区划地图"}',
+          }],
+        }
+      })
+      const runtime = testRuntime(store, tools, registryWith(fakeAdapter(model)))
+      const firstWaiting = await runtime.run({
+        ...runOptions(run, thread.id), runtimeConfig: config, executionMode: 'plan',
+      })
+      const firstApprovalId = firstWaiting.state.approvals[0]?.approvalId
+      if (!firstApprovalId) throw new Error('测试没有生成首个工作流审批。')
+
+      const secondWaiting = await runtime.resolveApproval(run.id, firstApprovalId, false)
+      const pendingApprovals = secondWaiting.state.approvals.filter(item => item.status === 'pending')
+
+      expect(secondWaiting.status).toBe('waiting_approval')
+      expect(secondWaiting.state.approvals).toHaveLength(2)
+      expect(secondWaiting.state.approvals.find(item => item.approvalId === firstApprovalId)).toMatchObject({
+        status: 'rejected',
+        payload: { consumed: true },
+      })
+      expect(pendingApprovals).toHaveLength(1)
+      expect(pendingApprovals[0]?.payload.args).toMatchObject({
+        workflow: { steps: [expect.objectContaining({ title: '交付修订地图' })] },
+      })
+
+      const secondApprovalId = pendingApprovals[0]?.approvalId
+      if (!secondApprovalId) throw new Error('测试没有保留替换后的工作流审批。')
+      const completed = await runtime.resolveApproval(run.id, secondApprovalId, true)
+
+      expect(completed.status).toBe('completed')
+      expect(completed.state.approvals.find(item => item.approvalId === secondApprovalId)).toMatchObject({
+        status: 'approved',
+        payload: { consumed: true },
+      })
+      expect(completed.state.agentWorkflow?.steps).toContainEqual(expect.objectContaining({
+        title: '交付修订地图',
+        status: 'completed',
+      }))
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
+  it('uses the SDK input guardrail to repair unknown workflow tools before requesting approval', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-tool-guardrail-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '计划工具契约护栏')
+      const config = testRuntimeConfig()
+      const run = await store.createRun(session.id, '生成可审批地图计划', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: config,
+      })
+      const tools = new ToolRegistry()
+      tools.register(planProvider)
+      tools.register(directResponseProvider())
+      let modelTurn = 0
+      let firstRequest: ModelRequest | null = null
+      const model = scriptedModel(request => {
+        modelTurn += 1
+        firstRequest ??= request
+        const selectedTool = modelTurn === 1 ? 'render_map' : 'deliver_test_response'
+        return {
+          toolCalls: [{
+            id: `guarded_plan_${modelTurn}`,
+            name: 'submit_agent_workflow',
+            arguments: JSON.stringify({
+              workflow: {
+                goal: '交付地图',
+                steps: [workflowStep('step_delivery', '交付地图', selectedTool)],
+              },
+            }),
+          }],
+        }
+      })
+
+      const waiting = await testRuntime(store, tools, registryWith(fakeAdapter(model))).run({
+        ...runOptions(run, thread.id), runtimeConfig: config, executionMode: 'plan',
+      })
+
+      expect(modelTurn).toBe(2)
+      expect(waiting.status).toBe('waiting_approval')
+      expect(waiting.state.approvals).toHaveLength(1)
+      expect(waiting.state.approvals[0]?.payload.args).toMatchObject({
+        workflow: { steps: [expect.objectContaining({ toolName: 'deliver_test_response' })] },
+      })
+      expect(firstRequest?.systemInstructions).toContain('deliver_test_response')
+      expect(firstRequest?.tools.map(tool => tool.name)).not.toContain('deliver_test_response')
+      expect((await store.getRunCheckpoint(run.id)).pendingToolCallIds).toEqual([])
+      expect(waiting.state.errors).toEqual([])
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
   it.each([
     ['strict SDK null values', 'strict', {
       query: '杭州',
@@ -641,7 +803,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     }
   })
 
-  it('revises a failed agent workflow explicitly and continues in the same run', async () => {
+  it('requires a new approval before executing a revised failed workflow', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-agent-workflow-revision-'))
     try {
       const store = createTestPersistenceFacade(root)
@@ -657,6 +819,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const tools = new ToolRegistry()
       tools.register(planProvider)
       tools.register(directResponseProvider())
+      let recoveryExecutions = 0
       tools.register(providerFromTools('agent-workflow-revision', [
         {
           ...toolDefinition('unstable_inspect', []),
@@ -666,7 +829,10 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         },
         {
           ...toolDefinition('verified_recovery', []),
-          handler: async () => result('verified-recovery', [], { validated: true }),
+          handler: async () => {
+            recoveryExecutions += 1
+            return result('verified-recovery', [], { validated: true })
+          },
         },
       ]))
       const initialWorkflow = {
@@ -722,10 +888,22 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const approval = waiting.state.approvals[0]
       if (!approval) throw new Error('测试没有生成智能体工作流审批。')
 
-      const completed = await runtime.resolveApproval(run.id, approval.approvalId, true)
+      const revisionWaiting = await runtime.resolveApproval(run.id, approval.approvalId, true)
+      const revisionApproval = revisionWaiting.state.approvals.find(candidate => (
+        candidate.status === 'pending' && candidate.action === 'revise_agent_workflow'
+      ))
+      if (!revisionApproval) throw new Error('测试没有生成工作流修订审批。')
+
+      expect(revisionWaiting.status).toBe('waiting_approval')
+      expect(recoveryExecutions).toBe(0)
+      expect(revisionWaiting.state.agentWorkflow).toMatchObject({ revision: 1, status: 'adjusting' })
+      expect(revisionApproval.payload.args).toMatchObject({ workflow: revisedWorkflow })
+
+      const completed = await runtime.resolveApproval(run.id, revisionApproval.approvalId, true)
 
       expect(completed.id).toBe(run.id)
       expect(completed.status).toBe('completed')
+      expect(recoveryExecutions).toBe(1)
       expect(completed.state.agentWorkflow).toMatchObject({
         revision: 2,
         status: 'completed',
@@ -759,6 +937,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         runtimeConfigSnapshot: config,
       })
       const collectionStarted = deferredSignal()
+      let tableExecutions = 0
       const tools = new ToolRegistry()
       tools.register(planProvider)
       tools.register(directResponseProvider())
@@ -773,7 +952,10 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         },
         {
           ...toolDefinition('build_guidance_table', []),
-          handler: async () => result('guidance-table', [], { tableCreated: true }),
+          handler: async () => {
+            tableExecutions += 1
+            return result('guidance-table', [], { tableCreated: true })
+          },
         },
       ]))
       const initialWorkflow = {
@@ -833,14 +1015,23 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const approval = waiting.state.approvals[0]
       if (!approval) throw new Error('测试没有生成智能体工作流审批。')
 
-      const completion = runtime.resolveApproval(run.id, approval.approvalId, true)
+      const firstContinuation = runtime.resolveApproval(run.id, approval.approvalId, true)
       await collectionStarted.promise
       const steering = await runtime.steer(run.id, 'steer_add_table', '请增加一张可核验的表格，再给出结论。')
       releaseCollection.resolve()
-      const completed = await completion
+      const revisionWaiting = await firstContinuation
+      const revisionApproval = revisionWaiting.state.approvals.find(candidate => (
+        candidate.status === 'pending' && candidate.action === 'revise_agent_workflow'
+      ))
+      if (!revisionApproval) throw new Error('测试没有生成用户引导后的工作流修订审批。')
+
+      expect(revisionWaiting.status).toBe('waiting_approval')
+      expect(tableExecutions).toBe(0)
+      const completed = await runtime.resolveApproval(run.id, revisionApproval.approvalId, true)
 
       expect(completed.id).toBe(run.id)
       expect(completed.status).toBe('completed')
+      expect(tableExecutions).toBe(1)
       expect(steeringObserved).toBe(true)
       expect(completed.state.agentWorkflow).toMatchObject({
         revision: 2,
@@ -947,7 +1138,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     expect(outcome.run.status).toBe('completed')
     expect(turns).toBe(2)
     // Agents SDK 会把 reasoning 带到同一 run 的下一次 Model 请求；Chat Completions
-    // 的不可重放边界在 CompatibleChatCompletionsModel 中统一执行。
+    // 的不可重放边界在 DeepSeekChatCompletionsModel 中统一执行。
     expect(secondTurnInput.some(item => isRecord(item) && item.type === 'reasoning')).toBe(true)
     expect(outcome.items.some(item => item.itemType === 'reasoning' && item.body?.includes('provider reasoning'))).toBe(true)
     expect(outcome.items.some(item => item.itemType === 'message' && item.body === '工具后总结。')).toBe(true)
@@ -969,6 +1160,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         systemPrompt: '你是空间子智能体。',
         model: null,
         tools: ['query_layer'],
+        timeoutMs: 120_000,
       }]
       const tools = new ToolRegistry()
       tools.register(planProvider)
@@ -994,6 +1186,8 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         }],
       }
       let subAgentTurns = 0
+      let planningTools: string[] = []
+      let executionTools: string[] = []
       const model = scriptedModel(request => {
         if (request.systemInstructions?.includes('空间子智能体')) {
           subAgentTurns += 1
@@ -1008,8 +1202,10 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         }
         if (hasToolResultNamed(request, 'spatial_analyst')) return { text: '主智能体已汇总子分析。' }
         if (hasToolResultNamed(request, 'submit_agent_workflow')) {
+          executionTools = request.tools.map(tool => tool.name)
           return { toolCalls: [{ id: 'sub_call_1', name: 'spatial_analyst', arguments: '{"input":"分析当前图层"}' }] }
         }
+        planningTools = request.tools.map(tool => tool.name)
         return {
           toolCalls: [{
             id: 'subagent_plan_call',
@@ -1023,6 +1219,8 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         modelProvider: 'fake',
         runtimeConfigSnapshot: config,
       })
+      const liveItems: ConversationItem[] = []
+      store.itemBus.subscribe(run.id, item => liveItems.push(item))
       const runtime = testRuntime(store, tools, registryWith(fakeAdapter(model)))
       const waiting = await runtime.run({
         ...runOptions(run, thread.id), runtimeConfig: config, executionMode: 'plan',
@@ -1032,9 +1230,16 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const completed = await runtime.resolveApproval(run.id, approval.approvalId, true)
       await store.flushConversationStore()
 
-      expect(completed.status).toBe('completed')
+      expect({ status: completed.status, errors: completed.state.errors }).toEqual({
+        status: 'completed',
+        errors: [],
+      })
       expect(subAgentTurns).toBe(2)
       expect(subAgentToolCalls).toBe(1)
+      expect(planningTools).not.toContain('spatial_analyst')
+      expect(executionTools).toContain('spatial_analyst')
+      expect(executionTools).not.toContain('exec_command')
+      expect(executionTools).not.toContain('read_file')
       expect(completed.state.subAgents).toContainEqual(expect.objectContaining({
         agentId: 'spatial_analyst',
         status: 'completed',
@@ -1053,11 +1258,118 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const transcript = await store.activeTranscript(thread.id)
       expect(transcript.some(entry => entry.kind === 'tool_call' && entry.payload.name === 'spatial_analyst')).toBe(true)
       expect(transcript.some(entry => entry.kind === 'tool_result' && entry.payload.name === 'spatial_analyst')).toBe(true)
+      const subAgentCallUpdates = liveItems.filter(item => (
+        item.itemType === 'function_call' && item.name === 'spatial_analyst'
+      ))
+      expect(subAgentCallUpdates.map(item => item.status)).toEqual(['running', 'completed'])
+      const queryCompletedIndex = liveItems.findIndex(item => (
+        item.itemType === 'function_call_output'
+        && item.name === 'query_layer'
+        && item.status === 'completed'
+      ))
+      const subAgentCompletedIndex = liveItems.findIndex(item => (
+        item.itemType === 'function_call'
+        && item.name === 'spatial_analyst'
+        && item.status === 'completed'
+      ))
+      expect(queryCompletedIndex).toBeGreaterThanOrEqual(0)
+      expect(subAgentCompletedIndex).toBeGreaterThan(queryCompletedIndex)
       const agentLog = await readFile(path.join(
         root, 'sessions', session.id, 'threads', thread.id,
         'runs', run.id, 'agents', 'spatial_analyst', 'transcript.jsonl',
       ), 'utf8')
       expect(agentLog).toContain('completed_item')
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
+  it('uses the SDK tool timeout and persists a timed-out subagent as failed', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-subagent-timeout-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '子智能体超时测试')
+      const config = testRuntimeConfig()
+      config.subAgents = [{
+        agentId: 'slow_analyst',
+        name: '慢速分析助手',
+        role: 'analyst',
+        summary: '测试子智能体超时边界',
+        systemPrompt: '你是超时测试子智能体。',
+        model: null,
+        tools: [],
+        timeoutMs: 25,
+      }]
+      const workflow = {
+        goal: '验证子智能体超时不会无限阻塞主运行',
+        steps: [{
+          stepId: 'step_slow_agent',
+          title: '调用慢速分析助手',
+          kind: 'agent' as const,
+          toolName: 'slow_analyst',
+          ownerAgentId: 'slow_analyst',
+          args: { input: '等待外部数据' },
+          reason: '验证超时和失败状态投影',
+          dependsOn: [],
+        }],
+      }
+      const rootModel = scriptedModel(request => hasToolResultNamed(request, 'submit_agent_workflow')
+        ? { toolCalls: [{ id: 'call_slow_agent', name: 'slow_analyst', arguments: '{"input":"等待外部数据"}' }] }
+        : {
+            toolCalls: [{
+              id: 'call_slow_plan',
+              name: 'submit_agent_workflow',
+              arguments: JSON.stringify({ workflow }),
+            }],
+          })
+      const model: Model = {
+        getResponse: request => request.systemInstructions?.includes('超时测试子智能体')
+          ? rejectWhenAborted(request.signal)
+          : rootModel.getResponse(request),
+        async *getStreamedResponse(request) {
+          if (request.systemInstructions?.includes('超时测试子智能体')) {
+            await rejectWhenAborted(request.signal)
+            return
+          }
+          yield* rootModel.getStreamedResponse(request)
+        },
+      }
+      const tools = new ToolRegistry()
+      tools.register(planProvider)
+      const run = await store.createRun(session.id, '请验证子智能体超时', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: config,
+      })
+      const liveItems: ConversationItem[] = []
+      store.itemBus.subscribe(run.id, item => liveItems.push(item))
+      const runtime = testRuntime(store, tools, registryWith(fakeAdapter(model)))
+      const waiting = await runtime.run({
+        ...runOptions(run, thread.id), runtimeConfig: config, executionMode: 'plan',
+      })
+      const approval = waiting.state.approvals[0]
+      if (!approval) throw new Error('测试没有生成智能体工作流审批。')
+
+      const failed = await runtime.resolveApproval(run.id, approval.approvalId, true)
+
+      expect(failed.status).toBe('failed')
+      expect(failed.state.errors.join('\n')).toContain("Tool 'slow_analyst' timed out after 25ms")
+      expect(failed.state.subAgents).toContainEqual(expect.objectContaining({
+        agentId: 'slow_analyst',
+        status: 'failed',
+        currentStepId: null,
+        latestMessage: expect.stringContaining('timed out after 25ms'),
+      }))
+      expect(failed.state.agentWorkflow).toMatchObject({
+        status: 'adjusting',
+        steps: [expect.objectContaining({ stepId: 'step_slow_agent', status: 'failed' })],
+      })
+      const subAgentCallUpdates = liveItems.filter(item => (
+        item.itemType === 'function_call' && item.name === 'slow_analyst'
+      ))
+      expect(subAgentCallUpdates.map(item => item.status)).toEqual(['running', 'failed'])
     } finally {
       await removeTempRoot(root)
     }
@@ -1175,6 +1487,23 @@ function scriptedModel(script: (request: ModelRequest) => ScriptedResponse): Mod
 }
 
 class ReplaySafeTestError extends Error {}
+
+function rejectWhenAborted(signal: AbortSignal | undefined): Promise<never> {
+  return new Promise((_, reject) => {
+    if (!signal) {
+      reject(new Error('子智能体模型请求缺少 SDK abort signal'))
+      return
+    }
+    const rejectAbort = () => reject(signal.reason instanceof Error
+      ? signal.reason
+      : new Error('子智能体模型请求已中止'))
+    if (signal.aborted) {
+      rejectAbort()
+      return
+    }
+    signal.addEventListener('abort', rejectAbort, { once: true })
+  })
+}
 
 let responseSequence = 0
 function makeIdForResponse(): string {

@@ -1,15 +1,15 @@
 // +-------------------------------------------------------------------------
 //
-//   地理智能平台 - Agents SDK Chat Completions 模型
+//   地理智能平台 - DeepSeek Agents SDK Chat Completions 模型
 //
-//   文件:       compatibleChatCompletionsModel.ts
+//   文件:       deepSeekChatCompletionsModel.ts
 //
 //   日期:       2026年06月22日
 //   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
-// 该模块是 OpenAI Compatible 传输层的唯一实现。Runner 负责 Agent 编排，
-// 本模型只负责严格转换 Chat Completions 请求、响应与流事件。
+// 该模块是 DeepSeek OpenAI-compatible 传输层的唯一实现。Runner 负责
+// Agent 编排，本模型只负责 DeepSeek Chat Completions 请求、响应与流事件。
 
 import {
   Usage,
@@ -36,15 +36,15 @@ import type {
 const FUNCTION_NAME = /^[a-zA-Z0-9_-]+$/u
 const RESERVED_PROVIDER_FIELDS = new Set([
   'model', 'messages', 'tools', 'stream', 'stream_options', 'response_format',
-  'tool_choice', 'parallel_tool_calls',
+  'tool_choice', 'parallel_tool_calls', 'reasoning_effort',
 ])
 
-type CompatibleAssistantMessage = ChatCompletion['choices'][number]['message'] & {
+type DeepSeekAssistantMessage = ChatCompletion['choices'][number]['message'] & {
   reasoning?: string | null
   reasoning_content?: string | null
 }
 
-interface CompatibleStreamChunk {
+interface DeepSeekStreamChunk {
   id?: string
   choices?: Array<{
     index?: number
@@ -79,7 +79,7 @@ interface AccumulatedToolCall {
 
 type ModelOutput = Extract<ResponseStreamEvent, { type: 'response_done' }>['response']['output']
 
-class CompatibleModelStreamError extends Error {
+class DeepSeekModelStreamError extends Error {
   constructor(
     message: string,
     readonly replaySafe: boolean,
@@ -87,31 +87,31 @@ class CompatibleModelStreamError extends Error {
     options?: ErrorOptions,
   ) {
     super(message, options)
-    this.name = 'CompatibleModelStreamError'
+    this.name = 'DeepSeekModelStreamError'
   }
 }
 
-export interface CompatibleChatCompletionsModelOptions {
+export interface DeepSeekChatCompletionsModelOptions {
   client: OpenAI
   model: string
 }
 
-// CompatibleChatCompletionsModel
+// DeepSeekChatCompletionsModel
 //
-// 同时规范化标准 OpenAI 增量与兼容服务的 reasoning_content/完整参数快照，
-// 但不接受任何 Responses 专属状态或工具能力。
-export class CompatibleChatCompletionsModel implements Model {
+// 使用官方 Agents SDK Model 契约和 openai npm 客户端，同时严格实现 DeepSeek
+// V4 的 reasoning_content 回放规则，不接受 Responses 专属状态或工具能力。
+export class DeepSeekChatCompletionsModel implements Model {
   readonly model: string
   private readonly client: OpenAI
 
-  constructor(options: CompatibleChatCompletionsModelOptions) {
-    if (!options.model.trim()) throw new Error('Chat Completions 模型名称不能为空')
+  constructor(options: DeepSeekChatCompletionsModelOptions) {
+    if (!options.model.trim()) throw new Error('DeepSeek Chat Completions 模型名称不能为空')
     this.client = options.client
     this.model = options.model
   }
 
   getRetryAdvice(args: ModelRetryAdviceRequest): ModelRetryAdvice | undefined {
-    if (args.error instanceof CompatibleModelStreamError) {
+    if (args.error instanceof DeepSeekModelStreamError) {
       if (!args.error.networkError) return undefined
       return {
         suggested: args.error.replaySafe,
@@ -129,7 +129,7 @@ export class CompatibleChatCompletionsModel implements Model {
     const choice = response.choices[0]
     if (!choice || response.choices.length !== 1) throw new Error('Chat Completions 必须返回且只能返回一个 choice')
     assertFinishReason(choice.finish_reason)
-    const output = parseAssistantMessage(response.id, choice.message as CompatibleAssistantMessage)
+    const output = parseAssistantMessage(response.id, choice.message as DeepSeekAssistantMessage)
     if (!output.length) throw new Error('Chat Completions 未返回正文或工具调用')
     return {
       usage: new Usage(toUsage(response.usage)),
@@ -143,12 +143,12 @@ export class CompatibleChatCompletionsModel implements Model {
     const params = this.buildRequest(request, true)
     let emittedSemanticOutput = false
     try {
-      const stream = await this.client.chat.completions.create(params, { signal: request.signal }) as unknown as AsyncIterable<CompatibleStreamChunk>
+      const stream = await this.client.chat.completions.create(params, { signal: request.signal }) as unknown as AsyncIterable<DeepSeekStreamChunk>
       let responseId = ''
       let text = ''
       let reasoning = ''
       let finishReason: string | null = null
-      let usage: CompatibleStreamChunk['usage']
+      let usage: DeepSeekStreamChunk['usage']
       let started = false
       const calls = new Map<number, AccumulatedToolCall>()
 
@@ -205,8 +205,8 @@ export class CompatibleChatCompletionsModel implements Model {
         },
       }
     } catch (error) {
-      if (error instanceof UserError || error instanceof CompatibleModelStreamError) throw error
-      throw new CompatibleModelStreamError(
+      if (error instanceof UserError || error instanceof DeepSeekModelStreamError) throw error
+      throw new DeepSeekModelStreamError(
         error instanceof Error ? error.message : String(error),
         !emittedSemanticOutput && isTransientNetworkError(error),
         isTransientNetworkError(error),
@@ -233,6 +233,14 @@ export class CompatibleChatCompletionsModel implements Model {
       if (RESERVED_PROVIDER_FIELDS.has(key)) throw new UserError(`providerData 不得覆盖保留字段 '${key}'`)
     }
     const responseFormat = toResponseFormat(request.outputType)
+    const providerThinkingDisabled = isRecord(providerData.thinking)
+      && providerData.thinking.type === 'disabled'
+    if (!providerThinkingDisabled && isNonAutoToolChoice(request.modelSettings.toolChoice)) {
+      throw new UserError('DeepSeek V4 thinking 模式不支持显式 toolChoice；请使用 auto，或显式关闭 thinking。')
+    }
+    const omitToolChoice = !providerThinkingDisabled
+      && (request.modelSettings.toolChoice === undefined || request.modelSettings.toolChoice === 'auto')
+    const toolChoice = toToolChoice(request.modelSettings.toolChoice, tools)
     return ({
       model: this.model,
       messages,
@@ -242,12 +250,14 @@ export class CompatibleChatCompletionsModel implements Model {
       frequency_penalty: request.modelSettings.frequencyPenalty,
       presence_penalty: request.modelSettings.presencePenalty,
       max_tokens: request.modelSettings.maxTokens,
-      tool_choice: toToolChoice(request.modelSettings.toolChoice, tools),
+      ...(!omitToolChoice && toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
       parallel_tool_calls: request.modelSettings.parallelToolCalls ?? false,
       stream,
       ...(stream ? { stream_options: { include_usage: true } } : {}),
       ...(responseFormat ? { response_format: responseFormat } : {}),
-      ...(request.modelSettings.reasoning?.effort ? { reasoning_effort: request.modelSettings.reasoning.effort } : {}),
+      ...(!providerThinkingDisabled && request.modelSettings.reasoning?.effort
+        ? { reasoning_effort: request.modelSettings.reasoning.effort }
+        : {}),
       ...providerData,
     } as unknown) as ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming
   }
@@ -268,7 +278,13 @@ function assertSupportedRequest(request: ModelRequest): void {
 function toChatMessages(input: string | AgentInputItem[]): ChatCompletionMessageParam[] {
   if (typeof input === 'string') return [{ role: 'user', content: input }]
   const messages: ChatCompletionMessageParam[] = []
-  let pendingAssistant: { role: 'assistant'; content: string | null; tool_calls: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> } | null = null
+  let pendingReasoning = ''
+  let pendingAssistant: {
+    role: 'assistant'
+    content: string | null
+    reasoning_content?: string
+    tool_calls: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>
+  } | null = null
   const flush = () => {
     if (!pendingAssistant) return
     const value = pendingAssistant
@@ -276,6 +292,7 @@ function toChatMessages(input: string | AgentInputItem[]): ChatCompletionMessage
     if (!value.tool_calls.length && !value.content?.trim()) {
       throw new UserError('历史 assistant 消息缺少正文或工具调用')
     }
+    if (value.tool_calls.length && value.content === null) value.content = ''
     messages.push({ ...value, tool_calls: value.tool_calls.length ? value.tool_calls : undefined } as ChatCompletionMessageParam)
   }
   const assistant = () => pendingAssistant ??= { role: 'assistant', content: null, tool_calls: [] }
@@ -283,6 +300,7 @@ function toChatMessages(input: string | AgentInputItem[]): ChatCompletionMessage
   for (const item of input) {
     if (isMessage(item)) {
       flush()
+      pendingReasoning = ''
       if (item.role === 'system') messages.push({ role: 'system', content: String(item.content) })
       else if (item.role === 'user') messages.push({ role: 'user', content: extractUserText(item.content) })
       else {
@@ -293,13 +311,16 @@ function toChatMessages(input: string | AgentInputItem[]): ChatCompletionMessage
       continue
     }
     if (item.type === 'reasoning') {
-      // Provider reasoning is UI-only telemetry in GeoForge. Replaying it as a
-      // standalone assistant message is invalid for Chat Completions.
+      // DeepSeek 要求工具调用回合在后续请求中完整回放 reasoning_content。
+      pendingReasoning += reasoningText(item)
       continue
     }
     if (item.type === 'function_call') {
       if (!item.callId || !item.name || !FUNCTION_NAME.test(item.name)) throw new UserError('历史工具调用缺少合法 callId/name')
-      assistant().tool_calls.push({
+      const message = assistant()
+      if (pendingReasoning && !message.reasoning_content) message.reasoning_content = pendingReasoning
+      pendingReasoning = ''
+      message.tool_calls.push({
         id: item.callId,
         type: 'function',
         function: { name: item.name, arguments: item.arguments || '{}' },
@@ -361,7 +382,17 @@ function toToolChoice(choice: ModelRequest['modelSettings']['toolChoice'], tools
   return { type: 'function', function: { name: choice } }
 }
 
-function parseAssistantMessage(responseId: string, message: CompatibleAssistantMessage): ModelOutput {
+function isNonAutoToolChoice(choice: ModelRequest['modelSettings']['toolChoice']): boolean {
+  return Boolean(choice && choice !== 'auto')
+}
+
+function reasoningText(item: Extract<AgentInputItem, { type: 'reasoning' }>): string {
+  return (item.rawContent ?? [])
+    .map(part => isRecord(part) && part.type === 'reasoning_text' && typeof part.text === 'string' ? part.text : '')
+    .join('')
+}
+
+function parseAssistantMessage(responseId: string, message: DeepSeekAssistantMessage): ModelOutput {
   const calls = (message.tool_calls ?? []).map((call, index) => {
     if (call.type !== 'function') throw new UserError(`不支持工具调用类型 '${call.type}'`)
     return { index, id: call.id, name: call.function.name, arguments: call.function.arguments }
@@ -426,7 +457,7 @@ function assertFinishReason(reason: string | null | undefined): void {
   throw new Error(`Chat Completions 未完整交付，finish_reason=${reason}`)
 }
 
-function toUsage(usage: CompatibleStreamChunk['usage'] | ChatCompletion['usage'] | null | undefined) {
+function toUsage(usage: DeepSeekStreamChunk['usage'] | ChatCompletion['usage'] | null | undefined) {
   return {
     requests: 1,
     inputTokens: usage?.prompt_tokens ?? 0,

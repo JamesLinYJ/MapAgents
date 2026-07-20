@@ -24,9 +24,11 @@ import {
   createMCPToolStaticFilter,
   getAllMcpTools,
   hostedMcpTool,
+  type Agent,
   type GetAllMcpToolsOptions,
   type MCPServer,
   type MCPServersOptions,
+  type RunContext,
   type Tool,
 } from '@openai/agents'
 import {
@@ -160,7 +162,7 @@ export async function createRuntimeSdkTools(
       errorFunction: null,
     })
     for (const tool of serverTools) {
-      tools.push(applyMcpApprovalPolicy(tool, serverConfig))
+      tools.push(applyMcpExecutionPhasePolicy(applyMcpApprovalPolicy(tool, serverConfig)))
     }
   }
 
@@ -171,6 +173,25 @@ export async function createRuntimeSdkTools(
       await Promise.all(managers.map(manager => manager.close()))
     },
   }
+}
+
+function applyMcpExecutionPhasePolicy(
+  tool: Tool<AgentsExecutionContext>,
+): Tool<AgentsExecutionContext> {
+  if (tool.type !== 'function') return tool
+  const isEnabled = async (
+    runContext: RunContext<AgentsExecutionContext>,
+    agent: Agent<AgentsExecutionContext>,
+  ): Promise<boolean> => (
+    runContext.context.isSdkExtensionEnabled() && tool.isEnabled(runContext, agent)
+  )
+  const invoke: typeof tool.invoke = async (runContext, input, details) => {
+    if (!runContext.context.isSdkExtensionEnabled()) {
+      throw new Error(`当前规划或结构化工作流边界禁止调用 MCP 工具 '${tool.name}'。`)
+    }
+    return tool.invoke(runContext, input, details)
+  }
+  return { ...tool, isEnabled, invoke }
 }
 
 function emptyToolIntegration(): RuntimeSdkToolIntegration {

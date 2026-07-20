@@ -15,10 +15,14 @@ import {
   Runner,
   RunState,
   type AgentInputItem,
+  type Tool,
 } from '@openai/agents'
 import {
-  Capabilities,
   SandboxAgent,
+  compaction,
+  filesystem,
+  shell,
+  type Capability,
   type SandboxSessionLike,
 } from '@openai/agents/sandbox'
 import type { ToolRegistry } from '../framework/registry.js'
@@ -30,7 +34,7 @@ import type {
 import type { AgentRuntimeStore } from '../store/runtimePorts.js'
 import { ItemSink } from '../conversation/itemSink.js'
 import { makeId, nowUtc } from '../utils/ids.js'
-import { buildSystemPrompt } from './prompts.js'
+import { buildPlanningCapabilityCatalog, buildSystemPrompt } from './prompts.js'
 import { buildMemoryPrompt, createMemoryRuntime, dreamMemories, extractMemoriesFromThread, rebuildSessionMemory } from '../memory/service.js'
 import { RunEventSink, TurnFinalizer } from './turnRunner.js'
 import {
@@ -55,7 +59,7 @@ import {
   sdkNativeLedgerStatus,
   toolResultText,
 } from './runtimeSdkProjection.js'
-import { resolveDecision } from './runtimeApprovals.js'
+import { approvalRejectionMessage, resolveDecision } from './runtimeApprovals.js'
 import {
   buildSandboxManifest,
   createConfiguredSandboxSession,
@@ -72,7 +76,7 @@ import { AgentsCheckpointService } from './agentsCheckpointService.js'
 import { RuntimeTranscriptProjector } from './runtimeTranscriptProjector.js'
 import { RuntimeApprovalPersistence } from './runtimeApprovalPersistence.js'
 import { RunSteeringController } from './runSteeringController.js'
-import type { RunOptions, RuntimeAssembly } from './runtimeTypes.js'
+import type { RunOptions, RuntimeAssembly, StreamProjectionState } from './runtimeTypes.js'
 import { createSubAgentTools } from './subAgentToolFactory.js'
 
 export type { OpenAIAgentsRuntimeOptions, SandboxSessionFactory } from './runtimeSandbox.js'
@@ -108,6 +112,10 @@ export class OpenAIAgentsRuntime {
     const finalizer = new TurnFinalizer(eventSink, itemSink, status => this.store.completeRun(options.runId, status))
     const abort = new AbortController()
     const unlinkExternalAbort = linkAbortSignal(options.signal, abort)
+    if (this.abortControllers.has(options.runId)) {
+      unlinkExternalAbort()
+      throw new Error(`运行 '${options.runId}' 已有活动执行器`)
+    }
     this.abortControllers.set(options.runId, abort)
     await this.store.updateRunStatus(options.runId, 'running')
     if (!options.resume && options.executionMode === 'plan') {
@@ -186,20 +194,57 @@ export class OpenAIAgentsRuntime {
     return this.steering.enqueue(runId, steeringId, content)
   }
 
-  async resolveApproval(runId: string, approvalId: string, approved: boolean, auth?: AuthContext | null): Promise<AnalysisRun> {
+  async acceptApprovalDecision(
+    runId: string,
+    approvalId: string,
+    approved: boolean,
+  ): Promise<{ run: AnalysisRun; accepted: boolean }> {
+    const run = this.store.getRun(runId)
+    const approval = run.state.approvals.find(candidate => candidate.approvalId === approvalId)
+    if (!approval) throw new Error(`审批 '${approvalId}' 不存在`)
+    if (approval.payload.consumed === true) {
+      return { run, accepted: false }
+    }
+
+    const expectedStatus = approved ? 'approved' : 'rejected'
+    // WS 在审批已经落盘、后台任务尚未成功登记时断开，可以安全重试同一决定。
+    // 只允许 queued 状态重试；一旦续跑进入 running/failed，禁止重放副作用。
+    if (approval.status === expectedStatus) {
+      return { run, accepted: run.status === 'queued' }
+    }
+    if (approval.status !== 'pending') return { run, accepted: false }
+
+    const resolvedApproval = {
+      ...approval,
+      status: approved ? 'approved' as const : 'rejected' as const,
+      resolvedAt: nowUtc(),
+    }
+    await this.store.updateRunState(runId, {
+      approvals: run.state.approvals.map(candidate => candidate.approvalId === approvalId
+        ? resolvedApproval
+        : candidate),
+      decisions: resolveDecision(run.state.decisions, approvalId, approved ? 'approved' : 'rejected', { approved }),
+    })
+    await this.store.updateRunStatus(runId, 'queued')
+    return { run: this.store.getRun(runId), accepted: true }
+  }
+
+  async continueApprovalDecision(
+    runId: string,
+    approvalId: string,
+    approved: boolean,
+    auth?: AuthContext | null,
+    signal?: AbortSignal,
+  ): Promise<AnalysisRun> {
     const run = this.store.getRun(runId)
     if (!run.threadId) throw new Error(`运行 '${runId}' 缺少 threadId`)
     if (!run.runtimeConfigSnapshot) throw new Error(`运行 '${runId}' 缺少 runtimeConfigSnapshot`)
     const approval = run.state.approvals.find(candidate => candidate.approvalId === approvalId)
     if (!approval) throw new Error(`审批 '${approvalId}' 不存在`)
-    if (approval.payload.consumed === true) return run
-
-    approval.status = approved ? 'approved' : 'rejected'
-    approval.resolvedAt = nowUtc()
-    await this.store.updateRunState(runId, {
-      approvals: run.state.approvals,
-      decisions: resolveDecision(run.state.decisions, approvalId, approved ? 'approved' : 'rejected', { approved }),
-    })
+    const expectedStatus = approved ? 'approved' : 'rejected'
+    if (approval.status !== expectedStatus || approval.payload.consumed === true) {
+      throw new Error(`审批 '${approvalId}' 未处于可续跑的 ${expectedStatus} 状态`)
+    }
     const eventSink = new RunEventSink(event => this.store.appendEvent(runId, event), runId, run.threadId)
     const itemSink = new ItemSink(item => this.store.appendItem(item), runId, run.threadId)
     const turnId = requireString(approval.payload.turnId, '审批 payload.turnId')
@@ -216,6 +261,11 @@ export class OpenAIAgentsRuntime {
       auth: auth ?? null,
     }
     const abort = new AbortController()
+    const unlinkExternalAbort = linkAbortSignal(signal, abort)
+    if (this.abortControllers.has(runId)) {
+      unlinkExternalAbort()
+      throw new Error(`运行 '${runId}' 已有活动执行器`)
+    }
     this.abortControllers.set(runId, abort)
     const finalizer = new TurnFinalizer(eventSink, itemSink, status => this.store.completeRun(runId, status))
     try {
@@ -233,13 +283,18 @@ export class OpenAIAgentsRuntime {
       const interruption = state.getInterruptions().find(item => functionCallId(item) === callId)
       if (!interruption) throw new Error(`SDK 状态中不存在待审批调用 '${callId}'`)
       if (approved) state.approve(interruption)
-      else state.reject(interruption, { message: '用户拒绝执行该工具。' })
+      else state.reject(interruption, { message: approvalRejectionMessage(approval.action) })
 
       const result = await this.executeSdkRun(options, assembly, state, abort.signal, eventSink, itemSink)
-      approval.payload.consumed = true
+      // executeSdkRun 可能在拒绝后立即产生一条新的审批。必须以刚落盘的
+      // run state 为事实源，只消费当前审批，不能用恢复前的 approvals 快照
+      // 覆盖新审批，否则前端会拿到一个在 approvals 中已经消失的 decisionId。
+      const latest = this.store.getRun(runId)
       await this.store.updateRunState(runId, {
-        approvals: run.state.approvals,
-        decisions: resolveDecision(this.store.getRun(runId).state.decisions, approvalId, approved ? 'approved' : 'rejected', { approved, consumed: true }),
+        approvals: latest.state.approvals.map(candidate => candidate.approvalId === approvalId
+          ? { ...candidate, payload: { ...candidate.payload, consumed: true } }
+          : candidate),
+        decisions: resolveDecision(latest.state.decisions, approvalId, approved ? 'approved' : 'rejected', { approved, consumed: true }),
       })
       if (result === 'waiting_approval') return this.store.getRun(runId)
       if (result === 'clarification_needed') return this.store.getRun(runId)
@@ -258,8 +313,15 @@ export class OpenAIAgentsRuntime {
       return this.store.getRun(runId)
     } finally {
       await this.steering.close(runId)
+      unlinkExternalAbort()
       this.abortControllers.delete(runId)
     }
+  }
+
+  async resolveApproval(runId: string, approvalId: string, approved: boolean, auth?: AuthContext | null): Promise<AnalysisRun> {
+    const receipt = await this.acceptApprovalDecision(runId, approvalId, approved)
+    if (!receipt.accepted) return receipt.run
+    return this.continueApprovalDecision(runId, approvalId, approved, auth)
   }
 
   private createThreadValueState(threadId: string, currentRunId: string): Map<string, unknown> {
@@ -321,7 +383,14 @@ export class OpenAIAgentsRuntime {
     const run = this.store.getRun(options.runId)
     const memoryToolsAvailable = this.memoryToolsAvailable()
     const memoryPrompt = await buildMemoryPrompt(createMemoryRuntime(this.store.runtimeRoot, contextConfig), memoryToolsAvailable)
-    const systemPrompt = buildSystemPrompt(options.runtimeConfig, run.state, '', '', memoryPrompt)
+    const buildSupervisorInstructions = (): string => {
+      const currentState = this.store.getRun(options.runId).state
+      const planningCatalog = currentState.planMode
+        ? buildPlanningCapabilityCatalog(this.toolRegistry.list(), options.runtimeConfig.subAgents)
+        : ''
+      return buildSystemPrompt(options.runtimeConfig, currentState, planningCatalog, '', memoryPrompt)
+    }
+    const systemPrompt = buildSupervisorInstructions()
     const assembled = await assembleThreadContext(this.store, threadId, contextConfig, systemPrompt)
     await this.store.updateRunState(options.runId, {
       runtimeStats: {
@@ -334,13 +403,29 @@ export class OpenAIAgentsRuntime {
     const valueState = this.createThreadValueState(threadId, options.runId)
     let coordinator: ToolExecutionCoordinator
     let supervisorAgent: Agent<AgentsExecutionContext> | null = null
-    const applyPlanModeModelBoundary = (enabled: boolean): void => {
+    let explicitTools: Tool<AgentsExecutionContext>[] = []
+    let sdkExtensionCapabilities: Capability[] = []
+    const coreSandboxCapabilities = planAwareSandboxCapabilities()
+    const applyPlanModeModelBoundary = (): void => {
       if (!supervisorAgent) return
-      supervisorAgent.modelSettings = modelSettings(options.reasoning, enabled)
-      supervisorAgent.resetToolChoice = !enabled
+      supervisorAgent.instructions = buildSupervisorInstructions()
+      supervisorAgent.modelSettings = modelSettings(options.reasoning)
+      supervisorAgent.resetToolChoice = true
+      supervisorAgent.tools = visibleExplicitTools(explicitTools, coordinator.isSdkExtensionEnabled())
+      if (supervisorAgent instanceof SandboxAgent) {
+        supervisorAgent.capabilities = [
+          ...coreSandboxCapabilities,
+          ...(coordinator.isSdkExtensionEnabled() ? sdkExtensionCapabilities : []),
+        ]
+      }
     }
     const context: AgentsExecutionContext = {
       runId: options.runId,
+      isExecutionEnabled: () => coordinator.isExecutionEnabled(),
+      isSdkExtensionEnabled: () => coordinator.isSdkExtensionEnabled(),
+      isToolEnabled: toolName => coordinator.isToolEnabled(toolName),
+      validateToolCall: (toolName, args) => coordinator.validateToolCall(toolName, args),
+      rejectPreparedToolCall: (toolName, callId, message) => coordinator.rejectPreparedToolCall(toolName, callId, message),
       prepareToolCall: (toolName, args, callId) => coordinator.prepare(toolName, args, callId),
       executeTool: (toolName, args, callId) => coordinator.executeForModel(toolName, args, callId),
     }
@@ -383,6 +468,7 @@ export class OpenAIAgentsRuntime {
       coordinator,
     })
     const sandboxIntegration = buildRuntimeSdkSandboxIntegration(options.runtimeConfig)
+    sdkExtensionCapabilities = sandboxIntegration.capabilities
     const artifactDirectory = await prepareRunArtifactDirectory(this.store.runtimeRoot, options.runId)
     const sandboxManifest = buildSandboxManifest(options, threadId, sandboxIntegration.pathGrants, {
       artifactDirectory,
@@ -417,16 +503,20 @@ export class OpenAIAgentsRuntime {
         active_mcp_servers: sdkTools.activeMcpServers,
       })
     }
+    explicitTools = [...supervisorTools, ...subAgentTools, ...sdkTools.tools]
     const agent = new SandboxAgent<AgentsExecutionContext>({
       name: options.runtimeConfig.supervisor.name,
       instructions: systemPrompt,
       model,
-      modelSettings: modelSettings(options.reasoning, run.state.planMode),
-      resetToolChoice: !run.state.planMode,
-      tools: [...supervisorTools, ...subAgentTools, ...sdkTools.tools],
+      modelSettings: modelSettings(options.reasoning),
+      resetToolChoice: true,
+      tools: visibleExplicitTools(explicitTools, coordinator.isSdkExtensionEnabled()),
       toolUseBehavior: { stopAtToolNames: returnDirectToolNames },
       defaultManifest: sandboxManifest,
-      capabilities: [...Capabilities.default(), ...sandboxIntegration.capabilities],
+      capabilities: [
+        ...coreSandboxCapabilities,
+        ...(coordinator.isSdkExtensionEnabled() ? sdkExtensionCapabilities : []),
+      ],
     })
     supervisorAgent = agent
     const runner = new Runner({
@@ -567,9 +657,11 @@ export class OpenAIAgentsRuntime {
   ): Promise<'completed' | 'waiting_approval' | 'clarification_needed'> {
     let outcome: 'completed' | 'waiting_approval' | 'clarification_needed' | null = null
     let nextInput: RunState<AgentsExecutionContext, Agent<AgentsExecutionContext>> | AgentInputItem[] | string = resumeState ?? options.query
+    let activeProjection: StreamProjectionState | null = null
     try {
       while (true) {
         const projection = this.transcriptProjector.createState()
+        activeProjection = projection
         const stream = await assembly.runner.run(
           assembly.agent,
           nextInput,
@@ -634,9 +726,6 @@ export class OpenAIAgentsRuntime {
           outcome = 'clarification_needed'
           return outcome
         }
-        if (this.store.getRun(options.runId).state.planMode) {
-          throw new Error('计划模式必须通过 request_clarification 或 submit_agent_workflow 结束。')
-        }
         const agentWorkflow = this.store.getRun(options.runId).state.agentWorkflow
         if (agentWorkflow && agentWorkflow.status !== 'completed') {
           throw new Error(`智能体工作流尚未完成，当前状态为 ${agentWorkflow.status}。必须完成或显式调整剩余步骤后再交付最终回答。`)
@@ -676,6 +765,11 @@ export class OpenAIAgentsRuntime {
         // 消息仍由 callModelInputFilter 在下一次模型调用前原子消费。
         nextInput = []
       }
+    } catch (error) {
+      if (activeProjection) {
+        this.transcriptProjector.failPendingSubAgentItems(activeProjection, itemSink, errorMessage(error))
+      }
+      throw error
     } finally {
       await assembly.sdkTools.close().catch(error => {
         logger.warn({ error: errorLogPayload(error) }, 'sdk mcp close failed')
@@ -758,4 +852,58 @@ function linkAbortSignal(source: AbortSignal | undefined, target: AbortControlle
   }
   source.addEventListener('abort', abortTarget, { once: true })
   return () => source.removeEventListener('abort', abortTarget)
+}
+
+function visibleExplicitTools(
+  tools: Tool<AgentsExecutionContext>[],
+  sdkExtensionEnabled: boolean,
+): Tool<AgentsExecutionContext>[] {
+  if (sdkExtensionEnabled) return tools
+  // Hosted MCP 不是 function tool，Agents SDK 不会对它应用 isEnabled；规划阶段
+  // 和结构化工作流执行期间都必须从 Agent 的公开工具列表中移除。
+  return tools.filter(tool => tool.type !== 'hosted_tool')
+}
+
+function planAwareSandboxCapabilities(): Capability[] {
+  return [
+    filesystem({
+      configureTools: tools => gateSandboxTools(tools, new Set(['view_image'])),
+    }),
+    shell({
+      configureTools: tools => gateSandboxTools(tools, new Set()),
+    }),
+    compaction(),
+  ]
+}
+
+function gateSandboxTools<TContext>(
+  tools: Tool<TContext>[],
+  planModeDiscoveryTools: ReadonlySet<string>,
+): Tool<TContext>[] {
+  return tools.map(tool => {
+    if (tool.type !== 'function') return tool
+    const isEnabled: typeof tool.isEnabled = async (runContext, agent) => {
+      const context = runContext.context as unknown as Partial<AgentsExecutionContext>
+      const executionEnabled = typeof context.isExecutionEnabled === 'function'
+        && context.isExecutionEnabled()
+      const sdkExtensionEnabled = typeof context.isSdkExtensionEnabled === 'function'
+        && context.isSdkExtensionEnabled()
+      const planningDiscovery = !executionEnabled && planModeDiscoveryTools.has(tool.name)
+      if (!sdkExtensionEnabled && !planningDiscovery) return false
+      return tool.isEnabled(runContext, agent)
+    }
+    const invoke: typeof tool.invoke = async (runContext, input, details) => {
+      const context = runContext.context as unknown as Partial<AgentsExecutionContext>
+      const executionEnabled = typeof context.isExecutionEnabled === 'function'
+        && context.isExecutionEnabled()
+      const sdkExtensionEnabled = typeof context.isSdkExtensionEnabled === 'function'
+        && context.isSdkExtensionEnabled()
+      const planningDiscovery = !executionEnabled && planModeDiscoveryTools.has(tool.name)
+      if (!sdkExtensionEnabled && !planningDiscovery) {
+        throw new Error(`当前规划或结构化工作流边界禁止调用沙箱工具 '${tool.name}'。`)
+      }
+      return tool.invoke(runContext, input, details)
+    }
+    return { ...tool, isEnabled, invoke }
+  })
 }

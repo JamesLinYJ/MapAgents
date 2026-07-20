@@ -61,8 +61,10 @@ export interface WorkspaceLayoutProps {
   onSelectThread: (threadId: string) => void
   mainSlot: ReactNode
   mapSlot: ReactNode
+  workflowSlot: ReactNode
   inspectorSlot: ReactNode
   toolsSlot: ReactNode
+  inspectorOpen: boolean
   workspaceMode: WorkspaceMode
   onWorkspaceModeChange: (mode: WorkspaceMode) => void
   toolsMode: boolean
@@ -109,8 +111,10 @@ export function WorkspaceLayout({
   onSelectThread,
   mainSlot,
   mapSlot,
+  workflowSlot,
   inspectorSlot,
   toolsSlot,
+  inspectorOpen,
   workspaceMode,
   onWorkspaceModeChange,
   toolsMode,
@@ -302,6 +306,7 @@ export function WorkspaceLayout({
             data-mobile-panel={effectiveMobilePanel}
             data-tools-mode={toolsMode ? 'true' : 'false'}
             data-map-mode={mapMode ? 'true' : 'false'}
+            data-inspector-open={inspectorOpen ? 'true' : 'false'}
             variants={workspaceListVariants}
             initial="hidden"
             animate="visible"
@@ -333,13 +338,15 @@ export function WorkspaceLayout({
                   </m.div>,
                   <m.aside
                     key="inspector-pane"
+                    id="workbench-inspector"
                     className="workbench-pane workbench-pane--inspector"
                     aria-label="工作台检查器"
                     layout
                     variants={workspaceItemVariants}
                     {...panelMotion}
                   >
-                    <div className="workbench-inspector-stack">
+                    <div id="workbench-inspector-stack" className="workbench-inspector-stack">
+                      {workflowSlot}
                       <m.div
                         className={mapMode ? 'workbench-side-swap workbench-side-swap--chat' : 'workbench-side-swap workbench-side-swap--map'}
                         layout

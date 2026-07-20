@@ -15,6 +15,7 @@ export type ToolParameterSchema = z.ZodObject
 
 const toolExecutionSurfaceSchema = z.enum(['agent', 'automation', 'debug'])
 const agentToolResultModeSchema = z.enum(['continue', 'return_direct'])
+const toolPlanModeAccessSchema = z.enum(['discovery', 'control'])
 
 export const toolManifestSchema = z.object({
   id: z.string().min(1),
@@ -37,6 +38,7 @@ export const toolManifestSchema = z.object({
     requiresApproval: z.boolean().default(false),
     executionSurfaces: z.array(toolExecutionSurfaceSchema).min(1).optional(),
     agentResultMode: agentToolResultModeSchema.optional(),
+    planModeAccess: toolPlanModeAccessSchema.optional(),
     jsonSchema: z.record(z.string(), z.unknown()),
   })).min(1),
 })
@@ -65,6 +67,7 @@ export function parseToolManifest(value: unknown): ToolManifest {
       requiresApproval: tool.requiresApproval,
       ...(tool.executionSurfaces ? { executionSurfaces: tool.executionSurfaces } : {}),
       ...(tool.agentResultMode ? { agentResultMode: tool.agentResultMode } : {}),
+      ...(tool.planModeAccess ? { planModeAccess: tool.planModeAccess } : {}),
       jsonSchema: tool.jsonSchema,
     })),
   }
@@ -227,7 +230,10 @@ export function valueRefRules(schema: Record<string, unknown>, prefix = ''): str
     if (!isRecord(raw)) continue
     const path = prefix ? `${prefix}.${key}` : key
     const kinds = valueRefKinds(raw)
-    if (kinds.length) rules.push(`${path} 只接受 ${kinds.join(' / ')}`)
+    if (kinds.length) {
+      const inline = schemaAllowsType(raw, 'object') ? '；也可按 schema 传内联 object' : ''
+      rules.push(`${path} 传字符串 refId 时只接受 ${kinds.join(' / ')}${inline}`)
+    }
     rules.push(...valueRefRules(raw, path))
   }
   return rules
@@ -254,8 +260,9 @@ function enrichSchema(value: unknown): unknown {
   if (kinds.length) {
     const base = typeof schema.description === 'string' && schema.description.trim()
       ? schema.description.trim()
-      : '必须使用当前 run 中已存在的 valueRef ID'
-    schema.description = `${base}；允许的 valueRef kind: ${kinds.join(' / ')}；禁止传入其它 kind 的 valueRef。`
+      : '字符串输入必须使用当前 run 中已存在的 valueRef ID'
+    const inline = schemaAllowsType(schema, 'object') ? '；同时允许 schema 声明的内联 object' : ''
+    schema.description = `${base}；字符串 refId 允许的 valueRef kind: ${kinds.join(' / ')}；禁止传入其它 kind 的 valueRef${inline}。`
   }
   if (isRecord(schema.properties)) {
     schema.properties = Object.fromEntries(Object.entries(schema.properties).map(([key, nested]) => [key, enrichSchema(nested)]))
@@ -267,4 +274,13 @@ function enrichSchema(value: unknown): unknown {
 function valueRefKinds(schema: Record<string, unknown>): string[] {
   if (!Array.isArray(schema['x-value-ref-kinds'])) return []
   return schema['x-value-ref-kinds'].map(String).filter(Boolean)
+}
+
+function schemaAllowsType(schema: Record<string, unknown>, expected: string): boolean {
+  if (schema.type === expected) return true
+  if (Array.isArray(schema.type) && schema.type.map(String).includes(expected)) return true
+  return ['anyOf', 'oneOf'].some(keyword => (
+    Array.isArray(schema[keyword])
+    && schema[keyword].some(candidate => isRecord(candidate) && schemaAllowsType(candidate, expected))
+  ))
 }

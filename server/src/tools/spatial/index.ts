@@ -10,6 +10,7 @@
 
 import manifest from './manifest.json' with { type: 'json' }
 import type { ToolProvider } from '../../framework/types.js'
+import { parseToolManifest } from '../../framework/schema.js'
 import type { ManagedLayerService } from '../../gis/managedLayers/managedLayerService.js'
 import { createLayerListTool } from '../layerList/layerList.js'
 import { createLayerQueryTool } from '../layerQuery/layerQuery.js'
@@ -23,7 +24,7 @@ export function createSpatialProvider(
 ): ToolProvider {
   const runtimeRoot = deps.runtimeRoot
   return {
-    manifest,
+    manifest: parseToolManifest(manifest),
     tools: () => [
       createLayerListTool(managedLayers),
       createLayerQueryTool(managedLayers),

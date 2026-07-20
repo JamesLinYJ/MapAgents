@@ -46,6 +46,7 @@ import {
   requireSingleFeature,
 } from '../../gis/geojson.js'
 import { makeId } from '../../utils/ids.js'
+import { geoJsonInputSchema, resolveGeoJsonInput } from '../spatial/geoJsonInput.js'
 import { SPATIAL_ANALYSIS_PROMPT } from '../spatial/prompts.js'
 
 type TurfUnits = 'kilometers' | 'meters' | 'miles'
@@ -74,8 +75,8 @@ export function createSpatialAnalysisTool(): ToolDef {
           ],
           description: '空间分析操作类型',
         },
-        sourceGeojson: { type: 'object', additionalProperties: true, description: '主 GeoJSON 输入（Feature/FeatureCollection/Geometry）', 'x-source': 'json' },
-        targetGeojson: { type: 'object', additionalProperties: true, description: '第二 GeoJSON 输入', 'x-source': 'json' },
+        sourceGeojson: geoJsonInputSchema('主 GeoJSON 输入：优先传前序工具返回的 valueRef ID，也可传用户明确提供的小型内联 GeoJSON。'),
+        targetGeojson: geoJsonInputSchema('第二 GeoJSON 输入：优先传前序工具返回的 valueRef ID，也可传用户明确提供的小型内联 GeoJSON。'),
         radius: { type: 'number', minimum: 0, description: '缓冲半径' },
         bearing: { type: 'number', description: '目标方位角（度）' },
         units: { type: 'string', enum: [...UNITS], default: 'kilometers' },
@@ -84,10 +85,10 @@ export function createSpatialAnalysisTool(): ToolDef {
       },
       required: ['operation', 'sourceGeojson'],
     },
-    async handler(args) {
+    async handler(args, ctx) {
       const operation = requiredText(args, 'operation')
-      const source = parseGeoJsonEntity(args.sourceGeojson, 'sourceGeojson')
-      const target = args.targetGeojson === undefined ? null : parseGeoJsonEntity(args.targetGeojson, 'targetGeojson')
+      const source = resolveGeoJsonInput(args.sourceGeojson, ctx, 'sourceGeojson')
+      const target = args.targetGeojson === undefined ? null : resolveGeoJsonInput(args.targetGeojson, ctx, 'targetGeojson')
       const units = parseUnits(args.units)
 
       switch (operation) {

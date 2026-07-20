@@ -14,15 +14,15 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { ToolDef } from '../../framework/types.js'
-import { parseGeoJsonEntity } from '../../gis/geojson.js'
 import { makeId } from '../../utils/ids.js'
+import { geoJsonInputSchema, resolveGeoJsonInput } from '../spatial/geoJsonInput.js'
 import { MAP_EXPORT_PROMPT } from '../spatial/prompts.js'
 
 export function createMapExportTool(runtimeRoot: string): ToolDef {
   return {
     name: 'map_export',
-    label: '导出地图数据',
-    description: '将 GeoJSON 分析结果保存为平台 artifact。',
+    label: '导出 GeoJSON 数据',
+    description: '将 GeoJSON 分析结果保存为可下载、可在平台地图中加载的 artifact；不生成 PNG/JPEG 或带标注的静态图片。',
     prompt: MAP_EXPORT_PROMPT,
     group: '空间分析',
     tags: ['export', 'file'],
@@ -31,13 +31,13 @@ export function createMapExportTool(runtimeRoot: string): ToolDef {
     jsonSchema: {
       type: 'object',
       properties: {
-        geojson: { type: 'object', additionalProperties: true, description: '要导出的 GeoJSON 数据', 'x-source': 'json' },
+        geojson: geoJsonInputSchema('要导出的 GeoJSON：优先传前序工具返回的 valueRef ID，也可传小型内联对象。'),
         filename: { type: 'string', description: '导出文件名（不含路径）', default: 'export.geojson' },
       },
       required: ['geojson'],
     },
     async handler(args, ctx) {
-      const geojson = parseGeoJsonEntity(args.geojson, 'geojson')
+      const geojson = resolveGeoJsonInput(args.geojson, ctx, 'geojson')
       const filename = safeFilename(args.filename)
       const artifactId = makeId('artifact')
       const relativePath = path.posix.join('artifacts', ctx.runId, `${artifactId}.geojson`)

@@ -170,7 +170,6 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
     handler: (payload, context) => respondDecision(
       payload,
       context.dependencies,
-      context.runtime,
       context.runTasks,
       context.ws,
       context.subscriptions,

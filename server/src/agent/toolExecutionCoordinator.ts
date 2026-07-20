@@ -60,6 +60,66 @@ export class ToolExecutionCoordinator {
 
   constructor(private readonly options: CoordinatorOptions) {}
 
+  isExecutionEnabled(): boolean {
+    return !this.options.store.getRun(this.options.runId).state.planMode
+  }
+
+  // MCP、Skill 与沙箱工具还没有进入结构化工作流的步骤契约。普通执行可用，
+  // 但规划阶段和已批准工作流期间必须关闭，避免审批后绕过步骤/参数边界。
+  isSdkExtensionEnabled(): boolean {
+    const state = this.options.store.getRun(this.options.runId).state
+    return !state.planMode && state.agentWorkflow === null
+  }
+
+  isToolEnabled(toolName: string): boolean {
+    const tool = this.options.registry.get(toolName)
+    if (!tool) return false
+    const state = this.options.store.getRun(this.options.runId).state
+    if (state.planMode) {
+      if (hasUnconsumedWorkflowRejection(state.approvals)) {
+        return tool.planModeAccess === 'control'
+      }
+      return tool.planModeAccess !== undefined
+    }
+    if (!state.agentWorkflow) return true
+    if (state.agentWorkflow.status === 'completed' || state.agentWorkflow.status === 'cancelled') return false
+    if (ACTIVE_WORKFLOW_CONTROL_TOOLS.has(toolName)) return true
+    return this.hasReadyWorkflowStep(toolName, 'supervisor')
+  }
+
+  isExternalAgentEnabled(agentId: string): boolean {
+    const state = this.options.store.getRun(this.options.runId).state
+    return !state.planMode && this.hasReadyWorkflowStep(agentId, agentId)
+  }
+
+  isToolEnabledForSubAgent(agentId: string, toolName: string): boolean {
+    if (!this.options.registry.get(toolName) || !this.isExecutionEnabled()) return false
+    return [...this.externalAgentCalls.values()].some(candidate => candidate === agentId)
+  }
+
+  validateToolCall(toolName: string, args: Record<string, unknown>): string | null {
+    if (!AGENT_WORKFLOW_DEFINITION_TOOLS.has(toolName)) return null
+    return validateAgentWorkflowDraft(
+      args,
+      this.options.registry,
+      this.options.runtimeConfig?.subAgents ?? [],
+    )
+  }
+
+  async rejectPreparedToolCall(toolName: string, callId: string, message: string): Promise<void> {
+    const itemId = this.callItems.get(callId)
+    if (itemId) {
+      this.options.itemSink.completeItem(itemId, {
+        callId,
+        name: toolName,
+        body: message,
+        isError: true,
+        metadata: { toolLabel: this.toolLabel(toolName), rejectedBy: 'input_guardrail' },
+      })
+    }
+    await this.updatePendingToolCall(callId, false)
+  }
+
   async prepare(toolName: string, args: Record<string, unknown>, callId: string): Promise<void> {
     if (this.preparedCalls.has(callId)) return
     const tool = this.options.registry.get(toolName)
@@ -118,6 +178,7 @@ export class ToolExecutionCoordinator {
     args: Record<string, unknown>,
     callId: string,
   ): Promise<string | null> {
+    this.assertExecutionPhaseAllowsExternalAgent(agentId)
     const stepId = await this.claimAgentWorkflowStep(agentId, args, callId, agentId)
     this.externalAgentCalls.set(callId, agentId)
     return stepId
@@ -174,6 +235,7 @@ export class ToolExecutionCoordinator {
       const toolLabel = this.toolLabel(toolName)
       this.options.eventSink.emit('tool.started', toolLabel, { tool: toolName, toolLabel, callId })
       const result = await this.options.registry.execute(toolName, args, this.createToolContext())
+      this.assertPlanModeDiscoveryResult(toolName, result)
       await this.enqueueResultMutation(async () => {
         await persistToolExecutionResult(
           this.options.store,
@@ -225,12 +287,11 @@ export class ToolExecutionCoordinator {
         await this.failClaimedAgentWorkflowStep(callId, message)
         await this.appendLedger(callId, toolName, 'failed', message)
         await this.appendToolFailure(callId, toolName, message)
-        const run = this.options.store.getRun(this.options.runId)
-        await this.options.store.updateRunState(this.options.runId, {
-          warnings: [...run.state.warnings, `工具“${this.toolLabel(toolName)}”调用失败：${message}`],
-          errors: [...run.state.errors, message],
+        await this.options.store.mutateRunState(this.options.runId, state => ({
+          warnings: [...state.warnings, `工具“${this.toolLabel(toolName)}”调用失败：${message}`],
+          errors: [...state.errors, message],
           failedTool: toolName,
-        })
+        }))
         if (itemId) this.options.itemSink.completeItem(itemId, {
           callId,
           name: toolName,
@@ -245,15 +306,32 @@ export class ToolExecutionCoordinator {
     }
   }
 
-  // 计划模式是硬运行边界：模型可以读、查、分析和提交退出计划，
-  // 但不能在审批前写文件、导出、导入、执行破坏性工具或产生业务副作用。
+  // 计划模式是能力白名单，不再把“只读”误当成“只用于规划”。查询完整要素、
+  // 空间计算和图表生成即使不修改外部事实，也属于待审批的业务执行。
   private assertPlanModeAllows(toolName: string): void {
     const run = this.options.store.getRun(this.options.runId)
     if (!run.state.planMode) return
     const tool = this.options.registry.get(toolName)
     if (!tool) throw new Error(`工具 '${toolName}' 未注册`)
-    if (tool.isReadOnly || toolName === 'submit_agent_workflow' || toolName === 'enter_plan_mode') return
-    throw new Error(`计划模式禁止执行写入或副作用工具 '${toolName}'。请先用 submit_agent_workflow 提交计划并等待批准。`)
+    if (tool.planModeAccess !== undefined) return
+    throw new Error(`计划模式禁止执行未声明为规划发现或计划控制的工具 '${toolName}'。请先用 submit_agent_workflow 提交计划并等待批准。`)
+  }
+
+  private assertExecutionPhaseAllowsExternalAgent(agentId: string): void {
+    if (this.isExecutionEnabled()) return
+    throw new Error(`计划模式禁止调用子智能体 '${agentId}'。请先用 submit_agent_workflow 提交计划并等待批准。`)
+  }
+
+  private assertPlanModeDiscoveryResult(toolName: string, result: ToolResult): void {
+    const run = this.options.store.getRun(this.options.runId)
+    const tool = this.options.registry.get(toolName)
+    if (!run.state.planMode || tool?.planModeAccess !== 'discovery') return
+    const createsArtifact = Boolean(result.artifacts?.length)
+      || (result.valueRefs ?? []).some(ref => ['geojson', 'route', 'feature_collection'].includes(ref.kind))
+      || Object.values(result.payload).some(isGeoJsonLike)
+    if (createsArtifact) {
+      throw new Error(`规划发现工具 '${toolName}' 返回了业务结果或 Artifact，违反计划模式契约。`)
+    }
   }
 
   private assertExternalAgentIsRunning(agentId: string): void {
@@ -271,44 +349,54 @@ export class ToolExecutionCoordinator {
   ): Promise<string | null> {
     if (AGENT_WORKFLOW_CONTROL_TOOLS.has(toolName)) return Promise.resolve(null)
     return this.enqueueWorkflowMutation(async () => {
-      const run = this.options.store.getRun(this.options.runId)
-      const workflow = run.state.agentWorkflow
-      if (!workflow) return null
-      if (workflow.status === 'adjusting') {
-        throw new Error('智能体工作流正在等待调整。请先调用 revise_agent_workflow，再执行后续工具。')
-      }
-      if (workflow.status === 'completed' || workflow.status === 'cancelled' || workflow.status === 'failed') {
-        throw new Error(`智能体工作流已经处于 ${workflow.status} 状态，不能继续调用工具。`)
-      }
-      const claimed = new Set(this.claimedWorkflowSteps.values())
-      const invocation = { toolName, args, ...(ownerAgentId ? { ownerAgentId } : {}) }
-      const step = findRunnableAgentWorkflowStep(workflow, invocation, claimed)
-      if (!step) {
-        const planned = workflow.steps.filter(item => item.toolName === toolName && item.status === 'pending')
-        const dependenciesSatisfied = planned.filter(item => item.dependsOn.every(dependency => (
-          workflow.steps.some(candidate => (
-            candidate.stepId === dependency
-            && (candidate.status === 'completed' || candidate.status === 'skipped')
-          ))
-        )))
-        if (ownerAgentId && dependenciesSatisfied.some(item => item.ownerAgentId !== ownerAgentId)) {
-          throw new Error(`子智能体 '${ownerAgentId}' 不能领取分配给其他负责人的步骤。请先调用 revise_agent_workflow 调整负责人。`)
+      let claimedStepId: string | null = null
+      const updated = await this.options.store.mutateRunState(this.options.runId, state => {
+        const workflow = state.agentWorkflow
+        if (!workflow) return {}
+        if (workflow.status === 'adjusting') {
+          throw new Error('智能体工作流正在等待调整。请先调用 revise_agent_workflow，再执行后续工具。')
         }
-        if (dependenciesSatisfied.length) {
-          throw new Error(`工具 '${toolName}' 的实际参数超出当前工作流步骤声明。请按已批准参数执行，或先调用 revise_agent_workflow 显式调整工作流。`)
+        if (workflow.status === 'completed' || workflow.status === 'cancelled' || workflow.status === 'failed') {
+          throw new Error(`智能体工作流已经处于 ${workflow.status} 状态，不能继续调用工具。`)
         }
-        if (planned.length) {
-          throw new Error(`工具 '${toolName}' 对应的计划步骤依赖尚未完成，不能提前执行。`)
+        const claimed = new Set(this.claimedWorkflowSteps.values())
+        const invocation = { toolName, args, ...(ownerAgentId ? { ownerAgentId } : {}) }
+        const step = findRunnableAgentWorkflowStep(workflow, invocation, claimed)
+        if (!step) {
+          const planned = workflow.steps.filter(item => item.toolName === toolName && item.status === 'pending')
+          const dependenciesSatisfied = planned.filter(item => item.dependsOn.every(dependency => (
+            workflow.steps.some(candidate => (
+              candidate.stepId === dependency
+              && (candidate.status === 'completed' || candidate.status === 'skipped')
+            ))
+          )))
+          if (ownerAgentId && dependenciesSatisfied.some(item => item.ownerAgentId !== ownerAgentId)) {
+            throw new Error(`子智能体 '${ownerAgentId}' 不能领取分配给其他负责人的步骤。请先调用 revise_agent_workflow 调整负责人。`)
+          }
+          if (dependenciesSatisfied.length) {
+            throw new Error(`工具 '${toolName}' 的实际参数超出当前工作流步骤声明。请按已批准参数执行，或先调用 revise_agent_workflow 显式调整工作流。`)
+          }
+          if (planned.length) {
+            throw new Error(`工具 '${toolName}' 对应的计划步骤依赖尚未完成，不能提前执行。`)
+          }
+          throw new Error(`工具 '${toolName}' 不在当前智能体工作流的可执行步骤中。请先调用 revise_agent_workflow 显式调整工作流。`)
         }
-        throw new Error(`工具 '${toolName}' 不在当前智能体工作流的可执行步骤中。请先调用 revise_agent_workflow 显式调整工作流。`)
-      }
-      const next = startAgentWorkflowStep(workflow, { stepId: step.stepId })
+        claimedStepId = step.stepId
+        const next = startAgentWorkflowStep(workflow, { stepId: step.stepId })
+        const nextStep = next.steps.find(item => item.stepId === step.stepId)
+        if (!nextStep) throw new Error(`工具开始时智能体工作流步骤 '${step.stepId}' 不存在。`)
+        return {
+          agentWorkflow: next,
+          todos: projectWorkflowStepToTodos(state.todos, nextStep),
+        }
+      })
+      if (!claimedStepId) return null
+      const next = updated.state.agentWorkflow
+      if (!next) throw new Error('工具开始后智能体工作流状态缺失。')
+      const step = next.steps.find(item => item.stepId === claimedStepId)
+      if (!step) throw new Error(`工具开始后智能体工作流步骤 '${claimedStepId}' 不存在。`)
       const nextStep = next.steps.find(item => item.stepId === step.stepId)
       if (!nextStep) throw new Error(`工具开始时智能体工作流步骤 '${step.stepId}' 不存在。`)
-      await this.options.store.updateRunState(this.options.runId, {
-        agentWorkflow: next,
-        todos: projectWorkflowStepToTodos(run.state.todos, nextStep),
-      })
       this.claimedWorkflowSteps.set(callId, step.stepId)
       this.options.eventSink.emit('step.started', step.title, {
         agentWorkflowId: next.agentWorkflowId,
@@ -324,18 +412,23 @@ export class ToolExecutionCoordinator {
     const stepId = this.claimedWorkflowSteps.get(callId)
     if (!stepId) return Promise.resolve()
     return this.enqueueWorkflowMutation(async () => {
-      const run = this.options.store.getRun(this.options.runId)
-      const workflow = run.state.agentWorkflow
-      if (!workflow) throw new Error('工具完成时智能体工作流状态缺失。')
-      const step = workflow.steps.find(item => item.stepId === stepId)
-      if (!step) throw new Error(`工具完成时智能体工作流步骤 '${stepId}' 不存在。`)
-      const next = completeAgentWorkflowStep(workflow, { stepId, resultSummary: summary })
+      const updated = await this.options.store.mutateRunState(this.options.runId, state => {
+        const workflow = state.agentWorkflow
+        if (!workflow) throw new Error('工具完成时智能体工作流状态缺失。')
+        const next = completeAgentWorkflowStep(workflow, { stepId, resultSummary: summary })
+        const nextStep = next.steps.find(item => item.stepId === stepId)
+        if (!nextStep) throw new Error(`工具完成时智能体工作流步骤 '${stepId}' 不存在。`)
+        return {
+          agentWorkflow: next,
+          todos: projectWorkflowStepToTodos(state.todos, nextStep),
+        }
+      })
+      const next = updated.state.agentWorkflow
+      if (!next) throw new Error('工具完成后智能体工作流状态缺失。')
+      const step = next.steps.find(item => item.stepId === stepId)
+      if (!step) throw new Error(`工具完成后智能体工作流步骤 '${stepId}' 不存在。`)
       const nextStep = next.steps.find(item => item.stepId === stepId)
       if (!nextStep) throw new Error(`工具完成时智能体工作流步骤 '${stepId}' 不存在。`)
-      await this.options.store.updateRunState(this.options.runId, {
-        agentWorkflow: next,
-        todos: projectWorkflowStepToTodos(run.state.todos, nextStep),
-      })
       this.claimedWorkflowSteps.delete(callId)
       this.options.eventSink.emit('step.completed', step.title, {
         agentWorkflowId: next.agentWorkflowId,
@@ -356,16 +449,21 @@ export class ToolExecutionCoordinator {
     const stepId = this.claimedWorkflowSteps.get(callId)
     if (!stepId) return Promise.resolve()
     return this.enqueueWorkflowMutation(async () => {
-      const run = this.options.store.getRun(this.options.runId)
-      const workflow = run.state.agentWorkflow
-      if (!workflow) return
-      const next = failAgentWorkflowStep(workflow, { stepId, errorMessage: message })
+      const updated = await this.options.store.mutateRunState(this.options.runId, state => {
+        const workflow = state.agentWorkflow
+        if (!workflow) return {}
+        const next = failAgentWorkflowStep(workflow, { stepId, errorMessage: message })
+        const nextStep = next.steps.find(item => item.stepId === stepId)
+        if (!nextStep) throw new Error(`工具失败时智能体工作流步骤 '${stepId}' 不存在。`)
+        return {
+          agentWorkflow: next,
+          todos: projectWorkflowStepToTodos(state.todos, nextStep),
+        }
+      })
+      const next = updated.state.agentWorkflow
+      if (!next) return
       const nextStep = next.steps.find(item => item.stepId === stepId)
       if (!nextStep) throw new Error(`工具失败时智能体工作流步骤 '${stepId}' 不存在。`)
-      await this.options.store.updateRunState(this.options.runId, {
-        agentWorkflow: next,
-        todos: projectWorkflowStepToTodos(run.state.todos, nextStep),
-      })
       this.claimedWorkflowSteps.delete(callId)
       this.options.eventSink.emit('warning.raised', `步骤执行失败：${message}`, {
         agentWorkflowId: next.agentWorkflowId,
@@ -491,6 +589,22 @@ export class ToolExecutionCoordinator {
     })
   }
 
+  private hasReadyWorkflowStep(toolName: string, ownerAgentId: string): boolean {
+    const workflow = this.options.store.getRun(this.options.runId).state.agentWorkflow
+    if (!workflow || workflow.status !== 'running') return false
+    const completed = new Set(workflow.steps
+      .filter(step => step.status === 'completed' || step.status === 'skipped')
+      .map(step => step.stepId))
+    const claimed = new Set(this.claimedWorkflowSteps.values())
+    return workflow.steps.some(step => (
+      step.status === 'pending'
+      && step.toolName === toolName
+      && step.ownerAgentId === ownerAgentId
+      && !claimed.has(step.stepId)
+      && step.dependsOn.every(dependency => completed.has(dependency))
+    ))
+  }
+
   private async appendToolFailure(callId: string, toolName: string, message: string): Promise<void> {
     await this.options.store.appendTranscript({
       threadId: this.options.threadId,
@@ -537,6 +651,16 @@ function projectWorkflowStepToTodos(todos: TodoItem[], step: AgentWorkflowStep):
   return todos.map(todo => todo.stepId === step.stepId ? { ...todo, status } : todo)
 }
 
+function hasUnconsumedWorkflowRejection(
+  approvals: ReadonlyArray<{ action: string; status: string; payload: Record<string, unknown> }>,
+): boolean {
+  return approvals.some(approval => (
+    (approval.action === 'submit_agent_workflow' || approval.action === 'revise_agent_workflow')
+    && approval.status === 'rejected'
+    && approval.payload.consumed !== true
+  ))
+}
+
 const AGENT_WORKFLOW_CONTROL_TOOLS = new Set([
   'request_clarification',
   'enter_plan_mode',
@@ -544,6 +668,121 @@ const AGENT_WORKFLOW_CONTROL_TOOLS = new Set([
   'revise_agent_workflow',
   'todo_write',
 ])
+
+const AGENT_WORKFLOW_DEFINITION_TOOLS = new Set([
+  'submit_agent_workflow',
+  'revise_agent_workflow',
+])
+
+const ACTIVE_WORKFLOW_CONTROL_TOOLS = new Set([
+  'request_clarification',
+  'revise_agent_workflow',
+])
+
+export function validateAgentWorkflowDraft(
+  args: Record<string, unknown>,
+  registry: ToolRegistry,
+  subAgents: ReadonlyArray<{ agentId: string; tools?: string[] }>,
+): string | null {
+  const workflow = isRecord(args.workflow) ? args.workflow : null
+  const rawSteps = workflow && Array.isArray(workflow.steps) ? workflow.steps : []
+  if (!rawSteps.length) return '工作流计划无效：至少需要一个可执行步骤。请依据执行能力目录修正后重新提交。'
+
+  const steps = rawSteps.map((value, index) => ({ value: isRecord(value) ? value : null, index }))
+  const stepIds = new Set<string>()
+  const dependencies = new Map<string, string[]>()
+  const subAgentConfigs = new Map(subAgents.map(agent => [agent.agentId, agent]))
+
+  for (const { value: step, index } of steps) {
+    if (!step) return `工作流计划无效：第 ${index + 1} 个步骤不是 JSON object。`
+    const stepId = typeof step.stepId === 'string' ? step.stepId.trim() : ''
+    const title = typeof step.title === 'string' && step.title.trim() ? step.title.trim() : `第 ${index + 1} 个步骤`
+    const kind = typeof step.kind === 'string' ? step.kind : ''
+    const toolName = typeof step.toolName === 'string' ? step.toolName.trim() : ''
+    const ownerAgentId = typeof step.ownerAgentId === 'string' ? step.ownerAgentId.trim() : ''
+    if (!stepId) return `工作流计划无效：步骤“${title}”缺少 stepId。`
+    if (stepIds.has(stepId)) return `工作流计划无效：stepId '${stepId}' 重复。`
+    stepIds.add(stepId)
+
+    if (kind === 'agent') {
+      const subAgent = subAgentConfigs.get(toolName)
+      if (!subAgent) {
+        return `工作流计划无效：步骤“${title}”引用了未配置的子智能体 '${toolName}'。只能使用执行能力目录中的确切 agentId。`
+      }
+      if (ownerAgentId !== toolName) {
+        return `工作流计划无效：子智能体步骤“${title}”的 ownerAgentId 必须等于 '${toolName}'。`
+      }
+      const stepArgs = isRecord(step.args) ? step.args : null
+      const input = stepArgs && typeof stepArgs.input === 'string' ? stepArgs.input.trim() : ''
+      if (!stepArgs || Object.keys(stepArgs).some(key => key !== 'input') || !input) {
+        return `工作流计划无效：子智能体步骤“${title}”的 args 必须严格为 { input: string }。`
+      }
+      const allowedTools = new Set(subAgent.tools ?? [])
+      const mentionedTools = new Set(input.match(/[A-Za-z][A-Za-z0-9_-]*/gu) ?? [])
+      const unauthorized = registry.list()
+        .map(definition => definition.name)
+        .find(name => mentionedTools.has(name) && !allowedTools.has(name))
+      if (unauthorized) {
+        return `工作流计划无效：子智能体 '${toolName}' 的任务显式要求未授权工具 '${unauthorized}'。请改由 supervisor 执行，或调整为该子智能体目录中的授权工具。`
+      }
+    } else {
+      const definition = registry.get(toolName)
+      if (!definition || !(definition.executionSurfaces?.includes('agent') ?? true)) {
+        return `工作流计划无效：步骤“${title}”引用了未注册的 Agent 工具 '${toolName}'。只能使用执行能力目录中的确切 toolName。`
+      }
+      if (AGENT_WORKFLOW_CONTROL_TOOLS.has(toolName)) {
+        return `工作流计划无效：计划控制工具 '${toolName}' 不能作为业务执行步骤。`
+      }
+      if (ownerAgentId !== 'supervisor') {
+        return `工作流计划无效：主智能体步骤“${title}”的 ownerAgentId 必须为 supervisor。`
+      }
+      if (kind === 'automation' && toolName !== 'execute_automation') {
+        return `工作流计划无效：Automation 步骤“${title}”必须使用 execute_automation。`
+      }
+      if (kind !== 'automation' && toolName === 'execute_automation') {
+        return `工作流计划无效：execute_automation 步骤“${title}”的 kind 必须为 automation。`
+      }
+      const stepArgs = isRecord(step.args) ? step.args : null
+      if (!stepArgs) return `工作流计划无效：步骤“${title}”的 args 必须是 JSON object。`
+      const argumentError = registry.validatePlannedArguments(toolName, stepArgs)
+      if (argumentError) {
+        return `工作流计划无效：步骤“${title}”的预计参数不符合 '${toolName}' 契约：${argumentError}。依赖前序结果的动态参数应从 args 省略，不得填写占位值。`
+      }
+    }
+
+    const dependsOn = Array.isArray(step.dependsOn)
+      ? step.dependsOn.filter((value): value is string => typeof value === 'string')
+      : []
+    if (dependsOn.includes(stepId)) return `工作流计划无效：步骤 '${stepId}' 不能依赖自身。`
+    dependencies.set(stepId, dependsOn)
+  }
+
+  for (const [stepId, dependsOn] of dependencies) {
+    const unknown = dependsOn.find(dependency => !stepIds.has(dependency))
+    if (unknown) return `工作流计划无效：步骤 '${stepId}' 依赖不存在的步骤 '${unknown}'。`
+  }
+  if (hasDependencyCycle(dependencies)) {
+    return '工作流计划无效：步骤依赖形成了循环，无法确定执行顺序。'
+  }
+  return null
+}
+
+function hasDependencyCycle(dependencies: ReadonlyMap<string, string[]>): boolean {
+  const visiting = new Set<string>()
+  const visited = new Set<string>()
+  const visit = (stepId: string): boolean => {
+    if (visiting.has(stepId)) return true
+    if (visited.has(stepId)) return false
+    visiting.add(stepId)
+    for (const dependency of dependencies.get(stepId) ?? []) {
+      if (visit(dependency)) return true
+    }
+    visiting.delete(stepId)
+    visited.add(stepId)
+    return false
+  }
+  return [...dependencies.keys()].some(visit)
+}
 
 export function formatToolResultForModel(result: ToolResult, maxChars: number): string {
   const base = {
@@ -619,4 +858,12 @@ function errorMessage(error: unknown): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isGeoJsonLike(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  return [
+    'FeatureCollection', 'Feature', 'LineString', 'Point', 'Polygon',
+    'MultiLineString', 'MultiPoint', 'MultiPolygon', 'GeometryCollection',
+  ].includes(String(value.type))
 }

@@ -22,10 +22,12 @@ import type {
 import type { TranscriptEntry } from '../schemas/types.js'
 import type { ConversationChatMessage } from './contextManager.js'
 
-export function modelSettings(reasoning = true, planMode = false): ModelSettings {
+export function modelSettings(reasoning = true): ModelSettings {
   return {
     parallelToolCalls: false,
-    toolChoice: planMode ? 'required' : 'auto',
+    // 计划模式的安全边界由 ToolExecutionCoordinator 和终止状态校验负责。
+    // `required` 会迫使模型调用无关工具，且与部分供应商的 thinking 模式冲突。
+    toolChoice: 'auto',
     ...(reasoning ? { reasoning: { effort: 'high' as const } } : {}),
     retry: {
       maxRetries: 1,

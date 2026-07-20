@@ -23,8 +23,10 @@ interface TopBarProps {
   activeNav: PrimaryNav
   artifactCount: number; providerLabel: string; runStatusLabel: string
   authMe: AuthMe
+  inspectorOpen: boolean
   onNavChange: (nav: PrimaryNav) => void
   onLogout: () => Promise<void> | void
+  onToggleInspector: () => void
   onPrimaryAction: () => void; primaryActionLabel: string
 }
 
@@ -40,8 +42,10 @@ export function TopBar({
   providerLabel,
   runStatusLabel,
   authMe,
+  inspectorOpen,
   onNavChange,
   onLogout,
+  onToggleInspector,
   onPrimaryAction,
   primaryActionLabel,
 }: TopBarProps) {
@@ -88,9 +92,18 @@ export function TopBar({
       </nav>
 
       <div className="workbench-chrome__right">
-        <span className="workbench-chrome__icon workbench-chrome__icon--passive workbench-chrome__panel" aria-hidden="true">
+        <button
+          className={`workbench-chrome__icon workbench-chrome__panel${inspectorOpen ? ' workbench-chrome__panel--active' : ''}`}
+          type="button"
+          aria-label={inspectorOpen ? '收起任务侧栏' : '打开任务侧栏'}
+          aria-controls="workbench-inspector"
+          aria-expanded={inspectorOpen}
+          disabled={activeNav === 'tools'}
+          title={activeNav === 'tools' ? '工具管理页不显示任务侧栏' : inspectorOpen ? '收起任务侧栏' : '打开任务侧栏'}
+          onClick={onToggleInspector}
+        >
           <PanelRight size={17} />
-        </span>
+        </button>
         <span className="workbench-chrome__status">
           <Sparkles size={11}/>{runStatusLabel}
         </span>

@@ -8,6 +8,8 @@
 //   作者:       JamesLinYJ
 // --------------------------------------------------------------------------
 
+import { ensureToolSchemas, isRecord } from '../framework/schema.js'
+import type { ToolDef } from '../framework/types.js'
 import type { AgentRuntimeConfig, AgentState } from '../schemas/types.js'
 
 export interface SystemPromptParts {
@@ -33,13 +35,16 @@ export function buildSystemPrompt(
 
   // Core role
   parts.push(config.supervisor.systemPrompt || defaultSupervisorPrompt())
+  parts.push(`\n${buildArtifactInspectionPrompt(state)}`)
 
-  // Tool catalog
+  // Planning catalog
   if (toolDescriptions) {
-    parts.push(`\n## 可用工具\n${toolDescriptions}`)
+    parts.push(`\n## 审批后可用的执行能力目录
+以下名称来自当前运行的真实注册表，仅用于形成可执行计划。规划阶段能否调用某项能力仍由 OpenAI Agents SDK 的动态 isEnabled 边界决定；目录出现不代表已经获准执行。
+${toolDescriptions}`)
   }
 
-  const sdkPrompt = buildSdkExtensionsPrompt(config)
+  const sdkPrompt = buildSdkExtensionsPrompt(config, state)
   if (sdkPrompt) parts.push(`\n${sdkPrompt}`)
 
   // Memory context
@@ -54,12 +59,19 @@ export function buildSystemPrompt(
 
   if (state?.planMode) {
     parts.push(`\n## 计划模式硬规则
-- 当前运行处于计划模式。你可以读取、检查、查询和分析，但不能调用写入、导出、导入、修改或有副作用的工具。
-- 可以用普通正文解释你已经理解的需求和关键约束；如需探索，可只调用只读工具。
-- 如果用户没有给出可规划目标，或关键约束不足，必须调用 request_clarification 请求用户补充，不要编造计划。
-- 当计划完整时，必须调用 submit_agent_workflow，并传入结构化 workflow：goal、步骤类型、实际工具、负责人和依赖关系。
-- 计划模式的本轮只能以 request_clarification 或 submit_agent_workflow 结束；不要直接用普通正文结束。
-- submit_agent_workflow 会触发用户审批。审批通过前，不得继续执行计划中的写入或副作用动作。
+- 当前运行处于规划阶段。只有显式声明为 planning discovery 或 control 的工具会开放；普通只读工具也可能属于待审批的业务执行。
+- 可以读取图层、数据集、Automation、记忆或源码目录与元数据来形成计划；不能查询完整业务要素、执行空间/气象分析、生成图表或产物、调用子智能体、执行 Automation、MCP 或沙箱命令。
+- 当前执行能力目录、工具 Schema 和本轮 list_automations 返回是工具能力与参数的权威事实源。不得搜索或读取长期记忆来确认工具/Automation 的名称、参数类型、默认值、示例或当前能力。
+- 可以用普通正文解释你已经理解的需求和关键约束；不要尝试调用当前不可见的执行工具。
+- 纯信息问答、寒暄、能力说明，或用户明确要求不调用工具时，可以直接用普通正文回答；不要为了满足模式而制造无意义的澄清或工具调用。
+- 存在待执行目标但关键约束不足时，必须调用 request_clarification 请求用户补充，不要编造计划。
+- 待执行目标的计划完整时，必须调用 submit_agent_workflow，并传入结构化 workflow：goal、步骤类型、实际工具、负责人和依赖关系；不得用普通正文计划冒充可审批 workflow。
+- 执行能力目录中的工具说明和参数摘要是契约。不得声称工具能生成目录未声明的格式或产物；目标能力不存在时必须请求澄清并列出真实可用替代项。
+- workflow 步骤的 args 只填写规划时已经确定的值。依赖前序步骤才能得到的 refId 或其它动态值必须省略，执行时再使用真实工具结果；禁止填写“step_1 返回值”“待替换 valueRef”等占位文本。
+- 委托子智能体时只能安排其目录中明确列出的工具能力，不得在 input 中要求它调用未授权工具。
+- workflow 只列真实执行动作。主智能体在工具或子智能体返回后的最终汇总、解释与交付正文不是额外步骤；不得用 todo_write、create_chart 或其它工具虚构“主智能体汇总”步骤。只有用户明确要求该工具产物时才规划对应步骤。
+- 用户明确限定步骤数量、负责人或交付形式时必须原样保留；不能为了表现“完整”而增加未要求的工具、图表或产物。
+- submit_agent_workflow 会触发用户审批。审批通过前，不得执行计划中的任何业务步骤，包括只读查询与分析。
 - 如果用户拒绝计划，继续留在规划语境中修订计划，不要伪造已经执行。`)
   }
 
@@ -71,6 +83,64 @@ export function buildSystemPrompt(
 - 置信度低于 70%、数据缺失或工具链不完整时，必须明确说明不确定性`)
 
   return parts.join('\n')
+}
+
+export function buildPlanningCapabilityCatalog(
+  tools: ReadonlyArray<ToolDef>,
+  subAgents: AgentRuntimeConfig['subAgents'],
+): string {
+  const toolLines = tools
+    .filter(tool => tool.executionSurfaces?.includes('agent') ?? true)
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map(tool => `- ${tool.name}（${tool.label}）：${singleLine(tool.description)}；${planningParameterSummary(tool)}`)
+  const agentLines = [...subAgents]
+    .sort((left, right) => left.agentId.localeCompare(right.agentId))
+    .map(agent => [
+      `- ${agent.agentId}（子智能体 ${agent.name}）：${singleLine(agent.summary)}`,
+      '调用参数 {input: string 必填}',
+      `授权工具 [${agent.tools.join(', ') || '无'}]`,
+      `单次调用超时 ${agent.timeoutMs}ms`,
+    ].join('；'))
+  return [
+    '### 平台工具',
+    ...toolLines,
+    ...(agentLines.length ? ['### 子智能体', ...agentLines] : []),
+  ].join('\n')
+}
+
+function planningParameterSummary(tool: ToolDef): string {
+  const schema = ensureToolSchemas(tool).jsonSchema
+  const properties = isRecord(schema.properties) ? schema.properties : {}
+  const required = new Set(Array.isArray(schema.required) ? schema.required.map(String) : [])
+  const parameters = Object.entries(properties).map(([name, raw]) => {
+    const property = isRecord(raw) ? raw : {}
+    const valueRefs = Array.isArray(property['x-value-ref-kinds'])
+      ? ` valueRef<${property['x-value-ref-kinds'].map(String).join('|')}>`
+      : ''
+    const options = Array.isArray(property.enum)
+      ? ` enum(${property.enum.map(String).slice(0, 12).join('|')})`
+      : ''
+    return `${name}: ${schemaType(property)}${valueRefs}${options}${required.has(name) ? ' 必填' : ' 可选'}`
+  })
+  return `参数 {${parameters.join('; ')}}`
+}
+
+function schemaType(schema: Record<string, unknown>): string {
+  if (typeof schema.type === 'string') return schema.type
+  if (Array.isArray(schema.type)) return schema.type.map(String).join('|')
+  for (const keyword of ['anyOf', 'oneOf'] as const) {
+    if (Array.isArray(schema[keyword])) {
+      const types = schema[keyword]
+        .filter(isRecord)
+        .map(candidate => schemaType(candidate))
+      if (types.length) return [...new Set(types)].join('|')
+    }
+  }
+  return 'unknown'
+}
+
+function singleLine(value: string): string {
+  return value.replace(/\s+/gu, ' ').trim()
 }
 
 function defaultSupervisorPrompt(): string {
@@ -94,29 +164,33 @@ function defaultSupervisorPrompt(): string {
 # 谨慎执行动作
 - 本地只读检查、查询、统计和分析可以主动进行；写入、删除、导入、导出、生成持久化 artifact、修改运行配置、调用破坏性工具或影响共享资源的动作必须遵守审批。
 - 用户批准某一次动作，不代表批准所有后续动作。审批只对当前 callId、工具和参数范围有效。
-- 如果用户拒绝工具或计划，不要重试同一个动作；根据拒绝原因修订计划、请求澄清或停止。
+- 如果用户拒绝工具或计划，不要重试同一个动作；根据拒绝原因修订计划、请求澄清或停止。拒绝决定没有携带原因时，立即调用 request_clarification 询问需要修改的方向，不要先调用其它发现或业务工具。
+- 澄清选项只能表达用户可选择的目标、范围、数据、执行路径或交付形式；不得建议绕过 Automation、审批、权限、真实数据或其它系统硬边界。
 - 遇到异常状态、未识别文件、权限失败、锁文件、结构定义漂移或 Worker/MCP 连接失败时，先调查并报告原因，不要用删除、跳过、伪造结果来“清障”。
 
 # 使用工具
 - 优先使用平台工具、MCP 工具、SDK Skill 和 valueRef 数据流，不用自由文本模拟工具结果。
 - 每个工具都有自己的中文工具说明、参数结构、valueRef 类型、审批规则和执行模式限制。调用前必须同时满足这些规则。
 - valueRef 是跨工具传递事实的唯一句柄。后续工具需要 ref 时传 refId；不要复制大段 GeoJSON、路径、坐标数组、变量列表或统计详情。
-- 平台 artifact URI（如 /api/v1/results/...）是前端和下载接口使用的资源引用，不是开发者沙箱本地文件路径。当前 run 的 Artifact 会按工具返回的「artifacts/<runId>/<filename>」相对路径只读挂载到沙箱；只有工具明确返回这种当前 run 路径时，才可用 view_image 检查图片。不得用 read_file 或 exec_command 猜测、搜索宿主机路径。
-- 图片检查失败时必须明确说“Artifact 已注册，但视觉内容尚未验证”，不得把注册成功写成视觉检查成功，也不得用 shell 搜索路径后继续拼接成功结论。
 - 能并行收集的只读信息可以并行；存在数据依赖的工具链必须按顺序推进，上一工具失败时不得继续伪造下一步输入。
 - 工具、MCP、Worker、模型、结构校验或安全护栏失败必须真实失败并说明中文原因。禁止返回伪兜底成功文本、合成产物、兼容旧载荷或吞掉错误。
 
 # 计划模式
-- 计划模式是运行时硬边界，不只是表达风格。计划模式中只能读取、检查、查询和分析。
-- 计划模式中不能写入、导出、导入、生成报告、创建持久化结果或执行其它副作用动作。
-- 计划模式无法形成可执行计划时，调用 request_clarification 请求补充。
-- 计划完整后调用 submit_agent_workflow，提交结构化智能体工作流，等待用户批准。审批通过前不得执行计划中的副作用步骤。
-- 进入计划模式后，运行时会强制每个模型回合调用工具；不得尝试用普通正文结束或绕过 request_clarification / submit_agent_workflow。
+- 计划模式是运行时能力白名单，不只是表达风格。只有显式声明为 planning discovery 或 control 的工具可以使用；isReadOnly 本身不授予规划阶段权限。
+- 规划阶段可以读取目录与元数据来形成计划，但不能查询完整业务要素、执行空间/气象分析、生成图表或持久化结果、调用子智能体、执行 Automation、MCP、沙箱命令或其它计划步骤。
+- 纯信息问答、寒暄、能力说明，或用户明确要求不调用工具时，直接用普通正文回答。
+- 存在待执行目标但无法形成可执行计划时，调用 request_clarification 请求补充。
+- 待执行目标的计划完整后调用 submit_agent_workflow，提交结构化智能体工作流，等待用户批准。审批通过前不得执行任何业务步骤，也不得用普通正文计划冒充审批。
+- 计划模式仍使用自主工具选择。不要为了凑工具调用而读取无关记忆、文件或数据。
 
 # 智能体工作流
 - 智能体工作流是当前 run 内的动态执行事实，不是普通说明文字。每个步骤必须声明 stepId、title、kind、toolName、ownerAgentId、args、reason 和 dependsOn。agent 步骤的 ownerAgentId 必须等于子智能体工具名；其它步骤必须为 supervisor。
+- workflow 只描述需要真实执行的工具、Automation 或子智能体动作。主智能体在这些动作返回后的最终汇总、解释和普通正文交付不是 workflow 步骤；OpenAI Agents SDK 的 Agent-as-tool 结果会返回父智能体，父智能体应在同一 run 中自然续跑并完成回答。
+- 不得用 todo_write 代表“主智能体汇总”，也不得用 create_chart、报告或导出工具装饰普通文字汇总。只有用户明确要求相应产物时才加入这些步骤；用户限定步骤数量、负责人或交付形式时不得擅自扩展。
+- 已批准工作流会自动投影步骤进度与 Todo；不得再调用 todo_write 复制或覆盖这份状态。todo_write 只用于没有结构化工作流的独立任务清单。
 - 没有依赖关系的步骤可以并行执行；存在数据依赖的步骤必须等待依赖步骤完成。不要为了并行而并行。
-- 工具调用必须对应当前工作流中依赖已满足的待执行步骤。需要增加、删除、替换或重新排序步骤时，先调用 revise_agent_workflow，并给出真实 changeReason。
+- 工具调用必须对应当前工作流中依赖已满足的待执行步骤。需要增加、删除、替换或重新排序步骤时，先调用 revise_agent_workflow，并给出真实 changeReason；修订会再次请求用户审批，批准前不能执行新路径。
+- 已批准的结构化工作流只开放目录中列明的平台工具、Automation 与子智能体步骤。MCP、Skill、Shell 和文件系统工具不属于当前工作流契约，执行期间不得调用。
 - 工具失败后不要隐式绕过。工作流会进入调整状态；先依据错误修订路径，再继续执行。
 - 用户在运行中插入的新消息是引导信息。若它改变目标、范围或交付要求，必须修订当前工作流；若不改变执行路径，则按新要求继续并在最终结果中体现。
 - 自动化流程可以作为智能体工作流中的原子步骤。此时 kind 使用 automation，toolName 使用 execute_automation；不要把自动化流程内部节点复制成智能体步骤。
@@ -125,6 +199,7 @@ function defaultSupervisorPrompt(): string {
 
 # 记忆与上下文
 - 当用户要求“记住、忘记、回忆、之前、上次、查看记忆”等内容时，必须使用记忆工具读取、搜索、写入或删除；不要凭印象回答长期记忆。
+- 长期记忆只补充当前线程与平台事实源中没有的跨对话偏好、反馈、历史决策或外部引用。当前工具注册表、执行能力目录、Automation 清单和参数 Schema 是能力契约；不得用记忆学习或确认当前工具/Automation 的参数、默认值、示例和可用性。
 - 如果用户要求忽略记忆，则本轮按没有长期记忆处理，不主动引用或暗示记忆内容。
 - 记忆可能过期。涉及文件、函数、配置、图层、工具能力、数据源、路径或权限时，先验证当前状态，再依据记忆给建议。
 - MEMORY.md 只是索引，不是正文。长期记忆正文必须在独立 Markdown 文件中，且只保存长期有用、不可从仓库或当前运行推导的事实。
@@ -158,7 +233,21 @@ function defaultSupervisorPrompt(): string {
 - 置信度低于 70%、数据不完整或结论依赖假设时，明确标注不确定性和缺失来源。`
 }
 
-function buildSdkExtensionsPrompt(config: AgentRuntimeConfig): string {
+function buildArtifactInspectionPrompt(state: AgentState | null): string {
+  if (state?.agentWorkflow) {
+    return `## 当前工作流的产物边界
+- 结构化工作流执行期间，只有已审批步骤对应的平台工具、Automation 或子智能体会动态开放；沙箱、文件系统、Shell、MCP 与 Skill 工具当前不可用。
+- 平台工具返回的 payload、valueRef、统计摘要和 artifact 引用是当前回答的事实依据。工作流步骤全部完成后，直接基于这些结果形成中文结论，不再尝试检查或读取 artifact 文件。
+- 平台 artifact URI（如 /api/v1/results/...）只用于前端预览与下载，不是本阶段可调用的本地文件路径。不得声称已经目视验证图片内容。
+- 工具调用只能通过当前模型 API 的结构化工具调用字段发出；不得把内部工具协议、XML 标签、伪函数调用或工具参数写进对用户可见的正文。`
+  }
+  return `## Artifact 检查边界
+- 平台 artifact URI（如 /api/v1/results/...）是前端和下载接口使用的资源引用，不是开发者沙箱本地文件路径。当前 run 的 Artifact 会按工具返回的「artifacts/<runId>/<filename>」相对路径只读挂载到沙箱；只有工具明确返回这种当前 run 路径时，才可用 view_image 检查图片。不得用 read_file 或 exec_command 猜测、搜索宿主机路径。
+- 图片检查失败时必须明确说“Artifact 已注册，但视觉内容尚未验证”，不得把注册成功写成视觉检查成功，也不得用 shell 搜索路径后继续拼接成功结论。`
+}
+
+function buildSdkExtensionsPrompt(config: AgentRuntimeConfig, state: AgentState | null): string {
+  if (state?.agentWorkflow) return ''
   const parts: string[] = []
   if (config.sdk.mcp.enabled) {
     const enabledServers = config.sdk.mcp.servers.filter(server => server.enabled)

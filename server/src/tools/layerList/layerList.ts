@@ -26,6 +26,7 @@ export function createLayerListTool(managedLayers: ManagedLayerService): ToolDef
     tags: ['layer', 'postgis', 'catalog'],
     isReadOnly: true,
     isDestructive: false,
+    planModeAccess: 'discovery',
     jsonSchema: {
       type: 'object',
       properties: {

@@ -34,6 +34,7 @@ import type { WorkspaceSidebarItem } from './layout/WorkspaceLayout'
 import { WorkspaceInspectorPanel } from './layout/WorkspaceInspectorPanel'
 import { WorkspaceMapPanel } from './layout/WorkspaceMapPanel'
 import { WorkspaceToolPanel } from './layout/WorkspaceToolPanel'
+import { WorkspaceWorkflowPanel } from './layout/WorkspaceWorkflowPanel'
 import { AccountCenterPage, LegalPolicyPage, PublicSharePage, WorkspaceRouteHost } from './layout/WorkspaceRouteHost'
 import { useWorkspaceMapActivation } from './layout/useWorkspaceMapActivation'
 import {
@@ -174,6 +175,8 @@ function AppShell() {
     changePrimaryNav: handleNavChange,
     copyShareLink: handleCopyShareLink,
     focusQueryInput,
+    inspectorOpen,
+    openWorkflowInspector,
     panelMode,
     query,
     readWorkspacePointer,
@@ -185,6 +188,7 @@ function AppShell() {
     setQuery,
     showSources,
     syncUrl,
+    toggleInspector,
     useNextTemplate: handleUseTemplate,
     workspaceMode,
   } = useNavigationController({
@@ -524,8 +528,10 @@ function AppShell() {
                     providerLabel={providerLabel}
                     runStatusLabel={formatTopBarRunStatus(run?.status)}
                     authMe={authMe}
+                    inspectorOpen={inspectorOpen}
                     onNavChange={handleNavChange}
                     onLogout={handleLogout}
+                    onToggleInspector={toggleInspector}
                     onPrimaryAction={async () => {
                       if (selectedArtifactId) {
                         setPanelMode('export')
@@ -566,6 +572,7 @@ function AppShell() {
                 onSelectThread={onSelectTaskAction}
                 workspaceMode={workspaceMode}
                 onWorkspaceModeChange={changeWorkspaceMode}
+                inspectorOpen={inspectorOpen}
                 toolsMode={activeNav === 'tools'}
                 toolsSlot={
                   <WorkspaceToolPanel
@@ -681,6 +688,7 @@ function AppShell() {
                     onRenameTask={onRenameTaskAction}
                     onDeleteTask={onDeleteTaskAction}
                     onForkMessage={onForkMessageAction}
+                    onOpenWorkflow={openWorkflowInspector}
                     dataReferences={dataReferences}
                     trashedThreads={trashedThreads}
                     onLoadTrash={onRefreshTrashAction}
@@ -715,6 +723,7 @@ function AppShell() {
                     onOpenLayerManager={() => setPanelMode('layerManager')}
                   />
                 }
+                workflowSlot={<WorkspaceWorkflowPanel agentState={agentState} />}
                 inspectorSlot={
                   <WorkspaceInspectorPanel
                     panelMode={panelMode}

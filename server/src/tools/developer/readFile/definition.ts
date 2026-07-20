@@ -21,6 +21,7 @@ export const readFileTool: ToolDef = {
   tags: ['developer', 'file', 'read'],
   isReadOnly: true,
   isDestructive: false,
+  planModeAccess: 'discovery',
   jsonSchema: {
     type: 'object',
     properties: {

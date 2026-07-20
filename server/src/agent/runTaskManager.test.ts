@@ -66,6 +66,39 @@ describe('RunTaskManager', () => {
     expect(cancel).toHaveBeenCalledWith(run.id)
   })
 
+  it('acknowledges an approval before the resumed agent run completes', async () => {
+    const run = testRun('run_approval')
+    const queued = { ...run, status: 'queued' as const }
+    const completed = { ...run, status: 'completed' as const }
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const runtime = {
+      acceptApprovalDecision: vi.fn(async () => ({ run: queued, accepted: true })),
+      continueApprovalDecision: vi.fn(async () => {
+        await gate
+        return completed
+      }),
+    } as unknown as OpenAIAgentsRuntime
+    const manager = new RunTaskManager(runtime, testStore(run))
+    const onComplete = vi.fn()
+
+    const acknowledged = await manager.respondToApproval(
+      run.id,
+      'approval_1',
+      true,
+      null,
+      { onComplete },
+    )
+
+    expect(acknowledged.status).toBe('queued')
+    expect(manager.activeRunIds()).toEqual([run.id])
+    expect(onComplete).not.toHaveBeenCalled()
+    release()
+    await manager.drain()
+    expect(onComplete).toHaveBeenCalledWith(run.id)
+    expect(manager.activeRunIds()).toEqual([])
+  })
+
   it('propagates background cancellation into the runtime signal', async () => {
     const run = testRun('run_4')
     let receivedSignal: AbortSignal | undefined
@@ -95,7 +128,7 @@ function testOptions(runId: string): RunOptions {
     threadId: 'thread_1',
     sessionId: 'session_1',
     query: '测试后台运行',
-    provider: 'openai_compatible',
+    provider: 'deepseek',
     modelName: 'test-model',
     runtimeConfig: {
       supervisor: { name: 'Supervisor', systemPrompt: '测试' },
@@ -127,7 +160,7 @@ function testRun(id: string): AnalysisRun {
     threadId: 'thread_1',
     userQuery: '测试后台运行',
     status: 'running',
-    modelProvider: 'openai_compatible',
+    modelProvider: 'deepseek',
     modelName: 'test-model',
     createdAt: '2026-07-08T00:00:00.000Z',
     updatedAt: '2026-07-08T00:00:00.000Z',
@@ -164,7 +197,7 @@ function testRun(id: string): AnalysisRun {
       errors: [],
       failedStepId: null,
       failedTool: null,
-      modelProvider: 'openai_compatible',
+      modelProvider: 'deepseek',
       modelName: 'test-model',
     },
   }

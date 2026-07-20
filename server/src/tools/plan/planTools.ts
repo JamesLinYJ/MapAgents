@@ -29,6 +29,7 @@ export const requestClarificationTool: ToolDef = {
   prompt: REQUEST_CLARIFICATION_PROMPT,
   group: '系统', tags: ['plan', 'system'],
   isReadOnly: true, isDestructive: false,
+  planModeAccess: 'control',
   agentResultMode: 'return_direct',
 
   jsonSchema: {
@@ -92,7 +93,8 @@ export const enterPlanModeTool: ToolDef = {
   description: ENTER_PLAN_MODE_DESCRIPTION,
   prompt: ENTER_PLAN_MODE_PROMPT,
   group: '系统',  tags: ['plan', 'system'],
-  isReadOnly: true, isDestructive: false, 
+  isReadOnly: true, isDestructive: false,
+  planModeAccess: 'control',
 
   jsonSchema: {
     type: 'object',
@@ -119,7 +121,8 @@ export const submitAgentWorkflowTool: ToolDef = {
   description: SUBMIT_AGENT_WORKFLOW_DESCRIPTION,
   prompt: SUBMIT_AGENT_WORKFLOW_PROMPT,
   group: '系统',  tags: ['plan', 'system'],
-  isReadOnly: true, isDestructive: false, 
+  isReadOnly: true, isDestructive: false,
+  planModeAccess: 'control',
   requiresApproval: true,
 
   jsonSchema: {
@@ -177,6 +180,8 @@ export const reviseAgentWorkflowTool: ToolDef = {
   prompt: REVISE_AGENT_WORKFLOW_PROMPT,
   group: '系统', tags: ['plan', 'workflow', 'system'],
   isReadOnly: true, isDestructive: false,
+  planModeAccess: 'control',
+  requiresApproval: true,
   jsonSchema: {
     type: 'object',
     properties: {

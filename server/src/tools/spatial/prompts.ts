@@ -29,7 +29,7 @@ export const QUERY_LAYER_PROMPT = `用于从已注册 PostGIS 图层读取真实
 export const SPATIAL_ANALYSIS_PROMPT = `用于执行确定性的 GeoJSON 几何运算。
 
 使用规则：
-- 输入必须是真实 GeoJSON，来源可以是 query_layer、layer_create、前序 spatial_analysis、上传数据或用户明确给出的几何。
+- 输入必须是真实 GeoJSON。前序工具已经返回 valueRef 时直接传 refId；只有用户明确提供的小型几何才传内联对象。
 - 路网通行路线用 route_planner；地点解析用 geocode_place；几何距离、面积、包含、缓冲、相交、合并和派生几何用本工具。
 - 任务需要行政边界时，不要从地名或地理编码 bbox 伪造 GeoJSON。
 - 操作要精确选择：area/length/distance 产出标量，buffer/centroid/bbox/destination/midpoint 产出派生几何，intersects/contains/within 判断关系，intersect/union/difference 做面叠加。
@@ -39,7 +39,8 @@ export const MAP_EXPORT_PROMPT = `用于把 GeoJSON 结果持久化为可下载 
 
 使用规则：
 - 只有用户要求导出、下载、保存地图数据，或自动化流程明确需要持久化 artifact 时使用。
-- geojson 输入必须来自已校验 GeoJSON 或前序工具结果；不要导出未校验文本或猜测几何。
+- geojson 输入必须来自已校验 GeoJSON 或前序工具 valueRef；有 refId 时直接传 refId，不要复制大型几何。
+- 本工具只生成 GeoJSON artifact，并让平台地图加载该数据；不会渲染 PNG/JPEG、区县文字标注或静态地图图片。用户要求这些格式时必须说明当前能力缺口并请求改选真实可交付格式。
 - filename 只用于展示；不要包含绝对路径、路径穿越或本地文件系统假设。
 - 本工具会创建 artifact，应视为有副作用动作。计划模式中只能写入获批计划，不能在只读探索阶段调用。`
 
@@ -47,6 +48,6 @@ export const LAYER_CREATE_PROMPT = `用于从已校验 GeoJSON 创建当前 sess
 
 使用规则：
 - 用户希望把派生结果显示为可复用地图图层，或后续查询需要 PostGIS layerKey 时使用。
-- geojson 输入必须已经校验或由其他工具产生；不要用猜测坐标创建行政边界图层。
+- geojson 输入必须已经校验或由其他工具产生；前序工具有 valueRef 时直接传 refId，不要用猜测坐标创建行政边界图层。
 - name 要简短、可读；description 写事实说明。不要把隐藏状态或长分析文本塞进图层名。
 - 返回的 layer 和 feature_collection valueRef 是后续工具的规范句柄；传 ref，不要复制 GeoJSON。`

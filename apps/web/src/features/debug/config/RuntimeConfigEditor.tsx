@@ -701,6 +701,7 @@ export function RuntimeConfigEditor({ runtimeConfig, onSaveRuntimeConfig }: Runt
                         systemPrompt: '',
                         model: null,
                         tools: [],
+                        timeoutMs: 120_000,
                       },
                     ],
                   })
@@ -776,6 +777,19 @@ export function RuntimeConfigEditor({ runtimeConfig, onSaveRuntimeConfig }: Runt
                         value={agent.model ?? ''}
                         onChange={(event) => setDraft(updateSubAgent(draft, index, {
                           model: event.target.value.trim() || null,
+                        }))}
+                      />
+                    </label>
+                    <label className="tool-field">
+                      <span className="composer__label">单次调用超时（ms）</span>
+                      <input
+                        className="composer__input"
+                        type="number"
+                        min={1}
+                        max={2_147_483_647}
+                        value={agent.timeoutMs}
+                        onChange={(event) => setDraft(updateSubAgent(draft, index, {
+                          timeoutMs: Math.max(1, Number(event.target.value) || 1),
                         }))}
                       />
                     </label>

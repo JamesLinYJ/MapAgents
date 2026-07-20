@@ -11,7 +11,7 @@
 import type { ModelProviderDescriptor } from '../schemas/types.js'
 import type { Env } from '../framework/env.js'
 import type { Model } from '@openai/agents'
-import { createOpenAIAdapter } from './providers/openaiCompatible.js'
+import { createDeepSeekAdapter } from './providers/deepseek.js'
 import { createAnthropicAdapter } from './providers/anthropic.js'
 import { createGeminiAdapter } from './providers/gemini.js'
 import { createOllamaAdapter } from './providers/ollama.js'
@@ -45,12 +45,12 @@ export class ModelAdapterRegistry {
 
     const dmf = (p: string) => env.DEFAULT_MODEL_PROVIDER === p ? (env.DEFAULT_MODEL_NAME ?? '') : ''
 
-    this.register(createOpenAIAdapter({
-      baseUrl: env.OPENAI_BASE_URL ?? '',
-      apiKey: env.OPENAI_API_KEY ?? '',
-      defaultModel: (env.OPENAI_MODEL ?? dmf('openai_compatible')),
-      ...(env.OPENAI_SUBAGENT_MODEL ? { subagentModel: env.OPENAI_SUBAGENT_MODEL } : {}),
-      toolSchemaMode: env.OPENAI_TOOL_SCHEMA_MODE,
+    this.register(createDeepSeekAdapter({
+      baseUrl: env.DEEPSEEK_BASE_URL ?? '',
+      apiKey: env.DEEPSEEK_API_KEY ?? '',
+      defaultModel: (env.DEEPSEEK_MODEL ?? dmf('deepseek')),
+      ...(env.DEEPSEEK_SUBAGENT_MODEL ? { subagentModel: env.DEEPSEEK_SUBAGENT_MODEL } : {}),
+      toolSchemaMode: env.DEEPSEEK_TOOL_SCHEMA_MODE,
     }))
     this.register(createAnthropicAdapter({
       baseUrl: env.ANTHROPIC_BASE_URL ?? '',

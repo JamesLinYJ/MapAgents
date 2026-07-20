@@ -73,6 +73,7 @@ export function ChatPanel(props: ChatPanelProps) {
     onRenameTask,
     onDeleteTask,
     onForkMessage,
+    onOpenWorkflow,
     dataReferences,
     trashedThreads = [],
     onLoadTrash,
@@ -301,6 +302,7 @@ export function ChatPanel(props: ChatPanelProps) {
                     progressTasks={progressTasks}
                     onSelectArtifact={onSelectArtifact}
                     onForkMessage={onForkMessage}
+                    onOpenWorkflow={onOpenWorkflow}
                     onRetry={() => onSubmit(executionModeForComposerMode(composerMode))}
                     onFocusDecision={openServerDecision}
                     feedVariants={feedVariants}

@@ -47,6 +47,7 @@ export function WorkspaceInspectorPanel({
           progressItems={detailProps.progressItems}
           tasks={tasks}
           events={detailProps.events}
+          artifactCount={detailProps.artifacts.length}
           onOpenHistory={onOpenHistory}
         />
       </m.div>

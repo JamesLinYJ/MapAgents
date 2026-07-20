@@ -17,6 +17,34 @@ import { createTestPersistenceFacade } from '../../test-support/persistenceFacad
 import { persistToolExecutionResult } from './resultPersistence.js'
 
 describe('tool result persistence', () => {
+  it('preserves all results from concurrent tool completions', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-result-concurrent-'))
+    let store: PlatformPersistenceFacade | undefined
+    try {
+      store = createTestPersistenceFacade(path.join(root, 'sessions'))
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '并行结果测试')
+      const run = await store.createRun(session.id, '并行执行工具', { threadId: thread.id })
+
+      await Promise.all(['tool_a', 'tool_b'].map(tool => persistToolExecutionResult(
+        store!, run.id, tool, tool, {}, {
+          message: `${tool} 完成`,
+          payload: {},
+          warnings: [],
+          resultId: `result_${tool}`,
+          source: 'test',
+        },
+      )))
+
+      expect(store.getRun(run.id).state.toolResults.map(result => result.tool).sort())
+        .toEqual(['tool_a', 'tool_b'])
+    } finally {
+      await store?.flushConversationStore()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('persists inline GeoJSON identically for direct and agent tool paths', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-result-'))
     let store: PlatformPersistenceFacade | undefined

@@ -17,7 +17,6 @@ import { WebSocket } from 'ws'
 
 import type { AnalysisRun, DecisionRequest } from '../schemas/types.js'
 import type { AuthContext } from '../security/types.js'
-import type { OpenAIAgentsRuntime } from '../agent/runtime.js'
 import type { RunTaskManager } from '../agent/runTaskManager.js'
 import { nowUtc } from '../utils/ids.js'
 import type { WsDependencies } from './dependencies.js'
@@ -28,7 +27,6 @@ import { sendRunSnapshot, subscribeToRun } from './subscriptions.js'
 export async function respondDecision(
   payload: Record<string, unknown>,
   dependencies: WsDependencies,
-  runtime: OpenAIAgentsRuntime,
   runTasks: RunTaskManager,
   ws: WebSocket,
   subscriptions: Map<string, () => void>,
@@ -46,7 +44,10 @@ export async function respondDecision(
     const approved = selectedApprovalValue(decision, optionalString(payload.optionId))
     const approvalId = typeof decision.payload.approvalId === 'string' ? decision.payload.approvalId : decisionId
     if (approved) dependencies.usageStats.assertWorkspaceCanStartModelRun(auth)
-    return runtime.resolveApproval(runId, approvalId, approved, auth)
+    subscribeToRun(ws, runId, store, subscriptions)
+    return runTasks.respondToApproval(runId, approvalId, approved, auth, {
+      onComplete: completedRunId => sendRunSnapshot(ws, completedRunId, store),
+    })
   }
 
   if (decision.kind === 'clarification') {

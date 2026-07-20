@@ -38,11 +38,13 @@ export function deriveWorkbenchProgressSummary({
   progressItems,
   tasks,
   events,
+  artifactCount = 0,
 }: {
   runStatus?: AnalysisRun['status']
   progressItems: ReadonlyArray<WorkbenchProgressItem>
   tasks: ReadonlyArray<ProgressTodoItem>
   events: ReadonlyArray<RunEvent>
+  artifactCount?: number
 }): WorkbenchProgressSummary {
   const completedCount = progressItems.filter(item => item.status === 'done').length
   const totalCount = Math.max(progressItems.length, 1)
@@ -52,12 +54,15 @@ export function deriveWorkbenchProgressSummary({
   const latestEvent = events.at(-1)
 
   if (runStatus === 'completed') {
+    const hasArtifacts = artifactCount > 0
     return {
       title: '任务进度',
-      statusLabel: '分析完成',
+      statusLabel: hasArtifacts ? '分析完成' : '回答完成',
       tone: 'done',
-      description: '本轮分析已完成，结果图层和摘要可以继续查看或导出。',
-      latestDetail: latestTask?.content ?? '结果已经整理完成',
+      description: hasArtifacts
+        ? '本轮分析已完成，结果产物和摘要可以继续查看。'
+        : '本轮回复已完成，没有生成地图、文件或下载产物。',
+      latestDetail: latestTask?.content ?? (hasArtifacts ? '结果已经整理完成' : '回答已经整理完成'),
       completedCount: totalCount,
       totalCount,
     }

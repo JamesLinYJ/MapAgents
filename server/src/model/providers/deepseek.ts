@@ -1,8 +1,8 @@
 // +-------------------------------------------------------------------------
 //
-//   地理智能平台 - OpenAI Compatible 适配器（标准 openai SDK）
+//   地理智能平台 - DeepSeek OpenAI-compatible 适配器
 //
-//   文件:       openaiCompatible.ts
+//   文件:       deepseek.ts
 //
 //   日期:       2026年06月05日
 //   作者:       JamesLinYJ
@@ -15,9 +15,11 @@ import type {
 } from 'openai/resources/chat/completions/completions'
 import type { AgentToolSchemaMode, ModelAdapter } from '../registry.js'
 import { abortSignalWithTimeout } from '../../utils/abort.js'
-import { CompatibleChatCompletionsModel } from '../compatibleChatCompletionsModel.js'
+import {
+  DeepSeekChatCompletionsModel,
+} from '../deepSeekChatCompletionsModel.js'
 
-export interface OpenAIOptions {
+export interface DeepSeekOptions {
   baseUrl: string
   apiKey: string
   defaultModel: string
@@ -25,13 +27,13 @@ export interface OpenAIOptions {
   displayName?: string
   toolSchemaMode: AgentToolSchemaMode
 }
-export function createOpenAIAdapter(opts: OpenAIOptions): ModelAdapter {
+export function createDeepSeekAdapter(opts: DeepSeekOptions): ModelAdapter {
   const baseUrl = opts.baseUrl.replace(/\/$/, '')
   const client = opts.apiKey ? new OpenAI({ baseURL: baseUrl, apiKey: opts.apiKey }) : null
 
   return {
-    provider: 'openai_compatible',
-    displayName: opts.displayName ?? 'OpenAI Compatible',
+    provider: 'deepseek',
+    displayName: opts.displayName ?? 'DeepSeek',
     defaultModel: opts.defaultModel,
     ...(opts.subagentModel ? { subagentModel: opts.subagentModel } : {}),
     contextWindowTokens: inferContextWindow(opts.defaultModel),
@@ -42,16 +44,16 @@ export function createOpenAIAdapter(opts: OpenAIOptions): ModelAdapter {
     },
 
     createAgentModel(modelName?: string | null) {
-      if (!client) throw new Error('OpenAI Compatible provider 未配置 API key')
+      if (!client) throw new Error('DeepSeek provider 未配置 API key')
       const model = modelName ?? opts.defaultModel
-      if (!model) throw new Error('OpenAI Compatible provider 未配置模型名称')
-      return new CompatibleChatCompletionsModel({ client, model })
+      if (!model) throw new Error('DeepSeek provider 未配置模型名称')
+      return new DeepSeekChatCompletionsModel({ client, model })
     },
 
     capabilities: () => ['chat', 'structured', 'stream', 'chat_completions'],
 
     async chat(prompt: string, kwargs?: Record<string, unknown>): Promise<Record<string, unknown>> {
-      if (!client) throw new Error('OpenAI Compatible provider 未配置 API key')
+      if (!client) throw new Error('DeepSeek provider 未配置 API key')
       const model = (kwargs?.model as string) ?? opts.defaultModel
       const messages = (kwargs?.messages as Array<{ role: string; content: string }>) ?? [{ role: 'user', content: prompt }]
 
@@ -66,7 +68,7 @@ export function createOpenAIAdapter(opts: OpenAIOptions): ModelAdapter {
       })
 
       const content = completion.choices[0]?.message?.content ?? ''
-      return { provider: 'openai_compatible', content, raw: completion as unknown as Record<string, unknown>, model }
+      return { provider: 'deepseek', content, raw: completion as unknown as Record<string, unknown>, model }
     },
 
   }

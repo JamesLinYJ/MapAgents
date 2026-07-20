@@ -57,7 +57,7 @@ function createRunStore(overrides: Partial<ConversationPayloadStore> = {}) {
     createdByUserId: 'user_1',
     visibility: 'workspace',
     userQuery: '测试',
-    modelProvider: 'openai_compatible',
+    modelProvider: 'deepseek',
     modelName: null,
     status: 'running',
     createdAt: '2026-07-09T00:00:00.000Z',
@@ -68,7 +68,7 @@ function createRunStore(overrides: Partial<ConversationPayloadStore> = {}) {
       sessionId: 'session_1',
       threadId: 'thread_1',
       userQuery: '测试',
-      modelProvider: 'openai_compatible',
+      modelProvider: 'deepseek',
       modelName: null,
       parsedIntent: null,
       clarification: null,
@@ -111,6 +111,10 @@ function createRunStore(overrides: Partial<ConversationPayloadStore> = {}) {
     saveRun: vi.fn().mockResolvedValue(undefined),
     saveRunWithCheckpoint: vi.fn().mockResolvedValue(undefined),
     saveRunCheckpoint: vi.fn().mockResolvedValue(undefined),
+    getRunCheckpoint: vi.fn().mockResolvedValue({
+      pendingToolCallIds: [],
+      recoveryStatus: 'clean',
+    }),
     saveThread: vi.fn().mockRejectedValue(new Error('projection unavailable')),
     appendConversationItem: vi.fn().mockResolvedValue(undefined),
   } as unknown as ConversationPersistence
@@ -131,6 +135,76 @@ function createRunStore(overrides: Partial<ConversationPayloadStore> = {}) {
 }
 
 describe('RunStore projections', () => {
+  it('serializes concurrent state read-modify-write operations for one run', async () => {
+    const { store, index, repository } = createRunStore()
+    let releaseFirstSave: (() => void) | null = null
+    vi.mocked(repository.saveRun)
+      .mockImplementationOnce(() => new Promise<void>(resolve => { releaseFirstSave = resolve }))
+      .mockResolvedValue(undefined)
+
+    const first = store.updateState('run_1', { warnings: ['第一条警告'] })
+    await vi.waitFor(() => expect(repository.saveRun).toHaveBeenCalledTimes(1))
+    const second = store.updateState('run_1', { errors: ['第二条错误'] })
+    await Promise.resolve()
+
+    expect(repository.saveRun).toHaveBeenCalledTimes(1)
+    if (!releaseFirstSave) throw new Error('首个状态写入没有进入等待态')
+    releaseFirstSave()
+    await Promise.all([first, second])
+
+    expect(index.getRun('run_1').state).toMatchObject({
+      warnings: ['第一条警告'],
+      errors: ['第二条错误'],
+    })
+    expect(repository.saveRun).toHaveBeenCalledTimes(2)
+  })
+
+  it('applies atomic mutations against the latest serialized state', async () => {
+    const { store, index } = createRunStore()
+
+    await Promise.all([
+      store.mutateState('run_1', state => ({ warnings: [...state.warnings, 'A'] })),
+      store.mutateState('run_1', state => ({ warnings: [...state.warnings, 'B'] })),
+    ])
+
+    expect(index.getRun('run_1').state.warnings).toEqual(['A', 'B'])
+  })
+
+  it('marks an orphaned active run as interrupted during startup recovery', async () => {
+    const { store, index, repository } = createRunStore()
+
+    const recovered = await store.recoverOrphanedRuns()
+
+    expect(recovered).toHaveLength(1)
+    expect(index.getRun('run_1')).toMatchObject({
+      status: 'interrupted',
+      state: {
+        runLifecycle: { status: 'interrupted' },
+        warnings: [expect.stringContaining('服务进程重启')],
+      },
+    })
+    expect(repository.saveRunWithCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'interrupted' }),
+      { pendingToolCallIds: [], recoveryStatus: 'interrupted' },
+    )
+  })
+
+  it('requires manual action when an orphaned run has an unknown tool state', async () => {
+    const { store, index, repository } = createRunStore()
+    vi.mocked(repository.getRunCheckpoint).mockResolvedValue({
+      pendingToolCallIds: ['call_unknown'],
+      recoveryStatus: 'requires_action',
+    } as never)
+
+    await store.recoverOrphanedRuns()
+
+    expect(index.getRun('run_1').status).toBe('requires_action')
+    expect(repository.saveRunWithCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'requires_action' }),
+      { pendingToolCallIds: ['call_unknown'], recoveryStatus: 'requires_action' },
+    )
+  })
+
   it('persists terminal run status even when thread status projection fails', async () => {
     const { store, index, payloadStore, repository } = createRunStore()
 

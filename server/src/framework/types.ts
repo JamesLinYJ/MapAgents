@@ -4,6 +4,7 @@ import type { AuthContext } from '../security/types.js'
 
 export type ToolExecutionSurface = 'agent' | 'automation' | 'debug'
 export type AgentToolResultMode = 'continue' | 'return_direct'
+export type ToolPlanModeAccess = 'discovery' | 'control'
 
 export interface ToolManifest {
     id: string;
@@ -28,6 +29,7 @@ export interface ToolManifestEntry {
     requiresApproval?: boolean;
     executionSurfaces?: ToolExecutionSurface[];
     agentResultMode?: AgentToolResultMode;
+    planModeAccess?: ToolPlanModeAccess;
     jsonSchema: Record<string, unknown>;
 }
 export interface ToolDef {
@@ -42,6 +44,7 @@ export interface ToolDef {
     requiresApproval?: boolean;
     executionSurfaces?: ToolExecutionSurface[];
     agentResultMode?: AgentToolResultMode;
+    planModeAccess?: ToolPlanModeAccess;
     parameters?: z.ZodObject;
     jsonSchema?: Record<string, unknown>;
     handler: ToolHandler;

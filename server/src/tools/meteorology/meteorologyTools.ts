@@ -64,7 +64,15 @@ export function createMeteorologyTools(env: Env): ToolDef[] {
   }
 
   return [
-  tool('list_meteorological_files', '列出气象文件', '列出当前会话可用的通用气象数据集', {}, listMeteorologicalFiles),
+  tool(
+    'list_meteorological_files',
+    '列出气象文件',
+    '列出当前会话可用的通用气象数据集',
+    {},
+    listMeteorologicalFiles,
+    [],
+    { planModeAccess: 'discovery' },
+  ),
   ...createRadarMeteorologyTools(deps),
   ...createDatasetMeteorologyTools(deps),
   tool('define_rainfall_risk_thresholds', '定义短时强降水风险阈值', '保存短时强降水风险区划图使用的阈值和调色板', {

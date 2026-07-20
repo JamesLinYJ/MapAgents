@@ -71,6 +71,7 @@ export const memoryTools: ToolDef[] = [
     tags: ['memory', 'read'],
     isReadOnly: true,
     isDestructive: false,
+    planModeAccess: 'discovery',
     parameters: listMemoriesParameters,
     handler: async (args, context) => {
       const scope = typeof args.scope === 'string' ? memoryScopeSchema.parse(args.scope) : undefined
@@ -81,12 +82,13 @@ export const memoryTools: ToolDef[] = [
   {
     name: 'read_memory',
     label: '读取记忆',
-    description: '读取单个长期记忆正文。',
+    description: '读取用户明确引用或检索命中的长期偏好、历史决策与外部引用正文；不用于确认当前工具或 Automation 契约。',
     prompt: READ_MEMORY_PROMPT,
     group: '记忆',
     tags: ['memory', 'read'],
     isReadOnly: true,
     isDestructive: false,
+    planModeAccess: 'discovery',
     parameters: readMemoryParameters,
     handler: async (args, context) => {
       const record = await readMemory(
@@ -100,12 +102,13 @@ export const memoryTools: ToolDef[] = [
   {
     name: 'search_memory',
     label: '搜索记忆',
-    description: '根据用户问题选择最相关的长期记忆文件。',
+    description: '仅在问题依赖跨对话偏好、历史决策、团队约定或外部引用时检索长期记忆；不用于发现或确认当前工具与 Automation 参数。',
     prompt: SEARCH_MEMORY_PROMPT,
     group: '记忆',
     tags: ['memory', 'search'],
     isReadOnly: true,
     isDestructive: false,
+    planModeAccess: 'discovery',
     parameters: searchMemoryParameters,
     handler: async (args, context) => {
       const matches = await searchMemories(memoryRuntime(context), String(args.query), context.invokeStructuredModel)
@@ -170,6 +173,7 @@ export const memoryManifest: ToolManifest = {
     tags: tool.tags,
     isReadOnly: tool.isReadOnly,
     isDestructive: tool.isDestructive,
+    ...(tool.planModeAccess ? { planModeAccess: tool.planModeAccess } : {}),
     jsonSchema: tool.jsonSchema ?? deriveJsonSchema(tool.parameters!),
   })),
 }

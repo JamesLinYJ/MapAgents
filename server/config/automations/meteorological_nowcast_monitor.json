@@ -2,8 +2,8 @@
   "automationId": "meteorological_nowcast_monitor",
   "name": "气象短临监测",
   "description": "按确定性工具链建立文件序列、校验时次并分析降水趋势，最后生成中文结论。",
-  "version": "3.3.0",
-  "revision": 4,
+  "version": "3.4.0",
+  "revision": 5,
   "enabled": true,
   "agentInvocation": {
     "enabled": true,

@@ -13,7 +13,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { DecisionRequest } from '@geo-agent-platform/shared-types'
-import { pickPendingDecision } from '../features/conversation/useConversation'
+import { pickPendingDecision, workflowPreviewFromDecision } from '../features/conversation/useConversation'
 
 describe('conversation decision projection', () => {
   it('优先显示 pending approval，其次才是 pending clarification', () => {
@@ -39,6 +39,69 @@ describe('conversation decision projection', () => {
     const local = decision({ decisionId: 'execution_mode', kind: 'execution_mode' })
 
     expect(pickPendingDecision([local])).toBeNull()
+  })
+
+  it('从工作流审批参数投影用户可核验的目标和步骤', () => {
+    const approval = decision({
+      kind: 'approval',
+      payload: {
+        action: 'submit_agent_workflow',
+        args: {
+          workflow: {
+            goal: '生成杭州市行政区划地图',
+            steps: [{
+              stepId: 'step_query',
+              title: '查询行政区划图层',
+              toolName: 'query_layer',
+              ownerAgentId: 'supervisor',
+              reason: '取得真实区县边界',
+              dependsOn: [],
+            }],
+          },
+        },
+      },
+    })
+
+    expect(workflowPreviewFromDecision(approval)).toEqual({
+      goal: '生成杭州市行政区划地图',
+      steps: [{
+        stepId: 'step_query',
+        title: '查询行政区划图层',
+        kind: '',
+        toolName: 'query_layer',
+        ownerAgentId: 'supervisor',
+        args: {},
+        reason: '取得真实区县边界',
+        dependsOn: [],
+      }],
+    })
+  })
+
+  it('工作流修订再次审批时仍展示完整修订步骤', () => {
+    const approval = decision({
+      kind: 'approval',
+      payload: {
+        action: 'revise_agent_workflow',
+        args: {
+          workflow: {
+            goal: '改由空间子智能体核验边界',
+            steps: [{
+              stepId: 'step_agent',
+              title: '委托空间分析助手',
+              toolName: 'spatial_analyst',
+              ownerAgentId: 'spatial_analyst',
+              reason: '原数据链失败后采用已配置的专业能力',
+              dependsOn: [],
+            }],
+          },
+        },
+      },
+    })
+
+    expect(workflowPreviewFromDecision(approval)).toMatchObject({
+      goal: '改由空间子智能体核验边界',
+      steps: [expect.objectContaining({ toolName: 'spatial_analyst' })],
+    })
   })
 })
 

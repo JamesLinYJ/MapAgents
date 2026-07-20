@@ -47,11 +47,11 @@ const envSchema = z.object({
   // 模型 providers（至少一个）
   DEFAULT_MODEL_PROVIDER: z.string().optional(),
   DEFAULT_MODEL_NAME: z.string().optional(),
-  OPENAI_BASE_URL: z.string().optional(),
-  OPENAI_API_KEY: z.string().optional(),
-  OPENAI_MODEL: z.string().optional(),
-  OPENAI_SUBAGENT_MODEL: z.string().optional(),
-  OPENAI_TOOL_SCHEMA_MODE: z.enum(['strict', 'compatible']).default('compatible'),
+  DEEPSEEK_BASE_URL: z.string().optional(),
+  DEEPSEEK_API_KEY: z.string().optional(),
+  DEEPSEEK_MODEL: z.string().optional(),
+  DEEPSEEK_SUBAGENT_MODEL: z.string().optional(),
+  DEEPSEEK_TOOL_SCHEMA_MODE: z.enum(['strict', 'compatible']).default('compatible'),
   USAGE_DAILY_TOTAL_TOKEN_LIMIT: z.coerce.number().int().nonnegative().default(0),
   USAGE_MONTHLY_TOTAL_TOKEN_LIMIT: z.coerce.number().int().nonnegative().default(0),
 

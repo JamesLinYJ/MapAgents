@@ -16,6 +16,7 @@ import { m } from 'framer-motion'
 import { Check, X } from 'lucide-react'
 import type { DecisionRequest } from '@geo-agent-platform/shared-types'
 import { buildFadeUpMotion } from '../../shared/motion'
+import { workflowPreviewFromDecision } from './useConversation'
 
 interface DecisionSheetProps {
   decision: DecisionRequest
@@ -41,6 +42,8 @@ export function DecisionSheet({
   )
   const [selectedOptionId, setSelectedOptionId] = useState<string | null>(defaultOptionId)
   const [freeText, setFreeText] = useState('')
+  const workflowPreview = useMemo(() => workflowPreviewFromDecision(decision), [decision])
+  const showQuestion = normalizeDecisionCopy(decision.question) !== normalizeDecisionCopy(decision.title)
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
@@ -76,63 +79,89 @@ export function DecisionSheet({
         </button>
       </div>
 
-      <div className="cc-decision-sheet__question">{decision.question}</div>
+      <div className="cc-decision-sheet__body">
+        {showQuestion ? <div className="cc-decision-sheet__question">{decision.question}</div> : null}
 
-      <div className="cc-decision-sheet__options" role="radiogroup" aria-label={decision.question}>
-        {decision.options.map((option, index) => {
-          const optionId = option.optionId ?? `option_${index + 1}`
-          const checked = selectedOptionId === optionId
-          return (
+        {workflowPreview ? (
+          <section className="cc-workflow-preview" aria-label="待审批工作流">
+            <div className="cc-workflow-preview__goal">
+              <span>{decision.payload.action === 'revise_agent_workflow' ? '修订目标' : '执行目标'}</span>
+              <strong>{workflowPreview.goal || '按以下步骤完成当前目标'}</strong>
+            </div>
+            <ol>
+              {workflowPreview.steps.map((step, index) => (
+                <li key={step.stepId}>
+                  <span className="cc-workflow-preview__index">{index + 1}</span>
+                  <span className="cc-workflow-preview__copy">
+                    <strong>{step.title}</strong>
+                    <small>
+                      {[step.toolName, step.ownerAgentId && `负责人 ${step.ownerAgentId}`].filter(Boolean).join(' · ')}
+                    </small>
+                    {step.reason ? <small>{step.reason}</small> : null}
+                    {step.dependsOn.length ? <small>依赖：{step.dependsOn.join('、')}</small> : null}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </section>
+        ) : null}
+
+        <div className="cc-decision-sheet__options" role="radiogroup" aria-label={decision.question}>
+          {decision.options.map((option, index) => {
+            const optionId = option.optionId ?? `option_${index + 1}`
+            const checked = selectedOptionId === optionId
+            return (
+              <button
+                key={optionId}
+                className={`cc-decision-option${checked ? ' cc-decision-option--selected' : ''}`}
+                type="button"
+                role="radio"
+                aria-checked={checked}
+                disabled={busy}
+                onClick={() => setSelectedOptionId(optionId)}
+              >
+                <span className="cc-decision-option__radio">
+                  {checked ? <Check size={13} /> : null}
+                </span>
+                <span className="cc-decision-option__copy">
+                  <strong>{option.label}</strong>
+                  {option.description ? <small>{option.description}</small> : null}
+                </span>
+              </button>
+            )
+          })}
+
+          {decision.allowFreeText ? (
             <button
-              key={optionId}
-              className={`cc-decision-option${checked ? ' cc-decision-option--selected' : ''}`}
+              className={`cc-decision-option${isFreeText ? ' cc-decision-option--selected' : ''}`}
               type="button"
               role="radio"
-              aria-checked={checked}
+              aria-checked={isFreeText}
               disabled={busy}
-              onClick={() => setSelectedOptionId(optionId)}
+              onClick={() => setSelectedOptionId(freeTextId)}
             >
               <span className="cc-decision-option__radio">
-                {checked ? <Check size={13} /> : null}
+                {isFreeText ? <Check size={13} /> : null}
               </span>
               <span className="cc-decision-option__copy">
-                <strong>{option.label}</strong>
-                {option.description ? <small>{option.description}</small> : null}
+                <strong>其他补充</strong>
+                <small>输入你想补充的具体要求。</small>
               </span>
             </button>
-          )
-        })}
+          ) : null}
+        </div>
 
-        {decision.allowFreeText ? (
-          <button
-            className={`cc-decision-option${isFreeText ? ' cc-decision-option--selected' : ''}`}
-            type="button"
-            role="radio"
-            aria-checked={isFreeText}
+        {isFreeText ? (
+          <textarea
+            className="cc-decision-sheet__text"
+            value={freeText}
+            rows={3}
             disabled={busy}
-            onClick={() => setSelectedOptionId(freeTextId)}
-          >
-            <span className="cc-decision-option__radio">
-              {isFreeText ? <Check size={13} /> : null}
-            </span>
-            <span className="cc-decision-option__copy">
-              <strong>其他补充</strong>
-              <small>输入你想补充的具体要求。</small>
-            </span>
-          </button>
+            placeholder="输入补充说明..."
+            onChange={(event) => setFreeText(event.target.value)}
+          />
         ) : null}
       </div>
-
-      {isFreeText ? (
-        <textarea
-          className="cc-decision-sheet__text"
-          value={freeText}
-          rows={3}
-          disabled={busy}
-          placeholder="输入补充说明..."
-          onChange={(event) => setFreeText(event.target.value)}
-        />
-      ) : null}
 
       <div className="cc-decision-sheet__actions">
         <button className="cc-decision-submit" type="button" disabled={!canSubmit} onClick={() => {
@@ -145,4 +174,8 @@ export function DecisionSheet({
       </div>
     </m.div>
   )
+}
+
+function normalizeDecisionCopy(value: string): string {
+  return value.trim().replace(/[。！？!?]+$/u, '').replace(/\s+/gu, ' ')
 }

@@ -8,6 +8,7 @@
 //   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
+import { RunContext } from '@openai/agents'
 import { describe, expect, it } from 'vitest'
 import { ToolRegistry } from '../framework/registry.js'
 import type { ToolDef, ToolProvider } from '../framework/types.js'
@@ -55,8 +56,8 @@ describe('createAgentsTools', () => {
     const [tool] = createAgentsTools(registry, new Set(), { schemaMode: 'strict' })
     const properties = tool.parameters.properties as Record<string, Record<string, unknown>>
 
-    expect(tool.description).toContain('dataset_ref 只接受 meteorological_dataset')
-    expect(tool.description).toContain('boundary_ref 只接受 feature_collection / layer')
+    expect(tool.description).toContain('dataset_ref 传字符串 refId 时只接受 meteorological_dataset')
+    expect(tool.description).toContain('boundary_ref 传字符串 refId 时只接受 feature_collection / layer')
     expect(properties.dataset_ref.description).toContain('允许的 valueRef kind: meteorological_dataset')
     expect(properties.dataset_ref.description).toContain('禁止传入其它 kind')
   })
@@ -99,6 +100,34 @@ describe('createAgentsTools', () => {
       required: [],
       additionalProperties: true,
     })
+  })
+
+  it('uses Agents SDK dynamic enablement to expose only planning-safe tools before approval', async () => {
+    const registry = new ToolRegistry()
+    registry.register(providerFromTools([
+      { ...testTool('catalog_lookup', ['agent']), planModeAccess: 'discovery' },
+      testTool('query_layer', ['agent']),
+    ]))
+    const tools = createAgentsTools(registry, new Set(), { schemaMode: 'compatible' })
+    const byName = new Map(tools.map(tool => [tool.name, tool]))
+    let executionEnabled = false
+    const runContext = new RunContext({
+      runId: 'run_plan_boundary',
+      isExecutionEnabled: () => executionEnabled,
+      isSdkExtensionEnabled: () => executionEnabled,
+      isToolEnabled: toolName => executionEnabled || toolName === 'catalog_lookup',
+      validateToolCall: () => null,
+      rejectPreparedToolCall: async () => {},
+      prepareToolCall: async () => {},
+      executeTool: async () => 'ok',
+    })
+    const agent = {} as never
+
+    await expect(byName.get('catalog_lookup')?.isEnabled(runContext, agent)).resolves.toBe(true)
+    await expect(byName.get('query_layer')?.isEnabled(runContext, agent)).resolves.toBe(false)
+
+    executionEnabled = true
+    await expect(byName.get('query_layer')?.isEnabled(runContext, agent)).resolves.toBe(true)
   })
 })
 

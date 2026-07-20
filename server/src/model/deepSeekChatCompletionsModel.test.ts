@@ -2,7 +2,7 @@
 //
 //   地理智能平台 - Chat Completions SDK Model 契约测试
 //
-//   文件:       compatibleChatCompletionsModel.test.ts
+//   文件:       deepSeekChatCompletionsModel.test.ts
 //
 //   日期:       2026年06月22日
 //   作者:       OpenAI Codex
@@ -11,9 +11,9 @@
 import type { ModelRequest, ResponseStreamEvent } from '@openai/agents'
 import OpenAI from 'openai'
 import { describe, expect, it } from 'vitest'
-import { CompatibleChatCompletionsModel, mergeDeltaOrSnapshot } from './compatibleChatCompletionsModel.js'
+import { DeepSeekChatCompletionsModel, mergeDeltaOrSnapshot } from './deepSeekChatCompletionsModel.js'
 
-describe('CompatibleChatCompletionsModel', () => {
+describe('DeepSeekChatCompletionsModel', () => {
   it('normalizes standard text and DeepSeek reasoning streams', async () => {
     const model = createModel([
       chunk({ reasoning_content: '先分析' }),
@@ -71,7 +71,7 @@ describe('CompatibleChatCompletionsModel', () => {
         },
       },
     } as unknown as OpenAI
-    const model = new CompatibleChatCompletionsModel({ client, model: 'test-model' })
+    const model = new DeepSeekChatCompletionsModel({ client, model: 'deepseek-v4-pro' })
 
     await collect(model.getStreamedResponse(request({
       input: [
@@ -92,7 +92,94 @@ describe('CompatibleChatCompletionsModel', () => {
     ])
   })
 
-  // 兼容服务常先发送只有 role/id 的帧；此时断线尚未产生语义输出，允许 Runner 安全重试一次。
+  it('omits auto tool choice in thinking mode and rejects unsupported explicit choices', async () => {
+    const observedRequests: Array<Record<string, unknown>> = []
+    const client = {
+      chat: {
+        completions: {
+          create: async (params: Record<string, unknown>) => {
+            observedRequests.push(params)
+            return (async function* () {
+              yield chunk({ tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'probe', arguments: '{}' } }] }, 'tool_calls')
+            })()
+          },
+        },
+      },
+    } as unknown as OpenAI
+    const model = new DeepSeekChatCompletionsModel({ client, model: 'deepseek-v4-pro' })
+
+    await expect(collect(model.getStreamedResponse(request({
+      modelSettings: { parallelToolCalls: false, toolChoice: 'required', reasoning: { effort: 'high' } },
+      tools: [serializedTool('probe')],
+    })))).rejects.toThrow('DeepSeek V4 thinking 模式不支持显式 toolChoice')
+    await collect(model.getStreamedResponse(request({
+      modelSettings: {
+        parallelToolCalls: false,
+        toolChoice: 'required',
+        reasoning: { effort: 'high' },
+        providerData: { thinking: { type: 'disabled' } },
+      },
+      tools: [serializedTool('probe')],
+    })))
+    await collect(model.getStreamedResponse(request({
+      modelSettings: { parallelToolCalls: false, toolChoice: 'auto', reasoning: { effort: 'high' } },
+      tools: [serializedTool('probe')],
+    })))
+
+    expect(observedRequests[0]).toMatchObject({
+      tool_choice: 'required',
+      thinking: { type: 'disabled' },
+    })
+    expect(observedRequests[0]).not.toHaveProperty('reasoning_effort')
+    expect(observedRequests[1]).toMatchObject({
+      reasoning_effort: 'high',
+    })
+    expect(observedRequests[1]).not.toHaveProperty('tool_choice')
+    expect(observedRequests[1]).not.toHaveProperty('thinking')
+  })
+
+  it('replays DeepSeek reasoning on its assistant tool-call message', async () => {
+    let observedMessages: unknown[] = []
+    const client = {
+      chat: {
+        completions: {
+          create: async (params: { messages: unknown[] }) => {
+            observedMessages = params.messages
+            return (async function* () {
+              yield chunk({ content: '继续回答' }, 'stop')
+            })()
+          },
+        },
+      },
+    } as unknown as OpenAI
+    const model = new DeepSeekChatCompletionsModel({ client, model: 'deepseek-v4-pro' })
+
+    await collect(model.getStreamedResponse(request({
+      input: [
+        { type: 'message', role: 'user', content: '查询图层' },
+        { type: 'reasoning', content: [], rawContent: [{ type: 'reasoning_text', text: '需要调用查询工具' }] },
+        { type: 'function_call', status: 'completed', callId: 'call_1', name: 'query_layer', arguments: '{"layerKey":"roads"}' },
+        { type: 'function_call_result', status: 'completed', callId: 'call_1', name: 'query_layer', output: { type: 'text', text: '查询完成' } },
+      ],
+    })))
+
+    expect(observedMessages).toEqual([
+      { role: 'user', content: '查询图层' },
+      {
+        role: 'assistant',
+        content: '',
+        reasoning_content: '需要调用查询工具',
+        tool_calls: [{
+          id: 'call_1',
+          type: 'function',
+          function: { name: 'query_layer', arguments: '{"layerKey":"roads"}' },
+        }],
+      },
+      { role: 'tool', tool_call_id: 'call_1', content: '查询完成' },
+    ])
+  })
+
+  // DeepSeek 流可能先发送只有 role/id 的帧；此时断线尚未产生语义输出，允许 Runner 安全重试一次。
   it('keeps role-only frames invisible so a pre-semantic network failure is replay-safe', async () => {
     const client = {
       chat: {
@@ -104,7 +191,7 @@ describe('CompatibleChatCompletionsModel', () => {
         },
       },
     } as unknown as OpenAI
-    const model = new CompatibleChatCompletionsModel({ client, model: 'test-model' })
+    const model = new DeepSeekChatCompletionsModel({ client, model: 'deepseek-v4-pro' })
     const modelRequest = request()
     const events: ResponseStreamEvent[] = []
     let failure: unknown
@@ -130,7 +217,7 @@ function createModel(chunks: unknown[]) {
       },
     },
   } as unknown as OpenAI
-  return new CompatibleChatCompletionsModel({ client, model: 'test-model' })
+  return new DeepSeekChatCompletionsModel({ client, model: 'deepseek-v4-pro' })
 }
 
 function request(overrides: Partial<ModelRequest> = {}): ModelRequest {
@@ -142,6 +229,16 @@ function request(overrides: Partial<ModelRequest> = {}): ModelRequest {
     handoffs: [],
     tracing: false,
     ...overrides,
+  }
+}
+
+function serializedTool(name: string): ModelRequest['tools'][number] {
+  return {
+    type: 'function',
+    name,
+    description: '兼容性探针',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    strict: false,
   }
 }
 

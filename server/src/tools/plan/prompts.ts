@@ -10,7 +10,7 @@
 
 // 计划正文通过结构化智能体工作流进入审批和 run state，不写本地计划文件。
 
-export const ENTER_PLAN_MODE_DESCRIPTION = '进入只读探索模式，只允许查询和分析操作，不能修改数据。'
+export const ENTER_PLAN_MODE_DESCRIPTION = '进入规划阶段，只允许显式声明的目录、元数据发现与计划控制工具，不能提前执行待审批的业务步骤。'
 
 export const REQUEST_CLARIFICATION_DESCRIPTION = '计划模式中请求用户补充目标、范围、数据或输出要求。'
 
@@ -20,11 +20,13 @@ export const REQUEST_CLARIFICATION_PROMPT = `计划模式的本轮对话无法�
 - 用户只发送寒暄、测试语句或笼统要求，当前没有可规划目标。
 - 用户要求生成计划，但没有说明任务目标。
 - 缺少必要范围、数据源、地点、变量、输出格式或审批边界。
+- 用户退回工作流但没有提供原因，需要询问要修改的目标、范围、数据、执行路径或交付形式。此时不要先调用其它发现或业务工具。
 
 使用本工具后，本轮应停止并等待用户补充；不要编造默认目标，不要用普通正文冒充澄清状态。
+快捷选项不得建议绕过 Automation、审批、权限、真实数据或其它系统硬边界；不能把被硬规则禁止的路径包装成“替代方案”。
 不要用本工具询问“计划是否可以”，计划审批必须通过 submit_agent_workflow。`
 
-export const ENTER_PLAN_MODE_PROMPT = `在复杂执行前进入只读计划模式，让用户先审阅计划，再批准任何写入或副作用动作。
+export const ENTER_PLAN_MODE_PROMPT = `在执行任务前进入计划模式，让用户先审阅结构化工作流，再批准业务执行。
 
 使用场景：
 - 任务包含多个步骤，或存在多个合理实现路线。
@@ -33,12 +35,13 @@ export const ENTER_PLAN_MODE_PROMPT = `在复杂执行前进入只读计划模�
 - 用户审批能避免返工或误操作。
 
 进入计划模式后：
-- 只能做读取、检查、查询和分析。
+- 只能使用工具契约中显式标记为 planning discovery 或 control 的工具；普通 isReadOnly 不代表可在规划阶段执行。
+- 可以检索图层目录、数据集目录、Automation 目录、记忆或源码元数据来形成计划；不能查询完整业务要素、做空间/气象计算、生成图表或产物、调用子智能体、执行 Automation、MCP 或沙箱命令。
 - 重要发现用普通 assistant 正文说明，不要塞进“思考过程”。
-- todo_write 只能在计划获批后使用，不能在计划模式中使用。
+- 结构化工作流会自动投影步骤进度与 Todo；不要调用 todo_write 复制工作流步骤。todo_write 只用于没有结构化工作流的独立任务清单。
 - 缺少目标、范围、数据或输出要求时，必须调用 request_clarification 等待用户补充。
 - 计划准备好后，必须调用 submit_agent_workflow，提交结构化智能体工作流供用户审批。
-- 计划模式的本轮只能以 request_clarification 或 submit_agent_workflow 结束。`
+- 纯信息问答或用户明确要求不调用工具时可以直接回答；有待执行目标时必须以 request_clarification 或 submit_agent_workflow 结束。`
 
 export const SUBMIT_AGENT_WORKFLOW_DESCRIPTION = '提交结构化智能体工作流并请求用户批准；批准后在同一运行中开始执行。'
 
@@ -53,15 +56,16 @@ export const SUBMIT_AGENT_WORKFLOW_PROMPT = `只在只读计划模式已经形�
 - 子智能体协作步骤使用 kind: agent，并将其工具名写入 toolName。
 
 不要在以下情况使用：
-- 只是简单查询，不需要实现或副作用操作。
+- 只是纯信息问答、寒暄、能力说明，且不需要执行任何业务工具。
 - 只想用普通文本询问“这样可以吗”。
 - 没有可审批计划，却想继续执行写入或导出动作。`
 
-export const REVISE_AGENT_WORKFLOW_DESCRIPTION = '根据新证据、工具失败或用户引导修订当前智能体工作流。'
+export const REVISE_AGENT_WORKFLOW_DESCRIPTION = '根据新证据、工具失败或用户引导提交完整修订，并再次请求用户批准后才执行新路径。'
 
 export const REVISE_AGENT_WORKFLOW_PROMPT = `当前智能体工作流已经开始执行，但新证据、工具失败或用户中途引导改变了后续路径时使用本工具。
 
 - 必须说明 changeReason，并提交完整的新目标与步骤图。
+- 修订会触发新的用户审批；批准前不得执行新增、替换或重新排序后的步骤。
 - 已完成且执行契约未改变的步骤会保留；修改过的步骤会重新进入待执行状态。
 - 不得删除仍被其它步骤依赖的步骤，也不得形成循环依赖。
 - 调整工作流不是掩盖失败；失败原因必须保留在步骤状态中，并在新路径中明确处理。

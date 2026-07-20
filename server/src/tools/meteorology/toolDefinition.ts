@@ -38,7 +38,7 @@ export function tool(
   properties: Record<string, unknown>,
   handler: ToolDef['handler'],
   required: string[] = [],
-  options: Partial<Pick<ToolDef, 'executionSurfaces' | 'agentResultMode' | 'isReadOnly' | 'isDestructive' | 'requiresApproval'>> = {},
+  options: Partial<Pick<ToolDef, 'executionSurfaces' | 'agentResultMode' | 'isReadOnly' | 'isDestructive' | 'requiresApproval' | 'planModeAccess'>> = {},
 ): ToolDef {
   const miniApp = miniAppMetadata(name)
   const {

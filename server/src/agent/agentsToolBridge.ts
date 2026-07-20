@@ -8,7 +8,7 @@
 //   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
-import { tool, type RunContext, type Tool } from '@openai/agents'
+import { ToolGuardrailFunctionOutputFactory, tool, type RunContext, type Tool } from '@openai/agents'
 import type { ToolRegistry } from '../framework/registry.js'
 import type { ToolDef } from '../framework/types.js'
 import { enrichValueRefDescriptions, ensureToolSchemas, isRecord, parametersForAgentsSdk, parametersForCompatibleAgentsSdk, stripNullObjectValues, valueRefRules } from '../framework/schema.js'
@@ -16,6 +16,11 @@ import type { AgentToolSchemaMode } from '../model/registry.js'
 
 export interface AgentsExecutionContext {
   runId: string
+  isExecutionEnabled(): boolean
+  isSdkExtensionEnabled(): boolean
+  isToolEnabled(toolName: string): boolean
+  validateToolCall(toolName: string, args: Record<string, unknown>): string | null
+  rejectPreparedToolCall(toolName: string, callId: string, message: string): Promise<void>
   prepareToolCall(toolName: string, args: Record<string, unknown>, callId: string): Promise<void>
   executeTool(toolName: string, args: Record<string, unknown>, callId: string): Promise<string>
 }
@@ -49,6 +54,9 @@ export function createAgentsTools(
       const args = requireArguments(definition.name, input)
       return options.schemaMode === 'strict' ? stripNullObjectValues(args) : args
     }
+    const isEnabled = ({ runContext }: { runContext: RunContext<AgentsExecutionContext> }): boolean => (
+      requireContext(runContext).isToolEnabled(definition.name)
+    )
     const needsApproval = async (runContext: RunContext, input: unknown, callId?: string): Promise<boolean> => {
       const context = requireContext(runContext)
       const args = normalizeArguments(input)
@@ -76,6 +84,20 @@ export function createAgentsTools(
       }
       return `工具调用失败：${message}。请检查参数类型和必需字段后重试。`
     }
+    const workflowGuardrails = AGENT_WORKFLOW_DEFINITION_TOOLS.has(definition.name)
+      ? [{
+          name: 'agent_workflow_definition_contract',
+          run: async ({ context, toolCall }: { context: RunContext<AgentsExecutionContext>; toolCall: { arguments: string; callId: string } }) => {
+            const runtime = requireContext(context)
+            const parsed: unknown = JSON.parse(toolCall.arguments)
+            const args = normalizeArguments(parsed)
+            const rejection = runtime.validateToolCall(definition.name, args)
+            if (!rejection) return ToolGuardrailFunctionOutputFactory.allow({ toolName: definition.name })
+            await runtime.rejectPreparedToolCall(definition.name, toolCall.callId, rejection)
+            return ToolGuardrailFunctionOutputFactory.rejectContent(rejection, { toolName: definition.name })
+          },
+        }]
+      : []
 
     if (options.schemaMode === 'compatible') {
       const parameters = parametersForCompatibleAgentsSdk(enrichedSchema)
@@ -86,6 +108,8 @@ export function createAgentsTools(
         strict: false,
         errorFunction,
         needsApproval,
+        isEnabled,
+        inputGuardrails: workflowGuardrails,
         execute,
       })
     }
@@ -98,6 +122,8 @@ export function createAgentsTools(
       strict: true,
       errorFunction,
       needsApproval,
+      isEnabled,
+      inputGuardrails: workflowGuardrails,
       execute,
     })
   })
@@ -122,12 +148,22 @@ function requireContext(runContext?: RunContext<unknown>): AgentsExecutionContex
   const context = runContext?.context
   if (!isRecord(context)
     || typeof context.runId !== 'string'
+    || typeof context.isExecutionEnabled !== 'function'
+    || typeof context.isSdkExtensionEnabled !== 'function'
+    || typeof context.isToolEnabled !== 'function'
+    || typeof context.validateToolCall !== 'function'
+    || typeof context.rejectPreparedToolCall !== 'function'
     || typeof context.prepareToolCall !== 'function'
     || typeof context.executeTool !== 'function') {
     throw new Error('Agents SDK 工具缺少运行上下文')
   }
   return context as unknown as AgentsExecutionContext
 }
+
+const AGENT_WORKFLOW_DEFINITION_TOOLS = new Set([
+  'submit_agent_workflow',
+  'revise_agent_workflow',
+])
 
 function requireArguments(toolName: string, input: unknown): Record<string, unknown> {
   if (!isRecord(input)) throw new Error(`工具 '${toolName}' 参数必须为 JSON object`)

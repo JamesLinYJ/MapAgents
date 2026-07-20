@@ -38,6 +38,7 @@ export interface AgentRuntimeStore {
   readonly runtimeRoot: string
   getRun(runId: string): AnalysisRun
   listRunsForThread(threadId: string): AnalysisRun[]
+  mutateRunState(runId: string, mutation: (state: AgentState) => Partial<AgentState>): Promise<AnalysisRun>
   updateRunState(runId: string, updates: Partial<AgentState>): Promise<AnalysisRun>
   updateRunStatus(runId: string, status: AnalysisRun['status']): Promise<AnalysisRun>
   completeRun(runId: string, status: string): Promise<AnalysisRun>
@@ -129,5 +130,6 @@ export type ToolExecutionStore = Pick<AgentRuntimeStore,
   | 'resolveMeteorologicalDataset'
   | 'runtimeRoot'
   | 'saveRunCheckpoint'
+  | 'mutateRunState'
   | 'updateRunState'
 >

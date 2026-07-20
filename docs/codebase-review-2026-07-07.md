@@ -149,7 +149,7 @@
 
 **问题**
 - 测试覆盖不均衡：模型适配器（Anthropic/Gemini/Ollama）、WS handler 主流程、main.ts 入口均无测试
-- platformStore.ts（820+ 行）、compatibleChatCompletionsModel.ts（490+ 行）、ws/handler.ts 文件过大
+- platformStore.ts（820+ 行）、deepSeekChatCompletionsModel.ts（490+ 行）、ws/handler.ts 文件过大
 - 全项目使用 console.log/console.error 而非 pino 结构化日志，丢失日志级别和结构化字段
 - 全量内存索引（Map<string, T>）在大规模场景下存在 OOM 风险
 - 单进程令牌桶限流器不适配多实例 Kubernetes 部署场景

@@ -29,6 +29,7 @@ export class RuntimeTranscriptProjector {
       reasoningText: '',
       lastAssistantText: '',
       completedAssistantItems: [],
+      subAgentCallItemIds: new Map(),
     }
   }
 
@@ -108,18 +109,37 @@ export class RuntimeTranscriptProjector {
             arguments: raw.arguments,
             metadata: { toolLabel: '子智能体任务' },
           })
-          itemSink.completeItem(item.itemId, {
-            name: raw.name,
-            callId: raw.callId,
-            body: '子智能体已启动',
-            metadata: { toolLabel: '子智能体任务' },
-          })
+          projection.subAgentCallItemIds.set(raw.callId, item.itemId)
         }
       }
       const eventLabel = raw.type === 'function_call' && assembly.subAgentNames.has(raw.name)
         ? '子智能体任务'
         : '工具调用'
       eventSink.emit('tool.started', eventLabel, { sdkItemType: event.item.type })
+      return
+    }
+    if (event.name === 'tool_output') {
+      const raw = event.item.rawItem
+      if (raw.type === 'function_call_result' && assembly.subAgentNames.has(raw.name)) {
+        const failed = raw.status === 'incomplete'
+        const itemId = projection.subAgentCallItemIds.get(raw.callId)
+        if (itemId) {
+          itemSink.completeItem(itemId, {
+            name: raw.name,
+            callId: raw.callId,
+            body: failed ? '子智能体执行失败' : '子智能体已返回结果',
+            isError: failed,
+            metadata: { toolLabel: '子智能体任务' },
+          })
+          projection.subAgentCallItemIds.delete(raw.callId)
+        }
+        eventSink.emit('tool.completed', failed ? '子智能体执行失败' : '子智能体任务完成', {
+          sdkItemType: event.item.type,
+          callId: raw.callId,
+          agentId: raw.name,
+          status: failed ? 'failed' : 'completed',
+        })
+      }
       return
     }
     if (event.name === 'tool_approval_requested') {
@@ -172,6 +192,22 @@ export class RuntimeTranscriptProjector {
   isPlatformManagedTool(toolName: string, runtimeConfig: AgentRuntimeConfig): boolean {
     return Boolean(this.toolRegistry.get(toolName))
       || runtimeConfig.subAgents.some(config => config.agentId === toolName)
+  }
+
+  failPendingSubAgentItems(
+    projection: StreamProjectionState,
+    itemSink: ItemSink,
+    message: string,
+  ): void {
+    for (const [callId, itemId] of projection.subAgentCallItemIds) {
+      itemSink.completeItem(itemId, {
+        callId,
+        body: message,
+        isError: true,
+        metadata: { toolLabel: '子智能体任务' },
+      })
+    }
+    projection.subAgentCallItemIds.clear()
   }
 
   async appendSandboxNativeToolCallTranscript(

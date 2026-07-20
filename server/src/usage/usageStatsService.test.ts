@@ -49,7 +49,7 @@ describe('UsageStatsService', () => {
     expect(summary.totals.cacheHitReportedRuns).toBe(1)
     expect(summary.totals.totalTokens).toBe(165)
     expect(summary.totals.contextEstimatedTokens).toBe(900)
-    expect(summary.byProvider[0]?.key).toBe('openai_compatible')
+    expect(summary.byProvider[0]?.key).toBe('deepseek')
     expect(summary.byModel[0]?.label).toBe('deepseek-v4-pro')
     expect(summary.recentRuns[0]).toMatchObject({
       runId: 'run_with_cache',
@@ -137,7 +137,7 @@ function run(
     createdByUserId: 'user_test',
     visibility: 'workspace',
     userQuery: id,
-    modelProvider: 'openai_compatible',
+    modelProvider: 'deepseek',
     modelName: 'deepseek-v4-pro',
     status: options.status ?? 'completed',
     createdAt,
@@ -146,7 +146,7 @@ function run(
       sessionId: 'session_test',
       threadId: `thread_${id}`,
       userQuery: id,
-      modelProvider: 'openai_compatible',
+      modelProvider: 'deepseek',
       modelName: 'deepseek-v4-pro',
       runtimeStats: options.runtimeStats,
     },

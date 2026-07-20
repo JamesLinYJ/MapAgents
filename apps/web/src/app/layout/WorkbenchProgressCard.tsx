@@ -24,6 +24,7 @@ export interface WorkbenchProgressCardProps {
   progressItems: ReadonlyArray<WorkbenchProgressItem>
   tasks: ReadonlyArray<ProgressTodoItem>
   events: ReadonlyArray<RunEvent>
+  artifactCount: number
   onOpenHistory: () => void
 }
 
@@ -32,9 +33,10 @@ export function WorkbenchProgressCard({
   progressItems,
   tasks,
   events,
+  artifactCount,
   onOpenHistory,
 }: WorkbenchProgressCardProps) {
-  const summary = deriveWorkbenchProgressSummary({ runStatus, progressItems, tasks, events })
+  const summary = deriveWorkbenchProgressSummary({ runStatus, progressItems, tasks, events, artifactCount })
 
   return (
     <section

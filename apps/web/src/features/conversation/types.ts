@@ -63,6 +63,7 @@ export interface ChatPanelProps {
   onRenameTask: (id: string, title: string) => void
   onDeleteTask: (id: string) => void
   onForkMessage?: (entryId: string) => void
+  onOpenWorkflow?: () => void
   dataReferences: DataReferenceSummary[]
   trashedThreads?: Array<{ thread: AgentThreadRecord; deletedAt: string; purgeAfter: string }>
   onLoadTrash?: () => void

@@ -44,6 +44,7 @@ export interface RunStoreEvents {
 // session/thread 上的 latest* 字段是 run 的投影，由这里同步维护。
 export class RunStore {
   private readonly durableRunningItems = new Map<string, Set<string>>()
+  private readonly stateMutationTails = new Map<string, Promise<void>>()
 
   constructor(
     private readonly index: ConversationProjectionIndex,
@@ -101,6 +102,46 @@ export class RunStore {
 
   get(runId: string): AnalysisRun {
     return this.index.getRun(runId)
+  }
+
+  // 单写实例启动后，内存中不存在上一进程的执行器。遗留的 queued/running
+  // Run 必须原子转为可恢复终态，不能继续向 UI 投影成“正在执行”。
+  async recoverOrphanedRuns(): Promise<AnalysisRun[]> {
+    const recovered: AnalysisRun[] = []
+    const candidates = [...this.index.runValues()]
+      .filter(run => run.status === 'queued' || run.status === 'running')
+      .sort(compareRuns)
+    for (const run of candidates) {
+      const checkpoint = await this.repository.getRunCheckpoint(run.id)
+      const requiresAction = checkpoint.recoveryStatus === 'requires_action'
+        || checkpoint.pendingToolCallIds.length > 0
+      const status: AnalysisRun['status'] = requiresAction ? 'requires_action' : 'interrupted'
+      const reason = requiresAction
+        ? `服务进程重启时发现状态未知的工具调用：${checkpoint.pendingToolCallIds.join('、') || 'checkpoint 标记需要操作'}。系统未自动重放。`
+        : '服务进程重启时该运行仍处于活动状态，已标记为中断；如需继续，必须由用户显式恢复。'
+      const updatedAt = nowUtc()
+      const next: AnalysisRun = {
+        ...run,
+        status,
+        updatedAt,
+        state: {
+          ...run.state,
+          warnings: run.state.warnings.includes(reason)
+            ? run.state.warnings
+            : [...run.state.warnings, reason],
+          runLifecycle: { status, reason, updatedAt },
+        },
+      }
+      await this.repository.saveRunWithCheckpoint(next, {
+        pendingToolCallIds: checkpoint.pendingToolCallIds,
+        recoveryStatus: requiresAction ? 'requires_action' : 'interrupted',
+      })
+      this.index.setRun(next)
+      this.events.runBus.publish(next.id, structuredClone(next))
+      await this.persistDerivedThreadRunStatusProjection(run, status, updatedAt)
+      recovered.push(next)
+    }
+    return recovered
   }
 
   async create(sessionId: string, query: string, opts?: {
@@ -176,40 +217,56 @@ export class RunStore {
   }
 
   async updateState(runId: string, updates: Partial<AgentState>): Promise<AnalysisRun> {
-    const run = this.get(runId)
-    const next = { ...run, state: { ...run.state, ...updates }, updatedAt: nowUtc() }
-    await this.repository.saveRun(next)
-    this.index.setRun(next)
-    this.events.runBus.publish(runId, structuredClone(next))
-    return next
+    return this.mutateState(runId, () => updates)
+  }
+
+  // Run 状态的读-改-写必须在同一串行边界内完成。仅序列化数据库 save
+  // 不足以保护内存投影：并行调用可能先读到同一旧快照，再依次覆盖新状态。
+  async mutateState(
+    runId: string,
+    mutation: (state: AgentState) => Partial<AgentState>,
+  ): Promise<AnalysisRun> {
+    return this.serializeStateMutation(runId, async () => {
+      const run = this.get(runId)
+      const updates = mutation(run.state)
+      const next = { ...run, state: { ...run.state, ...updates }, updatedAt: nowUtc() }
+      await this.repository.saveRun(next)
+      this.index.setRun(next)
+      this.events.runBus.publish(runId, structuredClone(next))
+      return next
+    })
   }
 
   async updateStatus(runId: string, status: AnalysisRun['status']): Promise<AnalysisRun> {
-    const run = this.get(runId)
-    const next = { ...run, status, updatedAt: nowUtc() }
-    await this.repository.saveRunWithCheckpoint(next, {
-      recoveryStatus: status === 'interrupted' ? 'interrupted' : status === 'requires_action' ? 'requires_action' : 'clean',
+    return this.serializeStateMutation(runId, async () => {
+      const run = this.get(runId)
+      const next = { ...run, status, updatedAt: nowUtc() }
+      await this.repository.saveRunWithCheckpoint(next, {
+        recoveryStatus: status === 'interrupted' ? 'interrupted' : status === 'requires_action' ? 'requires_action' : 'clean',
+      })
+      this.index.setRun(next)
+      this.events.runBus.publish(runId, structuredClone(next))
+      await this.persistDerivedThreadRunStatusProjection(run, status, next.updatedAt)
+      return next
     })
-    this.index.setRun(next)
-    this.events.runBus.publish(runId, structuredClone(next))
-    await this.persistDerivedThreadRunStatusProjection(run, status, next.updatedAt)
-    return next
   }
 
   async complete(runId: string, status: string): Promise<AnalysisRun> {
-    const run = this.get(runId)
-    const next = { ...run, status: status as AnalysisRun['status'], updatedAt: nowUtc() }
-    await this.repository.saveRunWithCheckpoint(next, {
-      recoveryStatus: next.status === 'waiting_approval' || next.status === 'requires_action'
-        ? 'requires_action'
-        : 'clean',
+    return this.serializeStateMutation(runId, async () => {
+      const run = this.get(runId)
+      const next = { ...run, status: status as AnalysisRun['status'], updatedAt: nowUtc() }
+      await this.repository.saveRunWithCheckpoint(next, {
+        recoveryStatus: next.status === 'waiting_approval' || next.status === 'requires_action'
+          ? 'requires_action'
+          : 'clean',
+      })
+      await this.payloadStore.flush()
+      this.index.setRun(next)
+      this.events.runBus.publish(runId, structuredClone(next))
+      await this.persistDerivedThreadRunStatusProjection(run, next.status, next.updatedAt)
+      this.durableRunningItems.delete(runId)
+      return next
     })
-    await this.payloadStore.flush()
-    this.index.setRun(next)
-    this.events.runBus.publish(runId, structuredClone(next))
-    await this.persistDerivedThreadRunStatusProjection(run, next.status, next.updatedAt)
-    this.durableRunningItems.delete(runId)
-    return next
   }
 
   async saveCheckpoint(
@@ -354,6 +411,18 @@ export class RunStore {
     if (itemIds.has(item.itemId)) return false
     itemIds.add(item.itemId)
     return true
+  }
+
+  private async serializeStateMutation<T>(runId: string, mutation: () => Promise<T>): Promise<T> {
+    const previous = this.stateMutationTails.get(runId) ?? Promise.resolve()
+    const pending = previous.then(mutation, mutation)
+    const tail = pending.then(() => undefined, () => undefined)
+    this.stateMutationTails.set(runId, tail)
+    try {
+      return await pending
+    } finally {
+      if (this.stateMutationTails.get(runId) === tail) this.stateMutationTails.delete(runId)
+    }
   }
 }
 

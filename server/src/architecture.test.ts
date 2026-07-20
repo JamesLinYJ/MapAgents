@@ -1045,7 +1045,7 @@ describe('conversation architecture', () => {
     await expect(stat(dedicatedRunner)).rejects.toMatchObject({ code: 'ENOENT' })
     expect(runtimeSource).not.toContain('shouldRunDeterministicNowcast')
     expect(runtimeSource).not.toContain('runDeterministicNowcast')
-    expect(automation.revision).toBe(4)
+    expect(automation.revision).toBe(5)
     expect(automation.defaultParameters.horizonMinutes).toBe(180)
     expect(automation.defaultParameters.regionLayerKey).toBe('hangzhou_districts')
     expect(automation.agentInvocation.enabled).toBe(true)

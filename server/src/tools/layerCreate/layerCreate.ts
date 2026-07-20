@@ -13,8 +13,9 @@
 
 import type { ToolDef } from '../../framework/types.js'
 import type { ManagedLayerService } from '../../gis/managedLayers/managedLayerService.js'
-import { parseGeoJsonEntity, toFeatureCollection } from '../../gis/geojson.js'
+import { toFeatureCollection } from '../../gis/geojson.js'
 import { makeId } from '../../utils/ids.js'
+import { geoJsonInputSchema, resolveGeoJsonInput } from '../spatial/geoJsonInput.js'
 import { LAYER_CREATE_PROMPT } from '../spatial/prompts.js'
 
 export function createLayerCreateTool(managedLayers: ManagedLayerService): ToolDef {
@@ -30,7 +31,7 @@ export function createLayerCreateTool(managedLayers: ManagedLayerService): ToolD
     jsonSchema: {
       type: 'object',
       properties: {
-        geojson: { type: 'object', additionalProperties: true, description: 'GeoJSON FeatureCollection、Feature 或 Geometry', 'x-source': 'json' },
+        geojson: geoJsonInputSchema('GeoJSON FeatureCollection、Feature 或 Geometry；优先传前序工具返回的 valueRef ID。'),
         name: { type: 'string', description: '图层显示名称' },
         description: { type: 'string', description: '图层描述', default: '' },
       },
@@ -39,7 +40,7 @@ export function createLayerCreateTool(managedLayers: ManagedLayerService): ToolD
     async handler(args, ctx) {
       const workspaceId = ctx.auth?.defaultWorkspaceId
       if (!workspaceId) throw new Error('创建分析图层需要有效的工作区身份。')
-      const collection = toFeatureCollection(parseGeoJsonEntity(args.geojson, 'geojson'))
+      const collection = toFeatureCollection(resolveGeoJsonInput(args.geojson, ctx, 'geojson'))
       if (!collection.features.length) throw new Error('GeoJSON 没有任何要素，无法创建图层')
       const name = requiredText(args.name, 'name')
       const description = typeof args.description === 'string' ? args.description.trim() : ''

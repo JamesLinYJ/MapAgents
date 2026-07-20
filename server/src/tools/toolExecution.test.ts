@@ -1,11 +1,16 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { Geometry } from 'geojson'
+import type { ValueRef } from '../framework/types.js'
 import type { ManagedLayerService } from '../gis/managedLayers/managedLayerService.js'
 import type { LayerDescriptor } from '../schemas/types.js'
 import { createLayerListTool } from './layerList/layerList.js'
 import { createLayerQueryTool } from './layerQuery/layerQuery.js'
 import { createLayerCreateTool } from './layerCreate/layerCreate.js'
 import { createSpatialAnalysisTool } from './spatialAnalysis/spatialAnalysis.js'
+import { createMapExportTool } from './mapExport/mapExport.js'
 
 describe('geo tools', () => {
   it('lists existing platform layers without external fetching', async () => {
@@ -143,6 +148,57 @@ describe('geo tools', () => {
     expect(result.source).toBe('turf')
     expect(result.payload.areaSqm).toBeGreaterThan(0)
   })
+
+  it('passes query_layer GeoJSON valueRefs into analysis, layer creation, and export', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geoforge-geojson-value-ref-'))
+    try {
+      const polygon: Geometry = {
+        type: 'Polygon',
+        coordinates: [[[120, 30], [120, 31], [121, 31], [121, 30], [120, 30]]],
+      }
+      let importedCollection: unknown = null
+      const managedLayers = {
+        queryFeatures: async () => [{ geometry: polygon, properties: { name: '测试区' } }],
+        featureCount: async () => 1,
+        importGeoJsonLayer: async (input: Record<string, unknown>) => {
+          importedCollection = input.collection
+          return layer('analysis_layer', String(input.name), ['analysis'])
+        },
+      } as unknown as ManagedLayerService
+
+      const queried = await createLayerQueryTool(managedLayers).handler({
+        layerKey: 'hangzhou_districts',
+        requireComplete: true,
+      }, runtime())
+      const featureRef = queried.valueRefs?.find(ref => ref.kind === 'feature_collection')
+      if (!featureRef) throw new Error('query_layer 没有返回 feature_collection valueRef')
+      const refs = new Map([[featureRef.refId, featureRef]])
+
+      const analyzed = await createSpatialAnalysisTool().handler({
+        operation: 'area',
+        sourceGeojson: featureRef.refId,
+      }, runtime(refs))
+      const created = await createLayerCreateTool(managedLayers).handler({
+        name: '测试分析图层',
+        geojson: featureRef.refId,
+      }, runtime(refs))
+      const exported = await createMapExportTool(root).handler({
+        filename: '测试行政区划.geojson',
+        geojson: featureRef.refId,
+      }, runtime(refs))
+
+      expect(analyzed.payload.areaSqm).toBeGreaterThan(0)
+      expect(importedCollection).toMatchObject({ type: 'FeatureCollection' })
+      expect(created.payload).toMatchObject({ layerKey: 'analysis_layer', featureCount: 1 })
+      const artifact = exported.artifacts?.[0]
+      expect(artifact).toMatchObject({ artifactType: 'geojson', name: '测试行政区划.geojson' })
+      if (!artifact?.relativePath) throw new Error('map_export 没有返回 artifact 相对路径')
+      const serialized = await readFile(path.join(root, artifact.relativePath), 'utf8')
+      expect(JSON.parse(serialized)).toMatchObject({ type: 'FeatureCollection' })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 })
 
 function point(lon: number, lat: number): Geometry {
@@ -178,7 +234,7 @@ function layer(
   }
 }
 
-function runtime() {
+function runtime(refs: ReadonlyMap<string, ValueRef> = new Map()) {
   return {
     runId: 'run_1',
     threadId: 'thread_1',
@@ -189,9 +245,11 @@ function runtime() {
       authSessionId: 'auth_session_1', authSessionExpiresAt: null, csrfToken: 'csrf',
       defaultWorkspaceId: 'workspace_1', roles: [],
     },
-    state: new Map(),
-    resolveValueRef: () => {
-      throw new Error('未知 valueRef')
+    state: new Map(refs),
+    resolveValueRef: (refId: string) => {
+      const reference = refs.get(refId)
+      if (!reference) throw new Error(`未知 valueRef '${refId}'`)
+      return reference
     },
     invokeStructuredModel: async () => ({}),
     log: () => undefined,

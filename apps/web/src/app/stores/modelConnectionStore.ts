@@ -24,11 +24,11 @@ interface ModelConnectionState {
 
 export const useModelConnectionStore = create<ModelConnectionState>((set, get) => ({
   providers: [],
-  provider: 'openai_compatible',
+  provider: 'deepseek',
   model: '',
   applyProviders: providers => {
     const preferred =
-      providers.find(item => item.provider === 'openai_compatible' && supportsAgentSdkLiveSupervisor(item)) ??
+      providers.find(item => item.provider === 'deepseek' && supportsAgentSdkLiveSupervisor(item)) ??
       providers.find(item => supportsAgentSdkLiveSupervisor(item)) ??
       (providers.length > 0 ? providers[0] : undefined)
     set({

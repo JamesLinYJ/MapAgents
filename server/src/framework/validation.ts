@@ -25,6 +25,7 @@ export function validateToolDefinition(tool: ToolDef): void {
     if (typeof tool.handler !== 'function') {
         throw new Error(`工具 "${tool.name}" 缺少 handler`);
     }
+    validatePlanModeAccess(tool, tool.name);
     validateJsonSchema(jsonSchema, `${tool.name}.jsonSchema`);
 }
 export function validateToolProvider(provider: ToolProvider): void {
@@ -66,6 +67,7 @@ function validateManifestParity(manifestTool: ToolManifestEntry, runtimeTool: To
         'tags',
         'executionSurfaces',
         'agentResultMode',
+        'planModeAccess',
         'jsonSchema',
     ];
     for (const field of fields) {
@@ -95,17 +97,48 @@ function validateManifest(manifest: ToolManifest): void {
         if (tool.executionSurfaces?.length === 0) {
             throw new Error(`Provider "${manifest.id}" 的工具 "${tool.name}" executionSurfaces 不能为空`);
         }
+        validatePlanModeAccess(tool, `${manifest.id}.${tool.name}`);
         validateJsonSchema(tool.jsonSchema, `${manifest.id}.${tool.name}.jsonSchema`);
     }
 }
+function validatePlanModeAccess(
+    tool: Pick<ToolManifestEntry, 'isReadOnly' | 'isDestructive' | 'planModeAccess'>,
+    field: string,
+): void {
+    if (tool.planModeAccess && (!tool.isReadOnly || tool.isDestructive)) {
+        throw new Error(`${field}.planModeAccess 只能授予无破坏性的只读工具`);
+    }
+}
 function validateJsonSchema(schema: Record<string, unknown>, field: string): void {
-    const type = schema.type;
-    if (typeof type !== 'string' || !['object', 'array', 'string', 'number', 'integer', 'boolean'].includes(type)) {
+    const supportedTypes = new Set(['object', 'array', 'string', 'number', 'integer', 'boolean', 'null']);
+    const types = typeof schema.type === 'string'
+        ? [schema.type]
+        : Array.isArray(schema.type) && schema.type.every(value => typeof value === 'string')
+            ? schema.type
+            : [];
+    const compositeKeywords = ['anyOf', 'oneOf', 'allOf'] as const;
+    let hasComposite = false;
+    for (const keyword of compositeKeywords) {
+        if (schema[keyword] === undefined) continue;
+        hasComposite = true;
+        const alternatives = schema[keyword];
+        if (!Array.isArray(alternatives) || alternatives.length === 0)
+            throw new Error(`${field}.${keyword} 必须是非空 schema 数组`);
+        for (const [index, alternative] of alternatives.entries()) {
+            if (!isRecord(alternative))
+                throw new Error(`${field}.${keyword}.${index} 必须是 schema 对象`);
+            validateJsonSchema(alternative, `${field}.${keyword}.${index}`);
+        }
+    }
+    if (types.length === 0 && !hasComposite) {
+        throw new Error(`${field}.type 不受支持，且未声明 anyOf/oneOf/allOf`);
+    }
+    if (types.some(type => !supportedTypes.has(type))) {
         throw new Error(`${field}.type 不受支持`);
     }
     if (schema.enum !== undefined && !Array.isArray(schema.enum))
         throw new Error(`${field}.enum 必须是数组`);
-    if (type === 'object') {
+    if (types.includes('object')) {
         if (schema.properties !== undefined && !isRecord(schema.properties))
             throw new Error(`${field}.properties 必须是对象`);
         for (const [key, value] of Object.entries(isRecord(schema.properties) ? schema.properties : {})) {
@@ -115,8 +148,10 @@ function validateJsonSchema(schema: Record<string, unknown>, field: string): voi
         }
         if (schema.required !== undefined && !Array.isArray(schema.required))
             throw new Error(`${field}.required 必须是数组`);
+        if (isRecord(schema.additionalProperties))
+            validateJsonSchema(schema.additionalProperties, `${field}.additionalProperties`);
     }
-    if (type === 'array' && schema.items !== undefined) {
+    if (types.includes('array') && schema.items !== undefined) {
         if (!isRecord(schema.items))
             throw new Error(`${field}.items 必须是 schema 对象`);
         validateJsonSchema(schema.items, `${field}.items`);

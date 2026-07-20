@@ -497,6 +497,8 @@ export function buildProgressItems({
       description:
         agentWorkflow?.steps.length
           ? `已经整理出 ${agentWorkflow.steps.length} 个分析步骤。`
+          : runStatus === 'completed' && !artifacts.length
+            ? '本轮不需要准备外部数据。'
           : '会按当前目录、上传图层或外部来源准备数据。',
       status: agentWorkflow?.steps.length ? ('done' as const) : hasWorkStarted ? ('active' as const) : ('pending' as const),
     },
@@ -507,9 +509,11 @@ export function buildProgressItems({
         runStatus === 'running'
           ? formatUiRunEventMessage(latestEvent)
           : runStatus === 'waiting_approval'
-            ? '分析已经完成，系统正在等待你确认发布或执行敏感操作。'
+            ? '计划或受控动作正在等待确认，尚未继续执行。'
           : artifacts.length
             ? '空间分析已经完成，结果正在整理。'
+            : runStatus === 'completed'
+              ? '本轮不需要执行空间计算或业务工具。'
             : '需要空间计算时，会基于真实工具执行。',
       status:
         runStatus === 'running' || runStatus === 'waiting_approval'
@@ -525,9 +529,11 @@ export function buildProgressItems({
       title: '交付结果',
       description:
         runStatus === 'completed'
-          ? '结果图层、下载入口和服务链接已经生成。'
+          ? artifacts.length
+            ? '结果图层、下载入口或文件产物已经生成。'
+            : '本轮回复已完成，没有生成地图、文件或下载产物。'
           : runStatus === 'waiting_approval'
-            ? '结果已经生成，待审批动作会在确认后继续执行。'
+            ? '待审批动作尚未执行；已有结果保持可见。'
           : runStatus === 'failed'
             ? '本次没有成功生成最终结果。'
             : '完成后会自动把结果高亮到地图上。',
@@ -559,7 +565,7 @@ export function formatUiRunEventMessage(event?: RunEvent) {
     return '已经生成新的地图结果，正在加入地图。'
   }
   if (event.type === 'approval.required') {
-    return '分析结果已生成，正在等待审批。'
+    return '计划或受控动作正在等待审批，尚未执行。'
   }
   if (event.type === 'clarification.required') {
     return '需要你确认一个选项后继续。'

@@ -47,4 +47,5 @@ export interface StreamProjectionState {
   reasoningText: string
   lastAssistantText: string
   completedAssistantItems: Array<{ itemId: string; text: string; entryId: string | null }>
+  subAgentCallItemIds: Map<string, string>
 }

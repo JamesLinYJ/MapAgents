@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest'
 import { requiredAt } from './testSupport'
 import { deriveWorkbenchProgressSummary } from '../app/layout/WorkbenchProgressModel'
+import { buildProgressItems } from '../app/derivedState'
 
 const progressItems = [
   { id: 'understand', title: '理解需求', description: '正在理解问题', status: 'done' as const },
@@ -48,12 +49,29 @@ describe('workbench progress card model', () => {
       progressItems,
       tasks: [{ id: 'task_2', content: '已生成气象分析摘要', activeForm: '生成摘要', status: 'completed' }],
       events: [],
+      artifactCount: 1,
     })
 
     expect(summary.statusLabel).toBe('分析完成')
     expect(summary.tone).toBe('done')
     expect(summary.completedCount).toBe(summary.totalCount)
     expect(summary.latestDetail).toBe('已生成气象分析摘要')
+  })
+
+  it('describes a text-only completion without claiming result artifacts exist', () => {
+    const items = buildProgressItems({ runStatus: 'completed', artifacts: [], events: [] })
+    const summary = deriveWorkbenchProgressSummary({
+      runStatus: 'completed',
+      progressItems: items,
+      tasks: [],
+      events: [],
+      artifactCount: 0,
+    })
+
+    expect(summary.statusLabel).toBe('回答完成')
+    expect(summary.description).toContain('没有生成地图、文件或下载产物')
+    expect(summary.latestDetail).toBe('回答已经整理完成')
+    expect(items.find(item => item.id === 'deliver')?.description).toContain('没有生成地图、文件或下载产物')
   })
 
   it('surfaces failed runs as warnings with a concrete latest detail', () => {

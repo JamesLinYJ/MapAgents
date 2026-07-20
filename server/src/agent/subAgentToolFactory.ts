@@ -8,7 +8,7 @@
 //   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
-import { Agent, type Model, type Tool } from '@openai/agents'
+import { Agent, invokeFunctionTool, type Model, type Tool } from '@openai/agents'
 import { z } from 'zod'
 
 import type { ToolRegistry } from '../framework/registry.js'
@@ -42,19 +42,21 @@ interface SubAgentToolFactoryOptions {
 export async function createSubAgentTools(
   options: SubAgentToolFactoryOptions,
 ): Promise<Tool<AgentsExecutionContext>[]> {
-  const previous = new Map(options.store.getRun(options.runId).state.subAgents.map(agent => [agent.agentId, agent]))
-  await options.store.updateRunState(options.runId, {
-    subAgents: options.configs.map(config => previous.get(config.agentId) ?? ({
-      agentId: config.agentId,
-      name: config.name,
-      role: config.role,
-      status: 'pending',
-      summary: config.summary,
-      stepIds: [],
-      tools: config.tools,
-      currentStepId: null,
-      latestMessage: null,
-    })),
+  await options.store.mutateRunState(options.runId, state => {
+    const previous = new Map(state.subAgents.map(agent => [agent.agentId, agent]))
+    return {
+      subAgents: options.configs.map(config => previous.get(config.agentId) ?? ({
+        agentId: config.agentId,
+        name: config.name,
+        role: config.role,
+        status: 'pending',
+        summary: config.summary,
+        stepIds: [],
+        tools: config.tools,
+        currentStepId: null,
+        latestMessage: null,
+      })),
+    }
   })
 
   let stateMutation: Promise<void> = Promise.resolve()
@@ -84,6 +86,11 @@ export async function createSubAgentTools(
     })
     const subAgentExecutionContext: AgentsExecutionContext = {
       runId: options.runId,
+      isExecutionEnabled: () => options.coordinator.isExecutionEnabled(),
+      isSdkExtensionEnabled: () => false,
+      isToolEnabled: toolName => options.coordinator.isToolEnabledForSubAgent(config.agentId, toolName),
+      validateToolCall: (toolName, args) => options.coordinator.validateToolCall(toolName, args),
+      rejectPreparedToolCall: (toolName, callId, message) => options.coordinator.rejectPreparedToolCall(toolName, callId, message),
       prepareToolCall: (toolName, args, callId) => options.coordinator.prepare(toolName, args, callId),
       executeTool: (toolName, args, callId) => options.coordinator.executeForSubAgent(
         config.agentId,
@@ -95,6 +102,7 @@ export async function createSubAgentTools(
     const agentTool = subAgent.asTool({
       toolName: config.agentId,
       toolDescription: config.summary,
+      isEnabled: () => options.coordinator.isExternalAgentEnabled(config.agentId),
       runOptions: { context: subAgentExecutionContext },
       customOutputExtractor: async output => {
         for (const item of output.newItems) {
@@ -113,8 +121,16 @@ export async function createSubAgentTools(
       },
     })
     const invoke = agentTool.invoke.bind(agentTool)
+    const timedAgentTool = {
+      ...agentTool,
+      timeoutMs: config.timeoutMs,
+      timeoutBehavior: 'raise_exception' as const,
+      invoke,
+    }
     return {
       ...agentTool,
+      // 用 SDK 公开的 invokeFunctionTool 在工作流状态包装器内部执行超时。
+      // 这样超时会先把子智能体和步骤落为 failed，再作为硬失败返回父运行。
       invoke: async (runContext, input, details) => {
         const callId = details?.toolCall?.callId
         if (!callId) throw new Error(`子 Agent '${config.agentId}' 缺少 callId`)
@@ -138,7 +154,12 @@ export async function createSubAgentTools(
             status: 'running',
             stepId: workflowStepId,
           })
-          const output = await invoke(runContext, input, details)
+          const output = await invokeFunctionTool({
+            tool: timedAgentTool,
+            runContext,
+            input,
+            details,
+          })
           await options.coordinator.completeExternalAgentStep(callId, `${config.name} 已完成`)
           await mutateState(() => updateSubAgentState(options, config.agentId, current => ({
             ...current,
@@ -190,12 +211,13 @@ async function updateSubAgentState(
   agentId: string,
   update: (state: SubAgentState) => SubAgentState,
 ): Promise<void> {
-  const run = options.store.getRun(options.runId)
-  const subAgent = run.state.subAgents.find(candidate => candidate.agentId === agentId)
-  if (!subAgent) throw new Error(`子 Agent '${agentId}' 的运行状态不存在`)
-  await options.store.updateRunState(options.runId, {
-    subAgents: run.state.subAgents.map(candidate => candidate.agentId === agentId
-      ? update(candidate)
-      : candidate),
+  await options.store.mutateRunState(options.runId, state => {
+    const subAgent = state.subAgents.find(candidate => candidate.agentId === agentId)
+    if (!subAgent) throw new Error(`子 Agent '${agentId}' 的运行状态不存在`)
+    return {
+      subAgents: state.subAgents.map(candidate => candidate.agentId === agentId
+        ? update(candidate)
+        : candidate),
+    }
   })
 }

@@ -34,6 +34,7 @@ export function useNavigationController({
   setUiError,
 }: NavigationControllerOptions) {
   const [query, setQuery] = useState('')
+  const [inspectorOpen, setInspectorOpen] = useState(true)
   const activeNav = useWorkspaceStore(state => state.activeNav)
   const panelMode = useWorkspaceStore(state => state.panelMode)
   const activeSidebarItem = useWorkspaceStore(state => state.activeSidebarItem)
@@ -53,11 +54,31 @@ export function useNavigationController({
     })
   }, [])
 
+  const focusInspectorTop = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      const stack = document.getElementById('workbench-inspector-stack')
+      if (stack instanceof HTMLElement) stack.scrollTo({ top: 0, behavior: 'smooth' })
+    })
+  }, [])
+
+  const openInspector = useCallback(() => setInspectorOpen(true), [])
+  const openWorkflowInspector = useCallback(() => {
+    setInspectorOpen(true)
+    focusInspectorTop()
+  }, [focusInspectorTop])
+  const toggleInspector = useCallback(() => {
+    setInspectorOpen((open) => {
+      if (!open) focusInspectorTop()
+      return !open
+    })
+  }, [focusInspectorTop])
+
   const showSources = useCallback(() => {
+    openInspector()
     setActiveNav('layers')
     setPanelMode('layerManager')
     setActiveSidebarItem('sources')
-  }, [setActiveNav, setActiveSidebarItem, setPanelMode])
+  }, [openInspector, setActiveNav, setActiveSidebarItem, setPanelMode])
 
   const changeWorkspaceMode = useCallback((mode: WorkspaceMode) => {
     setWorkspaceMode(mode)
@@ -76,6 +97,7 @@ export function useNavigationController({
       return
     }
     if (nav === 'history') {
+      openInspector()
       setPanelMode('history')
       setActiveSidebarItem('assistant')
       return
@@ -87,7 +109,7 @@ export function useNavigationController({
     }
     setPanelMode('compute')
     setActiveSidebarItem('assistant')
-  }, [focusQueryInput, setActiveNav, setActiveSidebarItem, setPanelMode, showSources])
+  }, [focusQueryInput, openInspector, setActiveNav, setActiveSidebarItem, setPanelMode, showSources])
 
   const selectSample = useCallback((value: string) => {
     setQuery(value)
@@ -124,9 +146,10 @@ export function useNavigationController({
       changePrimaryNav('tools')
       return
     }
+    openInspector()
     setActiveNav('analysis')
     setPanelMode(itemId === 'config' ? 'config' : 'export')
-  }, [changePrimaryNav, setActiveNav, setActiveSidebarItem, setPanelMode, showSources])
+  }, [changePrimaryNav, openInspector, setActiveNav, setActiveSidebarItem, setPanelMode, showSources])
 
   const copyShareLink = useCallback(async () => {
     try {
@@ -144,6 +167,9 @@ export function useNavigationController({
     changePrimaryNav,
     copyShareLink,
     focusQueryInput,
+    inspectorOpen,
+    openInspector,
+    openWorkflowInspector,
     panelMode,
     query,
     readWorkspacePointer,
@@ -155,6 +181,7 @@ export function useNavigationController({
     setQuery,
     showSources,
     syncUrl: syncCleanWorkspaceUrl,
+    toggleInspector,
     useNextTemplate,
     workspaceMode,
   }

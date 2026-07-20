@@ -55,6 +55,7 @@ export function defaultRuntimeConfig(options: DefaultRuntimeConfigOptions = {}):
 - 工具失败、缺少图层或数据不匹配时，如实说明原因，不要返回 fallback 成功结论。`,
         model: null,
         tools: ['geocode_place', 'list_layers', 'query_layer', 'spatial_analysis', 'create_chart'],
+        timeoutMs: 120_000,
       },
     ],
     ui: { transcriptMaxEntries: 40, showInternalReasoningLabels: true, eventGroupingWindowMs: 1500 },

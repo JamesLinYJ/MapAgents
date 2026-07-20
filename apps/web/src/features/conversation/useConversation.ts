@@ -51,6 +51,57 @@ export function pickPendingDecision(decisions: ReadonlyArray<DecisionRequest> = 
     ?? null
 }
 
+export interface DecisionWorkflowPreview {
+  goal: string
+  steps: Array<{
+    stepId: string
+    title: string
+    kind: string
+    toolName: string
+    ownerAgentId: string
+    args: Record<string, unknown>
+    reason: string
+    dependsOn: string[]
+  }>
+}
+
+// 工作流在批准前还不能写入 run.state.agentWorkflow；审批 payload 中的
+// submit/revise_agent_workflow 参数是审批前唯一可信的工作流草案。
+export function workflowPreviewFromDecision(decision: DecisionRequest): DecisionWorkflowPreview | null {
+  const action = decision.payload.action
+  if (decision.kind !== 'approval'
+    || (action !== 'submit_agent_workflow' && action !== 'revise_agent_workflow')) return null
+  const args = asRecord(decision.payload.args)
+  const workflow = asRecord(args?.workflow)
+  if (!workflow) return null
+  const goal = typeof workflow.goal === 'string' ? workflow.goal.trim() : ''
+  const steps = Array.isArray(workflow.steps)
+    ? workflow.steps.flatMap((value, index) => {
+      const step = asRecord(value)
+      if (!step || typeof step.title !== 'string' || !step.title.trim()) return []
+      return [{
+        stepId: typeof step.stepId === 'string' && step.stepId.trim() ? step.stepId : `step_${index + 1}`,
+        title: step.title.trim(),
+        kind: typeof step.kind === 'string' ? step.kind.trim() : '',
+        toolName: typeof step.toolName === 'string' ? step.toolName.trim() : '',
+        ownerAgentId: typeof step.ownerAgentId === 'string' ? step.ownerAgentId.trim() : '',
+        args: asRecord(step.args) ?? {},
+        reason: typeof step.reason === 'string' ? step.reason.trim() : '',
+        dependsOn: Array.isArray(step.dependsOn)
+          ? step.dependsOn.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+          : [],
+      }]
+    })
+    : []
+  return goal || steps.length ? { goal, steps } : null
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
 export function formatStatusLine(
   runStatus: string | undefined,
   providerLabel: string,

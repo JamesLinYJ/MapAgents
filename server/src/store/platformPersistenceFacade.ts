@@ -144,6 +144,7 @@ export class PlatformPersistenceFacade {
     // PostgreSQL 决定有哪些 session/thread/run；文件层只按该快照定位 checkpoint 与大对象。
     await this.payloadStore.initialize(snapshot)
     this.index.load(snapshot)
+    await this.runStore.recoverOrphanedRuns()
   }
 
   async createSession(owner?: ResourceOwner | null): Promise<SessionRecord> {
@@ -372,6 +373,13 @@ export class PlatformPersistenceFacade {
 
   async updateRunState(runId: string, updates: Partial<AgentState>): Promise<AnalysisRun> {
     return this.runStore.updateState(runId, updates)
+  }
+
+  async mutateRunState(
+    runId: string,
+    mutation: (state: AgentState) => Partial<AgentState>,
+  ): Promise<AnalysisRun> {
+    return this.runStore.mutateState(runId, mutation)
   }
 
   async updateRunStatus(runId: string, status: AnalysisRun['status']): Promise<AnalysisRun> {

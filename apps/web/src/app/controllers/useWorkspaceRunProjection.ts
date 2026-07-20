@@ -60,7 +60,7 @@ export function useWorkspaceRunProjection({
     const latestRun = await hydrateRun(runId)
     startTransition(() => {
       setActiveThreadId(latestRun.threadId ?? undefined)
-      setProvider(latestRun.modelProvider ?? 'openai_compatible')
+      setProvider(latestRun.modelProvider ?? 'deepseek')
       setModel(latestRun.modelName ?? '')
       setSelectedArtifactId(pickPreferredArtifactId(latestRun.state.artifacts))
       setThreadRuns(current => mergeThreadRuns(current, latestRun))

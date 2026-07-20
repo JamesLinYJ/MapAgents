@@ -85,6 +85,14 @@ export class ToolRegistry {
     return [...enabled, ...unavailable]
   }
 
+  validatePlannedArguments(name: string, args: Record<string, unknown>): string | null {
+    const tool = this.tools.get(name)
+    if (!tool) return `工具 "${name}" 未注册`
+    const result = ensureToolSchemas(tool).parameters.partial().safeParse(args)
+    if (result.success) return null
+    return result.error.issues.map(issue => formatIssue(issue)).join('；')
+  }
+
   descriptors() {
     return this.list().map(t => ({
       name: t.name,
@@ -108,6 +116,7 @@ export class ToolRegistry {
         approvalRecommended: t.isDestructive || t.requiresApproval === true,
         executionSurfaces: t.executionSurfaces ?? ['agent', 'automation', 'debug'],
         agentResultMode: t.agentResultMode ?? 'continue',
+        planModeAccess: t.planModeAccess ?? 'blocked',
         jsonSchema: ensureToolSchemas(t).jsonSchema,
       },
     }))

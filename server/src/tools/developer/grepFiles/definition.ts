@@ -21,6 +21,7 @@ export const grepFilesTool: ToolDef = {
   tags: ['developer', 'file', 'search', 'ripgrep'],
   isReadOnly: true,
   isDestructive: false,
+  planModeAccess: 'discovery',
   jsonSchema: {
     type: 'object',
     properties: {

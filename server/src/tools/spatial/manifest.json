@@ -14,6 +14,7 @@
       "tags": ["layer", "postgis", "catalog"],
       "isReadOnly": true,
       "isDestructive": false,
+      "planModeAccess": "discovery",
       "jsonSchema": {
         "type": "object",
         "properties": {
@@ -57,8 +58,18 @@
         "type": "object",
         "properties": {
           "operation": { "type": "string", "enum": ["area", "length", "distance", "buffer", "centroid", "bbox", "intersects", "contains", "within", "intersect", "union", "difference", "along", "bearing", "destination", "midpoint", "nearest", "points_within_polygon", "great_circle"], "description": "空间分析操作类型" },
-          "sourceGeojson": { "type": "object", "additionalProperties": true, "description": "主 GeoJSON 输入（Feature/FeatureCollection/Geometry）", "x-source": "json" },
-          "targetGeojson": { "type": "object", "additionalProperties": true, "description": "第二 GeoJSON 输入", "x-source": "json" },
+          "sourceGeojson": {
+            "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "object", "additionalProperties": true }],
+            "description": "主 GeoJSON 输入：优先传前序工具返回的 valueRef ID，也可传用户明确提供的小型内联 GeoJSON。",
+            "x-source": "json-or-value-ref",
+            "x-value-ref-kinds": ["feature_collection", "geojson", "route", "layer"]
+          },
+          "targetGeojson": {
+            "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "object", "additionalProperties": true }],
+            "description": "第二 GeoJSON 输入：优先传前序工具返回的 valueRef ID，也可传用户明确提供的小型内联 GeoJSON。",
+            "x-source": "json-or-value-ref",
+            "x-value-ref-kinds": ["feature_collection", "geojson", "route", "layer"]
+          },
           "radius": { "type": "number", "minimum": 0, "description": "缓冲半径" },
           "bearing": { "type": "number", "description": "目标方位角（度）" },
           "units": { "type": "string", "enum": ["kilometers", "meters", "miles"], "default": "kilometers" },
@@ -70,8 +81,8 @@
     },
     {
       "name": "map_export",
-      "label": "导出地图数据",
-      "description": "将 GeoJSON 分析结果保存为平台 artifact。",
+      "label": "导出 GeoJSON 数据",
+      "description": "将 GeoJSON 分析结果保存为可下载、可在平台地图中加载的 artifact；不生成 PNG/JPEG 或带标注的静态图片。",
       "group": "空间分析",
       "tags": ["export", "file"],
       "isReadOnly": false,
@@ -79,7 +90,12 @@
       "jsonSchema": {
         "type": "object",
         "properties": {
-          "geojson": { "type": "object", "additionalProperties": true, "description": "要导出的 GeoJSON 数据", "x-source": "json" },
+          "geojson": {
+            "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "object", "additionalProperties": true }],
+            "description": "要导出的 GeoJSON：优先传前序工具返回的 valueRef ID，也可传小型内联对象。",
+            "x-source": "json-or-value-ref",
+            "x-value-ref-kinds": ["feature_collection", "geojson", "route", "layer"]
+          },
           "filename": { "type": "string", "description": "导出文件名（不含路径）", "default": "export.geojson" }
         },
         "required": ["geojson"]
@@ -96,7 +112,12 @@
       "jsonSchema": {
         "type": "object",
         "properties": {
-          "geojson": { "type": "object", "additionalProperties": true, "description": "GeoJSON FeatureCollection、Feature 或 Geometry", "x-source": "json" },
+          "geojson": {
+            "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "object", "additionalProperties": true }],
+            "description": "GeoJSON FeatureCollection、Feature 或 Geometry；优先传前序工具返回的 valueRef ID。",
+            "x-source": "json-or-value-ref",
+            "x-value-ref-kinds": ["feature_collection", "geojson", "route", "layer"]
+          },
           "name": { "type": "string", "description": "图层显示名称" },
           "description": { "type": "string", "description": "图层描述", "default": "" }
         },

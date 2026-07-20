@@ -210,12 +210,23 @@ describe('runtime SDK integrations', () => {
     const [mcpTool] = integration.tools
     expect(mcpTool?.type).toBe('function')
     if (mcpTool?.type !== 'function') throw new Error('测试工具必须是 function tool')
+    let executionEnabled = true
+    let sdkExtensionEnabled = true
     const context = new RunContext<AgentsExecutionContext>({
       runId: 'run_1',
+      isExecutionEnabled: () => executionEnabled,
+      isSdkExtensionEnabled: () => sdkExtensionEnabled,
+      isToolEnabled: () => true,
+      validateToolCall: () => null,
+      rejectPreparedToolCall: async () => {},
       prepareToolCall: async () => {},
       executeTool: async () => 'ok',
     })
     await expect(mcpTool.needsApproval(context, { query: 'abc' }, 'call_1')).resolves.toBe(true)
+    await expect(mcpTool.isEnabled(context, {} as never)).resolves.toBe(true)
+    sdkExtensionEnabled = false
+    await expect(mcpTool.isEnabled(context, {} as never)).resolves.toBe(false)
+    await expect(mcpTool.invoke(context, '{"query":"abc"}')).rejects.toThrow('结构化工作流边界禁止调用 MCP 工具')
     await integration.close()
     expect(closed).toBe(true)
   })
