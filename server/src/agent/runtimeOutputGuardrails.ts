@@ -12,6 +12,7 @@ import {
   OutputGuardrailTripwireTriggered,
   type OutputGuardrail,
 } from '@openai/agents'
+import { supervisorDeliverySchema } from '@geo-agent-platform/shared-types/runtime'
 import type { AgentsExecutionContext } from './agentsToolBridge.js'
 
 const PLAN_MODE_TERMINAL_GUARDRAIL = 'plan_mode_terminal_contract'
@@ -25,7 +26,7 @@ interface PlanModeTerminalGuardrailOptions {
 // 收口，SDK 必须拒绝这个最终输出，避免把“仍在规划”投影成“已完成”。
 export function createPlanModeTerminalGuardrail(
   options: PlanModeTerminalGuardrailOptions,
-): OutputGuardrail<'text', AgentsExecutionContext> {
+): OutputGuardrail<typeof supervisorDeliverySchema, AgentsExecutionContext> {
   return {
     name: PLAN_MODE_TERMINAL_GUARDRAIL,
     async execute() {

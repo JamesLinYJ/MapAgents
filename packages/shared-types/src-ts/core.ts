@@ -10,6 +10,7 @@ export const eventTypeSchema = z.enum([
   'artifact.created', 'subagent.created', 'subagent.updated',
   'loop.updated', 'todo.updated', 'tool.started', 'tool.completed',
   'clarification.required', 'approval.required', 'warning.raised',
+  'trace.recorded',
   'run.completed', 'run.failed',
 ])
 

@@ -121,6 +121,7 @@ function snapshot(): WorkspaceBootstrapSnapshot {
       conversationPath: null,
     }],
     providers: [],
+    tools: [],
   }
 }
 

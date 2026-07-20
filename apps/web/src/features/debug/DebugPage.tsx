@@ -163,7 +163,9 @@ export function DebugPage({
   const conversationPath = currentRun?.conversationPath
   const selectedMetadata = selectedArtifact ? artifactMetadata[selectedArtifact.artifactId] : undefined
   const latestRuns = sessionRuns.slice(0, 5)
-  const latestEvent = events.at(-1)
+  const traceEvents = useMemo(() => events.filter(event => event.type === 'trace.recorded'), [events])
+  const operationalEvents = useMemo(() => events.filter(event => event.type !== 'trace.recorded'), [events])
+  const latestEvent = operationalEvents.at(-1)
   const currentThreadId = agentState?.threadId ?? events.find((event) => event.threadId)?.threadId
   const todoItems = agentState?.todos ?? EMPTY_TODOS
   const subAgents = agentState?.subAgents ?? EMPTY_SUB_AGENTS
@@ -173,7 +175,7 @@ export function DebugPage({
     () => new Map(tools.map(tool => [tool.name, tool.label])),
     [tools],
   )
-  const loopTrace = agentState?.loopTrace?.length ? agentState.loopTrace : deriveLoopTraceFromEvents(events)
+  const loopTrace = agentState?.loopTrace?.length ? agentState.loopTrace : deriveLoopTraceFromEvents(operationalEvents)
   const latestLoopEntry = loopTrace.at(-1)
   const placeResolution = agentState?.placeResolution
   const supervisorStages = useMemo(
@@ -187,9 +189,9 @@ export function DebugPage({
         subAgents,
         approvals,
         toolCalls,
-        events,
+        events: operationalEvents,
       }),
-    [approvals, events, agentWorkflow, intent, query, runStatus, subAgents, todoItems, toolCalls],
+    [approvals, operationalEvents, agentWorkflow, intent, query, runStatus, subAgents, todoItems, toolCalls],
   )
   const transcriptHeadline = useMemo(() => pickConversationHeadline(items, runStatus), [items, runStatus])
   const assistantSummary = transcriptHeadline.title === '回答' ? transcriptHeadline.body : undefined
@@ -201,14 +203,14 @@ export function DebugPage({
         subAgents,
         approvals,
         toolCalls,
-        events,
+        events: operationalEvents,
         finalSummary: assistantSummary,
       }),
-    [approvals, assistantSummary, events, runStatus, subAgents, todoItems, toolCalls],
+    [approvals, assistantSummary, operationalEvents, runStatus, subAgents, todoItems, toolCalls],
   )
   const agentDiagnostics = useMemo(
-    () => subAgents.map((agent) => buildSubAgentDiagnostic(agent, todoItems, toolCalls, events)),
-    [events, subAgents, todoItems, toolCalls],
+    () => subAgents.map((agent) => buildSubAgentDiagnostic(agent, todoItems, toolCalls, operationalEvents)),
+    [operationalEvents, subAgents, todoItems, toolCalls],
   )
   const conversationEntries = useMemo(
     () => deriveEntriesFromItems(items, runStatus, tools),
@@ -249,9 +251,9 @@ export function DebugPage({
     },
     {
       label: '事件流',
-      value: `${events.length}`,
-      meta: events.at(-1)?.type ?? '暂无事件',
-      tone: events.length ? 'success' : 'neutral',
+      value: `${operationalEvents.length}`,
+      meta: traceEvents.length ? `${traceEvents.length} 条 SDK trace` : latestEvent?.type ?? '暂无事件',
+      tone: operationalEvents.length ? 'success' : 'neutral',
     },
     {
       label: '载荷存储',
@@ -628,6 +630,38 @@ export function DebugPage({
             <RuntimeConfigEditor runtimeConfig={runtimeConfig} onSaveRuntimeConfig={onSaveRuntimeConfig} />
             <div className="panel__section">
               <div className="panel__subheader">
+                <span>Agents SDK Trace</span>
+                <span className="panel__muted">{traceEvents.length} 条本地诊断记录</span>
+              </div>
+              {traceEvents.length ? (
+                <ol className="timeline">
+                  {[...traceEvents].reverse().slice(0, 20).map((event) => (
+                    <li key={event.eventId} className="timeline__item">
+                      <div className="timeline__marker" aria-hidden="true" />
+                      <div className="timeline__content">
+                        <div className="timeline__meta">
+                          <span>
+                            {String(event.payload.spanType ?? event.payload.phase ?? 'trace')}
+                            {event.payload.spanName ? ` · ${String(event.payload.spanName)}` : ''}
+                          </span>
+                          <time dateTime={event.timestamp}>{new Date(event.timestamp).toLocaleTimeString('zh-CN')}</time>
+                        </div>
+                        <p>{event.message}</p>
+                        <p className="panel__muted">
+                          trace {shortId(String(event.payload.traceId ?? ''))}
+                          {typeof event.payload.durationMs === 'number' ? ` · ${event.payload.durationMs} ms` : ''}
+                          {event.payload.failed === true ? ' · 失败' : ''}
+                        </p>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="panel__empty">当前运行还没有 SDK trace；服务端本地追踪启用后会在这里显示。</p>
+              )}
+            </div>
+            <div className="panel__section">
+              <div className="panel__subheader">
                 <span>地点解析状态</span>
                 <span className="panel__muted">{formatPlaceResolutionStatus(placeResolution?.status)}</span>
               </div>
@@ -852,11 +886,11 @@ export function DebugPage({
             <div className="panel__section panel__section--grow">
               <div className="panel__subheader">
                 <span>事件流</span>
-                <span className="panel__muted">{events.length} 条</span>
+                <span className="panel__muted">{operationalEvents.length} 条</span>
               </div>
               <ol className="timeline">
-                {events.length ? (
-                  events.map((event) => (
+                {operationalEvents.length ? (
+                  operationalEvents.map((event) => (
                     <li key={event.eventId} className="timeline__item">
                       <div className="timeline__marker" aria-hidden="true" />
                       <div className="timeline__content">

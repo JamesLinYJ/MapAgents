@@ -100,6 +100,10 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
     setAvailableTools(await listTools())
   }, [])
 
+  const applyToolDescriptors = useCallback((tools: ToolDescriptor[]) => {
+    startTransition(() => setAvailableTools(tools))
+  }, [])
+
   const refresh = useCallback(async () => {
     const [components, catalogEntries, loadedRuntimeConfig, automations, scheduled, background, usage] = await Promise.allSettled([
       getSystemComponents(),
@@ -129,12 +133,6 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
     const rejected = [components, catalogEntries, loadedRuntimeConfig, automations, scheduled, background, usage].find(result => result.status === 'rejected')
     if (rejected?.status === 'rejected') throw rejected.reason
   }, [])
-
-  useEffect(() => {
-    // 对话时间线始终需要轻量工具描述来显示中文名称；完整诊断数据仍按需加载。
-    if (!enabled) return
-    void refreshToolDescriptors().catch(error => setUiError(formatUiError(error, '工具名称加载失败。')))
-  }, [enabled, refreshToolDescriptors, setUiError])
 
   useEffect(() => {
     // 配置、Automation 和系统状态只在对应控制面可见时加载，不能占用首页关键路径。
@@ -172,26 +170,26 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
       setUiError(undefined)
       setIsToolCatalogSubmitting(true)
       await upsertToolCatalogEntry(tool.toolKind, tool.name, payload, sortOrder)
-      await refresh()
+      await Promise.all([refresh(), refreshToolDescriptors()])
     } catch (error) {
       setUiError(formatUiError(error, `${tool.label} 目录配置保存失败。`))
     } finally {
       setIsToolCatalogSubmitting(false)
     }
-  }, [refresh, setUiError])
+  }, [refresh, refreshToolDescriptors, setUiError])
 
   const removeCatalogEntry = useCallback(async (tool: ToolDescriptor) => {
     try {
       setUiError(undefined)
       setIsToolCatalogSubmitting(true)
       await deleteToolCatalogEntry(tool.toolKind, tool.name)
-      await refresh()
+      await Promise.all([refresh(), refreshToolDescriptors()])
     } catch (error) {
       setUiError(formatUiError(error, `${tool.label} 目录配置删除失败。`))
     } finally {
       setIsToolCatalogSubmitting(false)
     }
-  }, [refresh, setUiError])
+  }, [refresh, refreshToolDescriptors, setUiError])
 
   const runAutomation = useCallback(async (payload: StartAutomationPayload) => {
     try {
@@ -355,6 +353,7 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
   }, [refresh, setUiError])
 
   return {
+    applyToolDescriptors,
     availableTools,
     backgroundTasks,
     isToolCatalogSubmitting,

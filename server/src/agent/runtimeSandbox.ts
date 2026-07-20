@@ -34,10 +34,6 @@ export type SandboxSessionFactory = (
   config: RuntimeSandboxConfig,
 ) => Promise<SandboxSessionLike>
 
-export interface OpenAIAgentsRuntimeOptions {
-  createSandboxSession?: SandboxSessionFactory
-}
-
 export interface RuntimeSandboxResources {
   artifactDirectory?: string
 }

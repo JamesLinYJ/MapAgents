@@ -25,6 +25,7 @@ import { seedLayersFromDirectory } from '../gis/seedLayers.js'
 import { ModelAdapterRegistry } from '../model/registry.js'
 import { ensureModelResultCacheTable, ModelCompletionService, ModelResultCacheStore } from '../model/modelResultCache.js'
 import { errorLogPayload, logger } from '../observability/logger.js'
+import type { LocalAgentTracing } from '../observability/agentTracing.js'
 import { ensureMeteorologicalTables } from '../routes/meteorology.js'
 import { ensureSecurityTables } from '../security/database.js'
 import { BetterAuthService } from '../security/authService.js'
@@ -82,8 +83,12 @@ export interface AppContainer {
   checkReadiness(): Promise<{ status: 'ok' | 'degraded'; checks: Record<string, { ok: boolean; detail?: string }> }>
 }
 
-export async function createAppContainer(input: { env: Env; projectRoot: string }): Promise<AppContainer> {
-  const { env, projectRoot } = input
+export async function createAppContainer(input: {
+  env: Env
+  projectRoot: string
+  agentTracing?: LocalAgentTracing
+}): Promise<AppContainer> {
+  const { env, projectRoot, agentTracing } = input
   const db = createDb(env.DATABASE_URL)
   const instanceLock = new ApplicationInstanceLock(db)
   const runtimeRoot = path.resolve(env.RUNTIME_ROOT)
@@ -144,7 +149,13 @@ export async function createAppContainer(input: { env: Env; projectRoot: string 
     ttlSeconds: env.DEEPSEEK_RESULT_CACHE_TTL_SECONDS,
     maxBytes: env.DEEPSEEK_RESULT_CACHE_MAX_BYTES,
   })
-  const runtime = new OpenAIAgentsRuntime(store, toolRegistry, modelRegistry, {}, modelCompletions)
+  const runtime = new OpenAIAgentsRuntime(
+    store,
+    toolRegistry,
+    modelRegistry,
+    agentTracing ? { agentTracing } : {},
+    modelCompletions,
+  )
   const usageStats = new UsageStatsService(store, env)
   const backgroundTasks = new BackgroundTaskRegistry()
   const runTasks = new RunTaskManager(runtime, store, backgroundTasks)
@@ -227,6 +238,7 @@ export async function createAppContainer(input: { env: Env; projectRoot: string 
     shutdown: async () => {
       await jobQueue.stop()
       await Promise.all([runTasks.drain(), backgroundTasks.drain()])
+      await agentTracing?.shutdown()
     },
     checkReadiness: () => checkReadiness({ db, managedLayers, instanceLock, env }),
   }

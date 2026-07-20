@@ -77,6 +77,50 @@ describe('formatToolResultForModel', () => {
     })
     expect(JSON.stringify(formatted)).toContain('普通 assistant 正文不能结束规划')
   })
+
+  it('keeps GeoJSON feature properties while removing oversized coordinates', () => {
+    const names = [
+      '上城区', '拱墅区', '西湖区', '滨江区', '余杭区', '萧山区', '临平区',
+      '钱塘区', '富阳区', '临安区', '桐庐县', '淳安县', '建德市',
+    ]
+    const result: ToolResult = {
+      message: '读取 13 / 13 个要素',
+      payload: {
+        featureCollection: {
+          type: 'FeatureCollection',
+          features: names.map((name, index) => ({
+            type: 'Feature',
+            geometry: {
+              type: 'MultiPolygon',
+              coordinates: [[Array.from({ length: 400 }, (_, point) => [point, index])]],
+            },
+            properties: { name, adcode: 330100 + index },
+          })),
+        },
+      },
+      warnings: [],
+      resultId: 'result_hangzhou',
+      source: 'postgis',
+    }
+
+    const serialized = formatToolResultForModel(result, 1200)
+    const formatted = JSON.parse(serialized) as {
+      payloadSummary: {
+        featureCollection: {
+          featureCount: number
+          propertyRowsComplete: boolean
+          propertyRows: Array<{ properties: { name: string } }>
+        }
+      }
+    }
+
+    expect(formatted.payloadSummary.featureCollection).toMatchObject({
+      featureCount: 13,
+      propertyRowsComplete: true,
+    })
+    expect(formatted.payloadSummary.featureCollection.propertyRows.map(row => row.properties.name)).toEqual(names)
+    expect(serialized).not.toContain('coordinates')
+  })
 })
 
 describe('ToolExecutionCoordinator', () => {
@@ -162,7 +206,7 @@ describe('ToolExecutionCoordinator', () => {
       kind: 'agent',
       toolName: 'spatial_analyst',
       ownerAgentId: 'spatial_analyst',
-      args: { input: '请调用 inspect_dataset 完成检查' },
+      args: subAgentArgs('请调用 inspect_dataset 完成检查'),
     }
     expect(validateAgentWorkflowDraft({
       workflow: { goal: '越权委托', steps: [agentStep] },
@@ -170,6 +214,11 @@ describe('ToolExecutionCoordinator', () => {
     expect(validateAgentWorkflowDraft({
       workflow: { goal: '合法委托', steps: [agentStep] },
     }, registry, [{ agentId: 'spatial_analyst', tools: ['inspect_dataset'] }])).toBeNull()
+    expect(validateAgentWorkflowDraft({
+      workflow: { goal: '错误的终态转交', steps: [{ ...agentStep, toolName: 'terminal_specialist', ownerAgentId: 'terminal_specialist' }] },
+    }, registry, [{ agentId: 'terminal_specialist', tools: [], delegationMode: 'handoff' }])).toContain(
+      "Handoff 子智能体 'terminal_specialist' 会直接接管最终对话",
+    )
   })
 
   it('persists the Chinese tool label with transcript and conversation items', async () => {
@@ -474,7 +523,7 @@ describe('ToolExecutionCoordinator', () => {
         kind: 'agent',
         toolName: 'spatial_analyst',
         ownerAgentId: 'spatial_analyst',
-        args: { input: '检查数据集' },
+        args: subAgentArgs('检查数据集'),
         reason: '验证子智能体工具边界',
         dependsOn: [],
       }],
@@ -485,7 +534,7 @@ describe('ToolExecutionCoordinator', () => {
     expect(coordinator.isToolEnabledForSubAgent('spatial_analyst', 'inspect_dataset')).toBe(false)
     await coordinator.beginExternalAgentStep(
       'spatial_analyst',
-      { input: '检查数据集' },
+      subAgentArgs('检查数据集'),
       'call_subagent',
     )
     expect(coordinator.isExternalAgentEnabled('spatial_analyst')).toBe(false)
@@ -532,7 +581,7 @@ describe('ToolExecutionCoordinator', () => {
     expect(coordinator.isExecutionEnabled()).toBe(false)
     await expect(coordinator.beginExternalAgentStep(
       'spatial_analyst',
-      { input: '分析当前图层' },
+      subAgentArgs('分析当前图层'),
       'call_subagent',
     )).rejects.toThrow("计划模式禁止调用子智能体 'spatial_analyst'")
   })
@@ -593,6 +642,15 @@ function coordinatorHarness(
       valueState: new Map(),
       signal: new AbortController().signal,
     }),
+  }
+}
+
+function subAgentArgs(objective: string) {
+  return {
+    objective,
+    expectedDeliverables: ['可核验分析结论'],
+    contextRefs: [],
+    constraints: [],
   }
 }
 

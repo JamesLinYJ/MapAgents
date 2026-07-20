@@ -1,15 +1,12 @@
 import type { AgentInputItem, RunStreamEvent } from '@openai/agents'
-import type { AgentRuntimeConfig } from '@geo-agent-platform/shared-types/runtime'
 
 import type { ItemSink } from '../conversation/itemSink.js'
 import type { ToolRegistry } from '../framework/registry.js'
 import type { AgentRuntimeStore } from '../store/runtimePorts.js'
 import type { RunEventSink } from './turnRunner.js'
 import {
-  assistantText,
   extractReasoningDelta,
   isAssistantContentCheckpoint,
-  isAssistantMessage,
   parseArguments,
   sdkNativeLedgerStatus,
 } from './runtimeSdkProjection.js'
@@ -41,11 +38,11 @@ export class RuntimeTranscriptProjector {
     itemSink: ItemSink,
   ): Promise<void> {
     if (event.type === 'raw_model_stream_event') {
+      // Supervisor 使用结构化 outputType；output_text_delta 是尚未闭合的 JSON，
+      // 不能直接进入用户时间线。先缓冲；只有同一响应确实发起工具调用时，
+      // 才把它作为工具前置说明投影，终态 JSON 则始终不会泄露给用户。
       if (event.data.type === 'output_text_delta' && event.data.delta) {
-        if (!projection.assistantItemId) {
-          projection.assistantItemId = itemSink.startItem('message', { role: 'assistant' }).itemId
-        }
-        itemSink.deltaItem(projection.assistantItemId, event.data.delta)
+        projection.lastAssistantText += event.data.delta
       }
       if (event.data.type === 'model') {
         const delta = extractReasoningDelta(event.data.event)
@@ -59,20 +56,17 @@ export class RuntimeTranscriptProjector {
       }
       return
     }
-    if (event.type === 'agent_updated_stream_event') {
-      eventSink.emit('step.started', `Agent：${event.agent.name}`, { agentId: event.agent.name })
-      return
-    }
+    // Agent 生命周期由 Runner 的 agent_start / agent_end / agent_handoff hooks
+    // 统一投影；stream event 只负责模型内容和 run item，避免同一状态双写。
+    if (event.type === 'agent_updated_stream_event') return
     if (event.name === 'message_output_created') {
       const raw = event.item.rawItem as AgentInputItem
-      const text = isAssistantMessage(raw) ? assistantText(raw) : ''
-      if (text) {
-        const itemId = projection.assistantItemId
-          ?? itemSink.startItem('message', { role: 'assistant' }).itemId
-        itemSink.completeItem(itemId, { body: text })
-        projection.completedAssistantItems.push({ itemId, text, entryId: null })
-        projection.lastAssistantText = text
-        projection.assistantItemId = null
+      if (raw.type === 'message' && raw.role === 'assistant') {
+        const content = raw.content
+          .filter(part => part.type === 'output_text')
+          .map(part => part.text)
+          .join('')
+        if (content) projection.lastAssistantText = content
       }
       return
     }
@@ -84,8 +78,15 @@ export class RuntimeTranscriptProjector {
       return
     }
     if (event.name === 'tool_called') {
+      if (projection.lastAssistantText.trim()) {
+        const text = projection.lastAssistantText.trim()
+        const item = itemSink.startItem('message', { role: 'assistant' })
+        itemSink.completeItem(item.itemId, { body: text })
+        projection.completedAssistantItems.push({ itemId: item.itemId, text, entryId: null })
+        projection.lastAssistantText = ''
+      }
       const raw = event.item.rawItem
-      if (raw.type === 'function_call' && assembly.subAgentNames.has(raw.name)) {
+      if (raw.type === 'function_call' && assembly.subAgentToolNames.has(raw.name)) {
         const exists = (await this.store.activeTranscript(assembly.threadId))
           .some(entry => entry.kind === 'tool_call' && entry.payload.callId === raw.callId)
         if (!exists) {
@@ -103,6 +104,8 @@ export class RuntimeTranscriptProjector {
               ledgerStatus: 'started',
             },
           })
+        }
+        if (!projection.subAgentCallItemIds.has(raw.callId)) {
           const item = itemSink.startItem('function_call', {
             name: raw.name,
             callId: raw.callId,
@@ -112,15 +115,19 @@ export class RuntimeTranscriptProjector {
           projection.subAgentCallItemIds.set(raw.callId, item.itemId)
         }
       }
-      const eventLabel = raw.type === 'function_call' && assembly.subAgentNames.has(raw.name)
-        ? '子智能体任务'
+      const eventLabel = raw.type === 'function_call'
+        ? assembly.subAgentToolNames.has(raw.name)
+          ? '子智能体任务'
+          : assembly.handoffToolNames.has(raw.name)
+            ? 'Handoff 转交'
+            : '工具调用'
         : '工具调用'
       eventSink.emit('tool.started', eventLabel, { sdkItemType: event.item.type })
       return
     }
     if (event.name === 'tool_output') {
       const raw = event.item.rawItem
-      if (raw.type === 'function_call_result' && assembly.subAgentNames.has(raw.name)) {
+      if (raw.type === 'function_call_result' && assembly.subAgentToolNames.has(raw.name)) {
         const failed = raw.status === 'incomplete'
         const itemId = projection.subAgentCallItemIds.get(raw.callId)
         if (itemId) {
@@ -189,9 +196,9 @@ export class RuntimeTranscriptProjector {
     }
   }
 
-  isPlatformManagedTool(toolName: string, runtimeConfig: AgentRuntimeConfig): boolean {
+  isPlatformManagedTool(toolName: string, assembly: RuntimeAssembly): boolean {
     return Boolean(this.toolRegistry.get(toolName))
-      || runtimeConfig.subAgents.some(config => config.agentId === toolName)
+      || assembly.subAgentToolNames.has(toolName)
   }
 
   failPendingSubAgentItems(
@@ -210,12 +217,13 @@ export class RuntimeTranscriptProjector {
     projection.subAgentCallItemIds.clear()
   }
 
-  async appendSandboxNativeToolCallTranscript(
+  async appendSdkNativeToolCallTranscript(
     runId: string,
     threadId: string,
     turnId: string,
     item: Extract<AgentInputItem, { type: 'function_call' }>,
     itemSink: ItemSink,
+    presentation: { label: string; source: string },
   ): Promise<void> {
     const args = parseArguments(item.arguments)
     const sdkStatus = item.status ?? 'completed'
@@ -227,24 +235,65 @@ export class RuntimeTranscriptProjector {
       payload: {
         callId: item.callId,
         name: item.name,
-        label: '沙箱工具调用',
+        label: presentation.label,
         arguments: args,
         ledgerStatus: sdkNativeLedgerStatus(sdkStatus),
-        source: 'openai_agents_sandbox',
+        source: presentation.source,
       },
     })
     const callItem = itemSink.startItem('function_call', {
       name: item.name,
       callId: item.callId,
       arguments: item.arguments,
-      metadata: { toolLabel: '沙箱工具调用', source: 'openai_agents_sandbox' },
+      metadata: { toolLabel: presentation.label, source: presentation.source },
     })
     itemSink.completeItem(callItem.itemId, {
       name: item.name,
       callId: item.callId,
-      body: sdkStatus === 'incomplete' ? 'SDK 沙箱工具执行未完成' : 'SDK 沙箱工具已执行',
+      body: sdkStatus === 'incomplete' ? `${presentation.label}未完成` : `${presentation.label}已执行`,
       isError: item.status === 'incomplete',
-      metadata: { toolLabel: '沙箱工具调用', source: 'openai_agents_sandbox' },
+      metadata: { toolLabel: presentation.label, source: presentation.source },
+    })
+  }
+
+  async appendSdkRejectedToolCallTranscript(
+    runId: string,
+    threadId: string,
+    turnId: string,
+    item: Extract<AgentInputItem, { type: 'function_call' }>,
+    itemSink: ItemSink,
+    label: string,
+  ): Promise<void> {
+    await this.store.appendTranscript({
+      threadId,
+      runId,
+      turnId,
+      kind: 'tool_call',
+      payload: {
+        callId: item.callId,
+        name: item.name,
+        label,
+        arguments: parseArguments(item.arguments),
+        ledgerStatus: 'rejected',
+        source: 'openai_agents_sdk',
+      },
+    })
+    const callItem = itemSink.startItem('function_call', {
+      name: item.name,
+      callId: item.callId,
+      arguments: item.arguments,
+      metadata: { toolLabel: label, source: 'openai_agents_sdk' },
+    })
+    itemSink.completeItem(callItem.itemId, {
+      name: item.name,
+      callId: item.callId,
+      body: `${label}未在当前运行阶段开放`,
+      isError: true,
+      metadata: {
+        toolLabel: label,
+        source: 'openai_agents_sdk',
+        rejectedBy: 'tool_not_found',
+      },
     })
   }
 

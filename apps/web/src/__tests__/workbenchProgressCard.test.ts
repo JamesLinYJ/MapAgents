@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest'
 import { requiredAt } from './testSupport'
 import { deriveWorkbenchProgressSummary } from '../app/layout/WorkbenchProgressModel'
 import { buildProgressItems } from '../app/derivedState'
+import type { RunEvent } from '@geo-agent-platform/shared-types'
 
 const progressItems = [
   { id: 'understand', title: '理解需求', description: '正在理解问题', status: 'done' as const },
@@ -89,5 +90,36 @@ describe('workbench progress card model', () => {
     expect(summary.tone).toBe('warning')
     expect(summary.description).toBe('数据读取失败')
     expect(summary.latestDetail).toBe('分析没有顺利完成，请稍后重试。')
+  })
+
+  it('keeps local SDK trace records out of user-facing latest progress copy', () => {
+    const events = [
+      {
+        eventId: 'event_work',
+        runId: 'run_1',
+        threadId: 'thread_1',
+        type: 'step.started',
+        message: '正在检查数据范围',
+        timestamp: '2026-07-21T00:00:00.000Z',
+        payload: {},
+      },
+      {
+        eventId: 'event_trace',
+        runId: 'run_1',
+        threadId: 'thread_1',
+        type: 'trace.recorded',
+        message: 'SDK 模型 Span完成',
+        timestamp: '2026-07-21T00:00:00.100Z',
+        payload: { diagnostic: true },
+      },
+    ] satisfies RunEvent[]
+    const summary = deriveWorkbenchProgressSummary({
+      runStatus: 'running',
+      progressItems,
+      tasks: [],
+      events,
+    })
+
+    expect(summary.latestDetail).toBe('正在检查数据范围')
   })
 })

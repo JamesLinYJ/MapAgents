@@ -111,7 +111,12 @@ describe('system prompt', () => {
   it('keeps parent-agent synthesis outside the executable workflow', () => {
     const prompt = buildSystemPrompt(defaultRuntimeConfig(), null, '', '', '')
 
-    expect(prompt).toContain('Agent-as-tool 结果会返回父智能体')
+    expect(prompt).toContain('## 已配置协作智能体')
+    expect(prompt).toContain('spatial_analyst（空间分析助手；Agent-as-tool，完成后返回主智能体）')
+    expect(prompt).toContain('本目录只用于识别用户指定的负责人，不表示当前阶段已经允许调用')
+    expect(prompt).toContain('Agent-as-tool 与只读并行批次结果会返回父智能体')
+    expect(prompt).toContain('存在匹配 Agent 时保留用户指定的负责人')
+    expect(prompt).toContain('不得由 supervisor 静默代办')
     expect(prompt).toContain('最终汇总、解释和普通正文交付不是 workflow 步骤')
     expect(prompt).toContain('不得用 todo_write 代表“主智能体汇总”')
     expect(prompt).toContain('用户限定步骤数量、负责人或交付形式时不得擅自扩展')
@@ -162,7 +167,23 @@ describe('system prompt', () => {
     expect(catalog).toContain('layerKey: string 必填')
     expect(catalog).toContain('resultRef: string valueRef<feature_collection> 可选')
     expect(catalog).toContain('授权工具 [geocode_place, list_layers, query_layer, spatial_analysis, create_chart]')
+    expect(catalog).toContain('objective: string 必填')
+    expect(catalog).toContain('expectedDeliverables: string[] 必填')
+    expect(catalog).toContain('委派模式 Agent-as-tool（完成后返回主智能体）')
     expect(catalog).toContain('最大运行轮次 12')
     expect(catalog).toContain('单次调用超时 120000ms')
+  })
+
+  it('does not advertise terminal handoffs as return-to-supervisor workflow steps', () => {
+    const config = defaultRuntimeConfig()
+    config.subAgents[0] = {
+      ...config.subAgents[0]!,
+      agentId: 'terminal_specialist',
+      delegationMode: 'handoff',
+    }
+
+    const catalog = buildPlanningCapabilityCatalog([], config.subAgents)
+
+    expect(catalog).not.toContain('terminal_specialist')
   })
 })

@@ -1,0 +1,335 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - 子智能体运行时公共边界
+//
+//   文件:       subAgentRuntimeSupport.ts
+//
+//   日期:       2026年07月21日
+//   作者:       OpenAI Codex
+// --------------------------------------------------------------------------
+
+import {
+  Agent,
+  MaxTurnsExceededError,
+  ToolTimeoutError,
+  type Model,
+} from '@openai/agents'
+import {
+  subAgentDeliverySchema,
+  type RuntimeSubAgentConfig,
+  type SubAgentDelivery,
+  type SubAgentInvocation,
+} from '@geo-agent-platform/shared-types/runtime'
+
+import type { ToolRegistry } from '../framework/registry.js'
+import type { ModelAdapter } from '../model/registry.js'
+import type { LocalAgentTracing } from '../observability/agentTracing.js'
+import type { SubAgentState } from '../schemas/types.js'
+import type { AgentRuntimeStore } from '../store/runtimePorts.js'
+import { createAgentsTools, type AgentsExecutionContext } from './agentsToolBridge.js'
+import { errorMessage, modelSettings } from './runtimeSdkProjection.js'
+import type { ToolExecutionCoordinator } from './toolExecutionCoordinator.js'
+import type { RunEventSink } from './turnRunner.js'
+
+export interface SubAgentRuntimeDependencies {
+  selectedModel: string
+  rootModel: Model
+  reasoning: boolean | undefined
+  adapter: ModelAdapter
+  toolRegistry: ToolRegistry
+  approvalTools: ReadonlySet<string>
+  store: AgentRuntimeStore
+  runId: string
+  threadId: string
+  eventSink: RunEventSink
+  coordinator: ToolExecutionCoordinator
+  agentTracing?: LocalAgentTracing
+}
+
+export function createSubAgentDeliveryAgent(
+  config: RuntimeSubAgentConfig,
+  dependencies: SubAgentRuntimeDependencies,
+  approvalTools: ReadonlySet<string> = dependencies.approvalTools,
+): Agent<AgentsExecutionContext, typeof subAgentDeliverySchema> {
+  return new Agent<AgentsExecutionContext, typeof subAgentDeliverySchema>({
+    name: config.agentId,
+    instructions: config.systemPrompt ?? config.summary,
+    handoffDescription: config.summary,
+    model: resolveSubAgentModel(config, dependencies),
+    modelSettings: modelSettings(dependencies.reasoning),
+    outputType: subAgentDeliverySchema,
+    tools: createAgentsTools(dependencies.toolRegistry, approvalTools, {
+      schemaMode: dependencies.adapter.agentToolSchemaMode,
+      allowedToolNames: new Set(config.tools),
+    }),
+  })
+}
+
+export function createSubAgentExecutionContext(
+  config: RuntimeSubAgentConfig,
+  dependencies: SubAgentRuntimeDependencies,
+): AgentsExecutionContext {
+  return {
+    runId: dependencies.runId,
+    isExecutionEnabled: () => dependencies.coordinator.isExecutionEnabled(),
+    isSdkExtensionEnabled: () => false,
+    isToolEnabled: toolName => dependencies.coordinator.isToolEnabledForSubAgent(config.agentId, toolName),
+    validateToolCall: (toolName, args) => dependencies.coordinator.validateToolCall(toolName, args),
+    formatToolFailureForModel: (toolName, message) => dependencies.coordinator.formatToolFailureForModel(toolName, message),
+    rejectPreparedToolCall: (toolName, callId, message) => dependencies.coordinator.rejectPreparedToolCall(toolName, callId, message),
+    prepareToolCall: (toolName, args, callId) => dependencies.coordinator.prepare(toolName, args, callId),
+    executeTool: (toolName, args, callId) => dependencies.coordinator.executeForSubAgent(
+      config.agentId,
+      toolName,
+      args,
+      callId,
+    ),
+  }
+}
+
+export function subAgentErrorHandlers(config: RuntimeSubAgentConfig) {
+  const message = subAgentMaxTurnsMessage(config)
+  return {
+    maxTurns: () => ({
+      finalOutput: {
+        status: 'failed' as const,
+        summary: message,
+        evidence: [],
+        artifactIds: [],
+        warnings: [],
+        error: message,
+      },
+      includeInHistory: true,
+    }),
+  }
+}
+
+export function formatSubAgentInput(input: SubAgentInvocation): string {
+  return [
+    `任务目标：${input.objective}`,
+    `预期交付：\n${input.expectedDeliverables.map(item => `- ${item}`).join('\n')}`,
+    input.contextRefs.length ? `上下文引用：\n${input.contextRefs.map(item => `- ${item}`).join('\n')}` : '',
+    input.constraints.length ? `约束：\n${input.constraints.map(item => `- ${item}`).join('\n')}` : '',
+    '请只交付 outputType 要求的结构化结果，并为每项关键结论提供证据。',
+    'artifactIds 只能填写工具结果 artifacts[].artifactId 中以 artifact_ 开头的真实平台 ID；valueRefs[].refId（ref_ 开头）只能写入 evidence.source。没有 Artifact 时返回空数组。',
+  ].filter(Boolean).join('\n\n')
+}
+
+export function parseSubAgentDelivery(agentId: string, value: unknown): SubAgentDelivery {
+  let parsed = value
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value)
+    } catch {
+      throw new Error(`子 Agent '${agentId}' 返回的结构化结果不是有效 JSON`)
+    }
+  }
+  const result = subAgentDeliverySchema.safeParse(parsed)
+  if (!result.success) throw new Error(`子 Agent '${agentId}' 返回结果不符合 delivery 契约`)
+  if (result.data.status === 'failed') {
+    throw new Error(result.data.error ?? result.data.summary)
+  }
+  if (result.data.error !== null) {
+    throw new Error(`子 Agent '${agentId}' 的完成结果不能包含 error`)
+  }
+  return result.data
+}
+
+export function assertSubAgentDeliveryArtifacts(
+  delivery: SubAgentDelivery,
+  dependencies: Pick<SubAgentRuntimeDependencies, 'store' | 'runId'>,
+): void {
+  if (!delivery.artifactIds.length) return
+  const run = dependencies.store.getRun(dependencies.runId)
+  const owned = new Set(run.state.artifacts.map(artifact => artifact.artifactId))
+  const missing = [...new Set(delivery.artifactIds)].filter(artifactId => !owned.has(artifactId))
+  if (missing.length) {
+    throw new Error(`子 Agent 最终输出引用了当前运行不存在的 Artifact：${missing.join('、')}`)
+  }
+}
+
+export function subAgentFailureMessage(error: unknown, config: RuntimeSubAgentConfig): string {
+  if (error instanceof MaxTurnsExceededError) return subAgentMaxTurnsMessage(config)
+  if (error instanceof ToolTimeoutError) {
+    return `${config.name}超过单次调用时限 ${config.timeoutMs}ms，已停止。`
+  }
+  return errorMessage(error)
+}
+
+export class SubAgentStateController {
+  private mutation: Promise<void> = Promise.resolve()
+
+  constructor(private readonly dependencies: SubAgentRuntimeDependencies) {}
+
+  async initialize(configs: RuntimeSubAgentConfig[]): Promise<void> {
+    await this.dependencies.store.mutateRunState(this.dependencies.runId, state => {
+      const previous = new Map(state.subAgents.map(agent => [agent.agentId, agent]))
+      return {
+        subAgents: configs.map(config => {
+          const prior = previous.get(config.agentId)
+          return {
+            ...(prior ?? {
+              status: 'pending' as const,
+              stepIds: [],
+              currentStepId: null,
+              latestMessage: null,
+            }),
+            agentId: config.agentId,
+            name: config.name,
+            role: config.role,
+            summary: config.summary,
+            tools: config.tools,
+          }
+        }),
+      }
+    })
+  }
+
+  async start(
+    config: RuntimeSubAgentConfig,
+    invocation: SubAgentInvocation,
+    callId: string,
+  ): Promise<string | null> {
+    const stepId = await this.dependencies.coordinator.beginExternalAgentStep(
+      config.agentId,
+      invocation,
+      callId,
+    )
+    await this.update(config.agentId, current => ({
+      ...current,
+      status: 'running',
+      stepIds: stepId && !current.stepIds.includes(stepId) ? [...current.stepIds, stepId] : current.stepIds,
+      currentStepId: stepId,
+      latestMessage: '子智能体正在执行',
+    }))
+    this.dependencies.eventSink.emit('subagent.updated', `${config.name} 正在执行`, {
+      agentId: config.agentId,
+      status: 'running',
+      stepId,
+    })
+    return stepId
+  }
+
+  async complete(
+    config: RuntimeSubAgentConfig,
+    callId: string,
+    stepId: string | null,
+    delivery: SubAgentDelivery,
+  ): Promise<void> {
+    await this.dependencies.coordinator.completeExternalAgentStep(callId, delivery.summary)
+    await this.update(config.agentId, current => ({
+      ...current,
+      status: 'completed',
+      currentStepId: null,
+      latestMessage: delivery.summary,
+    }))
+    this.dependencies.eventSink.emit('subagent.updated', `${config.name} 已完成`, {
+      agentId: config.agentId,
+      status: 'completed',
+      stepId,
+    })
+  }
+
+  async fail(
+    config: RuntimeSubAgentConfig,
+    callId: string,
+    stepId: string | null,
+    message: string,
+  ): Promise<void> {
+    await this.dependencies.coordinator.failExternalAgentStep(callId, message)
+    await this.update(config.agentId, current => ({
+      ...current,
+      status: 'failed',
+      currentStepId: null,
+      latestMessage: message,
+    }))
+    this.dependencies.eventSink.emit('subagent.updated', `${config.name} 执行失败`, {
+      agentId: config.agentId,
+      status: 'failed',
+      stepId,
+    })
+  }
+
+  async startHandoff(config: RuntimeSubAgentConfig): Promise<void> {
+    this.dependencies.coordinator.activateHandoff(config.agentId)
+    await this.update(config.agentId, current => ({
+      ...current,
+      status: 'running',
+      latestMessage: '已取得当前对话的处理权',
+    }))
+    this.dependencies.eventSink.emit('subagent.updated', `${config.name} 已接管当前对话`, {
+      agentId: config.agentId,
+      status: 'running',
+      delegationMode: 'handoff',
+    })
+  }
+
+  async completeHandoff(config: RuntimeSubAgentConfig, summary: string): Promise<void> {
+    this.dependencies.coordinator.finishHandoff(config.agentId)
+    await this.update(config.agentId, current => ({
+      ...current,
+      status: 'completed',
+      currentStepId: null,
+      latestMessage: summary,
+    }))
+    this.dependencies.eventSink.emit('subagent.updated', `${config.name} 已完成接管任务`, {
+      agentId: config.agentId,
+      status: 'completed',
+      delegationMode: 'handoff',
+    })
+  }
+
+  async failHandoff(config: RuntimeSubAgentConfig, message: string): Promise<void> {
+    this.dependencies.coordinator.finishHandoff(config.agentId)
+    await this.update(config.agentId, current => ({
+      ...current,
+      status: 'failed',
+      currentStepId: null,
+      latestMessage: message,
+    }))
+    this.dependencies.eventSink.emit('subagent.updated', `${config.name} 接管后失败`, {
+      agentId: config.agentId,
+      status: 'failed',
+      delegationMode: 'handoff',
+    })
+  }
+
+  private update(agentId: string, operation: (state: SubAgentState) => SubAgentState): Promise<void> {
+    const pending = this.mutation.then(async () => {
+      await this.dependencies.store.mutateRunState(this.dependencies.runId, state => {
+        const subAgent = state.subAgents.find(candidate => candidate.agentId === agentId)
+        if (!subAgent) throw new Error(`子 Agent '${agentId}' 的运行状态不存在`)
+        return {
+          subAgents: state.subAgents.map(candidate => candidate.agentId === agentId
+            ? operation(candidate)
+            : candidate),
+        }
+      })
+    }, async () => {
+      await this.dependencies.store.mutateRunState(this.dependencies.runId, state => {
+        const subAgent = state.subAgents.find(candidate => candidate.agentId === agentId)
+        if (!subAgent) throw new Error(`子 Agent '${agentId}' 的运行状态不存在`)
+        return {
+          subAgents: state.subAgents.map(candidate => candidate.agentId === agentId
+            ? operation(candidate)
+            : candidate),
+        }
+      })
+    })
+    this.mutation = pending.then(() => undefined, () => undefined)
+    return pending
+  }
+}
+
+export function resolveSubAgentModel(config: RuntimeSubAgentConfig, dependencies: SubAgentRuntimeDependencies): Model {
+  const modelName = config.model ?? dependencies.selectedModel
+  if (modelName === dependencies.selectedModel) return dependencies.rootModel
+  if (!dependencies.adapter.createAgentModel) {
+    throw new Error(`模型 provider '${dependencies.adapter.provider}' 不支持创建子智能体模型`)
+  }
+  return dependencies.adapter.createAgentModel(modelName)
+}
+
+function subAgentMaxTurnsMessage(config: RuntimeSubAgentConfig): string {
+  return `${config.name}已达到最大运行轮次 ${config.maxTurns}，为避免循环调用已停止。`
+}

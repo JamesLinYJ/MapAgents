@@ -8,7 +8,7 @@
 //   作者:       JamesLinYJ
 // --------------------------------------------------------------------------
 
-import type { ModelProviderDescriptor } from '../schemas/types.js'
+import type { AgentRuntimeCapabilities, ModelProviderDescriptor } from '../schemas/types.js'
 import type { Env } from '../framework/env.js'
 import type { Model } from '@openai/agents'
 import { createDeepSeekAdapter } from './providers/deepseek.js'
@@ -25,6 +25,7 @@ export interface ModelAdapter {
   readonly subagentModel?: string
   readonly contextWindowTokens?: number
   readonly agentToolSchemaMode: AgentToolSchemaMode
+  readonly agentRuntimeCapabilities: AgentRuntimeCapabilities
   readonly cacheNamespace?: string
 
   isConfigured(): boolean
@@ -105,6 +106,7 @@ export class ModelAdapterRegistry {
         configured: a.isConfigured(),
         defaultModel: a.defaultModel,
         capabilities: [...a.capabilities(), ...labels],
+        agentRuntime: a.agentRuntimeCapabilities,
         contextWindowTokens: a.contextWindowTokens ?? inferContextWindow(a.defaultModel),
       }
     })

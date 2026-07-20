@@ -298,6 +298,44 @@ export function RuntimeConfigEditor({ runtimeConfig, onSaveRuntimeConfig }: Runt
               }}
             />
           </label>
+          <label className="tool-field">
+            <span className="composer__label">主运行最大轮次</span>
+            <input
+              className="composer__input"
+              type="number"
+              min={1}
+              value={draft.maxTurns}
+              onChange={(event) => setDraft({ ...draft, maxTurns: Math.max(1, Number(event.target.value) || 1) })}
+            />
+          </label>
+          <label className="tool-field">
+            <span className="composer__label">工具最大并发</span>
+            <input
+              className="composer__input"
+              type="number"
+              min={1}
+              max={16}
+              value={draft.maxFunctionToolConcurrency}
+              onChange={(event) => setDraft({
+                ...draft,
+                maxFunctionToolConcurrency: Math.min(16, Math.max(1, Number(event.target.value) || 1)),
+              })}
+            />
+          </label>
+          <label className="tool-field">
+            <span className="composer__label">并行子智能体上限</span>
+            <input
+              className="composer__input"
+              type="number"
+              min={1}
+              max={4}
+              value={draft.maxParallelSubAgents}
+              onChange={(event) => setDraft({
+                ...draft,
+                maxParallelSubAgents: Math.min(4, Math.max(1, Number(event.target.value) || 1)),
+              })}
+            />
+          </label>
           <div className="tool-field tool-field--full">
             <div className="panel__subheader">
               <span>OpenAI Agents SDK 扩展</span>
@@ -698,6 +736,8 @@ export function RuntimeConfigEditor({ runtimeConfig, onSaveRuntimeConfig }: Runt
                         name: '新智能体',
                         role: '新角色',
                         summary: '负责新的工具职责。',
+                        delegationMode: 'as_tool',
+                        parallelSafe: false,
                         systemPrompt: '',
                         model: null,
                         tools: [],
@@ -769,6 +809,31 @@ export function RuntimeConfigEditor({ runtimeConfig, onSaveRuntimeConfig }: Runt
                         className="composer__textarea tool-field__textarea tool-field__textarea--catalog"
                         value={agent.systemPrompt ?? ''}
                         onChange={(event) => setDraft(updateSubAgent(draft, index, { systemPrompt: event.target.value }))}
+                      />
+                    </label>
+                    <label className="tool-field">
+                      <span className="composer__label">委派模式</span>
+                      <select
+                        className="composer__select"
+                        value={agent.delegationMode}
+                        onChange={(event) => setDraft(updateSubAgent(draft, index, {
+                          delegationMode: parseDelegationMode(event.target.value),
+                        }))}
+                      >
+                        <option value="as_tool">Agent as tool</option>
+                        <option value="parallel_batch">只读并行批次</option>
+                        <option value="handoff">Handoff 接管</option>
+                      </select>
+                    </label>
+                    <label className="tool-field tool-field--checkbox">
+                      <span className="composer__label">允许进入只读并行批次</span>
+                      <input
+                        type="checkbox"
+                        checked={agent.parallelSafe}
+                        disabled={agent.delegationMode !== 'parallel_batch'}
+                        onChange={(event) => setDraft(updateSubAgent(draft, index, {
+                          parallelSafe: event.target.checked,
+                        }))}
                       />
                     </label>
                     <label className="tool-field tool-field--full">
@@ -863,6 +928,13 @@ function updateSubAgent(
       candidateIndex === index ? { ...item, ...fields } : item,
     ),
   }
+}
+
+function parseDelegationMode(
+  value: string,
+): AgentRuntimeConfig['subAgents'][number]['delegationMode'] {
+  if (value === 'as_tool' || value === 'parallel_batch' || value === 'handoff') return value
+  throw new Error(`未知子智能体委派模式：${value}`)
 }
 
 function updateMcpServer(

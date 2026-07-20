@@ -14,7 +14,7 @@
     "@geo-agent-platform/shared-types": "file:../packages/shared-types",
     "@hono/node-server": "^1.13.0",
     "@hono/zod-validator": "^0.8.0",
-    "@openai/agents": "^0.13.4",
+    "@openai/agents": "0.13.5",
     "@turf/turf": "^7.2.0",
     "ajv": "^8.20.0",
     "better-auth": "^1.6.23",

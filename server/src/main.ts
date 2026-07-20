@@ -18,11 +18,11 @@ dotenv.config({ path: path.join(projectRoot, '.env') })
 
 import { createServer } from 'node:http'
 import { getRequestListener } from '@hono/node-server'
-import { setTracingDisabled } from '@openai/agents'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { metricsResponse, observeHttpMetrics } from './observability/metrics.js'
 import { errorLogPayload, logger, logHttpRequestSummary, traceId, withLogContext } from './observability/logger.js'
+import { LocalAgentTracing } from './observability/agentTracing.js'
 import { getEnv } from './framework/env.js'
 import { artifactRoutes } from './routes/artifacts.js'
 import { fileRoutes } from './routes/files.js'
@@ -40,11 +40,12 @@ import {
 import { installLifecycleManager } from './lifecycle.js'
 import { createAppContainer } from './app/container.js'
 
-// GeoForge 不向外部 tracing 后端发送 Agent 数据；Runner 级配置负责每次运行，
-// 全局开关覆盖 SDK 创建根 trace 和嵌套 Agent 工具的生命周期。
 const env = getEnv()
-setTracingDisabled(true)
-const container = await createAppContainer({ env, projectRoot })
+// SDK tracing 使用进程级 provider。这里只安装本地结构化处理器，不注册
+// OpenAI exporter，也不记录模型正文或工具输入输出。
+const agentTracing = new LocalAgentTracing()
+agentTracing.install()
+const container = await createAppContainer({ env, projectRoot, agentTracing })
 
 const app = new Hono()
 const trustedOrigins = new Set([

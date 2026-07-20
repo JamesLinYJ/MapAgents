@@ -199,6 +199,7 @@ function AppShell() {
     setUiError,
   })
   const {
+    applyToolDescriptors,
     availableTools,
     backgroundTasks,
     isRuntimeConfigSubmitting,
@@ -345,6 +346,7 @@ function AppShell() {
 
   const { authMe, authStatus, clearAuth, retryAuth } = useWorkspaceBootstrap({
     applyProviders,
+    applyTools: applyToolDescriptors,
     clearActiveRunState,
     getThreadHistory,
     hydrateRunState,

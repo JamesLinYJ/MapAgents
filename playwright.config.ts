@@ -9,11 +9,14 @@
 // --------------------------------------------------------------------------
 
 import { defineConfig, devices } from '@playwright/test'
+import { resolve } from 'node:path'
 
 const executablePath = process.env.PLAYWRIGHT_EXECUTABLE_PATH
+const authStatePath = resolve('output/playwright/auth-state.json')
 
 export default defineConfig({
   testDir: './tests/e2e',
+  globalSetup: './tests/e2e/globalSetup.ts',
   fullyParallel: false,
   timeout: 45_000,
   expect: { timeout: 10_000 },
@@ -22,6 +25,7 @@ export default defineConfig({
   outputDir: 'output/playwright/results',
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:5173',
+    storageState: authStatePath,
     launchOptions: executablePath ? { executablePath } : undefined,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',

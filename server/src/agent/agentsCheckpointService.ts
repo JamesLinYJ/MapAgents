@@ -6,14 +6,17 @@
 // --------------------------------------------------------------------------
 
 import { Agent, RunContext, RunState } from '@openai/agents'
+import { supervisorDeliverySchema } from '@geo-agent-platform/shared-types/runtime'
 
 import type { AgentsExecutionContext } from './agentsToolBridge.js'
 import { SDK_STATE_SCHEMA_VERSION } from './agentsRuntimeMetadata.js'
 import type { AgentRuntimeStore } from '../store/runtimePorts.js'
 
+type SupervisorAgent = Agent<AgentsExecutionContext, typeof supervisorDeliverySchema>
+
 export interface RestoreAgentsCheckpointOptions {
   runId: string
-  agent: Agent<AgentsExecutionContext>
+  agent: SupervisorAgent
   context: AgentsExecutionContext
   sdkVersion: string
   configDigest: string
@@ -24,7 +27,7 @@ export class AgentsCheckpointService {
 
   async persist(
     runId: string,
-    state: RunState<AgentsExecutionContext, Agent<AgentsExecutionContext>>,
+    state: RunState<AgentsExecutionContext, SupervisorAgent>,
     metadata: { sdkVersion: string; configDigest: string },
   ): Promise<void> {
     await this.store.saveAgentsSdkState(runId, state.toString(), {
@@ -35,7 +38,7 @@ export class AgentsCheckpointService {
 
   async restore(
     options: RestoreAgentsCheckpointOptions,
-  ): Promise<RunState<AgentsExecutionContext, Agent<AgentsExecutionContext>>> {
+  ): Promise<RunState<AgentsExecutionContext, SupervisorAgent>> {
     const checkpoint = await this.store.getRunCheckpoint(options.runId)
     assertCheckpointCompatibility(checkpoint, {
       runId: options.runId,

@@ -37,6 +37,7 @@ export function registerWorkspaceCommands(registry: WsCommandRegistry): void {
         session,
         threads: context.dependencies.store.listThreadsForSession(session.id),
         providers: context.dependencies.modelRegistry.descriptors(),
+        tools: context.dependencies.toolRegistry.descriptors(),
         auth: context.dependencies.security.auth.toAuthMe(auth),
       }
     },

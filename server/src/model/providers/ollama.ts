@@ -11,6 +11,10 @@ export function createOllamaAdapter(opts: OllamaOptions): ModelAdapter {
     displayName: opts.displayName ?? 'Ollama',
     defaultModel: opts.defaultModel,
     agentToolSchemaMode: 'compatible',
+    agentRuntimeCapabilities: {
+      structuredOutput: 'none', functionTools: false, localMcp: false,
+      hostedTools: false, handoffs: false, remoteConversation: false, serverCompaction: false,
+    },
     isConfigured: () => Boolean(baseUrl && opts.defaultModel),
     capabilities: () => ['chat'],
     async chat(prompt: string, kwargs?: Record<string, unknown>): Promise<Record<string, unknown>> {

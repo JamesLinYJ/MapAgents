@@ -29,6 +29,16 @@ export interface AgentsExecutionContext {
 export interface CreateAgentsToolsOptions {
   schemaMode: AgentToolSchemaMode
   allowedToolNames?: ReadonlySet<string>
+  executionScope?: AgentsToolExecutionScope
+}
+
+export interface AgentsToolExecutionScope {
+  isToolEnabled(toolName: string): boolean
+  validateToolCall(toolName: string, args: Record<string, unknown>): string | null
+  formatToolFailureForModel(toolName: string, message: string): string
+  rejectPreparedToolCall(toolName: string, callId: string, message: string): Promise<void>
+  prepareToolCall(toolName: string, args: Record<string, unknown>, callId: string): Promise<void>
+  executeTool(toolName: string, args: Record<string, unknown>, callId: string): Promise<string>
 }
 
 export function createAgentsTools(
@@ -55,14 +65,17 @@ export function createAgentsTools(
       const args = requireArguments(definition.name, input)
       return options.schemaMode === 'strict' ? stripNullObjectValues(args) : args
     }
+    const scope = (runContext?: RunContext<unknown>): AgentsToolExecutionScope => (
+      options.executionScope ?? requireContext(runContext)
+    )
     const isEnabled = ({ runContext }: { runContext: RunContext<AgentsExecutionContext> }): boolean => (
-      requireContext(runContext).isToolEnabled(definition.name)
+      scope(runContext).isToolEnabled(definition.name)
     )
     const needsApproval = async (runContext: RunContext, input: unknown, callId?: string): Promise<boolean> => {
-      const context = requireContext(runContext)
+      const execution = scope(runContext)
       const args = normalizeArguments(input)
       if (!callId) throw new Error(`工具 '${definition.name}' 缺少 callId`)
-      await context.prepareToolCall(definition.name, args, callId)
+      await execution.prepareToolCall(definition.name, args, callId)
       return definition.requiresApproval === true || definition.isDestructive || approvalTools.has(definition.name)
     }
     const execute = async (
@@ -70,12 +83,12 @@ export function createAgentsTools(
       runContext?: RunContext<AgentsExecutionContext>,
       details?: { toolCall?: { callId?: string } },
     ): Promise<string> => {
-      const context = requireContext(runContext)
+      const execution = scope(runContext)
       const args = normalizeArguments(input)
       const callId = details?.toolCall?.callId
       if (!callId) throw new Error(`工具 '${definition.name}' 缺少 callId`)
-      await context.prepareToolCall(definition.name, args, callId)
-      return context.executeTool(definition.name, args, callId)
+      await execution.prepareToolCall(definition.name, args, callId)
+      return execution.executeTool(definition.name, args, callId)
     }
     const errorFunction = (runContext: RunContext, error: unknown): string => {
       const message = error instanceof Error ? error.message : String(error)
@@ -83,13 +96,13 @@ export function createAgentsTools(
       if (/计划模式|禁止执行|无权|未授权/.test(message)) {
         throw error instanceof Error ? error : new Error(message)
       }
-      return requireContext(runContext).formatToolFailureForModel(definition.name, message)
+      return scope(runContext).formatToolFailureForModel(definition.name, message)
     }
     const workflowGuardrails = AGENT_WORKFLOW_DEFINITION_TOOLS.has(definition.name)
       ? [{
           name: 'agent_workflow_definition_contract',
           run: async ({ context, toolCall }: { context: RunContext<AgentsExecutionContext>; toolCall: { arguments: string; callId: string } }) => {
-            const runtime = requireContext(context)
+            const runtime = scope(context)
             const parsed: unknown = JSON.parse(toolCall.arguments)
             const args = normalizeArguments(parsed)
             const rejection = runtime.validateToolCall(definition.name, args)

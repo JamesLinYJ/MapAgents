@@ -134,6 +134,7 @@ describe('WebSocket run subscriptions', () => {
     const bootstrap = payloadData(await request(ws, 'workspace:bootstrap', { sessionId: session.id }, 'bootstrap'))
     expect(isRecord(bootstrap) && isRecord(bootstrap.session) ? bootstrap.session.id : null).toBe(session.id)
     expect(isRecord(bootstrap) && Array.isArray(bootstrap.threads) ? bootstrap.threads : []).toHaveLength(4)
+    expect(isRecord(bootstrap) && Array.isArray(bootstrap.tools) ? bootstrap.tools : null).toEqual([])
 
     const first = payloadData(await request(ws, 'run:list', { sessionId: session.id, limit: 3 }, 'runs_1'))
     expect(isRecord(first) && Array.isArray(first.items) ? first.items : []).toHaveLength(3)
@@ -771,10 +772,10 @@ function scriptedModel(script: (request: ModelRequest) => ScriptedResponse): Mod
   return {
     async getResponse(request): Promise<ModelResponse> {
       const responseId = makeResponseId()
-      return { usage: new Usage(), output: outputItems(script(request), responseId), responseId }
+      return { usage: new Usage(), output: outputItems(structuredResponse(script(request), request), responseId), responseId }
     },
     async *getStreamedResponse(request): AsyncIterable<ResponseStreamEvent> {
-      const response = script(request)
+      const response = structuredResponse(script(request), request)
       const responseId = makeResponseId()
       yield { type: 'response_started' }
       if (response.text) yield { type: 'output_text_delta', delta: response.text }
@@ -824,6 +825,24 @@ function outputItems(response: ScriptedResponse, responseId: string): AgentOutpu
   return output
 }
 
+function structuredResponse(response: ScriptedResponse, request: ModelRequest): ScriptedResponse {
+  if (!response.text || response.toolCalls?.length || request.outputType === 'text') return response
+  const properties = request.outputType.schema.properties
+  if ('markdown' in properties) {
+    return {
+      ...response,
+      text: JSON.stringify({ markdown: response.text, summary: response.text, artifactIds: [], warnings: [] }),
+    }
+  }
+  if ('evidence' in properties) {
+    return {
+      ...response,
+      text: JSON.stringify({ status: 'completed', summary: response.text, evidence: [], artifactIds: [], warnings: [], error: null }),
+    }
+  }
+  return response
+}
+
 function fakeAdapter(model: Model): ModelAdapter {
   return {
     provider: 'fake',
@@ -831,6 +850,15 @@ function fakeAdapter(model: Model): ModelAdapter {
     defaultModel: 'fake-model',
     contextWindowTokens: 128_000,
     agentToolSchemaMode: 'strict',
+    agentRuntimeCapabilities: {
+      structuredOutput: 'json_schema',
+      functionTools: true,
+      localMcp: true,
+      hostedTools: false,
+      handoffs: true,
+      remoteConversation: false,
+      serverCompaction: false,
+    },
     isConfigured: () => true,
     capabilities: () => ['chat', 'stream'],
     createAgentModel: () => model,

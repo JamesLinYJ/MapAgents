@@ -469,8 +469,8 @@ export function buildProgressItems({
   artifacts: ArtifactRef[]
   events: RunEvent[]
 }) {
-  const latestEvent = events.at(-1)
-  const hasWorkStarted = events.length > 0 || runStatus === 'running' || runStatus === 'completed'
+  const latestEvent = latestOperationalRunEvent(events)
+  const hasWorkStarted = Boolean(latestEvent) || runStatus === 'running' || runStatus === 'completed'
 
   return [
     {
@@ -574,6 +574,14 @@ export function formatUiRunEventMessage(event?: RunEvent) {
     return '分析没有顺利完成，请稍后重试。'
   }
   return event.message
+}
+
+export function latestOperationalRunEvent(events: ReadonlyArray<RunEvent>): RunEvent | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]
+    if (event && event.type !== 'trace.recorded') return event
+  }
+  return undefined
 }
 
 export function describeCollectionGeometry(collection?: GeoJSON.FeatureCollection) {

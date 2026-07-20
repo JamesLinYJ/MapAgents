@@ -99,5 +99,6 @@ function snapshot(sessionId: string): WorkspaceBootstrapSnapshot {
     },
     threads: [],
     providers: [],
+    tools: [],
   }
 }

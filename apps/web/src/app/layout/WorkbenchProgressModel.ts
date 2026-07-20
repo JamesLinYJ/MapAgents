@@ -14,7 +14,7 @@
 // 非组件导出，也避免右侧检查区重新发明运行状态。
 
 import type { AnalysisRun, RunEvent } from '@geo-agent-platform/shared-types'
-import { formatUiRunEventMessage, type ProgressTodoItem } from '../derivedState'
+import { formatUiRunEventMessage, latestOperationalRunEvent, type ProgressTodoItem } from '../derivedState'
 
 export interface WorkbenchProgressItem {
   id: string
@@ -51,7 +51,7 @@ export function deriveWorkbenchProgressSummary({
   const activeItem = progressItems.find(item => item.status === 'active')
   const warningItem = progressItems.find(item => item.status === 'warning')
   const latestTask = [...tasks].reverse().find(task => task.status === 'running' || task.status === 'completed') ?? tasks.at(-1)
-  const latestEvent = events.at(-1)
+  const latestEvent = latestOperationalRunEvent(events)
 
   if (runStatus === 'completed') {
     const hasArtifacts = artifactCount > 0

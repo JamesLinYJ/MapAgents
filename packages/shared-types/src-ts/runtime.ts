@@ -25,12 +25,73 @@ export const runtimeSubAgentConfigSchema = z.object({
   name: z.string(),
   role: z.string(),
   summary: z.string(),
+  delegationMode: z.enum(['as_tool', 'parallel_batch', 'handoff']).default('as_tool'),
+  parallelSafe: z.boolean().default(false),
   systemPrompt: z.string().nullable().default(null),
   model: z.string().nullable().default(null),
   tools: z.array(z.string()).default([]),
   maxTurns: z.number().int().positive().max(100).default(12),
   timeoutMs: z.number().int().positive().max(2_147_483_647).default(120_000),
 })
+
+export const subAgentInvocationSchema = z.object({
+  objective: z.string().trim().min(1),
+  expectedDeliverables: z.array(z.string().trim().min(1)).min(1),
+  contextRefs: z.array(z.string().trim().min(1)),
+  constraints: z.array(z.string().trim().min(1)),
+}).strict()
+
+export const agentBatchTaskSchema = subAgentInvocationSchema.extend({
+  taskId: z.string().trim().min(1),
+  agentId: z.string().trim().min(1),
+}).strict()
+
+export const agentBatchInvocationSchema = z.object({
+  tasks: z.array(agentBatchTaskSchema).min(1).max(4),
+}).strict()
+
+const deliveryArtifactIdSchema = z.string()
+  .trim()
+  .regex(/^artifact_[a-zA-Z0-9_-]+$/u, '必须是当前运行真实生成的 artifact_<id>')
+  .describe('当前 run 的平台 Artifact ID，必须来自工具结果 artifacts[].artifactId；不能填写 valueRefs[].refId')
+
+export const supervisorDeliverySchema = z.object({
+  markdown: z.string().trim().min(1).describe('直接展示给用户的最终中文 Markdown 正文'),
+  summary: z.string().trim().min(1).describe('最终交付的单段简要摘要'),
+  artifactIds: z.array(deliveryArtifactIdSchema)
+    .describe('本次交付引用的真实平台 Artifact ID；没有 Artifact 时必须为空数组'),
+  warnings: z.array(z.string().trim().min(1)).describe('需要用户注意的真实限制或警告'),
+}).strict()
+
+export const subAgentEvidenceSchema = z.object({
+  claim: z.string().trim().min(1).describe('由当前工具结果支持的可核验结论'),
+  source: z.string().trim().min(1)
+    .describe('证据来源，可填写工具名、valueRefs[].refId 或 artifacts[].artifactId'),
+}).strict()
+
+export const subAgentDeliverySchema = z.object({
+  status: z.enum(['completed', 'failed']),
+  summary: z.string().trim().min(1).describe('返回主智能体的任务结论'),
+  evidence: z.array(subAgentEvidenceSchema).describe('支持任务结论的证据清单'),
+  artifactIds: z.array(deliveryArtifactIdSchema)
+    .describe('子智能体引用的真实平台 Artifact ID；没有 Artifact 时必须为空数组'),
+  warnings: z.array(z.string().trim().min(1)).describe('任务限制或非致命警告'),
+  error: z.string().trim().min(1).nullable().describe('status=failed 时的错误；completed 时必须为 null'),
+}).strict()
+
+export const agentBatchTaskResultSchema = z.object({
+  taskId: z.string().trim().min(1),
+  agentId: z.string().trim().min(1),
+  status: z.enum(['completed', 'failed']),
+  delivery: subAgentDeliverySchema.nullable(),
+  error: z.string().trim().min(1).nullable(),
+  durationMs: z.number().nonnegative(),
+}).strict()
+
+export const agentBatchDeliverySchema = z.object({
+  status: z.enum(['completed', 'partial_failure', 'failed']),
+  tasks: z.array(agentBatchTaskResultSchema).min(1),
+}).strict()
 
 export const supervisorRuntimeConfigSchema = z.object({
   name: z.string().default('geo_agent_supervisor'),
@@ -236,6 +297,7 @@ export const agentRuntimeConfigSchema = z.object({
   loopTraceLimit: z.number().default(80),
   maxTurns: z.number().default(50),
   maxFunctionToolConcurrency: z.number().int().min(1).max(16).default(4),
+  maxParallelSubAgents: z.number().int().min(1).max(4).default(3),
   sandbox: runtimeSandboxConfigSchema.default({ backend: 'docker', dockerImage: 'node:22-bookworm-slim' }),
   sdk: runtimeSdkConfigSchema.default({
     mcp: { enabled: false, connectTimeoutMs: 10_000, closeTimeoutMs: 2_000, servers: [] },
@@ -333,6 +395,14 @@ export const agentRuntimeConfigSchema = z.object({
 export type PermissionRuleEntry = z.infer<typeof permissionRuleSchema>
 export type HookConfigEntry = z.infer<typeof hookConfigSchema>
 export type RuntimeSubAgentConfig = z.infer<typeof runtimeSubAgentConfigSchema>
+export type SubAgentInvocation = z.infer<typeof subAgentInvocationSchema>
+export type AgentBatchTask = z.infer<typeof agentBatchTaskSchema>
+export type AgentBatchInvocation = z.infer<typeof agentBatchInvocationSchema>
+export type SupervisorDelivery = z.infer<typeof supervisorDeliverySchema>
+export type SubAgentEvidence = z.infer<typeof subAgentEvidenceSchema>
+export type SubAgentDelivery = z.infer<typeof subAgentDeliverySchema>
+export type AgentBatchTaskResult = z.infer<typeof agentBatchTaskResultSchema>
+export type AgentBatchDelivery = z.infer<typeof agentBatchDeliverySchema>
 export type SupervisorRuntimeConfig = z.infer<typeof supervisorRuntimeConfigSchema>
 export type RuntimeUiConfig = z.infer<typeof runtimeUiConfigSchema>
 export type RuntimeCatalogConfig = z.infer<typeof runtimeCatalogConfigSchema>

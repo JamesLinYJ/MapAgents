@@ -45,6 +45,7 @@ export async function loadBootstrapFromWorkspacePointer(
 
 export function useWorkspaceBootstrap({
   applyProviders,
+  applyTools,
   clearActiveRunState,
   disabled = false,
   getThreadHistory,
@@ -58,6 +59,7 @@ export function useWorkspaceBootstrap({
   syncWorkspaceUrl = true,
 }: {
   applyProviders: (providers: WorkspaceBootstrapSnapshot['providers']) => void
+  applyTools: (tools: WorkspaceBootstrapSnapshot['tools']) => void
   clearActiveRunState: () => void
   disabled?: boolean
   getThreadHistory: (threadId: string, cursor?: string | null, limit?: number) => Promise<ThreadHistoryPage>
@@ -114,6 +116,7 @@ export function useWorkspaceBootstrap({
         const snapshot = await loadBootstrapFromWorkspacePointer(workspacePointer, loadWorkspaceBootstrap)
         if (disposed) return
         applyProviders(snapshot.providers)
+        applyTools(snapshot.tools)
         setUiError(undefined)
 
         const sessionRecord = snapshot.session
@@ -167,6 +170,7 @@ export function useWorkspaceBootstrap({
     return () => { disposed = true }
   }, [
     applyProviders,
+    applyTools,
     authRefreshNonce,
     clearActiveRunState,
     disabled,

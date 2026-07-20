@@ -18,6 +18,7 @@ export function defaultRuntimeConfig(options: DefaultRuntimeConfigOptions = {}):
     loopTraceLimit: 80,
     maxTurns: 50,
     maxFunctionToolConcurrency: 4,
+    maxParallelSubAgents: 3,
     sandbox,
     sdk: {
       mcp: {
@@ -46,6 +47,8 @@ export function defaultRuntimeConfig(options: DefaultRuntimeConfigOptions = {}):
         name: '空间分析助手',
         role: 'spatial_analyst',
         summary: '负责地理空间分析和图层查询',
+        delegationMode: 'as_tool',
+        parallelSafe: false,
         systemPrompt: `你是平台的空间分析子智能体，负责平台图层检索、真实要素查询和确定性 GIS 几何分析。
 
 工作规则：

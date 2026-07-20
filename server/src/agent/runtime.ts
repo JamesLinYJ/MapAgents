@@ -9,6 +9,7 @@
 // --------------------------------------------------------------------------
 
 import { errorLogPayload, logger } from '../observability/logger.js'
+import type { LocalAgentTracing } from '../observability/agentTracing.js'
 import {
   Agent,
   RunContext,
@@ -26,12 +27,15 @@ import {
   type SandboxSessionLike,
 } from '@openai/agents/sandbox'
 import type { ToolRegistry } from '../framework/registry.js'
-import type { ModelAdapterRegistry } from '../model/registry.js'
+import type { ModelAdapter, ModelAdapterRegistry } from '../model/registry.js'
 import { recordModelCompletionUsage, type ModelCompletionService } from '../model/modelResultCache.js'
 import type {
+  AgentRuntimeConfig,
   AnalysisRun,
+  SupervisorDelivery,
   ToolValueRef,
 } from '../schemas/types.js'
+import { supervisorDeliverySchema } from '../schemas/types.js'
 import type { AgentRuntimeStore } from '../store/runtimePorts.js'
 import { ItemSink } from '../conversation/itemSink.js'
 import { makeId, nowUtc } from '../utils/ids.js'
@@ -65,12 +69,12 @@ import {
   buildSandboxManifest,
   createConfiguredSandboxSession,
   prepareRunArtifactDirectory,
-  type OpenAIAgentsRuntimeOptions,
+  type SandboxSessionFactory,
 } from './runtimeSandbox.js'
 import {
   buildRuntimeSdkSandboxIntegration,
-  createRuntimeSdkTools,
-  type RuntimeSdkToolIntegration,
+  createRuntimeSdkIntegration,
+  type RuntimeSdkIntegration,
 } from './runtimeSdkIntegrations.js'
 import { aggregateModelUsage, mergeModelUsageStats, type ModelUsageLike } from './modelUsage.js'
 import { AgentsCheckpointService } from './agentsCheckpointService.js'
@@ -79,13 +83,21 @@ import { RuntimeApprovalPersistence } from './runtimeApprovalPersistence.js'
 import { RunSteeringController } from './runSteeringController.js'
 import type { RunOptions, RuntimeAssembly, StreamProjectionState } from './runtimeTypes.js'
 import { createSubAgentTools } from './subAgentToolFactory.js'
+import { createParallelSubAgentTool, PARALLEL_SUBAGENT_TOOL_NAME } from './parallelSubAgentToolFactory.js'
+import { createHandoffAgents } from './handoffAgentFactory.js'
+import { SubAgentStateController } from './subAgentRuntimeSupport.js'
 import {
   createPlanModeTerminalGuardrail,
   planModeTerminalGuardrailMessage,
 } from './runtimeOutputGuardrails.js'
 
-export type { OpenAIAgentsRuntimeOptions, SandboxSessionFactory } from './runtimeSandbox.js'
+export type { SandboxSessionFactory } from './runtimeSandbox.js'
 export type { RunOptions } from './runtimeTypes.js'
+
+export interface OpenAIAgentsRuntimeOptions {
+  createSandboxSession?: SandboxSessionFactory
+  agentTracing?: LocalAgentTracing
+}
 
 // OpenAIAgentsRuntime
 //
@@ -123,30 +135,32 @@ export class OpenAIAgentsRuntime {
       throw new Error(`运行 '${options.runId}' 已有活动执行器`)
     }
     this.abortControllers.set(options.runId, abort)
-    await this.store.updateRunStatus(options.runId, 'running')
-    if (!options.resume && options.executionMode === 'plan') {
-      await this.store.updateRunState(options.runId, {
-        planMode: true,
-        agentWorkflow: null,
-      })
-    }
-
-    const turnId = options.resume
-      ? await this.checkpoints.requireTurnId(threadId, options.runId)
-      : makeId('turn')
-    if (!options.resume) {
-      const userEntry = await this.store.appendTranscript({
-        threadId,
-        runId: options.runId,
-        turnId,
-        kind: 'message',
-        payload: { role: 'user', content: options.query },
-      })
-      itemSink.appendUserMessage(options.query, { transcriptEntryId: userEntry.entryId })
-      eventSink.emit('intent.parsed', '开始分析...', {})
-    }
-
+    let detachTracing = (): void => {}
     try {
+      detachTracing = this.runtimeOptions.agentTracing?.attachRun(options.runId, eventSink) ?? (() => {})
+      await this.store.updateRunStatus(options.runId, 'running')
+      if (!options.resume && options.executionMode === 'plan') {
+        await this.store.updateRunState(options.runId, {
+          planMode: true,
+          agentWorkflow: null,
+        })
+      }
+
+      const turnId = options.resume
+        ? await this.checkpoints.requireTurnId(threadId, options.runId)
+        : makeId('turn')
+      if (!options.resume) {
+        const userEntry = await this.store.appendTranscript({
+          threadId,
+          runId: options.runId,
+          turnId,
+          kind: 'message',
+          payload: { role: 'user', content: options.query },
+        })
+        itemSink.appendUserMessage(options.query, { transcriptEntryId: userEntry.entryId })
+        eventSink.emit('intent.parsed', '开始分析...', {})
+      }
+
       await this.steering.open(options.runId)
       const assembly = await this.assembleRuntime(options, threadId, turnId, eventSink, itemSink, abort.signal)
       const resumeState = options.resume
@@ -183,9 +197,17 @@ export class OpenAIAgentsRuntime {
       }
       return this.store.getRun(options.runId)
     } finally {
-      await this.steering.close(options.runId)
-      unlinkExternalAbort()
-      this.abortControllers.delete(options.runId)
+      detachTracing()
+      try {
+        await eventSink.flush()
+      } finally {
+        try {
+          await this.steering.close(options.runId)
+        } finally {
+          unlinkExternalAbort()
+          this.abortControllers.delete(options.runId)
+        }
+      }
     }
   }
 
@@ -273,8 +295,10 @@ export class OpenAIAgentsRuntime {
       throw new Error(`运行 '${runId}' 已有活动执行器`)
     }
     this.abortControllers.set(runId, abort)
+    let detachTracing = (): void => {}
     const finalizer = new TurnFinalizer(eventSink, itemSink, status => this.store.completeRun(runId, status))
     try {
+      detachTracing = this.runtimeOptions.agentTracing?.attachRun(runId, eventSink) ?? (() => {})
       await this.store.updateRunStatus(runId, 'running')
       await this.steering.open(runId)
       const assembly = await this.assembleRuntime(options, run.threadId, turnId, eventSink, itemSink, abort.signal, false)
@@ -318,9 +342,17 @@ export class OpenAIAgentsRuntime {
       }
       return this.store.getRun(runId)
     } finally {
-      await this.steering.close(runId)
-      unlinkExternalAbort()
-      this.abortControllers.delete(runId)
+      detachTracing()
+      try {
+        await eventSink.flush()
+      } finally {
+        try {
+          await this.steering.close(runId)
+        } finally {
+          unlinkExternalAbort()
+          this.abortControllers.delete(runId)
+        }
+      }
     }
   }
 
@@ -362,6 +394,7 @@ export class OpenAIAgentsRuntime {
     const adapter = this.modelRegistry.resolveProvider(options.provider)
     const workspaceId = this.store.getRun(options.runId).workspaceId
     if (!adapter.createAgentModel) throw new Error(`模型 provider '${adapter.provider}' 不支持 Agents SDK Supervisor`)
+    assertAgentRuntimeCapabilities(adapter, options.runtimeConfig)
     const selectedModel = options.modelName ?? adapter.defaultModel
     if (!selectedModel) throw new Error(`模型 provider '${adapter.provider}' 未配置模型名称`)
     const model = adapter.createAgentModel(selectedModel)
@@ -422,23 +455,7 @@ export class OpenAIAgentsRuntime {
 
     const valueState = this.createThreadValueState(threadId, options.runId)
     let coordinator: ToolExecutionCoordinator
-    let supervisorAgent: Agent<AgentsExecutionContext> | null = null
-    let explicitTools: Tool<AgentsExecutionContext>[] = []
-    let sdkExtensionCapabilities: Capability[] = []
     const coreSandboxCapabilities = planAwareSandboxCapabilities()
-    const applyPlanModeModelBoundary = (): void => {
-      if (!supervisorAgent) return
-      supervisorAgent.instructions = buildSupervisorInstructions()
-      supervisorAgent.modelSettings = modelSettings(options.reasoning)
-      supervisorAgent.resetToolChoice = true
-      supervisorAgent.tools = visibleExplicitTools(explicitTools, coordinator.isSdkExtensionEnabled())
-      if (supervisorAgent instanceof SandboxAgent) {
-        supervisorAgent.capabilities = [
-          ...coreSandboxCapabilities,
-          ...(coordinator.isSdkExtensionEnabled() ? sdkExtensionCapabilities : []),
-        ]
-      }
-    }
     const context: AgentsExecutionContext = {
       runId: options.runId,
       isExecutionEnabled: () => coordinator.isExecutionEnabled(),
@@ -468,16 +485,18 @@ export class OpenAIAgentsRuntime {
       itemSink,
       valueState,
       signal,
-      onPlanModeChanged: applyPlanModeModelBoundary,
     })
     const approvalTools = new Set(options.runtimeConfig.supervisor.approvalInterruptTools)
-    const supervisorTools = createAgentsTools(this.toolRegistry, approvalTools, {
-      schemaMode: adapter.agentToolSchemaMode,
-    })
     const returnDirectToolNames = this.toolRegistry.list()
       .filter(tool => (tool.executionSurfaces?.includes('agent') ?? true) && tool.agentResultMode === 'return_direct')
       .map(tool => tool.name)
-    const subAgentTools = await createSubAgentTools({
+    const supervisorTools = wrapReturnDirectTools(
+      createAgentsTools(this.toolRegistry, approvalTools, {
+        schemaMode: adapter.agentToolSchemaMode,
+      }),
+      new Set(returnDirectToolNames),
+    )
+    const subAgentDependencies = {
       configs: options.runtimeConfig.subAgents,
       selectedModel,
       rootModel: model,
@@ -487,27 +506,47 @@ export class OpenAIAgentsRuntime {
       approvalTools,
       store: this.store,
       runId: options.runId,
+      threadId,
       eventSink,
       coordinator,
+      ...(this.runtimeOptions.agentTracing ? { agentTracing: this.runtimeOptions.agentTracing } : {}),
+    }
+    const subAgentState = new SubAgentStateController(subAgentDependencies)
+    await subAgentState.initialize(options.runtimeConfig.subAgents)
+    const subAgentTools = await createSubAgentTools({
+      ...subAgentDependencies,
+      stateController: subAgentState,
+    })
+    const parallelSubAgentTool = createParallelSubAgentTool({
+      ...subAgentDependencies,
+      maxParallelSubAgents: options.runtimeConfig.maxParallelSubAgents,
+      signal,
+      stateController: subAgentState,
+    })
+    const handoffIntegration = createHandoffAgents({
+      ...subAgentDependencies,
+      stateController: subAgentState,
     })
     const sandboxIntegration = buildRuntimeSdkSandboxIntegration(options.runtimeConfig)
-    sdkExtensionCapabilities = sandboxIntegration.capabilities
+    const sdkExtensionCapabilities = sandboxIntegration.capabilities
     const artifactDirectory = await prepareRunArtifactDirectory(this.store.runtimeRoot, options.runId)
     const sandboxManifest = buildSandboxManifest(options, threadId, sandboxIntegration.pathGrants, {
       artifactDirectory,
     })
     const createSandboxSession = this.runtimeOptions.createSandboxSession ?? createConfiguredSandboxSession
     let sandboxSession: SandboxSessionLike | null = null
-    let sdkTools: RuntimeSdkToolIntegration | null = null
+    let sdkIntegration: RuntimeSdkIntegration | null = null
     try {
       sandboxSession = await createSandboxSession(sandboxManifest, options.runtimeConfig.sandbox)
       const reservedToolNames = new Set([
         ...this.toolRegistry.list().map(tool => tool.name),
-        ...options.runtimeConfig.subAgents.map(config => config.agentId),
+        ...subAgentTools.map(tool => tool.name),
+        ...(parallelSubAgentTool ? [PARALLEL_SUBAGENT_TOOL_NAME] : []),
+        ...handoffIntegration.handoffs.map(item => item.toolName),
       ])
-      sdkTools = await createRuntimeSdkTools(options.runtimeConfig, reservedToolNames)
+      sdkIntegration = await createRuntimeSdkIntegration(options.runtimeConfig, reservedToolNames)
     } catch (error) {
-      await sdkTools?.close().catch(closeError => {
+      await sdkIntegration?.close().catch(closeError => {
         logger.warn({ error: errorLogPayload(closeError) }, 'sdk mcp close after assembly failure failed')
       })
       await sandboxSession?.close?.().catch(closeError => {
@@ -515,26 +554,35 @@ export class OpenAIAgentsRuntime {
       })
       throw error
     }
-    if (!sandboxSession || !sdkTools) throw new Error('Agents SDK 运行时装配未完成')
+    if (!sandboxSession || !sdkIntegration) throw new Error('Agents SDK 运行时装配未完成')
     await this.store.updateRunState(options.runId, {
       activeSkills: sandboxIntegration.activeSkills,
-      activeMcpServers: sdkTools.activeMcpServers,
+      activeMcpServers: sdkIntegration.activeMcpServers,
     })
-    if (sandboxIntegration.activeSkills.length || sdkTools.activeMcpServers.length) {
+    if (sandboxIntegration.activeSkills.length || sdkIntegration.activeMcpServers.length) {
       eventSink.emit('step.started', 'SDK 扩展已装配', {
         active_skills: sandboxIntegration.activeSkills,
-        active_mcp_servers: sdkTools.activeMcpServers,
+        active_mcp_servers: sdkIntegration.activeMcpServers,
       })
     }
-    explicitTools = [...supervisorTools, ...subAgentTools, ...sdkTools.tools]
-    const agent = new SandboxAgent<AgentsExecutionContext>({
+    const explicitTools = [
+      ...supervisorTools,
+      ...subAgentTools,
+      ...(parallelSubAgentTool ? [parallelSubAgentTool] : []),
+      ...sdkIntegration.tools,
+    ]
+    const agent = new SandboxAgent<AgentsExecutionContext, typeof supervisorDeliverySchema>({
       name: options.runtimeConfig.supervisor.name,
-      instructions: systemPrompt,
+      instructions: () => buildSupervisorInstructions(),
       model,
       modelSettings: modelSettings(options.reasoning),
       resetToolChoice: true,
       tools: visibleExplicitTools(explicitTools, coordinator.isSdkExtensionEnabled()),
+      mcpServers: sdkIntegration.mcpServers,
+      mcpConfig: sdkIntegration.mcpConfig,
       toolUseBehavior: { stopAtToolNames: returnDirectToolNames },
+      outputType: supervisorDeliverySchema,
+      handoffs: handoffIntegration.handoffs,
       outputGuardrails: [createPlanModeTerminalGuardrail({
         hasTerminalViolation: () => {
           const state = this.store.getRun(options.runId).state
@@ -549,24 +597,54 @@ export class OpenAIAgentsRuntime {
       defaultManifest: sandboxManifest,
       capabilities: [
         ...coreSandboxCapabilities,
-        ...(coordinator.isSdkExtensionEnabled() ? sdkExtensionCapabilities : []),
+        ...sdkExtensionCapabilities,
       ],
     })
-    supervisorAgent = agent
+    const unavailableSdkToolCallIds = new Set<string>()
     const runner = new Runner({
       model,
-      tracingDisabled: true,
+      tracingDisabled: !this.runtimeOptions.agentTracing,
       traceIncludeSensitiveData: false,
+      workflowName: 'GeoForge Agent Workflow',
+      groupId: threadId,
+      traceMetadata: {
+        runId: options.runId,
+        threadId,
+        sessionId: options.sessionId,
+        provider: options.provider,
+      },
       // Agents SDK 原生地把模型臆造的未知工具转回模型，而不是让协议错误覆盖
       // 已经落盘的业务失败。格式化器同时重申结构化工作流的调整边界。
       toolNotFoundBehavior: 'return_error_to_model',
-      toolErrorFormatter: ({ kind, toolName }) => kind === 'tool_not_found'
-        ? coordinator.formatUnavailableToolForModel(toolName)
-        : undefined,
+      toolErrorFormatter: ({ kind, toolName, callId }) => {
+        if (kind !== 'tool_not_found') return undefined
+        unavailableSdkToolCallIds.add(callId)
+        return coordinator.formatUnavailableToolForModel(toolName)
+      },
       toolExecution: {
         maxFunctionToolConcurrency: options.runtimeConfig.maxFunctionToolConcurrency,
         preApprovalInputGuardrails: true,
       },
+    })
+    runner.on('agent_start', (_context, startedAgent) => {
+      eventSink.emit('step.started', `Agent：${startedAgent.name}`, {
+        agentId: startedAgent.name,
+        lifecycle: 'agent_start',
+      })
+    })
+    runner.on('agent_end', (_context, endedAgent) => {
+      eventSink.emit('step.completed', `Agent：${endedAgent.name}`, {
+        agentId: endedAgent.name,
+        lifecycle: 'agent_end',
+      })
+    })
+    runner.on('agent_handoff', (_context, fromAgent, toAgent) => {
+      eventSink.emit('subagent.updated', `${fromAgent.name} 已转交给 ${toAgent.name}`, {
+        fromAgentId: fromAgent.name,
+        agentId: toAgent.name,
+        status: 'running',
+        delegationMode: 'handoff',
+      })
     })
 
     let assembly: RuntimeAssembly | null = null
@@ -578,7 +656,12 @@ export class OpenAIAgentsRuntime {
       pendingSessionAssistantContent = null
       await this.transcriptProjector.appendAssistantMessageTranscript(assembly, content)
     }
+    const discardPendingSessionAssistantMessage = (): void => {
+      pendingSessionAssistantContent = null
+    }
     const projectSessionItems = async (items: AgentInputItem[]): Promise<void> => {
+      if (!assembly) throw new Error('SDK Session item 早于运行时装配完成')
+      const currentAssembly = assembly
       for (const item of items) {
         if (isAssistantMessage(item)) {
           const content = assistantText(item)
@@ -592,10 +675,30 @@ export class OpenAIAgentsRuntime {
           const exists = (await this.store.activeTranscript(threadId))
             .some(entry => entry.kind === 'tool_call' && entry.payload.callId === item.callId)
           if (!exists) {
-            if (this.transcriptProjector.isPlatformManagedTool(item.name, options.runtimeConfig)) {
+            if (unavailableSdkToolCallIds.has(item.callId)) {
+              const label = currentAssembly.subAgentToolNames.has(item.name)
+                ? '子智能体任务'
+                : this.toolRegistry.get(item.name)?.label ?? item.name
+              await this.transcriptProjector.appendSdkRejectedToolCallTranscript(
+                options.runId,
+                threadId,
+                turnId,
+                item,
+                itemSink,
+                label,
+              )
+            } else if (this.transcriptProjector.isPlatformManagedTool(item.name, currentAssembly)) {
               throw new Error(`SDK Session 收到未准备的工具调用 '${item.callId}'`)
+            } else {
+              await this.transcriptProjector.appendSdkNativeToolCallTranscript(
+                options.runId,
+                threadId,
+                turnId,
+                item,
+                itemSink,
+                sdkNativeToolPresentation(item.name, currentAssembly),
+              )
             }
-            await this.transcriptProjector.appendSandboxNativeToolCallTranscript(options.runId, threadId, turnId, item, itemSink)
           }
           if (pendingSessionAssistantContent) {
             if (!assembly) throw new Error('SDK Session 工具调用早于运行时装配完成')
@@ -611,15 +714,20 @@ export class OpenAIAgentsRuntime {
             .some(entry => entry.kind === 'tool_result' && entry.payload.callId === item.callId)
           if (exists) continue
           const content = toolResultText(item.output)
-          const isSubAgent = options.runtimeConfig.subAgents.some(config => config.agentId === item.name)
-          const isSandboxNativeTool = !this.transcriptProjector.isPlatformManagedTool(item.name, options.runtimeConfig)
+          const isSubAgent = currentAssembly.subAgentToolNames.has(item.name)
+          const isSdkRejectedTool = unavailableSdkToolCallIds.has(item.callId)
+          const isSdkNativeTool = !isSdkRejectedTool
+            && !this.transcriptProjector.isPlatformManagedTool(item.name, currentAssembly)
+          const nativePresentation = sdkNativeToolPresentation(item.name, currentAssembly)
           const platformTool = this.toolRegistry.get(item.name)
           const failedCheckpoint = transcript.some(entry => (
             entry.kind === 'checkpoint'
             && entry.payload.callId === item.callId
             && entry.payload.ledgerStatus === 'failed'
           ))
-          const ledgerStatus = isSandboxNativeTool
+          const ledgerStatus = isSdkRejectedTool
+            ? 'rejected'
+            : isSdkNativeTool
             ? sdkNativeLedgerStatus(item.status)
             : (isSubAgent ? 'completed' : failedCheckpoint ? 'failed' : 'rejected')
           await this.store.appendTranscript({
@@ -630,34 +738,41 @@ export class OpenAIAgentsRuntime {
             payload: {
               callId: item.callId,
               name: item.name,
-              label: isSubAgent ? '子智能体任务' : isSandboxNativeTool ? '沙箱工具调用' : platformTool?.label ?? item.name,
+              label: isSubAgent
+                ? '子智能体任务'
+                : isSdkRejectedTool
+                  ? platformTool?.label ?? item.name
+                  : isSdkNativeTool ? nativePresentation.label : platformTool?.label ?? item.name,
               summary: content,
               content,
               contentRef: null,
               ledgerStatus,
               resultId: null,
-              ...(isSandboxNativeTool ? { source: 'openai_agents_sandbox' } : {}),
+              ...(isSdkRejectedTool
+                ? { source: 'openai_agents_sdk' }
+                : isSdkNativeTool ? { source: nativePresentation.source } : {}),
             },
           })
-          if (isSandboxNativeTool) {
+          if (isSdkNativeTool) {
             const outputItem = itemSink.startItem('function_call_output', {
               callId: item.callId,
               name: item.name,
               role: 'tool',
-              metadata: { toolLabel: '沙箱工具调用', source: 'openai_agents_sandbox' },
+              metadata: { toolLabel: nativePresentation.label, source: nativePresentation.source },
             })
             itemSink.completeItem(outputItem.itemId, {
               callId: item.callId,
               name: item.name,
               output: content,
               isError: ledgerStatus === 'failed',
-              metadata: { toolLabel: '沙箱工具调用', source: 'openai_agents_sandbox' },
+              metadata: { toolLabel: nativePresentation.label, source: nativePresentation.source },
             })
           }
           await this.store.saveRunCheckpoint(options.runId, {
             pendingToolCallIds: [],
             recoveryStatus: 'clean',
           })
+          unavailableSdkToolCallIds.delete(item.callId)
         }
       }
     }
@@ -675,13 +790,24 @@ export class OpenAIAgentsRuntime {
       coordinator,
       adapter,
       sandboxSession,
-      sdkTools,
+      sdkIntegration,
       configDigest: runtimeConfigDigest(options.runtimeConfig),
       sdkVersion: await agentsSdkVersion(),
       threadId,
       turnId,
-      subAgentNames: new Set(options.runtimeConfig.subAgents.map(config => config.agentId)),
+      subAgentToolNames: new Set([
+        ...options.runtimeConfig.subAgents
+          .filter(config => config.delegationMode === 'as_tool')
+          .map(config => config.agentId),
+        ...(parallelSubAgentTool ? [PARALLEL_SUBAGENT_TOOL_NAME] : []),
+      ]),
+      handoffToolNames: new Set(handoffIntegration.handoffs.map(item => item.toolName)),
+      handoffAgentNames: handoffIntegration.agentIds,
+      mcpToolNames: sdkIntegration.mcpToolNames,
+      completeHandoff: handoffIntegration.complete,
+      failHandoff: handoffIntegration.fail,
       flushPendingSessionAssistantMessage,
+      discardPendingSessionAssistantMessage,
     }
     return assembly
   }
@@ -689,13 +815,13 @@ export class OpenAIAgentsRuntime {
   private async executeSdkRun(
     options: RunOptions,
     assembly: RuntimeAssembly,
-    resumeState: RunState<AgentsExecutionContext, Agent<AgentsExecutionContext>> | null,
+    resumeState: RunState<AgentsExecutionContext, Agent<AgentsExecutionContext, typeof supervisorDeliverySchema>> | null,
     signal: AbortSignal,
     eventSink: RunEventSink,
     itemSink: ItemSink,
   ): Promise<'completed' | 'waiting_approval' | 'clarification_needed'> {
     let outcome: 'completed' | 'waiting_approval' | 'clarification_needed' | null = null
-    let nextInput: RunState<AgentsExecutionContext, Agent<AgentsExecutionContext>> | AgentInputItem[] | string = resumeState ?? options.query
+    let nextInput: RunState<AgentsExecutionContext, Agent<AgentsExecutionContext, typeof supervisorDeliverySchema>> | AgentInputItem[] | string = resumeState ?? options.query
     let activeProjection: StreamProjectionState | null = null
     try {
       while (true) {
@@ -727,7 +853,6 @@ export class OpenAIAgentsRuntime {
         }
         await stream.completed
         if (stream.error) throw stream.error
-        await assembly.flushPendingSessionAssistantMessage()
         await this.transcriptProjector.linkAssistantTranscriptEntries(options.runId, assembly, projection, itemSink)
         if (projection.reasoningItemId) {
           itemSink.completeItem(projection.reasoningItemId, { body: projection.reasoningText })
@@ -742,8 +867,7 @@ export class OpenAIAgentsRuntime {
           outcome = 'waiting_approval'
           return outcome
         }
-        const finalOutput = typeof stream.finalOutput === 'string' ? stream.finalOutput.trim() : ''
-        if (!finalOutput) throw new Error('Agent 未返回可交付文本')
+        assembly.discardPendingSessionAssistantMessage()
         const runAfterTools = this.store.getRun(options.runId)
         if (runAfterTools.state.clarification && !runAfterTools.state.clarification.selectedOptionId) {
           eventSink.emit('clarification.required', runAfterTools.state.clarification.question, {
@@ -774,20 +898,24 @@ export class OpenAIAgentsRuntime {
         if (incompleteTodos.length) {
           throw new Error(`运行仍有未完成 Todo：${incompleteTodos.map(todo => todo.title).join('、')}。请先更新为完成、失败或受阻状态。`)
         }
-        if (!projection.lastAssistantText || projection.lastAssistantText !== finalOutput) {
-          const synthetic: AgentInputItem = {
-            type: 'message', role: 'assistant', status: 'completed',
-            content: [{ type: 'output_text', text: finalOutput }],
-          }
-          const content = assistantText(synthetic)
-          if (!content) throw new Error('终止工具未生成可持久化文本')
-          const item = itemSink.startItem('message', { role: 'assistant' })
-          const persisted = await this.transcriptProjector.appendAssistantMessageTranscript(assembly, content, item.itemId)
-          itemSink.completeItem(item.itemId, {
-            body: finalOutput,
-            metadata: { transcriptEntryId: persisted.entryId },
-          })
+        const delivery = parseSupervisorDelivery(stream.finalOutput)
+        const finalOutput = delivery.markdown.trim()
+        assertDeliveryArtifacts(runAfterTools, delivery)
+        const lastAgentName = stream.lastAgent?.name
+        if (lastAgentName && assembly.handoffAgentNames.has(lastAgentName)) {
+          await assembly.completeHandoff(lastAgentName, delivery.summary)
         }
+        const item = itemSink.startItem('message', { role: 'assistant' })
+        const persisted = await this.transcriptProjector.appendAssistantMessageTranscript(assembly, finalOutput, item.itemId)
+        itemSink.completeItem(item.itemId, {
+          body: finalOutput,
+          metadata: {
+            transcriptEntryId: persisted.entryId,
+            deliverySummary: delivery.summary,
+            artifactIds: delivery.artifactIds,
+            warnings: delivery.warnings,
+          },
+        })
         await this.checkpoints.persist(options.runId, stream.state, assembly)
         await this.store.saveRunCheckpoint(options.runId, {
           pendingToolCallIds: [],
@@ -805,12 +933,18 @@ export class OpenAIAgentsRuntime {
         nextInput = []
       }
     } catch (error) {
+      const activeHandoff = assembly.coordinator.activeHandoffAgent()
+      if (activeHandoff) {
+        await assembly.failHandoff(activeHandoff, errorMessage(error)).catch(handoffError => {
+          logger.warn({ error: errorLogPayload(handoffError) }, 'handoff failure state update failed')
+        })
+      }
       if (activeProjection) {
         this.transcriptProjector.failPendingSubAgentItems(activeProjection, itemSink, errorMessage(error))
       }
       throw error
     } finally {
-      await assembly.sdkTools.close().catch(error => {
+      await assembly.sdkIntegration.close().catch(error => {
         logger.warn({ error: errorLogPayload(error) }, 'sdk mcp close failed')
       })
       if (outcome !== 'waiting_approval') {
@@ -906,6 +1040,45 @@ function linkAbortSignal(source: AbortSignal | undefined, target: AbortControlle
   return () => source.removeEventListener('abort', abortTarget)
 }
 
+function assertAgentRuntimeCapabilities(adapter: ModelAdapter, config: AgentRuntimeConfig): void {
+  const capabilities = adapter.agentRuntimeCapabilities
+  if (capabilities.structuredOutput === 'none') {
+    throw new Error(`模型 provider '${adapter.provider}' 不支持 Agent 结构化输出`)
+  }
+  if (!capabilities.functionTools) {
+    throw new Error(`模型 provider '${adapter.provider}' 不支持 Agent function tools`)
+  }
+  const enabledMcp = config.sdk.mcp.enabled
+    ? config.sdk.mcp.servers.filter(server => server.enabled)
+    : []
+  if (enabledMcp.some(server => server.executionMode === 'function_tools') && !capabilities.localMcp) {
+    throw new Error(`模型 provider '${adapter.provider}' 不支持本地 MCP 工具`)
+  }
+  if (enabledMcp.some(server => server.executionMode === 'hosted') && !capabilities.hostedTools) {
+    throw new Error(`模型 provider '${adapter.provider}' 不支持 Hosted MCP`)
+  }
+  if (config.subAgents.some(agent => agent.delegationMode === 'handoff') && !capabilities.handoffs) {
+    throw new Error(`模型 provider '${adapter.provider}' 不支持 Agent handoff`)
+  }
+}
+
+function parseSupervisorDelivery(
+  finalOutput: unknown,
+): SupervisorDelivery {
+  const parsed = supervisorDeliverySchema.safeParse(finalOutput)
+  if (parsed.success) return parsed.data
+  throw new Error('Agent 最终输出不符合结构化交付契约')
+}
+
+function assertDeliveryArtifacts(run: AnalysisRun, delivery: SupervisorDelivery): void {
+  if (!delivery.artifactIds.length) return
+  const owned = new Set(run.state.artifacts.map(artifact => artifact.artifactId))
+  const missing = [...new Set(delivery.artifactIds)].filter(artifactId => !owned.has(artifactId))
+  if (missing.length) {
+    throw new Error(`Agent 最终输出引用了当前运行不存在的 Artifact：${missing.join('、')}`)
+  }
+}
+
 function visibleExplicitTools(
   tools: Tool<AgentsExecutionContext>[],
   sdkExtensionEnabled: boolean,
@@ -914,6 +1087,40 @@ function visibleExplicitTools(
   // Hosted MCP 不是 function tool，Agents SDK 不会对它应用 isEnabled；规划阶段
   // 和结构化工作流执行期间都必须从 Agent 的公开工具列表中移除。
   return tools.filter(tool => tool.type !== 'hosted_tool')
+}
+
+function sdkNativeToolPresentation(
+  toolName: string,
+  assembly: RuntimeAssembly,
+): { label: string; source: string } {
+  if (assembly.handoffToolNames.has(toolName)) {
+    return { label: 'Handoff 转交', source: 'openai_agents_handoff' }
+  }
+  if (assembly.mcpToolNames.has(toolName)) {
+    return { label: 'MCP 工具调用', source: 'openai_agents_mcp' }
+  }
+  return { label: '沙箱工具调用', source: 'openai_agents_sandbox' }
+}
+
+function wrapReturnDirectTools(
+  tools: Tool<AgentsExecutionContext>[],
+  returnDirectToolNames: ReadonlySet<string>,
+): Tool<AgentsExecutionContext>[] {
+  return tools.map(tool => {
+    if (tool.type !== 'function' || !returnDirectToolNames.has(tool.name)) return tool
+    const invoke = tool.invoke.bind(tool)
+    return {
+      ...tool,
+      invoke: async (runContext, input, details) => {
+        const output = await invoke(runContext, input, details)
+        if (typeof output !== 'string') {
+          throw new Error(`直接交付工具 '${tool.name}' 返回了非文本结果`)
+        }
+        const markdown = output.trim()
+        return JSON.stringify({ markdown, summary: markdown, artifactIds: [], warnings: [] })
+      },
+    }
+  })
 }
 
 function planAwareSandboxCapabilities(): Capability[] {

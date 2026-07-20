@@ -23,7 +23,7 @@ import {
   type AgentThreadRecord,
   type AnalysisRun,
 } from './platform.js'
-import { modelProviderDescriptorSchema } from './resources.js'
+import { modelProviderDescriptorSchema, toolDescriptorSchema } from './resources.js'
 
 export const runSummaryPageSchema = z.object({
   items: z.array(runSummarySchema),
@@ -35,6 +35,7 @@ export const workspaceBootstrapSnapshotSchema = z.object({
   session: sessionRecordSchema,
   threads: z.array(agentThreadRecordSchema),
   providers: z.array(modelProviderDescriptorSchema),
+  tools: z.array(toolDescriptorSchema),
 })
 
 export const threadHistoryPageSchema = z.object({

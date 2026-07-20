@@ -101,7 +101,7 @@ export function formatPlaceResolutionStatus(status?: string | null) {
 }
 
 export function deriveLoopTraceFromEvents(events: RunEvent[]): LoopTraceEntry[] {
-  return events.slice(-16).map((event, index) => ({
+  return events.filter(event => event.type !== 'trace.recorded').slice(-16).map((event, index) => ({
     iteration: index + 1,
     phase: String(event.payload?.phase ?? event.type),
     title: event.type,

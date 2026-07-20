@@ -59,12 +59,23 @@ export const basemapDescriptorSchema = z.object({
   isDefault: z.boolean().default(false),
 })
 
+export const agentRuntimeCapabilitiesSchema = z.object({
+  structuredOutput: z.enum(['json_object', 'json_schema', 'none']),
+  functionTools: z.boolean(),
+  localMcp: z.boolean(),
+  hostedTools: z.boolean(),
+  handoffs: z.boolean(),
+  remoteConversation: z.boolean(),
+  serverCompaction: z.boolean(),
+})
+
 export const modelProviderDescriptorSchema = z.object({
   provider: z.string(),
   displayName: z.string(),
   configured: z.boolean(),
   defaultModel: z.string().nullable().default(null),
   capabilities: z.array(z.string()).default([]),
+  agentRuntime: agentRuntimeCapabilitiesSchema,
   contextWindowTokens: z.number().int().positive().default(128000),
 })
 
@@ -473,6 +484,7 @@ export type LayerPropertyDescriptor = z.infer<typeof layerPropertyDescriptorSche
 export type LayerDescriptor = z.infer<typeof layerDescriptorSchema>
 export type BasemapDescriptor = z.infer<typeof basemapDescriptorSchema>
 export type ModelProviderDescriptor = z.infer<typeof modelProviderDescriptorSchema>
+export type AgentRuntimeCapabilities = z.infer<typeof agentRuntimeCapabilitiesSchema>
 export type SpeechLanguageOption = z.infer<typeof speechLanguageOptionSchema>
 export type SpeechAuthorization = z.infer<typeof speechAuthorizationSchema>
 export type SystemComponentsStatus = z.infer<typeof systemComponentsStatusSchema>

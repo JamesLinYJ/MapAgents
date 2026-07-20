@@ -14,7 +14,7 @@ import type { ModelAdapter } from '../model/registry.js'
 import { recordModelCompletionUsage, type ModelCompletionService } from '../model/modelResultCache.js'
 import type { ToolExecutionStore } from '../store/runtimePorts.js'
 import type { AuthContext } from '../security/types.js'
-import type { AgentWorkflowStep, TodoItem } from '../schemas/types.js'
+import { subAgentInvocationSchema, type AgentWorkflowStep, type TodoItem } from '../schemas/types.js'
 import { persistToolExecutionResult, resolveRuntimeValueRef } from '../tools/resultPersistence.js'
 import { makeId } from '../utils/ids.js'
 import { ItemSink } from '../conversation/itemSink.js'
@@ -61,6 +61,7 @@ export class ToolExecutionCoordinator {
   private resultMutation: Promise<void> = Promise.resolve()
   private checkpointMutation: Promise<void> = Promise.resolve()
   private enteredPlanMode = false
+  private activeHandoffAgentId: string | null = null
 
   constructor(private readonly options: CoordinatorOptions) {}
 
@@ -125,6 +126,34 @@ export class ToolExecutionCoordinator {
     return !state.planMode && this.hasReadyWorkflowStep(agentId, agentId)
   }
 
+  isHandoffEnabled(agentId: string): boolean {
+    const state = this.options.store.getRun(this.options.runId).state
+    return !state.planMode
+      && state.agentWorkflow === null
+      && (this.activeHandoffAgentId === null || this.activeHandoffAgentId === agentId)
+  }
+
+  activateHandoff(agentId: string): void {
+    if (!this.isHandoffEnabled(agentId)) {
+      throw new Error(`当前运行边界禁止转交给子智能体 '${agentId}'`)
+    }
+    this.activeHandoffAgentId = agentId
+  }
+
+  finishHandoff(agentId: string): void {
+    if (this.activeHandoffAgentId === agentId) this.activeHandoffAgentId = null
+  }
+
+  activeHandoffAgent(): string | null {
+    return this.activeHandoffAgentId
+  }
+
+  isToolEnabledForHandoff(agentId: string, toolName: string): boolean {
+    return this.activeHandoffAgentId === agentId
+      && Boolean(this.options.registry.get(toolName))
+      && this.isHandoffEnabled(agentId)
+  }
+
   isToolEnabledForSubAgent(agentId: string, toolName: string): boolean {
     if (!this.options.registry.get(toolName) || !this.isExecutionEnabled()) return false
     return [...this.externalAgentCalls.values()].some(candidate => candidate === agentId)
@@ -187,6 +216,42 @@ export class ToolExecutionCoordinator {
     this.callItems.set(callId, item.itemId)
   }
 
+  async prepareExternalAgentCall(
+    agentId: string,
+    agentName: string,
+    args: Record<string, unknown>,
+    callId: string,
+  ): Promise<void> {
+    if (this.preparedCalls.has(callId)) return
+    const existing = (await this.options.store.activeTranscript(this.options.threadId))
+      .some(entry => entry.kind === 'tool_call' && entry.payload.callId === callId)
+    if (existing) {
+      this.preparedCalls.add(callId)
+      return
+    }
+    await this.options.store.appendTranscript({
+      threadId: this.options.threadId,
+      runId: this.options.runId,
+      turnId: this.options.turnId,
+      kind: 'tool_call',
+      payload: {
+        callId,
+        name: agentId,
+        label: agentName,
+        arguments: args,
+        ledgerStatus: 'prepared',
+      },
+    })
+    await this.updatePendingToolCall(callId, true)
+    this.preparedCalls.add(callId)
+  }
+
+  // 并行批次的父调用只负责聚合多个子步骤，不直接占有某个 workflow step；
+  // 但它仍是一个已准备的 SDK tool call，必须由同一协调器结清 checkpoint。
+  async settlePreparedExternalAgentCall(callId: string): Promise<void> {
+    await this.updatePendingToolCall(callId, false)
+  }
+
   async executeForModel(toolName: string, args: Record<string, unknown>, callId: string): Promise<string> {
     const result = await this.execute(toolName, args, callId)
     const tool = this.options.registry.get(toolName)
@@ -226,6 +291,7 @@ export class ToolExecutionCoordinator {
       await this.completeClaimedAgentWorkflowStep(callId, summary)
     } finally {
       this.externalAgentCalls.delete(callId)
+      await this.updatePendingToolCall(callId, false)
     }
   }
 
@@ -234,6 +300,7 @@ export class ToolExecutionCoordinator {
       await this.failClaimedAgentWorkflowStep(callId, message)
     } finally {
       this.externalAgentCalls.delete(callId)
+      await this.updatePendingToolCall(callId, false)
     }
   }
 
@@ -359,6 +426,31 @@ export class ToolExecutionCoordinator {
     if (!tool) throw new Error(`工具 '${toolName}' 未注册`)
     if (tool.planModeAccess !== undefined) return
     throw new Error(`计划模式禁止执行未声明为规划发现或计划控制的工具 '${toolName}'。请先用 submit_agent_workflow 提交计划并等待批准。`)
+  }
+
+  async executeForHandoff(
+    agentId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    callId: string,
+  ): Promise<string> {
+    if (this.activeHandoffAgentId !== agentId) {
+      throw new Error(`子智能体 '${agentId}' 尚未取得 handoff 所有权`)
+    }
+    const result = await this.execute(toolName, args, callId)
+    const tool = this.options.registry.get(toolName)
+    if (!tool) throw new Error(`工具 '${toolName}' 未注册`)
+    if (tool.agentResultMode === 'return_direct') {
+      if (!result.modelOutput?.trim()) {
+        throw new Error(`工具 '${toolName}' 声明直接返回，但没有提供可交付文本`)
+      }
+      return result.modelOutput.trim()
+    }
+    return formatToolResultForModel(
+      result,
+      this.options.inlineToolResultMaxChars,
+      false,
+    )
   }
 
   private assertExecutionPhaseAllowsExternalAgent(agentId: string): void {
@@ -739,7 +831,11 @@ const ACTIVE_WORKFLOW_CONTROL_TOOLS = new Set([
 export function validateAgentWorkflowDraft(
   args: Record<string, unknown>,
   registry: ToolRegistry,
-  subAgents: ReadonlyArray<{ agentId: string; tools?: string[] }>,
+  subAgents: ReadonlyArray<{
+    agentId: string
+    tools?: string[]
+    delegationMode?: 'as_tool' | 'parallel_batch' | 'handoff'
+  }>,
 ): string | null {
   const workflow = isRecord(args.workflow) ? args.workflow : null
   const rawSteps = workflow && Array.isArray(workflow.steps) ? workflow.steps : []
@@ -766,16 +862,24 @@ export function validateAgentWorkflowDraft(
       if (!subAgent) {
         return `工作流计划无效：步骤“${title}”引用了未配置的子智能体 '${toolName}'。只能使用执行能力目录中的确切 agentId。`
       }
+      if (subAgent.delegationMode === 'handoff') {
+        return `工作流计划无效：Handoff 子智能体 '${toolName}' 会直接接管最终对话，不能作为需要返回 supervisor 的 workflow 步骤。`
+      }
       if (ownerAgentId !== toolName) {
         return `工作流计划无效：子智能体步骤“${title}”的 ownerAgentId 必须等于 '${toolName}'。`
       }
-      const stepArgs = isRecord(step.args) ? step.args : null
-      const input = stepArgs && typeof stepArgs.input === 'string' ? stepArgs.input.trim() : ''
-      if (!stepArgs || Object.keys(stepArgs).some(key => key !== 'input') || !input) {
-        return `工作流计划无效：子智能体步骤“${title}”的 args 必须严格为 { input: string }。`
+      const invocation = subAgentInvocationSchema.safeParse(step.args)
+      if (!invocation.success) {
+        return `工作流计划无效：子智能体步骤“${title}”的 args 不符合结构化委托契约。`
       }
       const allowedTools = new Set(subAgent.tools ?? [])
-      const mentionedTools = new Set(input.match(/[A-Za-z][A-Za-z0-9_-]*/gu) ?? [])
+      const invocationText = [
+        invocation.data.objective,
+        ...invocation.data.expectedDeliverables,
+        ...invocation.data.contextRefs,
+        ...invocation.data.constraints,
+      ].join('\n')
+      const mentionedTools = new Set(invocationText.match(/[A-Za-z][A-Za-z0-9_-]*/gu) ?? [])
       const unauthorized = registry.list()
         .map(definition => definition.name)
         .find(name => mentionedTools.has(name) && !allowedTools.has(name))
@@ -874,8 +978,12 @@ function summarizeValueRefs(refs: ValueRef[]) {
 }
 
 // 完整工具结果已经落盘到 run/transcript/artifact；模型继续推理只需要结构摘要和
-// valueRef 清单。大数组保留长度与少量样例，避免后续工具从海量 payload 里误取 ref。
+// valueRef 清单。GeoJSON 的坐标通常占据绝大多数体积，但要素属性才是模型回答
+// “有哪些对象”时的事实依据，因此压缩坐标、保留有界的属性行；其它大数组保留
+// 长度与少量样例，避免后续工具从海量 payload 里误取 ref。
 function summarizePayload(value: unknown, depth = 0): unknown {
+  const featureCollection = summarizeFeatureCollection(value)
+  if (featureCollection) return featureCollection
   if (depth > 3) return scalarSummary(value)
   if (Array.isArray(value)) {
     return {
@@ -889,6 +997,36 @@ function summarizePayload(value: unknown, depth = 0): unknown {
     return Object.fromEntries(entries.map(([key, item]) => [key, summarizePayload(item, depth + 1)]))
   }
   return value
+}
+
+const MAX_GEOJSON_PROPERTY_ROWS = 100
+
+function summarizeFeatureCollection(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value) || value.type !== 'FeatureCollection' || !Array.isArray(value.features)) return null
+  const propertyRows = value.features
+    .slice(0, MAX_GEOJSON_PROPERTY_ROWS)
+    .map((feature, index) => ({
+      index,
+      geometryType: isRecord(feature) && isRecord(feature.geometry) && typeof feature.geometry.type === 'string'
+        ? feature.geometry.type
+        : null,
+      properties: isRecord(feature) && isRecord(feature.properties)
+        ? summarizeFeatureProperties(feature.properties)
+        : {},
+    }))
+  return {
+    type: 'FeatureCollection',
+    featureCount: value.features.length,
+    propertyRows,
+    propertyRowsComplete: value.features.length <= MAX_GEOJSON_PROPERTY_ROWS,
+  }
+}
+
+function summarizeFeatureProperties(properties: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(properties).map(([key, value]) => {
+    if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) return [key, value]
+    return [key, scalarSummary(value)]
+  }))
 }
 
 function scalarSummary(value: unknown): unknown {

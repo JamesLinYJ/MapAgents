@@ -1,13 +1,13 @@
 import type { Agent, Runner } from '@openai/agents'
 import type { SandboxSessionLike } from '@openai/agents/sandbox'
 
-import type { AgentRuntimeConfig } from '@geo-agent-platform/shared-types/runtime'
+import type { AgentRuntimeConfig, supervisorDeliverySchema } from '@geo-agent-platform/shared-types/runtime'
 import type { ModelAdapter } from '../model/registry.js'
 import type { AuthContext } from '../security/types.js'
 import type { FileAgentsSession } from './fileAgentsSession.js'
 import type { AgentsExecutionContext } from './agentsToolBridge.js'
 import type { ToolExecutionCoordinator } from './toolExecutionCoordinator.js'
-import type { RuntimeSdkToolIntegration } from './runtimeSdkIntegrations.js'
+import type { RuntimeSdkIntegration } from './runtimeSdkIntegrations.js'
 
 export interface RunOptions {
   runId: string
@@ -25,20 +25,26 @@ export interface RunOptions {
 }
 
 export interface RuntimeAssembly {
-  agent: Agent<AgentsExecutionContext>
+  agent: Agent<AgentsExecutionContext, typeof supervisorDeliverySchema>
   runner: Runner
   session: FileAgentsSession
   context: AgentsExecutionContext
   coordinator: ToolExecutionCoordinator
   adapter: ModelAdapter
   sandboxSession: SandboxSessionLike
-  sdkTools: RuntimeSdkToolIntegration
+  sdkIntegration: RuntimeSdkIntegration
   configDigest: string
   sdkVersion: string
   threadId: string
   turnId: string
-  subAgentNames: ReadonlySet<string>
+  subAgentToolNames: ReadonlySet<string>
+  handoffToolNames: ReadonlySet<string>
+  handoffAgentNames: ReadonlySet<string>
+  mcpToolNames: ReadonlySet<string>
+  completeHandoff: (agentId: string, summary: string) => Promise<void>
+  failHandoff: (agentId: string, message: string) => Promise<void>
   flushPendingSessionAssistantMessage: () => Promise<void>
+  discardPendingSessionAssistantMessage: () => void
 }
 
 export interface StreamProjectionState {

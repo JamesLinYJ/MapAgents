@@ -34,10 +34,108 @@ describe('DeepSeekChatCompletionsModel', () => {
       type: 'reasoning', content: [], rawContent: [{ type: 'reasoning_text', text: '先分析' }],
     })
     expect(done?.response.usage.totalTokens).toBe(5)
-    expect(done?.response.usage.inputTokensDetails).toMatchObject({
+    expect(done?.response.usage.inputTokensDetails).toContainEqual(expect.objectContaining({
       prompt_cache_hit_tokens: 2,
       prompt_cache_miss_tokens: 1,
-    })
+    }))
+  })
+
+  it('keeps DeepSeek reasoning and final content on mutually exclusive stream channels', async () => {
+    const model = createModel([
+      chunk({
+        reasoning_content: '先分析',
+        content: '{"intermediate":true}',
+      }),
+      chunk({ content: '{"artifactIds":[],"markdown":"完成","summary":"完成","warnings":[]}' }, 'stop'),
+    ])
+
+    const events = await collect(model.getStreamedResponse(request()))
+    const done = events.find((event): event is Extract<ResponseStreamEvent, { type: 'response_done' }> => event.type === 'response_done')
+
+    expect(events).not.toContainEqual(expect.objectContaining({
+      type: 'output_text_delta',
+      delta: '{"intermediate":true}',
+    }))
+    expect(done?.response.output).toContainEqual(expect.objectContaining({
+      type: 'message',
+      content: [{
+        type: 'output_text',
+        text: '{"artifactIds":[],"markdown":"完成","summary":"完成","warnings":[]}',
+      }],
+    }))
+  })
+
+  it('normalizes cumulative content snapshots without duplicating structured output', async () => {
+    const partial = '{"artifactIds":[],"markdown":"完成"'
+    const complete = `${partial},"summary":"完成","warnings":[]}`
+    const model = createModel([
+      chunk({ content: partial }),
+      chunk({ content: complete }, 'stop'),
+    ])
+
+    const events = await collect(model.getStreamedResponse(request({
+      outputType: {
+        type: 'json_schema',
+        name: 'delivery',
+        strict: true,
+        schema: { type: 'object' },
+      },
+    })))
+    const done = events.find((event): event is Extract<ResponseStreamEvent, { type: 'response_done' }> => event.type === 'response_done')
+    const deltas = events
+      .filter((event): event is Extract<ResponseStreamEvent, { type: 'output_text_delta' }> => event.type === 'output_text_delta')
+      .map(event => event.delta)
+
+    expect(deltas.join('')).toBe(complete)
+    expect(done?.response.output).toContainEqual(expect.objectContaining({
+      type: 'message',
+      content: [{ type: 'output_text', text: complete }],
+    }))
+  })
+
+  it('rejects invalid DeepSeek json_object content at the provider boundary', async () => {
+    const model = createModel([
+      chunk({ content: '{"summary":"完成"} trailing' }, 'stop'),
+    ])
+
+    await expect(collect(model.getStreamedResponse(request({
+      outputType: {
+        type: 'json_schema',
+        name: 'delivery',
+        strict: true,
+        schema: { type: 'object' },
+      },
+    })))).rejects.toThrow('DeepSeek JSON Output 未返回单个合法 JSON object')
+  })
+
+  it('applies structured-output validation only to the final non-tool response', async () => {
+    const model = createModel([
+      chunk({
+        content: '先查询图层',
+        tool_calls: [{
+          index: 0,
+          id: 'call_1',
+          type: 'function',
+          function: { name: 'query_layer', arguments: '{"layerKey":"hangzhou_districts"}' },
+        }],
+      }, 'tool_calls'),
+    ])
+
+    const events = await collect(model.getStreamedResponse(request({
+      outputType: {
+        type: 'json_schema',
+        name: 'delivery',
+        strict: true,
+        schema: { type: 'object' },
+      },
+    })))
+    const done = events.find((event): event is Extract<ResponseStreamEvent, { type: 'response_done' }> => event.type === 'response_done')
+
+    expect(done?.response.output).toContainEqual(expect.objectContaining({
+      type: 'function_call',
+      callId: 'call_1',
+      name: 'query_layer',
+    }))
   })
 
   it('accepts both incremental and full-snapshot tool argument frames', async () => {
@@ -52,6 +150,27 @@ describe('DeepSeekChatCompletionsModel', () => {
       type: 'function_call', callId: 'call_1', name: 'query_layer', arguments: '{"layer":"roads"}',
     }))
     expect(mergeDeltaOrSnapshot('{"a"', ':1}')).toBe('{"a":1}')
+  })
+
+  it('does not project whitespace-only DeepSeek content as an assistant history message', async () => {
+    const model = createModel([
+      chunk({
+        content: '         ',
+        tool_calls: [{
+          index: 0,
+          id: 'call_1',
+          type: 'function',
+          function: { name: 'list_layers', arguments: '{"query":"杭州"}' },
+        }],
+      }, 'tool_calls'),
+    ])
+
+    const events = await collect(model.getStreamedResponse(request()))
+    const done = events.find((event): event is Extract<ResponseStreamEvent, { type: 'response_done' }> => event.type === 'response_done')
+
+    expect(done?.response.output).toEqual([
+      expect.objectContaining({ type: 'function_call', callId: 'call_1', name: 'list_layers' }),
+    ])
   })
 
   it('fails malformed tool arguments instead of manufacturing an empty object', async () => {
@@ -168,6 +287,192 @@ describe('DeepSeekChatCompletionsModel', () => {
     const tools = observed?.tools as Array<{ function: { name: string; parameters: { properties?: Record<string, unknown> } } }>
     expect(tools.map(tool => tool.function.name)).toEqual(['a_tool', 'z_tool'])
     expect(Object.keys(tools[1]?.function.parameters.properties ?? {})).toEqual(['a', 'z'])
+    expect(tools.every(tool => !('strict' in tool.function))).toBe(true)
+  })
+
+  it('bridges SDK structured output to DeepSeek json_object with a stable schema instruction', async () => {
+    let observed: Record<string, unknown> | undefined
+    const client = {
+      chat: { completions: { create: async (params: Record<string, unknown>) => {
+        observed = params
+        return (async function* () {
+          yield chunk({ content: '{"markdown":"完成","summary":"完成","artifactIds":[],"warnings":[]}' }, 'stop')
+        })()
+      } } },
+    } as unknown as OpenAI
+    const model = new DeepSeekChatCompletionsModel({ client, model: 'deepseek-v4-pro' })
+    await collect(model.getStreamedResponse(request({
+      systemInstructions: '保持回答可靠。',
+      outputType: {
+        type: 'json_schema',
+        name: 'delivery',
+        strict: true,
+        schema: {
+          type: 'object',
+          properties: {
+            warnings: { type: 'array', items: { type: 'string' } },
+            markdown: { type: 'string' },
+            summary: { type: 'string' },
+            artifactIds: { type: 'array', items: { type: 'string' } },
+          },
+          required: ['markdown', 'summary', 'artifactIds', 'warnings'],
+          additionalProperties: false,
+        },
+      },
+    })))
+
+    expect(observed?.response_format).toEqual({ type: 'json_object' })
+    expect(observed?.response_format).not.toHaveProperty('json_schema')
+    const system = (observed?.messages as Array<{ role: string; content: string }>)[0]
+    expect(system).toMatchObject({ role: 'system' })
+    expect(system?.content).toContain('保持回答可靠。')
+    expect(system?.content).toContain('JSON 必须严格符合以下 schema')
+    expect(system?.content).toContain('"artifactIds"')
+    expect(system?.content).toContain('EXAMPLE JSON OUTPUT:')
+    expect(system?.content).toContain('{"artifactIds":[],"markdown":"示例","summary":"示例","warnings":[]}')
+  })
+
+  it('keeps DeepSeek JSON Output enabled while tool calling', async () => {
+    let observed: Record<string, unknown> | undefined
+    const client = {
+      chat: { completions: { create: async (params: Record<string, unknown>) => {
+        observed = params
+        return (async function* () {
+          yield chunk({ tool_calls: [{
+            index: 0,
+            id: 'call_1',
+            type: 'function',
+            function: { name: 'probe', arguments: '{}' },
+          }] }, 'tool_calls')
+        })()
+      } } },
+    } as unknown as OpenAI
+    const model = new DeepSeekChatCompletionsModel({ client, model: 'deepseek-v4-pro' })
+
+    await collect(model.getStreamedResponse(request({
+      outputType: {
+        type: 'json_schema',
+        name: 'delivery',
+        strict: true,
+        schema: { type: 'object' },
+      },
+      tools: [serializedTool('probe')],
+    })))
+
+    expect(observed?.response_format).toEqual({ type: 'json_object' })
+    const system = (observed?.messages as Array<{ role: string; content: string }>)[0]
+    expect(system?.content).toContain('最终回答必须只包含一个有效 JSON object')
+  })
+
+  it('retries a side-effect-free invalid structured final response before publishing events', async () => {
+    let calls = 0
+    const observed: Array<Record<string, unknown>> = []
+    const valid = '{"artifactIds":[],"markdown":"完成","summary":"完成","warnings":[]}'
+    const client = {
+      chat: { completions: { create: async (params: Record<string, unknown>) => {
+        calls += 1
+        observed.push(params)
+        return (async function* () {
+          yield chunk({ content: calls < 3 ? ' ' : valid }, 'stop', {
+            prompt_tokens: 10,
+            completion_tokens: 2,
+            total_tokens: 12,
+            prompt_cache_hit_tokens: 6,
+            prompt_cache_miss_tokens: 4,
+          })
+        })()
+      } } },
+    } as unknown as OpenAI
+    const model = new DeepSeekChatCompletionsModel({ client, model: 'deepseek-v4-pro' })
+
+    const events = await collect(model.getStreamedResponse(request({
+      outputType: {
+        type: 'json_schema',
+        name: 'delivery',
+        strict: true,
+        schema: { type: 'object' },
+      },
+      tools: [serializedTool('probe')],
+    })))
+    const deltas = events
+      .filter((event): event is Extract<ResponseStreamEvent, { type: 'output_text_delta' }> => event.type === 'output_text_delta')
+      .map(event => event.delta)
+
+    expect(calls).toBe(3)
+    expect(observed[0]?.tools).toBeDefined()
+    expect(observed[1]?.tools).toBeUndefined()
+    expect(observed[2]?.tools).toBeUndefined()
+    expect(deltas.join('')).toBe(valid)
+    expect(events.filter(event => event.type === 'response_started')).toHaveLength(1)
+    expect(events.filter(event => event.type === 'response_done')).toHaveLength(1)
+    const done = events.find((event): event is Extract<ResponseStreamEvent, { type: 'response_done' }> => event.type === 'response_done')
+    expect(done?.response.usage).toMatchObject({
+      requests: 3,
+      inputTokens: 30,
+      outputTokens: 6,
+      totalTokens: 36,
+    })
+    expect(done?.response.usage.inputTokensDetails).toHaveLength(3)
+  })
+
+  it('applies the same side-effect-free structured retry contract to non-streaming calls', async () => {
+    let calls = 0
+    const observed: Array<Record<string, unknown>> = []
+    const valid = '{"artifactIds":[],"markdown":"完成","summary":"完成","warnings":[]}'
+    const client = {
+      chat: { completions: { create: async (params: Record<string, unknown>) => {
+        calls += 1
+        observed.push(params)
+        return {
+          id: `response_${calls}`,
+          choices: [{
+            index: 0,
+            finish_reason: 'stop',
+            message: { role: 'assistant', content: calls < 3 ? '' : valid },
+          }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }
+      } } },
+    } as unknown as OpenAI
+    const model = new DeepSeekChatCompletionsModel({ client, model: 'deepseek-v4-pro' })
+
+    const response = await model.getResponse(request({
+      outputType: {
+        type: 'json_schema',
+        name: 'delivery',
+        strict: true,
+        schema: { type: 'object' },
+      },
+      tools: [serializedTool('probe')],
+    }))
+
+    expect(calls).toBe(3)
+    expect(observed[0]?.tools).toBeDefined()
+    expect(observed[1]?.tools).toBeUndefined()
+    expect(observed[2]?.tools).toBeUndefined()
+    expect(response.usage).toMatchObject({
+      requests: 3,
+      inputTokens: 3,
+      outputTokens: 3,
+      totalTokens: 6,
+    })
+    expect(response.usage.requestUsageEntries).toHaveLength(3)
+    expect(response.output).toContainEqual(expect.objectContaining({
+      type: 'message',
+      content: [{ type: 'output_text', text: valid }],
+    }))
+  })
+
+  it('rejects non-object structured output that DeepSeek json_object cannot represent', async () => {
+    const model = createModel([])
+    await expect(collect(model.getStreamedResponse(request({
+      outputType: {
+        type: 'json_schema',
+        name: 'unsupported_scalar',
+        strict: true,
+        schema: { type: 'string' },
+      },
+    })))).rejects.toThrow('只支持 JSON object 根类型')
   })
 
   it('replays DeepSeek reasoning on its assistant tool-call message', async () => {

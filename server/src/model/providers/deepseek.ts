@@ -38,6 +38,15 @@ export function createDeepSeekAdapter(opts: DeepSeekOptions): ModelAdapter {
     ...(opts.subagentModel ? { subagentModel: opts.subagentModel } : {}),
     contextWindowTokens: inferContextWindow(opts.defaultModel),
     agentToolSchemaMode: opts.toolSchemaMode,
+    agentRuntimeCapabilities: {
+      structuredOutput: 'json_object',
+      functionTools: true,
+      localMcp: true,
+      hostedTools: false,
+      handoffs: true,
+      remoteConversation: false,
+      serverCompaction: false,
+    },
     cacheNamespace: baseUrl,
 
     isConfigured(): boolean {

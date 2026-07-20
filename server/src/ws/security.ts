@@ -36,7 +36,7 @@ export function registerWsAuthorizationPolicies(registry: WsCommandRegistry): vo
     registry.setAuthorize(type, async (payload, context) => policy(payload, context, await requireActiveAuth(context)))
   }
 
-  set('workspace:bootstrap', workspaceRead)
+  set('workspace:bootstrap', workspaceBootstrapRead)
   set('session:get-default', workspaceRead)
   set('session:get', sessionRead)
   set('thread:list', sessionRead)
@@ -127,6 +127,11 @@ async function requireActiveAuth(context: WsCommandContext): Promise<AuthContext
 
 async function workspaceRead(_payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {
   await context.dependencies.security.authorization.enforce(auth, 'workspace', 'read', { workspaceId: auth.defaultWorkspaceId })
+}
+
+async function workspaceBootstrapRead(payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {
+  await workspaceRead(payload, context, auth)
+  await context.dependencies.security.authorization.enforce(auth, 'tool', 'read', { workspaceId: auth.defaultWorkspaceId })
 }
 
 function sessionRead(payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {

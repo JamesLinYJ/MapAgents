@@ -45,6 +45,9 @@ export function buildSystemPrompt(
 - 空间分析交付格式：GeoJSON、图层、表格、报告或工具返回的 artifact 引用
 - 置信度低于 70%、数据缺失或工具链不完整时，必须明确说明不确定性`)
 
+  const subAgentDirectory = buildSubAgentIdentityDirectory(config.subAgents)
+  if (subAgentDirectory) parts.push(`\n${subAgentDirectory}`)
+
   parts.push(`\n${buildArtifactInspectionPrompt(state)}`)
 
   const sdkPrompt = buildSdkExtensionsPrompt(config, state)
@@ -78,7 +81,7 @@ ${toolDescriptions}`)
 - 待执行目标的计划完整时，必须调用 submit_agent_workflow，并传入结构化 workflow：goal、步骤类型、实际工具、负责人和依赖关系；不得用普通正文计划冒充可审批 workflow。
 - 执行能力目录中的工具说明和参数摘要是契约。不得声称工具能生成目录未声明的格式或产物；目标能力不存在时必须请求澄清并列出真实可用替代项。
 - workflow 步骤的 args 只填写规划时已经确定的值。依赖前序步骤才能得到的 refId 或其它动态值必须省略，执行时再使用真实工具结果；禁止填写“step_1 返回值”“待替换 valueRef”等占位文本。
-- 委托子智能体时只能安排其目录中明确列出的工具能力，不得在 input 中要求它调用未授权工具。
+- 委托子智能体时只能安排其目录中明确列出的工具能力，不得在 objective、expectedDeliverables、contextRefs 或 constraints 中要求它调用未授权工具。
 - workflow 只列真实执行动作。主智能体在工具或子智能体返回后的最终汇总、解释与交付正文不是额外步骤；不得用 todo_write、create_chart 或其它工具虚构“主智能体汇总”步骤。只有用户明确要求该工具产物时才规划对应步骤。
 - 用户明确限定步骤数量、负责人或交付形式时必须原样保留；不能为了表现“完整”而增加未要求的工具、图表或产物。
 - submit_agent_workflow 会触发用户审批。审批通过前，不得执行计划中的任何业务步骤，包括只读查询与分析。
@@ -86,6 +89,22 @@ ${toolDescriptions}`)
   }
 
   return parts.join('\n')
+}
+
+function buildSubAgentIdentityDirectory(subAgents: AgentRuntimeConfig['subAgents']): string {
+  if (!subAgents.length) return ''
+  const modeLabel = (mode: AgentRuntimeConfig['subAgents'][number]['delegationMode']): string => {
+    if (mode === 'parallel_batch') return '只读并行批次'
+    if (mode === 'handoff') return 'Handoff 直接接管'
+    return 'Agent-as-tool，完成后返回主智能体'
+  }
+  return [
+    '## 已配置协作智能体',
+    '本目录只用于识别用户指定的负责人，不表示当前阶段已经允许调用。Agent-as-tool 与只读并行批次必须进入计划、通过审批并匹配可执行步骤；Handoff 会直接转移最终对话所有权。',
+    ...[...subAgents]
+      .sort((left, right) => left.agentId.localeCompare(right.agentId))
+      .map(agent => `- ${agent.agentId}（${agent.name}；${modeLabel(agent.delegationMode)}）：${singleLine(agent.summary)}`),
+  ].join('\n')
 }
 
 export function buildPlanningCapabilityCatalog(
@@ -96,11 +115,15 @@ export function buildPlanningCapabilityCatalog(
     .filter(tool => tool.executionSurfaces?.includes('agent') ?? true)
     .sort((left, right) => left.name.localeCompare(right.name))
     .map(tool => `- ${tool.name}（${tool.label}）：${singleLine(tool.description)}；${planningParameterSummary(tool)}`)
-  const agentLines = [...subAgents]
+  // Handoff 会把当前对话的最终所有权直接转给目标 Agent，不会返回 supervisor，
+  // 因此它不是“执行后回到主智能体”的结构化 workflow 步骤。
+  const agentLines = subAgents
+    .filter(agent => agent.delegationMode !== 'handoff')
     .sort((left, right) => left.agentId.localeCompare(right.agentId))
     .map(agent => [
       `- ${agent.agentId}（子智能体 ${agent.name}）：${singleLine(agent.summary)}`,
-      '调用参数 {input: string 必填}',
+      '调用参数 {objective: string 必填; expectedDeliverables: string[] 必填; contextRefs: string[] 必填; constraints: string[] 必填}',
+      `委派模式 ${agent.delegationMode === 'parallel_batch' ? '只读并行批次' : 'Agent-as-tool（完成后返回主智能体）'}`,
       `授权工具 [${agent.tools.join(', ') || '无'}]`,
       `最大运行轮次 ${agent.maxTurns}`,
       `单次调用超时 ${agent.timeoutMs}ms`,
@@ -160,6 +183,7 @@ function defaultSupervisorPrompt(): string {
 # 执行任务
 - 先判断用户的真实目标、数据来源、空间范围、时间范围、输出形式和风险边界。缺少关键条件时调用 request_clarification，不用默认值掩盖不确定性。
 - 简单问答直接回答；复杂任务、多步骤任务、可能产生副作用的任务，或用户明确要求计划时，进入计划模式并先形成可审批计划。
+- 用户明确要求使用子智能体、多智能体协作、由某个助手处理后再由你汇总时，必须进入计划模式并在动态执行目录中核验对应 agentId。存在匹配 Agent 时保留用户指定的负责人，不得由 supervisor 静默代办；不存在匹配能力时请求澄清。
 - 不要扩展用户没有要求的功能、重构或交付物。修复问题应从根因改动，不引入临时兼容分支、假成功文案或不可解释的绕行逻辑。
 - 如果一种方案失败，先诊断原因：读错误、校验假设、做聚焦修复。不要盲目重复同一调用，也不要在没有根因判断时换成猜测参数继续。
 - 用户纠正你的理解时，以用户最新要求为准，并明确修正后的执行路径。
@@ -176,6 +200,7 @@ function defaultSupervisorPrompt(): string {
 - 优先使用平台工具、MCP 工具、SDK Skill 和 valueRef 数据流，不用自由文本模拟工具结果。
 - 每个工具都有自己的中文工具说明、参数结构、valueRef 类型、审批规则和执行模式限制。调用前必须同时满足这些规则。
 - valueRef 是跨工具传递事实的唯一句柄。后续工具需要 ref 时传 refId；不要复制大段 GeoJSON、路径、坐标数组、变量列表或统计详情。
+- 最终结构化交付中的 artifactIds 只能填写工具结果 artifacts[].artifactId 中以 artifact_ 开头的真实平台 ID；valueRefs[].refId 只用于工具间数据传递或证据引用，不能冒充 Artifact。没有 Artifact 时返回空数组。
 - 能并行收集的只读信息可以并行；存在数据依赖的工具链必须按顺序推进，上一工具失败时不得继续伪造下一步输入。
 - 工具、MCP、Worker、模型、结构校验或安全护栏失败必须真实失败并说明中文原因。禁止返回伪兜底成功文本、合成产物、兼容旧载荷或吞掉错误。
 
@@ -189,7 +214,7 @@ function defaultSupervisorPrompt(): string {
 
 # 智能体工作流
 - 智能体工作流是当前 run 内的动态执行事实，不是普通说明文字。每个步骤必须声明 stepId、title、kind、toolName、ownerAgentId、args、reason 和 dependsOn。agent 步骤的 ownerAgentId 必须等于子智能体工具名；其它步骤必须为 supervisor。
-- workflow 只描述需要真实执行的工具、Automation 或子智能体动作。主智能体在这些动作返回后的最终汇总、解释和普通正文交付不是 workflow 步骤；OpenAI Agents SDK 的 Agent-as-tool 结果会返回父智能体，父智能体应在同一 run 中自然续跑并完成回答。
+- workflow 只描述需要真实执行的工具、Automation 或子智能体动作。主智能体在这些动作返回后的最终汇总、解释和普通正文交付不是 workflow 步骤；OpenAI Agents SDK 的 Agent-as-tool 与只读并行批次结果会返回父智能体，父智能体应在同一 run 中自然续跑并完成回答。Handoff 会直接转移最终对话所有权，不得把它规划成需要返回 supervisor 的 workflow 步骤。
 - 不得用 todo_write 代表“主智能体汇总”，也不得用 create_chart、报告或导出工具装饰普通文字汇总。只有用户明确要求相应产物时才加入这些步骤；用户限定步骤数量、负责人或交付形式时不得擅自扩展。
 - 已批准工作流会自动投影步骤进度与 Todo；不得再调用 todo_write 复制或覆盖这份状态。todo_write 只用于没有结构化工作流的独立任务清单。
 - 没有依赖关系的步骤可以并行执行；存在数据依赖的步骤必须等待依赖步骤完成。不要为了并行而并行。

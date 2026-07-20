@@ -24,7 +24,11 @@ import type { Env } from '../framework/env.js'
 import { ToolRegistry } from '../framework/registry.js'
 import type { ToolDef, ToolProvider, ToolResult, ValueRef } from '../framework/types.js'
 import { ModelAdapterRegistry, type ModelAdapter } from '../model/registry.js'
-import type { ConversationItem } from '../schemas/types.js'
+import {
+  subAgentDeliverySchema,
+  supervisorDeliverySchema,
+  type ConversationItem,
+} from '../schemas/types.js'
 import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import { createTestPersistenceFacade, PersistenceFacadeTestHarness } from '../../test-support/persistenceFacadeHarness.js'
 import planProvider from '../tools/plan/index.js'
@@ -58,6 +62,73 @@ function testRuntime(
 }
 
 describe('OpenAIAgentsRuntime delivery boundaries', () => {
+  it('distinguishes platform artifact IDs from valueRef IDs at the structured-output schema boundary', () => {
+    const supervisor = {
+      markdown: '完成。',
+      summary: '完成。',
+      artifactIds: ['ref_not_an_artifact'],
+      warnings: [],
+    }
+    const subAgent = {
+      status: 'completed',
+      summary: '完成。',
+      evidence: [{ claim: '已查询', source: 'ref_query_result' }],
+      artifactIds: ['ref_query_result'],
+      warnings: [],
+      error: null,
+    }
+
+    expect(supervisorDeliverySchema.safeParse(supervisor).success).toBe(false)
+    expect(subAgentDeliverySchema.safeParse(subAgent).success).toBe(false)
+    expect(supervisorDeliverySchema.safeParse({
+      ...supervisor,
+      artifactIds: ['artifact_query_result'],
+    }).success).toBe(true)
+    expect(subAgentDeliverySchema.safeParse({
+      ...subAgent,
+      artifactIds: ['artifact_query_result'],
+    }).success).toBe(true)
+  })
+
+  it('releases the active-run lifecycle when the first persistence write fails', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-initialization-failure-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '初始化失败清理')
+      const run = await store.createRun(session.id, '验证初始化失败后可以重试', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: testRuntimeConfig(),
+      })
+      const originalUpdateRunStatus = store.updateRunStatus.bind(store)
+      let failFirstWrite = true
+      store.updateRunStatus = async (...args) => {
+        if (failFirstWrite) {
+          failFirstWrite = false
+          throw new Error('注入的首次状态写入失败')
+        }
+        return originalUpdateRunStatus(...args)
+      }
+      const runtime = testRuntime(
+        store,
+        new ToolRegistry(),
+        registryWith(fakeAdapter(scriptedModel(() => ({ text: '重试完成。' })))),
+      )
+
+      const failed = await runtime.run(runOptions(run, thread.id))
+      expect(failed.status).toBe('failed')
+      expect(failed.state.errors).toContain('注入的首次状态写入失败')
+
+      const completed = await runtime.run(runOptions(run, thread.id))
+      expect(completed.status).toBe('completed')
+      expect(completed.state.errors).toContain('注入的首次状态写入失败')
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
   it('rebuilds the visible transcript after restart and sends the current user message once', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-continuation-'))
     try {
@@ -258,6 +329,125 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       expect(transcript).toContainEqual(expect.objectContaining({
         kind: 'message',
         payload: expect.objectContaining({ role: 'assistant', content: '计划：第一步检查，第二步执行。' }),
+      }))
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
+  it('records a dynamically unavailable platform tool as an SDK rejection and lets the model recover', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-tool-not-found-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '计划模式工具不可用恢复')
+      const config = testRuntimeConfig()
+      const run = await store.createRun(session.id, '先尝试查询再调整', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: config,
+      })
+      let executions = 0
+      const tools = new ToolRegistry()
+      tools.register(providerFromTools('plan-tool-not-found', [{
+        ...toolDefinition('query_layer', ['query']),
+        handler: async () => {
+          executions += 1
+          return result('不应执行', [], {})
+        },
+      }]))
+      const model = scriptedModel(request => {
+        if (hasToolResultNamed(request, 'query_layer')) {
+          return { text: '当前模式不能直接查询，我会先形成计划。' }
+        }
+        return {
+          toolCalls: [{
+            id: 'call_unavailable_query',
+            name: 'query_layer',
+            arguments: '{"query":"杭州"}',
+          }],
+        }
+      })
+
+      const completed = await testRuntime(store, tools, registryWith(fakeAdapter(model))).run({
+        ...runOptions(run, thread.id),
+        runtimeConfig: config,
+        executionMode: 'plan',
+      })
+
+      expect(completed.status).toBe('completed')
+      expect(executions).toBe(0)
+      const transcript = await store.activeTranscript(thread.id)
+      expect(transcript).toContainEqual(expect.objectContaining({
+        kind: 'tool_call',
+        payload: expect.objectContaining({
+          callId: 'call_unavailable_query',
+          name: 'query_layer',
+          ledgerStatus: 'rejected',
+          source: 'openai_agents_sdk',
+        }),
+      }))
+      expect(transcript).toContainEqual(expect.objectContaining({
+        kind: 'tool_result',
+        payload: expect.objectContaining({
+          callId: 'call_unavailable_query',
+          ledgerStatus: 'rejected',
+          source: 'openai_agents_sdk',
+        }),
+      }))
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
+  it('records a hallucinated unknown tool as an SDK rejection instead of a sandbox execution', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-unknown-tool-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '未知工具投影')
+      const config = testRuntimeConfig()
+      const run = await store.createRun(session.id, '调用一个不存在的工具后恢复', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: config,
+      })
+      const model = scriptedModel(request => {
+        if (hasToolResultNamed(request, 'invented_tool')) {
+          return { text: '这个工具不存在，我不会伪造执行结果。' }
+        }
+        return {
+          toolCalls: [{
+            id: 'call_invented_tool',
+            name: 'invented_tool',
+            arguments: '{}',
+          }],
+        }
+      })
+
+      const completed = await testRuntime(store, new ToolRegistry(), registryWith(fakeAdapter(model))).run({
+        ...runOptions(run, thread.id),
+        runtimeConfig: config,
+      })
+
+      expect(completed.status).toBe('completed')
+      const transcript = await store.activeTranscript(thread.id)
+      expect(transcript).toContainEqual(expect.objectContaining({
+        kind: 'tool_call',
+        payload: expect.objectContaining({
+          callId: 'call_invented_tool',
+          name: 'invented_tool',
+          ledgerStatus: 'rejected',
+          source: 'openai_agents_sdk',
+        }),
+      }))
+      expect(transcript).not.toContainEqual(expect.objectContaining({
+        payload: expect.objectContaining({
+          callId: 'call_invented_tool',
+          source: 'openai_agents_sandbox',
+        }),
       }))
     } finally {
       await removeTempRoot(root)
@@ -1260,6 +1450,8 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         systemPrompt: '你是空间子智能体。',
         model: null,
         tools: ['query_layer'],
+        delegationMode: 'as_tool',
+        parallelSafe: false,
         maxTurns: 12,
         timeoutMs: 120_000,
       }]
@@ -1281,7 +1473,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
           kind: 'agent' as const,
           toolName: 'spatial_analyst',
           ownerAgentId: 'spatial_analyst',
-          args: { input: '分析当前图层' },
+          args: subAgentArgs('分析当前图层', ['图层分析摘要']),
           reason: '由具备空间分析工具权限的子智能体完成专业检查',
           dependsOn: [],
         }],
@@ -1304,7 +1496,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         if (hasToolResultNamed(request, 'spatial_analyst')) return { text: '主智能体已汇总子分析。' }
         if (hasToolResultNamed(request, 'submit_agent_workflow')) {
           executionTools = request.tools.map(tool => tool.name)
-          return { toolCalls: [{ id: 'sub_call_1', name: 'spatial_analyst', arguments: '{"input":"分析当前图层"}' }] }
+          return { toolCalls: [{ id: 'sub_call_1', name: 'spatial_analyst', arguments: JSON.stringify(subAgentArgs('分析当前图层', ['图层分析摘要'])) }] }
         }
         planningTools = request.tools.map(tool => tool.name)
         return {
@@ -1385,6 +1577,316 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     }
   })
 
+  it('runs independent read-only subagents concurrently through one approved batch', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-parallel-subagents-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '并行子智能体测试')
+      const config = testRuntimeConfig()
+      config.maxParallelSubAgents = 2
+      config.subAgents = [
+        {
+          agentId: 'parallel_alpha',
+          name: '并行甲助手',
+          role: 'analyst',
+          summary: '并行检查数据甲',
+          systemPrompt: '你是并行甲子智能体。',
+          model: null,
+          tools: ['parallel_a'],
+          delegationMode: 'parallel_batch',
+          parallelSafe: true,
+          maxTurns: 12,
+          timeoutMs: 120_000,
+        },
+        {
+          agentId: 'parallel_beta',
+          name: '并行乙助手',
+          role: 'analyst',
+          summary: '并行检查数据乙',
+          systemPrompt: '你是并行乙子智能体。',
+          model: null,
+          tools: ['parallel_b'],
+          delegationMode: 'parallel_batch',
+          parallelSafe: true,
+          maxTurns: 12,
+          timeoutMs: 120_000,
+        },
+      ]
+      const tools = new ToolRegistry()
+      tools.register(planProvider)
+      const toolExecutions: string[] = []
+      tools.register(providerFromTools('parallel-subagent-tools', [
+        {
+          ...toolDefinition('parallel_a', []),
+          handler: async () => {
+            toolExecutions.push('parallel_a')
+            return result('parallel_a', [], { checked: 'a' })
+          },
+        },
+        {
+          ...toolDefinition('parallel_b', []),
+          handler: async () => {
+            toolExecutions.push('parallel_b')
+            return result('parallel_b', [], { checked: 'b' })
+          },
+        },
+      ]))
+      const workflow = {
+        goal: '并行完成两个彼此独立的只读检查',
+        steps: [
+          {
+            stepId: 'step_parallel_alpha',
+            title: '检查数据甲',
+            kind: 'agent' as const,
+            toolName: 'parallel_alpha',
+            ownerAgentId: 'parallel_alpha',
+            args: subAgentArgs('检查数据甲', ['甲检查结论']),
+            reason: '两个数据源彼此独立，可以并发读取',
+            dependsOn: [],
+          },
+          {
+            stepId: 'step_parallel_beta',
+            title: '检查数据乙',
+            kind: 'agent' as const,
+            toolName: 'parallel_beta',
+            ownerAgentId: 'parallel_beta',
+            args: subAgentArgs('检查数据乙', ['乙检查结论']),
+            reason: '两个数据源彼此独立，可以并发读取',
+            dependsOn: [],
+          },
+        ],
+      }
+      const batchInput = {
+        tasks: [
+          { taskId: 'task_alpha', agentId: 'parallel_alpha', ...subAgentArgs('检查数据甲', ['甲检查结论']) },
+          { taskId: 'task_beta', agentId: 'parallel_beta', ...subAgentArgs('检查数据乙', ['乙检查结论']) },
+        ],
+      }
+      const baseModel = scriptedModel(request => {
+        if (request.systemInstructions?.includes('并行甲子智能体')) {
+          return hasToolResultNamed(request, 'parallel_a')
+            ? { text: '数据甲检查完成。' }
+            : { toolCalls: [{ id: 'call_parallel_a', name: 'parallel_a', arguments: '{}' }] }
+        }
+        if (request.systemInstructions?.includes('并行乙子智能体')) {
+          return hasToolResultNamed(request, 'parallel_b')
+            ? { text: '数据乙检查完成。' }
+            : { toolCalls: [{ id: 'call_parallel_b', name: 'parallel_b', arguments: '{}' }] }
+        }
+        if (hasToolResultNamed(request, 'delegate_agent_batch')) return { text: '两个只读检查都已汇总。' }
+        if (hasToolResultNamed(request, 'submit_agent_workflow')) {
+          return {
+            toolCalls: [{
+              id: 'call_parallel_batch',
+              name: 'delegate_agent_batch',
+              arguments: JSON.stringify(batchInput),
+            }],
+          }
+        }
+        return {
+          toolCalls: [{
+            id: 'call_parallel_plan',
+            name: 'submit_agent_workflow',
+            arguments: JSON.stringify({ workflow }),
+          }],
+        }
+      })
+      const firstChildRequests = deferredSignal()
+      let firstChildArrivals = 0
+      let activeChildRequests = 0
+      let maxActiveChildRequests = 0
+      const model: Model = {
+        async getResponse(request) {
+          const isFirstChildRequest = request.systemInstructions?.includes('并行甲子智能体')
+            ? !hasToolResultNamed(request, 'parallel_a')
+            : request.systemInstructions?.includes('并行乙子智能体')
+              ? !hasToolResultNamed(request, 'parallel_b')
+              : false
+          if (!isFirstChildRequest) return baseModel.getResponse(request)
+          activeChildRequests += 1
+          maxActiveChildRequests = Math.max(maxActiveChildRequests, activeChildRequests)
+          firstChildArrivals += 1
+          if (firstChildArrivals === 2) firstChildRequests.resolve()
+          try {
+            await firstChildRequests.promise
+            return await baseModel.getResponse(request)
+          } finally {
+            activeChildRequests -= 1
+          }
+        },
+        async *getStreamedResponse(request) {
+          yield* baseModel.getStreamedResponse(request)
+        },
+      }
+      const run = await store.createRun(session.id, '并行检查两份数据', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: config,
+      })
+      const runtime = testRuntime(store, tools, registryWith(fakeAdapter(model)))
+      const waiting = await runtime.run({
+        ...runOptions(run, thread.id), runtimeConfig: config, executionMode: 'plan',
+      })
+      const approval = waiting.state.approvals[0]
+      if (!approval) throw new Error('测试没有生成并行智能体工作流审批。')
+
+      const completed = await runtime.resolveApproval(run.id, approval.approvalId, true)
+
+      expect(completed.status).toBe('completed')
+      expect(completed.state.errors).toEqual([])
+      expect(maxActiveChildRequests).toBe(2)
+      expect(toolExecutions.sort()).toEqual(['parallel_a', 'parallel_b'])
+      expect(completed.state.subAgents).toEqual(expect.arrayContaining([
+        expect.objectContaining({ agentId: 'parallel_alpha', status: 'completed' }),
+        expect.objectContaining({ agentId: 'parallel_beta', status: 'completed' }),
+      ]))
+      expect(completed.state.agentWorkflow).toMatchObject({
+        status: 'completed',
+        steps: [
+          expect.objectContaining({ stepId: 'step_parallel_alpha', status: 'completed' }),
+          expect.objectContaining({ stepId: 'step_parallel_beta', status: 'completed' }),
+        ],
+      })
+      const transcript = await store.activeTranscript(thread.id)
+      expect(transcript).toContainEqual(expect.objectContaining({
+        kind: 'tool_call',
+        payload: expect.objectContaining({ name: 'delegate_agent_batch' }),
+      }))
+      expect(transcript).toContainEqual(expect.objectContaining({
+        kind: 'tool_result',
+        payload: expect.objectContaining({ name: 'delegate_agent_batch', ledgerStatus: 'completed' }),
+      }))
+      expect((await store.getRunCheckpoint(run.id)).pendingToolCallIds).toEqual([])
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
+  it('rejects parallel subagents with write-capable tools during runtime assembly', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-parallel-safety-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '并行工具安全边界')
+      const config = testRuntimeConfig()
+      config.subAgents = [{
+        agentId: 'unsafe_parallel_agent',
+        name: '不安全并行助手',
+        role: 'writer',
+        summary: '尝试并行写入',
+        systemPrompt: null,
+        model: null,
+        tools: ['write_layer'],
+        delegationMode: 'parallel_batch',
+        parallelSafe: true,
+        maxTurns: 12,
+        timeoutMs: 120_000,
+      }]
+      const tools = new ToolRegistry()
+      tools.register(providerFromTools('unsafe-parallel-tool', [{
+        ...toolDefinition('write_layer', ['value']),
+        isReadOnly: false,
+        isDestructive: true,
+        handler: async () => result('write', [], { ok: true }),
+      }]))
+      const run = await store.createRun(session.id, '并行写入数据', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: config,
+      })
+
+      const failed = await testRuntime(
+        store,
+        tools,
+        registryWith(fakeAdapter(scriptedModel(() => ({ text: '不应调用模型' })))),
+      ).run({ ...runOptions(run, thread.id), runtimeConfig: config })
+
+      expect(failed.status).toBe('failed')
+      expect(failed.state.errors.at(-1)).toContain("只能使用只读、非破坏性工具；'write_layer' 不满足约束")
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
+  it('hands the live conversation to a configured specialist and records ownership lifecycle', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-handoff-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, 'Handoff 子智能体测试')
+      const config = testRuntimeConfig()
+      config.subAgents = [{
+        agentId: 'specialist',
+        name: '专属分析助手',
+        role: 'specialist',
+        summary: '接管专属分析问题',
+        systemPrompt: '你是专属 handoff 子智能体。',
+        model: null,
+        tools: [],
+        delegationMode: 'handoff',
+        parallelSafe: false,
+        maxTurns: 12,
+        timeoutMs: 120_000,
+      }]
+      let rootRequests = 0
+      let specialistRequests = 0
+      const model = scriptedModel(request => {
+        if (request.systemInstructions?.includes('专属 handoff 子智能体')) {
+          specialistRequests += 1
+          return { text: '专属分析已经完成。' }
+        }
+        rootRequests += 1
+        return {
+          toolCalls: [{
+            id: 'call_handoff_specialist',
+            name: 'handoff_to_specialist',
+            arguments: JSON.stringify(subAgentArgs('完成专属分析', ['专属分析结论'])),
+          }],
+        }
+      })
+      const run = await store.createRun(session.id, '把这个问题交给专属分析助手', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: config,
+      })
+
+      const completed = await testRuntime(store, new ToolRegistry(), registryWith(fakeAdapter(model))).run({
+        ...runOptions(run, thread.id), runtimeConfig: config,
+      })
+
+      expect(completed.status).toBe('completed')
+      expect(completed.state.errors).toEqual([])
+      expect(rootRequests).toBe(1)
+      expect(specialistRequests).toBe(1)
+      expect(completed.state.subAgents).toContainEqual(expect.objectContaining({
+        agentId: 'specialist',
+        status: 'completed',
+        latestMessage: '专属分析已经完成。',
+      }))
+      const transcript = await store.activeTranscript(thread.id)
+      expect(transcript).toContainEqual(expect.objectContaining({
+        kind: 'tool_call',
+        payload: expect.objectContaining({
+          name: 'handoff_to_specialist',
+          label: 'Handoff 转交',
+          source: 'openai_agents_handoff',
+        }),
+      }))
+      const events = await store.listEvents(run.id)
+      expect(events.some(event => (
+        event.type === 'subagent.updated'
+        && event.payload.delegationMode === 'handoff'
+        && event.payload.status === 'completed'
+      ))).toBe(true)
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
   it('uses the SDK tool timeout and persists a timed-out subagent as failed', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-subagent-timeout-'))
     try {
@@ -1401,6 +1903,8 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         systemPrompt: '你是超时测试子智能体。',
         model: null,
         tools: [],
+        delegationMode: 'as_tool',
+        parallelSafe: false,
         maxTurns: 12,
         timeoutMs: 25,
       }]
@@ -1412,13 +1916,13 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
           kind: 'agent' as const,
           toolName: 'slow_analyst',
           ownerAgentId: 'slow_analyst',
-          args: { input: '等待外部数据' },
+          args: subAgentArgs('等待外部数据', ['等待结果']),
           reason: '验证超时和失败状态投影',
           dependsOn: [],
         }],
       }
       const rootModel = scriptedModel(request => hasToolResultNamed(request, 'submit_agent_workflow')
-        ? { toolCalls: [{ id: 'call_slow_agent', name: 'slow_analyst', arguments: '{"input":"等待外部数据"}' }] }
+        ? { toolCalls: [{ id: 'call_slow_agent', name: 'slow_analyst', arguments: JSON.stringify(subAgentArgs('等待外部数据', ['等待结果'])) }] }
         : {
             toolCalls: [{
               id: 'call_slow_plan',
@@ -1493,6 +1997,8 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         systemPrompt: '你是轮次上限测试子智能体。',
         model: null,
         tools: ['query_layer'],
+        delegationMode: 'as_tool',
+        parallelSafe: false,
         maxTurns: 2,
         timeoutMs: 120_000,
       }]
@@ -1514,7 +2020,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
           kind: 'agent' as const,
           toolName: 'looping_analyst',
           ownerAgentId: 'looping_analyst',
-          args: { input: '持续查询' },
+          args: subAgentArgs('持续查询', ['查询结论']),
           reason: '验证最大运行轮次边界',
           dependsOn: [],
         }],
@@ -1532,7 +2038,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
           }
         }
         if (hasToolResultNamed(request, 'submit_agent_workflow')) {
-          return { toolCalls: [{ id: 'call_looping_agent', name: 'looping_analyst', arguments: '{"input":"持续查询"}' }] }
+          return { toolCalls: [{ id: 'call_looping_agent', name: 'looping_analyst', arguments: JSON.stringify(subAgentArgs('持续查询', ['查询结论'])) }] }
         }
         return {
           toolCalls: [{
@@ -1659,11 +2165,11 @@ function scriptedModel(script: (request: ModelRequest) => ScriptedResponse): Mod
       ? { suggested: true, replaySafety: 'safe', normalized: { isNetworkError: true } }
       : undefined,
     async getResponse(request): Promise<ModelResponse> {
-      const response = script(request)
+      const response = structuredResponse(script(request), request)
       return { usage: new Usage(), output: outputItems(response, makeIdForResponse()), responseId: makeIdForResponse() }
     },
     async *getStreamedResponse(request): AsyncIterable<ResponseStreamEvent> {
-      const response = script(request)
+      const response = structuredResponse(script(request), request)
       const responseId = makeIdForResponse()
       yield { type: 'response_started' }
       if (response.reasoning) {
@@ -1728,6 +2234,24 @@ function outputItems(response: ScriptedResponse, responseId: string): AgentOutpu
   return output
 }
 
+function structuredResponse(response: ScriptedResponse, request: ModelRequest): ScriptedResponse {
+  if (!response.text || response.toolCalls?.length || request.outputType === 'text') return response
+  const properties = request.outputType.schema.properties
+  if ('markdown' in properties) {
+    return {
+      ...response,
+      text: JSON.stringify({ markdown: response.text, summary: response.text, artifactIds: [], warnings: [] }),
+    }
+  }
+  if ('evidence' in properties) {
+    return {
+      ...response,
+      text: JSON.stringify({ status: 'completed', summary: response.text, evidence: [], artifactIds: [], warnings: [], error: null }),
+    }
+  }
+  return response
+}
+
 async function executeTextRun(model: Model, tools = new ToolRegistry()) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-stream-'))
   try {
@@ -1759,6 +2283,15 @@ function fakeAdapter(model: Model, agentToolSchemaMode: ModelAdapter['agentToolS
     defaultModel: 'fake-model',
     contextWindowTokens: 128_000,
     agentToolSchemaMode,
+    agentRuntimeCapabilities: {
+      structuredOutput: 'json_schema',
+      functionTools: true,
+      localMcp: true,
+      hostedTools: false,
+      handoffs: true,
+      remoteConversation: false,
+      serverCompaction: false,
+    },
     isConfigured: () => true,
     capabilities: () => ['chat', 'stream'],
     createAgentModel: () => model,
@@ -1802,6 +2335,10 @@ function hasToolResultNamed(request: ModelRequest, name: string): boolean {
     && isRecord(item)
     && item.name === name
   ))
+}
+
+function subAgentArgs(objective: string, expectedDeliverables: string[]) {
+  return { objective, expectedDeliverables, contextRefs: [], constraints: [] }
 }
 
 function approvalProvider(onExecute: () => void): ToolProvider {

@@ -95,6 +95,13 @@ class DeepSeekModelStreamError extends Error {
   }
 }
 
+class DeepSeekStructuredOutputError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = 'DeepSeekStructuredOutputError'
+  }
+}
+
 export interface DeepSeekChatCompletionsModelOptions {
   client: OpenAI
   model: string
@@ -130,95 +137,155 @@ export class DeepSeekChatCompletionsModel implements Model {
 
   async getResponse(request: ModelRequest): Promise<ModelResponse> {
     const params = this.buildRequest(request, false)
-    const response = await this.client.chat.completions.create(params, { signal: request.signal })
-    const choice = response.choices[0]
-    if (!choice || response.choices.length !== 1) throw new Error('Chat Completions 必须返回且只能返回一个 choice')
-    assertFinishReason(choice.finish_reason)
-    const output = parseAssistantMessage(response.id, choice.message as DeepSeekAssistantMessage)
-    if (!output.length) throw new Error('Chat Completions 未返回正文或工具调用')
-    this.observePromptCache(params, response.usage as DeepSeekStreamChunk['usage'])
-    return {
-      usage: new Usage(toUsage(response.usage)),
-      output,
-      responseId: response.id,
-      providerData: response as unknown as Record<string, unknown>,
+    const maximumAttempts = request.outputType === 'text' ? 1 : 3
+    const aggregateUsage = new Usage()
+
+    for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+      const attemptParams = attempt === 1
+        ? params
+        : toFinalizationRequest(params)
+      try {
+        const response = await this.client.chat.completions.create(attemptParams, { signal: request.signal })
+        const choice = response.choices[0]
+        if (!choice || response.choices.length !== 1) throw new Error('Chat Completions 必须返回且只能返回一个 choice')
+        assertFinishReason(choice.finish_reason)
+        const attemptUsage = new Usage(toUsage(response.usage))
+        aggregateUsage.add(attemptUsage)
+        this.observePromptCache(attemptParams, response.usage as DeepSeekStreamChunk['usage'])
+        const message = choice.message as DeepSeekAssistantMessage
+        if (!message.tool_calls?.length) assertStructuredOutput(request.outputType, message.content ?? '')
+        const output = parseAssistantMessage(response.id, message)
+        if (!output.length) throw new Error('Chat Completions 未返回正文或工具调用')
+        return {
+          usage: aggregateUsage,
+          output,
+          responseId: response.id,
+          providerData: response as unknown as Record<string, unknown>,
+        }
+      } catch (error) {
+        if (error instanceof DeepSeekStructuredOutputError && attempt < maximumAttempts && !request.signal?.aborted) {
+          logger.info({ model: this.model, attempt, finalizationWithoutTools: true }, 'DeepSeek structured output retry')
+          continue
+        }
+        throw error
+      }
     }
+
+    throw new Error('DeepSeek 结构化输出重试流程异常结束')
   }
 
   async *getStreamedResponse(request: ModelRequest): AsyncIterable<ResponseStreamEvent> {
     const params = this.buildRequest(request, true)
-    let emittedSemanticOutput = false
-    try {
-      const stream = await this.client.chat.completions.create(params, { signal: request.signal }) as unknown as AsyncIterable<DeepSeekStreamChunk>
-      let responseId = ''
-      let text = ''
-      let reasoning = ''
-      let finishReason: string | null = null
-      let usage: DeepSeekStreamChunk['usage']
-      let started = false
-      const calls = new Map<number, AccumulatedToolCall>()
+    const bufferStructuredTurn = request.outputType !== 'text'
+    const maximumAttempts = bufferStructuredTurn ? 3 : 1
+    const aggregateUsage = new Usage()
 
-      for await (const chunk of stream) {
-        if (chunk.id) {
-          if (responseId && responseId !== chunk.id) throw new Error('Chat Completions 流在同一响应中改变了 response id')
-          responseId = chunk.id
+    for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+      // 一旦模型已选择无工具的最终回答却违反 JSON 契约，后续尝试就是纯
+      // 最终化请求。移除工具目录可避免 DeepSeek 再进入 DSML 工具通道，且
+      // 不会重放任何已经执行过的工具副作用。
+      const attemptParams = attempt === 1
+        ? params
+        : toFinalizationRequest(params)
+      let emittedSemanticOutput = false
+      const bufferedEvents: ResponseStreamEvent[] = []
+      try {
+        const stream = await this.client.chat.completions.create(attemptParams, { signal: request.signal }) as unknown as AsyncIterable<DeepSeekStreamChunk>
+        let responseId = ''
+        let text = ''
+        let reasoning = ''
+        let finishReason: string | null = null
+        let usage: DeepSeekStreamChunk['usage']
+        let started = false
+        const calls = new Map<number, AccumulatedToolCall>()
+
+        for await (const chunk of stream) {
+          if (chunk.id) {
+            if (responseId && responseId !== chunk.id) throw new Error('Chat Completions 流在同一响应中改变了 response id')
+            responseId = chunk.id
+          }
+          if (chunk.usage) usage = chunk.usage
+          const choices = chunk.choices ?? []
+          if (choices.length === 0) {
+            if (started) {
+              const event: ResponseStreamEvent = { type: 'model', event: chunk, providerData: { source: 'openai_chat_completions' } }
+              if (bufferStructuredTurn) bufferedEvents.push(event)
+              else yield event
+            }
+            continue
+          }
+          const [choice] = choices
+          if (choices.length !== 1 || !choice || (choice.index ?? 0) !== 0) {
+            throw new Error('Chat Completions 流必须只包含 index=0 的 choice')
+          }
+          const delta = choice.delta
+          const reasoningDelta = delta?.reasoning ?? delta?.reasoning_content
+          // DeepSeek 官方流式协议把 reasoning_content 与最终 content 视为互斥
+          // 通道；思考分块即使携带 content 字段，也不能并入最终回答。
+          const contentDelta = reasoningDelta ? undefined : delta?.content
+          const hasSemanticOutput = Boolean(contentDelta || reasoningDelta || delta?.tool_calls?.length)
+          if (hasSemanticOutput && !started) {
+            started = true
+            const event: ResponseStreamEvent = { type: 'response_started', providerData: { chunk } }
+            if (bufferStructuredTurn) bufferedEvents.push(event)
+            else yield event
+          }
+          if (started) {
+            const event: ResponseStreamEvent = { type: 'model', event: chunk, providerData: { source: 'openai_chat_completions' } }
+            if (bufferStructuredTurn) bufferedEvents.push(event)
+            else yield event
+          }
+          if (hasSemanticOutput && !bufferStructuredTurn) emittedSemanticOutput = true
+          if (contentDelta) {
+            const previousText = text
+            text = mergeDeltaOrSnapshot(text, contentDelta)
+            const normalizedDelta = text.slice(previousText.length)
+            if (normalizedDelta) {
+              const event: ResponseStreamEvent = { type: 'output_text_delta', delta: normalizedDelta, providerData: { chunk } }
+              if (bufferStructuredTurn) bufferedEvents.push(event)
+              else yield event
+            }
+          }
+          if (reasoningDelta) reasoning = mergeDeltaOrSnapshot(reasoning, reasoningDelta)
+          for (const raw of delta?.tool_calls ?? []) accumulateToolCall(calls, raw)
+          if (choice.finish_reason) {
+            if (finishReason && finishReason !== choice.finish_reason) throw new Error('Chat Completions 流返回了冲突的 finish reason')
+            finishReason = choice.finish_reason
+          }
         }
-        if (chunk.usage) usage = chunk.usage
-        const choices = chunk.choices ?? []
-        if (choices.length === 0) {
-          if (started) yield { type: 'model', event: chunk, providerData: { source: 'openai_chat_completions' } }
+
+        if (!started || !responseId) throw new Error('Chat Completions 流缺少响应标识')
+        assertFinishReason(finishReason)
+        const attemptUsage = new Usage(toUsage(usage))
+        aggregateUsage.add(attemptUsage)
+        this.observePromptCache(attemptParams, usage)
+        if (calls.size === 0) assertStructuredOutput(request.outputType, text)
+        const output = buildOutput(responseId, text, reasoning, [...calls.values()].sort((a, b) => a.index - b.index))
+        if (!output.length) throw new Error('Chat Completions 流未返回正文或工具调用')
+        const doneEvent: ResponseStreamEvent = {
+          type: 'response_done',
+          response: { id: responseId, usage: aggregateUsage, output },
+        }
+        if (bufferStructuredTurn) {
+          bufferedEvents.push(doneEvent)
+          for (const event of bufferedEvents) yield event
+        } else {
+          yield doneEvent
+        }
+        return
+      } catch (error) {
+        if (error instanceof DeepSeekStructuredOutputError && attempt < maximumAttempts && !request.signal?.aborted) {
+          logger.info({ model: this.model, attempt, finalizationWithoutTools: true }, 'DeepSeek structured output retry')
           continue
         }
-        const [choice] = choices
-        if (choices.length !== 1 || !choice || (choice.index ?? 0) !== 0) {
-          throw new Error('Chat Completions 流必须只包含 index=0 的 choice')
-        }
-        const delta = choice.delta
-        const reasoningDelta = delta?.reasoning ?? delta?.reasoning_content
-        const hasSemanticOutput = Boolean(delta?.content || reasoningDelta || delta?.tool_calls?.length)
-        if (hasSemanticOutput && !started) {
-          started = true
-          yield { type: 'response_started', providerData: { chunk } }
-        }
-        if (started) yield { type: 'model', event: chunk, providerData: { source: 'openai_chat_completions' } }
-        if (hasSemanticOutput) emittedSemanticOutput = true
-        if (delta?.content) {
-          text += delta.content
-          yield { type: 'output_text_delta', delta: delta.content, providerData: { chunk } }
-        }
-        if (reasoningDelta) {
-          reasoning += reasoningDelta
-        }
-        for (const raw of delta?.tool_calls ?? []) {
-          accumulateToolCall(calls, raw)
-        }
-        if (choice.finish_reason) {
-          if (finishReason && finishReason !== choice.finish_reason) throw new Error('Chat Completions 流返回了冲突的 finish reason')
-          finishReason = choice.finish_reason
-        }
+        if (error instanceof UserError || error instanceof DeepSeekModelStreamError) throw error
+        throw new DeepSeekModelStreamError(
+          error instanceof Error ? error.message : String(error),
+          !emittedSemanticOutput && isTransientNetworkError(error),
+          isTransientNetworkError(error),
+          { cause: error },
+        )
       }
-
-      if (!started || !responseId) throw new Error('Chat Completions 流缺少响应标识')
-      assertFinishReason(finishReason)
-      const output = buildOutput(responseId, text, reasoning, [...calls.values()].sort((a, b) => a.index - b.index))
-      if (!output.length) throw new Error('Chat Completions 流未返回正文或工具调用')
-      this.observePromptCache(params, usage)
-      yield {
-        type: 'response_done',
-        response: {
-          id: responseId,
-          usage: toUsage(usage),
-          output,
-        },
-      }
-    } catch (error) {
-      if (error instanceof UserError || error instanceof DeepSeekModelStreamError) throw error
-      throw new DeepSeekModelStreamError(
-        error instanceof Error ? error.message : String(error),
-        !emittedSemanticOutput && isTransientNetworkError(error),
-        isTransientNetworkError(error),
-        { cause: error },
-      )
     }
   }
 
@@ -230,7 +297,11 @@ export class DeepSeekChatCompletionsModel implements Model {
   ): ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming {
     assertSupportedRequest(request)
     const messages = toChatMessages(request.input)
-    if (request.systemInstructions) messages.unshift({ role: 'system', content: request.systemInstructions })
+    const structuredOutputInstruction = toStructuredOutputInstruction(request.outputType)
+    const systemInstructions = [request.systemInstructions, structuredOutputInstruction]
+      .filter((value): value is string => Boolean(value))
+      .join('\n\n')
+    if (systemInstructions) messages.unshift({ role: 'system', content: systemInstructions })
     const tools = [
       ...request.tools.map(toChatTool),
       ...request.handoffs.map(toHandoffTool),
@@ -417,13 +488,15 @@ function toChatMessages(input: string | AgentInputItem[]): ChatCompletionMessage
 function toChatTool(tool: SerializedTool): ChatCompletionTool {
   if (tool.type !== 'function') throw new UserError(`Chat Completions 不支持工具类型 '${tool.type}'`)
   if (!FUNCTION_NAME.test(tool.name)) throw new UserError(`工具名称 '${tool.name}' 不符合 Chat Completions 约束`)
+  // DeepSeek 的 strict function calling 是 /beta 专属能力。GeoForge 使用稳定
+  // Chat Completions 端点，因此不发送该 Beta 字段；SDK 仍会在本地按同一
+  // schema 严格校验工具参数。
   return {
     type: 'function',
     function: {
       name: tool.name,
       description: tool.description || '',
       parameters: canonicalizeJson(tool.parameters) as Record<string, unknown>,
-      strict: tool.strict,
     },
   }
 }
@@ -436,17 +509,130 @@ function toHandoffTool(handoff: SerializedHandoff): ChatCompletionTool {
       name: handoff.toolName,
       description: handoff.toolDescription || '',
       parameters: canonicalizeJson(handoff.inputJsonSchema) as Record<string, unknown>,
-      strict: handoff.strictJsonSchema,
     },
   }
 }
 
 function toResponseFormat(outputType: ModelRequest['outputType']): Record<string, unknown> | undefined {
   if (outputType === 'text') return undefined
-  if (outputType.type === 'json_schema') {
-    return { type: 'json_schema', json_schema: { name: outputType.name, strict: outputType.strict, schema: outputType.schema } }
-  }
   return { type: 'json_object' }
+}
+
+function toFinalizationRequest<
+  T extends ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming,
+>(params: T): T {
+  const finalizationParams = { ...params } as T
+  delete finalizationParams.tools
+  delete finalizationParams.tool_choice
+  finalizationParams.parallel_tool_calls = false
+  return finalizationParams
+}
+
+// DeepSeek json_object 承诺返回单个合法 JSON object。适配器在供应商边界
+// 先验证该协议，再把正文交给 Agents SDK 做业务 schema 校验，避免把传输层
+// 拼接错误误报成业务 outputType 错误。
+function assertStructuredOutput(outputType: ModelRequest['outputType'], text: string): void {
+  if (outputType === 'text') return
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch (error) {
+    throw new DeepSeekStructuredOutputError('DeepSeek JSON Output 未返回单个合法 JSON object', { cause: error })
+  }
+  if (!isRecord(parsed)) throw new DeepSeekStructuredOutputError('DeepSeek JSON Output 的根值必须是 JSON object')
+}
+
+// DeepSeek Chat Completions 只公开 json_object；SDK 的 schema 仍由最终输出
+// parser 严格校验。把 canonical schema 放入稳定 system 后缀，既遵守供应商
+// 协议，也让相同 Agent 的提示前缀可命中缓存。
+function toStructuredOutputInstruction(outputType: ModelRequest['outputType']): string | undefined {
+  if (outputType === 'text') return undefined
+  if (outputType.type === 'json_schema') {
+    const canonicalSchema = canonicalizeJson(outputType.schema)
+    const example = jsonSchemaExample(canonicalSchema, canonicalSchema)
+    if (!isRecord(example)) {
+      throw new UserError('DeepSeek json_object 只支持 JSON object 根类型的结构化输出')
+    }
+    const schema = JSON.stringify(canonicalSchema)
+    return [
+      '<structured_output>',
+      '最终回答必须只包含一个有效 JSON object，不要使用 Markdown 代码围栏或附加正文。',
+      `JSON 必须严格符合以下 schema：${schema}`,
+      `EXAMPLE JSON OUTPUT:\n${JSON.stringify(example)}`,
+      '</structured_output>',
+    ].join('\n')
+  }
+  return [
+    '<structured_output>',
+    '最终回答必须只包含一个有效 JSON object，不要使用 Markdown 代码围栏或附加正文。',
+    'EXAMPLE JSON OUTPUT:\n{}',
+    '</structured_output>',
+  ].join('\n')
+}
+
+// DeepSeek 的 json_object 协议要求提示中包含 JSON 输出样例。这里从 SDK
+// 传入的 schema 生成稳定、最小的对象样例，避免在业务提示中维护第二份结构定义。
+function jsonSchemaExample(schema: unknown, root: unknown, seenRefs = new Set<string>()): unknown {
+  if (!isRecord(schema)) return null
+  if ('const' in schema) return schema.const
+  if (Array.isArray(schema.enum) && schema.enum.length) return schema.enum[0]
+  if ('default' in schema) return schema.default
+
+  if (typeof schema.$ref === 'string') {
+    if (seenRefs.has(schema.$ref)) return null
+    const target = resolveLocalSchemaRef(root, schema.$ref)
+    if (target === undefined) return null
+    return jsonSchemaExample(target, root, new Set([...seenRefs, schema.$ref]))
+  }
+
+  for (const keyword of ['anyOf', 'oneOf'] as const) {
+    const candidates = schema[keyword]
+    if (!Array.isArray(candidates) || !candidates.length) continue
+    const nullable = candidates.find(candidate => isRecord(candidate) && candidate.type === 'null')
+    if (nullable) return null
+    return jsonSchemaExample(candidates[0], root, seenRefs)
+  }
+
+  if (Array.isArray(schema.allOf)) {
+    const parts = schema.allOf.map(part => jsonSchemaExample(part, root, seenRefs))
+    if (parts.every(isRecord)) return Object.assign({}, ...parts)
+    return parts[0] ?? null
+  }
+
+  const type = Array.isArray(schema.type)
+    ? schema.type.find(candidate => candidate !== 'null')
+    : schema.type
+  if (type === 'object' || isRecord(schema.properties)) {
+    const properties = isRecord(schema.properties) ? schema.properties : {}
+    return Object.fromEntries(Object.entries(properties).map(([name, property]) => (
+      [name, jsonSchemaExample(property, root, seenRefs)]
+    )))
+  }
+  if (type === 'array') {
+    const minimum = typeof schema.minItems === 'number' ? Math.max(0, Math.trunc(schema.minItems)) : 0
+    return Array.from({ length: minimum }, () => jsonSchemaExample(schema.items, root, seenRefs))
+  }
+  if (type === 'string') return schema.format === 'date-time' ? '2026-01-01T00:00:00Z' : '示例'
+  if (type === 'integer' || type === 'number') {
+    if (typeof schema.minimum === 'number') return type === 'integer' ? Math.ceil(schema.minimum) : schema.minimum
+    if (typeof schema.exclusiveMinimum === 'number') {
+      return type === 'integer' ? Math.floor(schema.exclusiveMinimum) + 1 : schema.exclusiveMinimum + 1
+    }
+    return 0
+  }
+  if (type === 'boolean') return true
+  return null
+}
+
+function resolveLocalSchemaRef(root: unknown, ref: string): unknown {
+  if (!ref.startsWith('#/')) return undefined
+  let current: unknown = root
+  for (const rawSegment of ref.slice(2).split('/')) {
+    const segment = rawSegment.replace(/~1/gu, '/').replace(/~0/gu, '~')
+    if (!isRecord(current) || !(segment in current)) return undefined
+    current = current[segment]
+  }
+  return current
 }
 
 function toToolChoice(choice: ModelRequest['modelSettings']['toolChoice'], tools: ChatCompletionTool[]): unknown {
@@ -482,7 +668,9 @@ function parseAssistantMessage(responseId: string, message: DeepSeekAssistantMes
 function buildOutput(responseId: string, text: string, reasoning: string, calls: AccumulatedToolCall[]): ModelOutput {
   const output: ModelOutput = []
   if (reasoning) output.push({ type: 'reasoning', content: [], rawContent: [{ type: 'reasoning_text', text: reasoning }] })
-  if (text) {
+  // DeepSeek 在工具调用帧中可能同时返回仅含空白的 content。空白不是一条
+  // assistant 消息；若投影进 SDK Session，下一轮会形成无正文的历史消息。
+  if (text.trim()) {
     output.push({
       id: responseId,
       type: 'message',
