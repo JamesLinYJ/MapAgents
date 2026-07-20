@@ -52,6 +52,9 @@ const envSchema = z.object({
   DEEPSEEK_MODEL: z.string().optional(),
   DEEPSEEK_SUBAGENT_MODEL: z.string().optional(),
   DEEPSEEK_TOOL_SCHEMA_MODE: z.enum(['strict', 'compatible']).default('compatible'),
+  DEEPSEEK_RESULT_CACHE_ENABLED: booleanEnvSchema.default(true),
+  DEEPSEEK_RESULT_CACHE_TTL_SECONDS: z.coerce.number().int().positive().max(7 * 24 * 60 * 60).default(24 * 60 * 60),
+  DEEPSEEK_RESULT_CACHE_MAX_BYTES: z.coerce.number().int().positive().max(1024 * 1024).default(256 * 1024),
   USAGE_DAILY_TOTAL_TOKEN_LIMIT: z.coerce.number().int().nonnegative().default(0),
   USAGE_MONTHLY_TOTAL_TOKEN_LIMIT: z.coerce.number().int().nonnegative().default(0),
 

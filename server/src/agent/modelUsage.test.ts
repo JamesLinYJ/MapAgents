@@ -25,6 +25,8 @@ describe('model usage aggregation', () => {
       totalTokens: 210,
       cacheHitInputTokens: 70,
       cacheHitReportedCount: 2,
+      cacheMissInputTokens: 0,
+      cacheMissReportedCount: 0,
       responseCount: 2,
     })
   })
@@ -50,12 +52,15 @@ describe('model usage aggregation', () => {
       totalTokens: 7,
       cacheHitInputTokens: 4,
       cacheHitReportedCount: 1,
+      cacheMissInputTokens: 6,
+      cacheMissReportedCount: 1,
       responseCount: 1,
     })
 
     expect(merged.modelInputTokens).toBe(15)
     expect(merged.modelOutputTokens).toBe(2)
     expect(merged.modelCacheHitInputTokens).toBe(4)
+    expect(merged.modelCacheMissInputTokens).toBe(6)
     expect(merged.modelTotalTokens).toBe(7)
     expect(merged.customMetric).toBe(3)
   })

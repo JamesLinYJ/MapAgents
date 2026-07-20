@@ -39,7 +39,8 @@ export function UsageManagementPanel({ summary }: UsageManagementPanelProps) {
         <div className="usage-metric-grid">
           <MetricCard label="输入词元" value={formatNumber(summary.totals.inputTokens)} hint={`${summary.totals.runsWithUsage} 个运行已报告实际用量`} />
           <MetricCard label="输出词元" value={formatNumber(summary.totals.outputTokens)} hint="来自模型服务返回的用量数据" />
-          <MetricCard label="缓存命中词元" value={formatNumber(summary.totals.cacheHitInputTokens)} hint={`${summary.totals.cacheHitReportedRuns} 个运行报告缓存明细`} />
+          <MetricCard label="供应商缓存命中" value={formatNumber(summary.totals.cacheHitInputTokens)} hint={`${cacheHitRate(summary.totals.cacheHitInputTokens, summary.totals.cacheMissInputTokens)} 命中率`} />
+          <MetricCard label="结果缓存命中" value={formatNumber(summary.totals.resultCacheHitCount)} hint={`避免 ${formatNumber(summary.totals.resultCacheAvoidedRequestCount)} 次请求，估算节省 ${formatNumber(summary.totals.resultCacheEstimatedSavedTokens)} 词元`} />
           <MetricCard label="总词元" value={formatNumber(summary.totals.totalTokens)} hint={`${summary.totals.runsWithoutUsage} 个运行未报告实际用量`} />
         </div>
         <div className="usage-limit-grid">
@@ -108,7 +109,7 @@ function UsageBucketPanel({ title, buckets }: { title: string; buckets: TokenUsa
             </div>
             <div>
               <strong>{formatNumber(bucket.totalTokens)} 词元</strong>
-              <span>输入 {formatNumber(bucket.inputTokens)} · 输出 {formatNumber(bucket.outputTokens)} · 缓存 {formatNumber(bucket.cacheHitInputTokens)}</span>
+              <span>输入 {formatNumber(bucket.inputTokens)} · 输出 {formatNumber(bucket.outputTokens)} · 缓存 {formatNumber(bucket.cacheHitInputTokens)} / {formatNumber(bucket.cacheMissInputTokens)}</span>
             </div>
           </article>
         )) : <div className="panel__empty">暂无分组数据。</div>}
@@ -138,6 +139,11 @@ function MetricCard({ label, value, hint }: { label: string; value: string; hint
       <p>{hint}</p>
     </article>
   )
+}
+
+function cacheHitRate(hit: number, miss: number): string {
+  const total = hit + miss
+  return total > 0 ? `${Math.round(hit / total * 100)}%` : '未报告'
 }
 
 function PanelTitle({ eyebrow, title, count }: { eyebrow: string; title: string; count?: number }) {

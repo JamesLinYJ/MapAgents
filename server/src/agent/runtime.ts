@@ -27,6 +27,7 @@ import {
 } from '@openai/agents/sandbox'
 import type { ToolRegistry } from '../framework/registry.js'
 import type { ModelAdapterRegistry } from '../model/registry.js'
+import { recordModelCompletionUsage, type ModelCompletionService } from '../model/modelResultCache.js'
 import type {
   AnalysisRun,
   ToolValueRef,
@@ -98,6 +99,7 @@ export class OpenAIAgentsRuntime {
     private readonly toolRegistry: ToolRegistry,
     private readonly modelRegistry: ModelAdapterRegistry,
     private readonly runtimeOptions: OpenAIAgentsRuntimeOptions = {},
+    private readonly modelCompletions?: ModelCompletionService,
   ) {
     this.checkpoints = new AgentsCheckpointService(store)
     this.transcriptProjector = new RuntimeTranscriptProjector(store, toolRegistry)
@@ -354,6 +356,7 @@ export class OpenAIAgentsRuntime {
     maintainContext = true,
   ): Promise<RuntimeAssembly> {
     const adapter = this.modelRegistry.resolveProvider(options.provider)
+    const workspaceId = this.store.getRun(options.runId).workspaceId
     if (!adapter.createAgentModel) throw new Error(`模型 provider '${adapter.provider}' 不支持 Agents SDK Supervisor`)
     const selectedModel = options.modelName ?? adapter.defaultModel
     if (!selectedModel) throw new Error(`模型 provider '${adapter.provider}' 未配置模型名称`)
@@ -368,6 +371,19 @@ export class OpenAIAgentsRuntime {
         ?? summaryAdapter.subagentModel
         ?? selectedModel
       if (!summaryModel) throw new Error('未配置摘要模型')
+      if (this.modelCompletions && workspaceId) {
+        const response = await this.modelCompletions.completeText({
+          workspaceId,
+          runId: options.runId,
+          provider: summaryAdapter.provider,
+          model: summaryModel,
+          purpose: 'thread_summary',
+          prompt,
+          signal,
+        })
+        await recordModelCompletionUsage(this.store, options.runId, response)
+        return response.content
+      }
       const response = await summaryAdapter.chat(prompt, { model: summaryModel, reasoning: false, signal })
       if (typeof response.content !== 'string' || !response.content.trim()) throw new Error('摘要模型未返回文本')
       return response.content
@@ -433,6 +449,8 @@ export class OpenAIAgentsRuntime {
       store: this.store,
       registry: this.toolRegistry,
       adapter,
+      ...(this.modelCompletions ? { modelCompletions: this.modelCompletions } : {}),
+      workspaceId,
       runId: options.runId,
       sessionId: options.sessionId,
       threadId,
@@ -821,6 +839,19 @@ export class OpenAIAgentsRuntime {
       ?? adapter.defaultModel
     if (!model) throw new Error('未配置记忆选择模型')
     return async (prompt: string) => {
+      const workspaceId = this.store.getRun(options.runId).workspaceId
+      if (this.modelCompletions && workspaceId) {
+        const response = await this.modelCompletions.completeJson({
+          workspaceId,
+          runId: options.runId,
+          provider: adapter.provider,
+          model,
+          purpose: 'memory_selection',
+          prompt,
+        })
+        await recordModelCompletionUsage(this.store, options.runId, response)
+        return response.content
+      }
       const response = await adapter.chat(prompt, { model, reasoning: false })
       const content = response.content
       if (typeof content !== 'string' || !content.trim()) throw new Error('记忆选择模型未返回文本')

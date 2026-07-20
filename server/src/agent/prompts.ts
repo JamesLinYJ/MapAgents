@@ -35,7 +35,20 @@ export function buildSystemPrompt(
 
   // Core role
   parts.push(config.supervisor.systemPrompt || defaultSupervisorPrompt())
+
+  // DeepSeek 的上下文硬盘缓存按完整前缀单元命中。运行边界必须位于
+  // 工作流、记忆等动态状态之前，避免一次状态变化冲掉全部固定前缀。
+  parts.push(`\n## 本次运行边界
+- 最大运行轮次：${config.maxTurns}
+- 对外回复语言：中文
+- 地图执行层：MapLibre GL
+- 空间分析交付格式：GeoJSON、图层、表格、报告或工具返回的 artifact 引用
+- 置信度低于 70%、数据缺失或工具链不完整时，必须明确说明不确定性`)
+
   parts.push(`\n${buildArtifactInspectionPrompt(state)}`)
+
+  const sdkPrompt = buildSdkExtensionsPrompt(config, state)
+  if (sdkPrompt) parts.push(`\n${sdkPrompt}`)
 
   // Planning catalog
   if (toolDescriptions) {
@@ -43,9 +56,6 @@ export function buildSystemPrompt(
 以下名称来自当前运行的真实注册表，仅用于形成可执行计划。规划阶段能否调用某项能力仍由 OpenAI Agents SDK 的动态 isEnabled 边界决定；目录出现不代表已经获准执行。
 ${toolDescriptions}`)
   }
-
-  const sdkPrompt = buildSdkExtensionsPrompt(config, state)
-  if (sdkPrompt) parts.push(`\n${sdkPrompt}`)
 
   // Memory context
   if (memoryPrompt && config.context.memoryEnabled) {
@@ -74,13 +84,6 @@ ${toolDescriptions}`)
 - submit_agent_workflow 会触发用户审批。审批通过前，不得执行计划中的任何业务步骤，包括只读查询与分析。
 - 如果用户拒绝计划，继续留在规划语境中修订计划，不要伪造已经执行。`)
   }
-
-  parts.push(`\n## 本次运行边界
-- 最大运行轮次：${config.maxTurns}
-- 对外回复语言：中文
-- 地图执行层：MapLibre GL
-- 空间分析交付格式：GeoJSON、图层、表格、报告或工具返回的 artifact 引用
-- 置信度低于 70%、数据缺失或工具链不完整时，必须明确说明不确定性`)
 
   return parts.join('\n')
 }

@@ -17,10 +17,14 @@ interface UsageTotals {
   inputTokens: number
   outputTokens: number
   cacheHitInputTokens: number
+  cacheMissInputTokens: number
   cacheHitReportedRuns: number
   cacheHitUnreportedRuns: number
   totalTokens: number
   contextEstimatedTokens: number
+  resultCacheHitCount: number
+  resultCacheAvoidedRequestCount: number
+  resultCacheEstimatedSavedTokens: number
 }
 
 interface UsageBucket extends UsageTotals {
@@ -52,7 +56,11 @@ interface UsageRun {
   inputTokens: number
   outputTokens: number
   cacheHitInputTokens: number
+  cacheMissInputTokens: number
   cacheHitReported: boolean
+  resultCacheHitCount: number
+  resultCacheAvoidedRequestCount: number
+  resultCacheEstimatedSavedTokens: number
   totalTokens: number
   contextEstimatedTokens: number
   contextUsagePermille: number | null
@@ -128,6 +136,7 @@ function toUsageRun(run: AnalysisRun): UsageRun {
   const inputTokens = stat(stats.modelInputTokens)
   const outputTokens = stat(stats.modelOutputTokens)
   const cacheHitInputTokens = stat(stats.modelCacheHitInputTokens)
+  const cacheMissInputTokens = stat(stats.modelCacheMissInputTokens)
   const cacheHitReported = stat(stats.modelCacheHitReportedResponseCount) > 0
   const totalTokens = stat(stats.modelTotalTokens)
   const usageResponseCount = stat(stats.modelUsageResponseCount)
@@ -144,7 +153,11 @@ function toUsageRun(run: AnalysisRun): UsageRun {
     inputTokens,
     outputTokens,
     cacheHitInputTokens,
+    cacheMissInputTokens,
     cacheHitReported,
+    resultCacheHitCount: stat(stats.modelResultCacheHitCount),
+    resultCacheAvoidedRequestCount: stat(stats.modelResultCacheAvoidedRequestCount),
+    resultCacheEstimatedSavedTokens: stat(stats.modelResultCacheEstimatedSavedTokens),
     totalTokens,
     contextEstimatedTokens: stat(stats.contextEstimatedTokens),
     contextUsagePermille: nullableStat(stats.contextUsagePermille),
@@ -178,10 +191,14 @@ function addRun<T extends UsageTotals>(total: T, run: UsageRun): T {
   total.inputTokens += run.inputTokens
   total.outputTokens += run.outputTokens
   total.cacheHitInputTokens += run.cacheHitInputTokens
+  total.cacheMissInputTokens += run.cacheMissInputTokens
   total.cacheHitReportedRuns += run.cacheHitReported ? 1 : 0
   total.cacheHitUnreportedRuns += run.cacheHitReported ? 0 : 1
   total.totalTokens += run.totalTokens
   total.contextEstimatedTokens += run.contextEstimatedTokens
+  total.resultCacheHitCount += run.resultCacheHitCount
+  total.resultCacheAvoidedRequestCount += run.resultCacheAvoidedRequestCount
+  total.resultCacheEstimatedSavedTokens += run.resultCacheEstimatedSavedTokens
   return total
 }
 
@@ -193,10 +210,14 @@ function emptyTotals(): UsageTotals {
     inputTokens: 0,
     outputTokens: 0,
     cacheHitInputTokens: 0,
+    cacheMissInputTokens: 0,
     cacheHitReportedRuns: 0,
     cacheHitUnreportedRuns: 0,
     totalTokens: 0,
     contextEstimatedTokens: 0,
+    resultCacheHitCount: 0,
+    resultCacheAvoidedRequestCount: 0,
+    resultCacheEstimatedSavedTokens: 0,
   }
 }
 

@@ -17,7 +17,13 @@ describe('DeepSeekChatCompletionsModel', () => {
   it('normalizes standard text and DeepSeek reasoning streams', async () => {
     const model = createModel([
       chunk({ reasoning_content: '先分析' }),
-      chunk({ content: '答案' }, 'stop', { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 }),
+      chunk({ content: '答案' }, 'stop', {
+        prompt_tokens: 3,
+        completion_tokens: 2,
+        total_tokens: 5,
+        prompt_cache_hit_tokens: 2,
+        prompt_cache_miss_tokens: 1,
+      }),
     ])
 
     const events = await collect(model.getStreamedResponse(request()))
@@ -28,6 +34,10 @@ describe('DeepSeekChatCompletionsModel', () => {
       type: 'reasoning', content: [], rawContent: [{ type: 'reasoning_text', text: '先分析' }],
     })
     expect(done?.response.usage.totalTokens).toBe(5)
+    expect(done?.response.usage.inputTokensDetails).toMatchObject({
+      prompt_cache_hit_tokens: 2,
+      prompt_cache_miss_tokens: 1,
+    })
   })
 
   it('accepts both incremental and full-snapshot tool argument frames', async () => {
@@ -136,6 +146,28 @@ describe('DeepSeekChatCompletionsModel', () => {
     })
     expect(observedRequests[1]).not.toHaveProperty('tool_choice')
     expect(observedRequests[1]).not.toHaveProperty('thinking')
+    expect(observedRequests.every(item => !('cache_control' in item))).toBe(true)
+  })
+
+  it('stabilizes tool and JSON schema ordering for DeepSeek prefix caching', async () => {
+    let observed: Record<string, unknown> | undefined
+    const client = {
+      chat: { completions: { create: async (params: Record<string, unknown>) => {
+        observed = params
+        return (async function* () { yield chunk({ content: '完成' }, 'stop') })()
+      } } },
+    } as unknown as OpenAI
+    const model = new DeepSeekChatCompletionsModel({ client, model: 'deepseek-v4-pro' })
+    await collect(model.getStreamedResponse(request({
+      tools: [
+        { ...serializedTool('z_tool'), parameters: { type: 'object', properties: { z: { type: 'string' }, a: { type: 'string' } } } },
+        serializedTool('a_tool'),
+      ],
+    })))
+
+    const tools = observed?.tools as Array<{ function: { name: string; parameters: { properties?: Record<string, unknown> } } }>
+    expect(tools.map(tool => tool.function.name)).toEqual(['a_tool', 'z_tool'])
+    expect(Object.keys(tools[1]?.function.parameters.properties ?? {})).toEqual(['a', 'z'])
   })
 
   it('replays DeepSeek reasoning on its assistant tool-call message', async () => {

@@ -23,6 +23,7 @@ import { ManagedLayerService } from '../gis/managedLayers/managedLayerService.js
 import { MapTileGateway } from '../map/mapTileGateway.js'
 import { seedLayersFromDirectory } from '../gis/seedLayers.js'
 import { ModelAdapterRegistry } from '../model/registry.js'
+import { ensureModelResultCacheTable, ModelCompletionService, ModelResultCacheStore } from '../model/modelResultCache.js'
 import { errorLogPayload, logger } from '../observability/logger.js'
 import { ensureMeteorologicalTables } from '../routes/meteorology.js'
 import { ensureSecurityTables } from '../security/database.js'
@@ -65,6 +66,7 @@ export interface AppContainer {
   auditStore: AuditStore
   toolRegistry: ToolRegistry
   modelRegistry: ModelAdapterRegistry
+  modelCompletions: ModelCompletionService
   runtime: OpenAIAgentsRuntime
   runTasks: RunTaskManager
   automationRegistry: AutomationRegistry
@@ -128,6 +130,7 @@ export async function createAppContainer(input: { env: Env; projectRoot: string 
     await instanceLock.acquire()
     await ensureMeteorologicalTables(db)
     await ensureSecurityTables(db)
+    await ensureModelResultCacheTable(db)
     await store.initialize()
 
   if (env.SEED_LAYERS_DIR) {
@@ -136,7 +139,12 @@ export async function createAppContainer(input: { env: Env; projectRoot: string 
     logger.info({ count: seededLayers.length, seedLayersConfigured: true }, 'seeded layers')
   }
 
-  const runtime = new OpenAIAgentsRuntime(store, toolRegistry, modelRegistry)
+  const modelCompletions = new ModelCompletionService(modelRegistry, new ModelResultCacheStore(db), {
+    enabled: env.DEEPSEEK_RESULT_CACHE_ENABLED,
+    ttlSeconds: env.DEEPSEEK_RESULT_CACHE_TTL_SECONDS,
+    maxBytes: env.DEEPSEEK_RESULT_CACHE_MAX_BYTES,
+  })
+  const runtime = new OpenAIAgentsRuntime(store, toolRegistry, modelRegistry, {}, modelCompletions)
   const usageStats = new UsageStatsService(store, env)
   const backgroundTasks = new BackgroundTaskRegistry()
   const runTasks = new RunTaskManager(runtime, store, backgroundTasks)
@@ -166,6 +174,7 @@ export async function createAppContainer(input: { env: Env; projectRoot: string 
     toolRegistry,
     runTasks,
     modelRegistry,
+    modelCompletions,
     security,
     usageStats,
     backgroundTasks,
@@ -203,6 +212,7 @@ export async function createAppContainer(input: { env: Env; projectRoot: string 
     auditStore,
     toolRegistry,
     modelRegistry,
+    modelCompletions,
     runtime,
     runTasks,
     automationRegistry,

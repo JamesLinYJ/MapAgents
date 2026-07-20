@@ -38,6 +38,7 @@ export function createDeepSeekAdapter(opts: DeepSeekOptions): ModelAdapter {
     ...(opts.subagentModel ? { subagentModel: opts.subagentModel } : {}),
     contextWindowTokens: inferContextWindow(opts.defaultModel),
     agentToolSchemaMode: opts.toolSchemaMode,
+    cacheNamespace: baseUrl,
 
     isConfigured(): boolean {
       return Boolean(baseUrl && opts.apiKey && opts.defaultModel)
@@ -61,6 +62,7 @@ export function createDeepSeekAdapter(opts: DeepSeekOptions): ModelAdapter {
         model,
         messages: messages.map(m => toBasicMessage(m.role, m.content)),
         stream: false,
+        ...(typeof kwargs?.temperature === 'number' ? { temperature: kwargs.temperature } : {}),
         ...(kwargs?.reasoning !== false ? { reasoning_effort: 'high' as const } : {}),
       }
       const completion = await client.chat.completions.create(request, {

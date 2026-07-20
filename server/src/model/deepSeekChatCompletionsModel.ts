@@ -25,6 +25,7 @@ import {
   type SerializedTool,
 } from '@openai/agents'
 import OpenAI from 'openai'
+import { createHash } from 'node:crypto'
 import type {
   ChatCompletion,
   ChatCompletionCreateParamsNonStreaming,
@@ -32,6 +33,7 @@ import type {
   ChatCompletionMessageParam,
   ChatCompletionTool,
 } from 'openai/resources/chat/completions/completions'
+import { logger } from '../observability/logger.js'
 
 const FUNCTION_NAME = /^[a-zA-Z0-9_-]+$/u
 const RESERVED_PROVIDER_FIELDS = new Set([
@@ -65,6 +67,8 @@ interface DeepSeekStreamChunk {
     prompt_tokens?: number
     completion_tokens?: number
     total_tokens?: number
+    prompt_cache_hit_tokens?: number
+    prompt_cache_miss_tokens?: number
     prompt_tokens_details?: Record<string, number>
     completion_tokens_details?: Record<string, number>
   } | null
@@ -103,6 +107,7 @@ export interface DeepSeekChatCompletionsModelOptions {
 export class DeepSeekChatCompletionsModel implements Model {
   readonly model: string
   private readonly client: OpenAI
+  private previousCacheObservation?: CacheObservation
 
   constructor(options: DeepSeekChatCompletionsModelOptions) {
     if (!options.model.trim()) throw new Error('DeepSeek Chat Completions 模型名称不能为空')
@@ -131,6 +136,7 @@ export class DeepSeekChatCompletionsModel implements Model {
     assertFinishReason(choice.finish_reason)
     const output = parseAssistantMessage(response.id, choice.message as DeepSeekAssistantMessage)
     if (!output.length) throw new Error('Chat Completions 未返回正文或工具调用')
+    this.observePromptCache(params, response.usage as DeepSeekStreamChunk['usage'])
     return {
       usage: new Usage(toUsage(response.usage)),
       output,
@@ -196,6 +202,7 @@ export class DeepSeekChatCompletionsModel implements Model {
       assertFinishReason(finishReason)
       const output = buildOutput(responseId, text, reasoning, [...calls.values()].sort((a, b) => a.index - b.index))
       if (!output.length) throw new Error('Chat Completions 流未返回正文或工具调用')
+      this.observePromptCache(params, usage)
       yield {
         type: 'response_done',
         response: {
@@ -227,7 +234,7 @@ export class DeepSeekChatCompletionsModel implements Model {
     const tools = [
       ...request.tools.map(toChatTool),
       ...request.handoffs.map(toHandoffTool),
-    ]
+    ].sort((left, right) => chatToolName(left).localeCompare(chatToolName(right)))
     const providerData = request.modelSettings.providerData ?? {}
     for (const key of Object.keys(providerData)) {
       if (RESERVED_PROVIDER_FIELDS.has(key)) throw new UserError(`providerData 不得覆盖保留字段 '${key}'`)
@@ -261,6 +268,74 @@ export class DeepSeekChatCompletionsModel implements Model {
       ...providerData,
     } as unknown) as ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming
   }
+
+  private observePromptCache(
+    params: ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming,
+    usage: DeepSeekStreamChunk['usage'],
+  ): void {
+    if (!usage || typeof usage.prompt_cache_hit_tokens !== 'number') return
+    const current: CacheObservation = {
+      at: Date.now(),
+      hitTokens: Math.max(0, Math.trunc(usage.prompt_cache_hit_tokens)),
+      fingerprints: requestCacheFingerprints(params),
+    }
+    const previous = this.previousCacheObservation
+    this.previousCacheObservation = current
+    if (!previous) return
+    const drop = previous.hitTokens - current.hitTokens
+    if (drop < Math.max(2_000, Math.ceil(previous.hitTokens * 0.05))) return
+    const changed = Object.keys(current.fingerprints).filter(key => (
+      current.fingerprints[key as keyof CacheFingerprints] !== previous.fingerprints[key as keyof CacheFingerprints]
+    ))
+    logger.info({
+      model: this.model,
+      previousHitTokens: previous.hitTokens,
+      currentHitTokens: current.hitTokens,
+      elapsedMs: current.at - previous.at,
+      changedComponents: changed,
+      likelyCause: changed.length ? 'request_prefix_changed' : 'provider_eviction_expiry_or_best_effort_miss',
+    }, 'DeepSeek prompt cache hit tokens dropped')
+  }
+}
+
+interface CacheFingerprints {
+  modelSettings: string
+  systemPrefix: string
+  tools: string
+  historyPrefix: string
+}
+
+interface CacheObservation {
+  at: number
+  hitTokens: number
+  fingerprints: CacheFingerprints
+}
+
+function requestCacheFingerprints(
+  params: ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming,
+): CacheFingerprints {
+  const messages = params.messages
+  const systemMessages = messages.filter(message => message.role === 'system')
+  return {
+    modelSettings: digest({
+      model: params.model,
+      temperature: params.temperature,
+      top_p: params.top_p,
+      frequency_penalty: params.frequency_penalty,
+      presence_penalty: params.presence_penalty,
+      response_format: params.response_format,
+      tool_choice: params.tool_choice,
+      parallel_tool_calls: params.parallel_tool_calls,
+      reasoning_effort: 'reasoning_effort' in params ? params.reasoning_effort : undefined,
+    }),
+    systemPrefix: digest(systemMessages),
+    tools: digest(params.tools ?? []),
+    historyPrefix: digest(messages.slice(0, -1)),
+  }
+}
+
+function digest(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(canonicalizeJson(value))).digest('hex')
 }
 
 function assertSupportedRequest(request: ModelRequest): void {
@@ -347,7 +422,7 @@ function toChatTool(tool: SerializedTool): ChatCompletionTool {
     function: {
       name: tool.name,
       description: tool.description || '',
-      parameters: tool.parameters,
+      parameters: canonicalizeJson(tool.parameters) as Record<string, unknown>,
       strict: tool.strict,
     },
   }
@@ -360,7 +435,7 @@ function toHandoffTool(handoff: SerializedHandoff): ChatCompletionTool {
     function: {
       name: handoff.toolName,
       description: handoff.toolDescription || '',
-      parameters: handoff.inputJsonSchema,
+      parameters: canonicalizeJson(handoff.inputJsonSchema) as Record<string, unknown>,
       strict: handoff.strictJsonSchema,
     },
   }
@@ -380,6 +455,10 @@ function toToolChoice(choice: ModelRequest['modelSettings']['toolChoice'], tools
     throw new UserError(`toolChoice 指向未知工具 '${choice}'`)
   }
   return { type: 'function', function: { name: choice } }
+}
+
+function chatToolName(tool: ChatCompletionTool): string {
+  return 'function' in tool ? tool.function.name : ''
 }
 
 function isNonAutoToolChoice(choice: ModelRequest['modelSettings']['toolChoice']): boolean {
@@ -458,14 +537,33 @@ function assertFinishReason(reason: string | null | undefined): void {
 }
 
 function toUsage(usage: DeepSeekStreamChunk['usage'] | ChatCompletion['usage'] | null | undefined) {
+  const cacheUsage = usage as DeepSeekStreamChunk['usage']
   return {
     requests: 1,
     inputTokens: usage?.prompt_tokens ?? 0,
     outputTokens: usage?.completion_tokens ?? 0,
     totalTokens: usage?.total_tokens ?? 0,
-    inputTokensDetails: numericDetails(usage?.prompt_tokens_details),
+    inputTokensDetails: {
+      ...numericDetails(usage?.prompt_tokens_details),
+      ...(typeof cacheUsage?.prompt_cache_hit_tokens === 'number'
+        ? { prompt_cache_hit_tokens: cacheUsage.prompt_cache_hit_tokens }
+        : {}),
+      ...(typeof cacheUsage?.prompt_cache_miss_tokens === 'number'
+        ? { prompt_cache_miss_tokens: cacheUsage.prompt_cache_miss_tokens }
+        : {}),
+    },
     outputTokensDetails: numericDetails(usage?.completion_tokens_details),
   }
+}
+
+function canonicalizeJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalizeJson)
+  if (!isRecord(value)) return value
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort((left, right) => left.localeCompare(right))
+      .map(key => [key, canonicalizeJson(value[key])]),
+  )
 }
 
 function numericDetails(value: unknown): Record<string, number> {

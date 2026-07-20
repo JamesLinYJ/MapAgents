@@ -4,6 +4,7 @@
 import { z } from 'zod'
 import type { AgentRuntimeConfig } from '../schemas/types.js'
 import type { ModelAdapterRegistry } from '../model/registry.js'
+import type { ModelCompletionService } from '../model/modelResultCache.js'
 import type { ToolRegistry } from '../framework/registry.js'
 import type { SecurityServices } from '../security/routes.js'
 import type { AuthContext } from '../security/types.js'
@@ -36,6 +37,7 @@ export function registerToolCommands(registry: WsCommandRegistry): void {
       context.dependencies.defaultRuntimeConfig,
       context.dependencies.security,
       requireAuth(context.auth),
+      context.dependencies.modelCompletions,
     ),
   })
 }
@@ -48,6 +50,7 @@ export async function executeTool(
   runtimeConfigDefaults: AgentRuntimeConfig | undefined,
   security: SecurityServices,
   auth: AuthContext,
+  modelCompletions?: ModelCompletionService,
 ) {
   const toolName = requiredString(payload, 'toolName')
   await assertDirectToolRunAllowed(auth, security.authorization, registry, toolName)
@@ -78,6 +81,7 @@ export async function executeTool(
       store,
       registry,
       modelRegistry,
+      ...(modelCompletions ? { modelCompletions } : {}),
       defaultRuntimeConfig: runtimeConfigDefaults,
     })
     if (directRun) await store.completeRun(runId, 'completed')

@@ -25,6 +25,7 @@ export interface ModelAdapter {
   readonly subagentModel?: string
   readonly contextWindowTokens?: number
   readonly agentToolSchemaMode: AgentToolSchemaMode
+  readonly cacheNamespace?: string
 
   isConfigured(): boolean
   capabilities(): string[]

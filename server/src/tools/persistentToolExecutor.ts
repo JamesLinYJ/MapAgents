@@ -5,6 +5,7 @@ import { ItemSink } from '../conversation/itemSink.js'
 import type { ToolRegistry } from '../framework/registry.js'
 import type { ToolContext, ToolResult } from '../framework/types.js'
 import type { ModelAdapterRegistry } from '../model/registry.js'
+import { recordModelCompletionUsage, type ModelCompletionService } from '../model/modelResultCache.js'
 import type { AgentRuntimeConfig } from '../schemas/types.js'
 import type { AuthContext } from '../security/types.js'
 import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
@@ -26,6 +27,7 @@ export async function executePersistedTool(
     store: PlatformPersistenceFacade
     registry: ToolRegistry
     modelRegistry: ModelAdapterRegistry
+    modelCompletions?: ModelCompletionService
     defaultRuntimeConfig?: AgentRuntimeConfig | undefined
   },
 ): Promise<ToolResult> {
@@ -58,6 +60,19 @@ export async function executePersistedTool(
     }),
     invokeStructuredModel: async prompt => {
       const adapter = deps.modelRegistry.resolveProvider(run.modelProvider)
+      if (deps.modelCompletions && run.workspaceId) {
+        const response = await deps.modelCompletions.completeJson({
+          workspaceId: run.workspaceId,
+          runId: run.id,
+          provider: adapter.provider,
+          model: run.modelName ?? adapter.defaultModel,
+          purpose: 'tool_structured_analysis',
+          prompt,
+          signal: context.signal,
+        })
+        await recordModelCompletionUsage(deps.store, run.id, response)
+        return response.content
+      }
       const response = await adapter.chat(prompt, {
         model: run.modelName ?? adapter.defaultModel,
         reasoning: false,

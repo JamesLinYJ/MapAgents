@@ -86,7 +86,12 @@ export function registerMemoryCommands(registry: WsCommandRegistry): void {
       payloadSchema,
       auth: 'required',
       csrf,
-      handler: (payload, context) => handleMemoryCommand(type, requireMemoryPayload(payload), context.dependencies),
+      handler: (payload, context) => handleMemoryCommand(
+        type,
+        requireMemoryPayload(payload),
+        context.dependencies,
+        context.auth?.defaultWorkspaceId,
+      ),
     })
   }
 
@@ -114,8 +119,12 @@ export async function handleMemoryCommand(
   command: ClientMsg['type'],
   payload: Record<string, unknown>,
   dependencies: WsDependencies,
+  workspaceId?: string,
 ): Promise<unknown> {
   const { store, modelRegistry } = dependencies
+  const cached = dependencies.modelCompletions && workspaceId
+    ? { service: dependencies.modelCompletions, workspaceId }
+    : undefined
 
   switch (command) {
     case 'thread:memory:get':
@@ -133,7 +142,7 @@ export async function handleMemoryCommand(
         store,
         threadId,
         config.context,
-        makeSummarizer(modelRegistry, config, optionalString(payload.provider), optionalString(payload.modelName)),
+        makeSummarizer(modelRegistry, config, optionalString(payload.provider), optionalString(payload.modelName), cached),
         true,
       )
     }
@@ -178,6 +187,7 @@ export async function handleMemoryCommand(
         config,
         optionalString(payload.provider),
         optionalString(payload.modelName),
+        cached,
       )
       const matches = await searchMemories(
         createMemoryRuntime(store.runtimeRoot, config.context),
@@ -196,7 +206,13 @@ export async function handleMemoryCommand(
         store,
         threadId,
         runId,
-        makeStructuredSelector(modelRegistry, config, optionalString(payload.provider), optionalString(payload.modelName)),
+        makeStructuredSelector(
+          modelRegistry,
+          config,
+          optionalString(payload.provider),
+          optionalString(payload.modelName),
+          cached ? { ...cached, store, runId } : undefined,
+        ),
       )
       return { records, total: records.length }
     }
@@ -204,7 +220,13 @@ export async function handleMemoryCommand(
       const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
       return dreamMemories(
         createMemoryRuntime(store.runtimeRoot, config.context),
-        makeOptionalStructuredSelector(modelRegistry, config, optionalString(payload.provider), optionalString(payload.modelName)),
+        makeOptionalStructuredSelector(
+          modelRegistry,
+          config,
+          optionalString(payload.provider),
+          optionalString(payload.modelName),
+          cached ? { ...cached, purpose: 'memory_dream' } : undefined,
+        ),
         { force: payload.force === true },
       )
     }
@@ -217,7 +239,7 @@ export async function handleMemoryCommand(
         store,
         threadId,
         config.context,
-        makeSummarizer(modelRegistry, config, optionalString(payload.provider), optionalString(payload.modelName)),
+        makeSummarizer(modelRegistry, config, optionalString(payload.provider), optionalString(payload.modelName), cached),
         true,
       )
     }

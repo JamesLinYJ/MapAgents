@@ -11,6 +11,7 @@
 import type { ToolRegistry } from '../framework/registry.js'
 import type { ToolContext, ToolResult, ValueRef } from '../framework/types.js'
 import type { ModelAdapter } from '../model/registry.js'
+import { recordModelCompletionUsage, type ModelCompletionService } from '../model/modelResultCache.js'
 import type { ToolExecutionStore } from '../store/runtimePorts.js'
 import type { AuthContext } from '../security/types.js'
 import type { AgentWorkflowStep, TodoItem } from '../schemas/types.js'
@@ -29,6 +30,8 @@ interface CoordinatorOptions {
   store: ToolExecutionStore
   registry: ToolRegistry
   adapter: ModelAdapter | null
+  modelCompletions?: ModelCompletionService
+  workspaceId: string | null
   runId: string
   sessionId: string
   threadId: string
@@ -554,8 +557,21 @@ export class ToolExecutionCoordinator {
         datasetId: input.datasetId ?? null,
         filename: input.filename ?? null,
       }),
-      invokeStructuredModel: prompt => {
+      invokeStructuredModel: async prompt => {
         if (!this.options.adapter) throw new Error('当前确定性工具链未配置结构化模型调用')
+        if (this.options.modelCompletions && this.options.workspaceId) {
+          const response = await this.options.modelCompletions.completeJson({
+            workspaceId: this.options.workspaceId,
+            runId: this.options.runId,
+            provider: this.options.adapter.provider,
+            ...(this.options.modelName === undefined ? {} : { model: this.options.modelName }),
+            purpose: 'tool_structured_analysis',
+            prompt,
+            signal: this.options.signal,
+          })
+          await recordModelCompletionUsage(this.options.store, this.options.runId, response)
+          return response.content
+        }
         return invokeStructuredModel(this.options.adapter, prompt, this.options.modelName, this.options.signal)
       },
       log: (level, message) => this.options.eventSink.emit('tool.completed', message, { level }),

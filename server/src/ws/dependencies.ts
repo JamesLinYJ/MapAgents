@@ -17,6 +17,7 @@ import type { AgentRuntimeConfig } from '../schemas/types.js'
 import type { Env } from '../framework/env.js'
 import type { ManagedLayerService } from '../gis/managedLayers/managedLayerService.js'
 import type { ModelAdapterRegistry } from '../model/registry.js'
+import type { ModelCompletionService } from '../model/modelResultCache.js'
 import type { ToolRegistry } from '../framework/registry.js'
 import type { SandboxSessionFactory } from '../agent/runtime.js'
 import type { OpenAIAgentsRuntime } from '../agent/runtime.js'
@@ -34,6 +35,7 @@ export interface WsDependencies {
   store: PlatformPersistenceFacade
   toolRegistry: ToolRegistry
   modelRegistry: ModelAdapterRegistry
+  modelCompletions?: ModelCompletionService
   managedLayers: ManagedLayerService
   runtimeRoot: string
   defaultRuntimeConfig?: AgentRuntimeConfig

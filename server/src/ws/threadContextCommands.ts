@@ -58,6 +58,9 @@ export function registerThreadContextCommands(registry: WsCommandRegistry): void
           config,
           payload.provider ?? null,
           payload.modelName ?? null,
+          context.dependencies.modelCompletions && context.auth?.defaultWorkspaceId
+            ? { service: context.dependencies.modelCompletions, workspaceId: context.auth.defaultWorkspaceId }
+            : undefined,
         ),
         true,
       )

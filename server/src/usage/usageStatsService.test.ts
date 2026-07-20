@@ -21,10 +21,14 @@ describe('UsageStatsService', () => {
           modelInputTokens: 120,
           modelOutputTokens: 30,
           modelCacheHitInputTokens: 80,
+          modelCacheMissInputTokens: 40,
           modelCacheHitReportedResponseCount: 1,
           modelTotalTokens: 150,
           modelUsageResponseCount: 1,
           contextEstimatedTokens: 900,
+          modelResultCacheHitCount: 2,
+          modelResultCacheAvoidedRequestCount: 2,
+          modelResultCacheEstimatedSavedTokens: 70,
         },
       }),
       run('run_without_cache_detail', {
@@ -46,9 +50,12 @@ describe('UsageStatsService', () => {
     expect(summary.totals.inputTokens).toBe(130)
     expect(summary.totals.outputTokens).toBe(35)
     expect(summary.totals.cacheHitInputTokens).toBe(80)
+    expect(summary.totals.cacheMissInputTokens).toBe(40)
     expect(summary.totals.cacheHitReportedRuns).toBe(1)
     expect(summary.totals.totalTokens).toBe(165)
     expect(summary.totals.contextEstimatedTokens).toBe(900)
+    expect(summary.totals.resultCacheAvoidedRequestCount).toBe(2)
+    expect(summary.totals.resultCacheEstimatedSavedTokens).toBe(70)
     expect(summary.byProvider[0]?.key).toBe('deepseek')
     expect(summary.byModel[0]?.label).toBe('deepseek-v4-pro')
     expect(summary.recentRuns[0]).toMatchObject({

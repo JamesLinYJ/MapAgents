@@ -15,6 +15,7 @@ import type { RunTaskManager } from '../agent/runTaskManager.js'
 import type { ToolRegistry } from '../framework/registry.js'
 import type { AgentRuntimeConfig } from '../schemas/types.js'
 import type { ModelAdapterRegistry } from '../model/registry.js'
+import type { ModelCompletionService } from '../model/modelResultCache.js'
 import type { SecurityServices } from '../security/routes.js'
 import type { AuthContext } from '../security/types.js'
 import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
@@ -52,6 +53,7 @@ export interface AutomationRunnerOptions {
   toolRegistry: ToolRegistry
   runTasks: RunTaskManager
   modelRegistry: ModelAdapterRegistry
+  modelCompletions?: ModelCompletionService
   security: SecurityServices
   usageStats: UsageStatsService
   backgroundTasks: BackgroundTaskRegistry
@@ -349,6 +351,7 @@ export class AutomationRunner {
           store: this.options.store,
           registry: this.options.toolRegistry,
           modelRegistry: this.options.modelRegistry,
+          ...(this.options.modelCompletions ? { modelCompletions: this.options.modelCompletions } : {}),
           defaultRuntimeConfig: this.options.defaultRuntimeConfig,
         }), signal)
         return completed(nextState, node, {

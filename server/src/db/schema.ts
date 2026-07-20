@@ -197,6 +197,26 @@ export const platformRuns = pgTable('platform_runs', {
   statusUpdatedIdx: index('idx_platform_runs_status_updated').on(table.status, table.updatedAt),
 }))
 
+// 纯辅助模型结果缓存不是对话事实源；删除或过期不会影响 Run/Thread 恢复。
+// 仅保存内容哈希与已校验的小型结果，避免持久化原始提示词。
+export const platformModelResultCache = pgTable('platform_model_result_cache', {
+  cacheKey: text('cache_key').primaryKey(),
+  workspaceId: text('workspace_id').notNull().references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
+  provider: text('provider').notNull(),
+  model: text('model').notNull(),
+  purpose: text('purpose').notNull(),
+  content: text('content').notNull(),
+  usageJson: jsonb('usage_json').notNull().$type<Record<string, number>>().default({}),
+  hitCount: integer('hit_count').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  lastAccessedAt: timestamp('last_accessed_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  workspaceExpiryIdx: index('idx_model_result_cache_workspace_expiry').on(table.workspaceId, table.expiresAt),
+  expiryIdx: index('idx_model_result_cache_expiry').on(table.expiresAt),
+  hitCountCheck: check('platform_model_result_cache_hit_count_check', sql`${table.hitCount} >= 0`),
+}))
+
 export const platformConversationEntries = pgTable('platform_conversation_entries', {
   entryId: text('entry_id').primaryKey(),
   sessionId: text('session_id').notNull().references(() => platformSessions.sessionId, { onDelete: 'cascade' }),

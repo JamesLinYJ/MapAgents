@@ -406,10 +406,14 @@ export const tokenUsageTotalsSchema = z.object({
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
   cacheHitInputTokens: z.number().int().nonnegative(),
+  cacheMissInputTokens: z.number().int().nonnegative(),
   cacheHitReportedRuns: z.number().int().nonnegative(),
   cacheHitUnreportedRuns: z.number().int().nonnegative(),
   totalTokens: z.number().int().nonnegative(),
   contextEstimatedTokens: z.number().int().nonnegative(),
+  resultCacheHitCount: z.number().int().nonnegative(),
+  resultCacheAvoidedRequestCount: z.number().int().nonnegative(),
+  resultCacheEstimatedSavedTokens: z.number().int().nonnegative(),
 })
 
 export const tokenUsageBucketSchema = tokenUsageTotalsSchema.extend({
@@ -430,7 +434,11 @@ export const tokenUsageRunSchema = z.object({
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
   cacheHitInputTokens: z.number().int().nonnegative(),
+  cacheMissInputTokens: z.number().int().nonnegative(),
   cacheHitReported: z.boolean(),
+  resultCacheHitCount: z.number().int().nonnegative(),
+  resultCacheAvoidedRequestCount: z.number().int().nonnegative(),
+  resultCacheEstimatedSavedTokens: z.number().int().nonnegative(),
   totalTokens: z.number().int().nonnegative(),
   contextEstimatedTokens: z.number().int().nonnegative(),
   contextUsagePermille: z.number().int().nonnegative().nullable().default(null),

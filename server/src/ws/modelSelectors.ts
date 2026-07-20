@@ -15,6 +15,8 @@
 
 import type { AgentRuntimeConfig } from '../schemas/types.js'
 import type { ModelAdapterRegistry } from '../model/registry.js'
+import { recordModelCompletionUsage, type ModelCompletionPurpose, type ModelCompletionService } from '../model/modelResultCache.js'
+import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import { isRecord } from './payload.js'
 
 export function makeSummarizer(
@@ -22,9 +24,22 @@ export function makeSummarizer(
   config: AgentRuntimeConfig,
   requestedProvider: string | null,
   requestedModel: string | null,
+  cached?: CachedCompletionContext,
 ) {
   return async (prompt: string): Promise<string> => {
     const adapter = registry.resolveProvider(requestedProvider ?? config.context.summaryProvider)
+    if (cached) {
+      const response = await cached.service.completeText({
+        workspaceId: cached.workspaceId,
+        ...(cached.runId ? { runId: cached.runId } : {}),
+        provider: adapter.provider,
+        model: requestedModel ?? config.context.summaryModel ?? adapter.subagentModel ?? adapter.defaultModel,
+        purpose: 'thread_summary',
+        prompt,
+      })
+      if (cached.store && cached.runId) await recordModelCompletionUsage(cached.store, cached.runId, response)
+      return response.content
+    }
     const response = await adapter.chat(prompt, {
       model: requestedModel ?? config.context.summaryModel ?? adapter.subagentModel ?? adapter.defaultModel,
       reasoning: false,
@@ -39,9 +54,10 @@ export function makeOptionalStructuredSelector(
   config: AgentRuntimeConfig,
   requestedProvider: string | null,
   requestedModel: string | null,
+  cached?: CachedCompletionContext,
 ): ((prompt: string) => Promise<Record<string, unknown>>) | undefined {
   if (!requestedProvider && !requestedModel && !config.context.summaryProvider && !registry.defaultProvider) return undefined
-  return makeStructuredSelector(registry, config, requestedProvider, requestedModel)
+  return makeStructuredSelector(registry, config, requestedProvider, requestedModel, cached)
 }
 
 export function makeStructuredSelector(
@@ -49,6 +65,7 @@ export function makeStructuredSelector(
   config: AgentRuntimeConfig,
   requestedProvider: string | null,
   requestedModel: string | null,
+  cached?: CachedCompletionContext,
 ) {
   return async (prompt: string): Promise<Record<string, unknown>> => {
     const provider = requestedProvider ?? config.context.summaryProvider ?? registry.defaultProvider
@@ -56,6 +73,18 @@ export function makeStructuredSelector(
     const adapter = registry.resolveProvider(provider)
     const model = requestedModel ?? config.context.summaryModel ?? adapter.subagentModel ?? adapter.defaultModel
     if (!model) throw new Error('未配置记忆选择模型')
+    if (cached) {
+      const response = await cached.service.completeJson({
+        workspaceId: cached.workspaceId,
+        ...(cached.runId ? { runId: cached.runId } : {}),
+        provider: adapter.provider,
+        model,
+        purpose: cached.purpose ?? 'memory_selection',
+        prompt,
+      })
+      if (cached.store && cached.runId) await recordModelCompletionUsage(cached.store, cached.runId, response)
+      return response.content
+    }
     const response = await adapter.chat(prompt, {
       model,
       reasoning: false,
@@ -63,6 +92,14 @@ export function makeStructuredSelector(
     if (typeof response.content !== 'string' || !response.content.trim()) throw new Error('结构化模型未返回文本')
     return parseStructuredJson(response.content)
   }
+}
+
+interface CachedCompletionContext {
+  service: ModelCompletionService
+  workspaceId: string
+  store?: PlatformPersistenceFacade
+  runId?: string | null
+  purpose?: ModelCompletionPurpose
 }
 
 function parseStructuredJson(value: string): Record<string, unknown> {
