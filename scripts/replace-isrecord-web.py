@@ -1,6 +1,7 @@
 import os, re
+from pathlib import Path
 
-ROOT = r'C:\Projects\Newmap\apps\web\src'
+ROOT = str(Path(__file__).resolve().parents[1] / 'apps' / 'web' / 'src')
 GUARDS = os.path.join(ROOT, 'shared', 'utils', 'guards.ts')
 FILES = [
     'features/conversation/items.ts',

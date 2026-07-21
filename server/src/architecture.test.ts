@@ -133,12 +133,12 @@ describe('conversation architecture', () => {
 
   it('keeps the Windows development stack bound to loopback explicitly', async () => {
     const repositoryRoot = path.resolve(process.cwd(), '..')
-    const source = await readFile(path.join(repositoryRoot, 'dev.ps1'), 'utf8')
+    const source = await readFile(path.join(repositoryRoot, 'scripts/dev-environment.ps1'), 'utf8')
 
-    expect(source.includes("Set-ProcessValue 'API_HOST' '127.0.0.1'")).toBe(true)
-    expect(source.includes("Set-ProcessValue 'WEB_DEV_HOST' '127.0.0.1'")).toBe(true)
-    expect(source.includes("Set-ProcessDefault 'API_HOST' '127.0.0.1'")).toBe(false)
-    expect(source.includes("Set-ProcessDefault 'WEB_DEV_HOST' '127.0.0.1'")).toBe(false)
+    for (const name of ['API_HOST', 'WEB_DEV_HOST', 'OPS_GATEWAY_HOST', 'OPS_BROKER_HOST']) {
+      expect(source.includes(`Set-GeoForgeValue '${name}' '127.0.0.1'`), name).toBe(true)
+      expect(source.includes(`Set-GeoForgeDefault '${name}' '127.0.0.1'`), name).toBe(false)
+    }
   })
 
   it('keeps PlatformPersistenceFacade as a resource facade instead of a writer god object', async () => {

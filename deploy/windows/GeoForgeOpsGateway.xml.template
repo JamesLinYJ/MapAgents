@@ -1,0 +1,13 @@
+<service>
+  <id>GeoForgeOpsGateway</id>
+  <name>GeoForge Operations Gateway</name>
+  <description>Serves the independent GeoForge operations console and control plane.</description>
+  <executable>@@PWSH_EXECUTABLE@@</executable>
+  <arguments>-NoProfile -NonInteractive -File "@@GEOFORGE_ROOT@@\scripts\run-geoforge-windows-service.ps1" -Component OpsGateway -EnvironmentFile "@@SERVICE_ENV_FILE@@"</arguments>
+  <workingdirectory>@@GEOFORGE_ROOT@@</workingdirectory>
+  <depend>GeoForgeProcessCompose</depend>
+  <startmode>Automatic</startmode>
+  <stoptimeout>15sec</stoptimeout>
+  <onfailure action="restart" delay="3 sec" />
+  <log mode="roll-by-size-time"><sizeThreshold>10240</sizeThreshold><pattern>yyyyMMdd</pattern><autoRollAtTime>00:00:00</autoRollAtTime><zipOlderThanNumDays>7</zipOlderThanNumDays></log>
+</service>

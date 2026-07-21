@@ -1,0 +1,71 @@
+# +-------------------------------------------------------------------------
+#
+#   GeoForge 地理智能平台 - Linux 开发进程监督配置
+#
+#   文件:       process-compose.linux.yaml
+#
+#   日期:       2026年07月21日
+#   作者:       OpenAI Codex
+# --------------------------------------------------------------------------
+
+version: "0.5"
+is_strict: true
+ordered_shutdown: true
+
+processes:
+  infra:
+    description: "PostGIS, Martin and TiTiler infrastructure"
+    working_dir: "${GEOFORGE_ROOT}"
+    command: "bash ./scripts/run-infra.sh"
+    readiness_probe:
+      exec:
+        command: "bash ./scripts/check-infra.sh"
+      initial_delay_seconds: 3
+      period_seconds: 3
+      timeout_seconds: 10
+      success_threshold: 1
+      failure_threshold: 20
+    shutdown:
+      command: "bash ./scripts/stop-infra.sh"
+      timeout_seconds: 40
+  worker:
+    description: "GeoForge Python scientific worker"
+    working_dir: "${GEOFORGE_ROOT}"
+    command: "bash ./scripts/run-worker.sh"
+    depends_on:
+      infra:
+        condition: process_healthy
+    readiness_probe:
+      http_get: { host: "127.0.0.1", port: "${WORKER_PORT}", path: "/health", scheme: "http" }
+      initial_delay_seconds: 2
+      period_seconds: 2
+      timeout_seconds: 3
+      failure_threshold: 30
+    availability: { restart: on_failure, max_restarts: 5, backoff_seconds: 2 }
+  api:
+    description: "GeoForge Node API and WebSocket runtime"
+    working_dir: "${GEOFORGE_ROOT}"
+    command: "npm run start --workspace server"
+    depends_on:
+      infra: { condition: process_healthy }
+      worker: { condition: process_healthy }
+    readiness_probe:
+      http_get: { host: "127.0.0.1", port: "${API_PORT}", path: "/health", scheme: "http" }
+      initial_delay_seconds: 3
+      period_seconds: 2
+      timeout_seconds: 5
+      failure_threshold: 30
+    availability: { restart: on_failure, max_restarts: 5, backoff_seconds: 2 }
+  web:
+    description: "GeoForge browser workbench"
+    working_dir: "${GEOFORGE_ROOT}"
+    command: "npm run preview --workspace apps/web -- --host 127.0.0.1 --port ${WEB_DEV_PORT}"
+    depends_on:
+      api: { condition: process_healthy }
+    readiness_probe:
+      http_get: { host: "127.0.0.1", port: "${WEB_DEV_PORT}", path: "/", scheme: "http" }
+      initial_delay_seconds: 2
+      period_seconds: 2
+      timeout_seconds: 3
+      failure_threshold: 30
+    availability: { restart: on_failure, max_restarts: 5, backoff_seconds: 2 }

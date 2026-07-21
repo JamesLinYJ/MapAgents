@@ -5,6 +5,7 @@
   "workspaces": [
     "server",
     "apps/web",
+    "apps/operations",
     "packages/shared-types"
   ],
   "//": "Python worker only hosts packages/gis-meteorology scientific execution.",
@@ -13,17 +14,22 @@
     "dev:windows": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./dev.ps1 start",
     "dev:windows:status": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./dev.ps1 status",
     "dev:windows:stop": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./dev.ps1 stop",
-    "dev:server": "npm run dev --workspace server",
-    "dev:web": "npm run dev --workspace apps/web",
+    "dev:server": "npm run build:shared && npm run dev --workspace server",
+    "dev:web": "npm run build:shared && npm run dev --workspace apps/web",
     "dev:worker": "python -m uvicorn worker_app.sidecar:app --app-dir apps/worker/src --host 127.0.0.1 --port 8012 --reload",
-    "build": "npm run typecheck --workspace @geo-agent-platform/shared-types && npm run build --workspace server && npm run build --workspace apps/web",
-    "build:server": "npm run build --workspace server",
-    "build:web": "npm run build --workspace apps/web",
-    "test": "npm run test --workspace server && npm run test --workspace apps/web",
-    "test:server": "npm run test --workspace server",
-    "test:web": "npm run test --workspace apps/web",
+    "dev:ops-gateway": "pwsh -NoProfile -File ./scripts/run-ops-gateway-dev.ps1",
+    "dev:terminal-broker": "pwsh -NoProfile -File ./scripts/run-terminal-broker-dev.ps1",
+    "build": "npm run build:shared && npm run build --workspace server && npm run build --workspace apps/web && npm run build --workspace apps/operations",
+    "build:shared": "npm run build --workspace @geo-agent-platform/shared-types",
+    "build:server": "npm run build:shared && npm run build --workspace server",
+    "build:web": "npm run build:shared && npm run build --workspace apps/web",
+    "build:operations": "npm run build:shared && npm run build --workspace apps/operations",
+    "test": "npm run build:shared && npm run test --workspace server && npm run test --workspace apps/web && npm run test --workspace apps/operations",
+    "test:server": "npm run build:shared && npm run test --workspace server",
+    "test:web": "npm run build:shared && npm run test --workspace apps/web",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
+    "test:e2e:operations": "playwright test --config playwright.operations.config.ts",
     "lint:web": "npm run lint --workspace apps/web",
     "lint:terminology": "node scripts/check-meteorology-terminology.mjs",
     "generate:glass": "node scripts/generate-liquid-glass-maps.mjs",
@@ -36,5 +42,9 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.0": true,
+    "node-pty@1.1.0": true
   }
 }

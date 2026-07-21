@@ -15,8 +15,9 @@
 
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowLeft, ArrowRight, Database, FileText, LogOut, Menu, PanelLeft, PanelRight, Search, ShieldCheck, Sparkles, UserRound, Zap } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Database, FileText, LogOut, Menu, PanelLeft, PanelRight, Search, ServerCog, ShieldCheck, Sparkles, UserRound, Zap } from 'lucide-react'
 import type { AuthMe } from '@geo-agent-platform/shared-types'
+import { canOpenOperations } from '../../shared/operationsAccess'
 import type { PrimaryNav } from '../types'
 
 interface TopBarProps {
@@ -52,6 +53,7 @@ export function TopBar({
   const [accountOpen, setAccountOpen] = useState(false)
   const canOpenSecurity = authMe.platformRoles.includes('platform_admin')
     || authMe.memberships.some(item => item.role === 'workspace_admin')
+  const showOperations = canOpenOperations(authMe)
   const displayName = authMe.user.displayName || authMe.user.email
   const roleLabel = formatRoleLabel(authMe.platformRoles[0] ?? authMe.memberships[0]?.role)
   const workspaceLabel = authMe.defaultWorkspace?.name
@@ -145,6 +147,12 @@ export function TopBar({
                   <ShieldCheck size={15} aria-hidden="true" />
                   <span>安全管理</span>
                 </Link>
+              ) : null}
+              {showOperations ? (
+                <a className="workbench-account__item" href="/operations/" target="_blank" rel="noreferrer" role="menuitem" onClick={() => setAccountOpen(false)}>
+                  <ServerCog size={15} aria-hidden="true" />
+                  <span>运维控制台</span>
+                </a>
               ) : null}
               <Link className="workbench-account__item" to="/terms" role="menuitem" onClick={() => setAccountOpen(false)}>
                 <FileText size={15} aria-hidden="true" />

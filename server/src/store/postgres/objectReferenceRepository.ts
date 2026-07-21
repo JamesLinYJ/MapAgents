@@ -13,6 +13,7 @@ import {
   platformConversationEntries,
   platformRunRecords,
   platformRuns,
+  platformTerminalTranscriptChunks,
   platformThreadMemoryVersions,
 } from '../../db/schema.js'
 import type { ObjectReferenceRepository } from './conversationPersistencePorts.js'
@@ -21,14 +22,15 @@ export class PostgresObjectReferenceRepository implements ObjectReferenceReposit
   constructor(private readonly db: Database) {}
 
   async listReferencedObjectHashes(): Promise<string[]> {
-    const [runRows, memoryRows, entryRows, recordRows] = await Promise.all([
+    const [runRows, memoryRows, entryRows, recordRows, terminalChunkRows] = await Promise.all([
       this.db.select({ hash: platformRuns.sdkStateContentHash }).from(platformRuns),
       this.db.select({ hash: platformThreadMemoryVersions.contentHash }).from(platformThreadMemoryVersions),
       this.db.select({ payload: platformConversationEntries.payloadJson }).from(platformConversationEntries),
       this.db.select({ payload: platformRunRecords.payloadJson }).from(platformRunRecords),
+      this.db.select({ hash: platformTerminalTranscriptChunks.contentHash }).from(platformTerminalTranscriptChunks),
     ])
     const hashes = new Set<string>()
-    for (const row of [...runRows, ...memoryRows]) {
+    for (const row of [...runRows, ...memoryRows, ...terminalChunkRows]) {
       if (row.hash && /^[a-f0-9]{64}$/u.test(row.hash)) hashes.add(row.hash)
     }
     for (const row of [...entryRows, ...recordRows]) collectSha256Strings(row.payload, hashes)
