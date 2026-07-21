@@ -13,8 +13,8 @@ import { drizzleAdapter } from 'better-auth/adapters/drizzle'
 import { createHash, createHmac } from 'node:crypto'
 import { z } from 'zod'
 import type { Database } from '../db/connection.js'
-import { assertDatabaseReachable } from '../db/databaseAvailability.js'
 import { authAccount, authSession, authUser, authVerification } from '../db/schema.js'
+import type { Env } from '../framework/env.js'
 import type { AuthContext, AuthRoleBinding } from './types.js'
 import type { AuthMe } from '../schemas/types.js'
 import type { PlatformIdentityService } from './platformIdentityService.js'
@@ -36,29 +36,11 @@ const betterAuthSessionProjectionSchema = z.object({
 
 type BetterAuthSessionProjection = z.infer<typeof betterAuthSessionProjectionSchema>
 
-export interface BetterAuthConfiguration {
-  APP_BASE_URL: string
-  WEB_BASE_URL?: string | undefined
-  BETTER_AUTH_URL: string
-  BETTER_AUTH_SECRET: string
-  BETTER_AUTH_ALLOW_SIGN_UP: boolean
-  BETTER_AUTH_REQUIRE_EMAIL_VERIFICATION: boolean
-  BETTER_AUTH_MIN_PASSWORD_LENGTH: number
-  BOOTSTRAP_ADMIN_EMAIL?: string | undefined
-  TRUSTED_ORIGINS: string
-  CSRF_HEADER_NAME: string
-}
-
-function createBetterAuthRuntime(
-  db: Database,
-  env: BetterAuthConfiguration,
-  trustedOrigins: string[],
-  basePath: string,
-) {
+function createBetterAuthRuntime(db: Database, env: Env, trustedOrigins: string[]) {
   return betterAuth({
       appName: 'GeoForge',
       baseURL: env.BETTER_AUTH_URL,
-      basePath,
+      basePath: '/api/auth',
       secret: env.BETTER_AUTH_SECRET,
       trustedOrigins,
       database: drizzleAdapter(db, {
@@ -88,25 +70,13 @@ type BetterAuthRuntime = ReturnType<typeof createBetterAuthRuntime>
 
 export class BetterAuthService {
   readonly auth: BetterAuthRuntime
-  private readonly db: Database
-  private readonly env: BetterAuthConfiguration
+  private readonly env: Env
   private readonly identity: PlatformIdentityService
 
-  constructor(input: {
-    db: Database
-    env: BetterAuthConfiguration
-    identity: PlatformIdentityService
-    basePath?: string
-  }) {
-    this.db = input.db
+  constructor(input: { db: Database; env: Env; identity: PlatformIdentityService }) {
     this.env = input.env
     this.identity = input.identity
-    this.auth = createBetterAuthRuntime(
-      input.db,
-      input.env,
-      [...this.trustedOrigins()],
-      input.basePath ?? '/api/auth',
-    )
+    this.auth = createBetterAuthRuntime(input.db, input.env, [...this.trustedOrigins()])
   }
 
   handler(request: Request): Promise<Response> {
@@ -118,18 +88,10 @@ export class BetterAuthService {
   }
 
   async authenticateHeaders(headers: Headers): Promise<AuthContext | null> {
-    let session: Awaited<ReturnType<BetterAuthRuntime['api']['getSession']>>
-    try {
-      session = await this.auth.api.getSession({
-        headers,
-        query: { disableCookieCache: true },
-      })
-    } catch (error) {
-      if (isBetterAuthSessionReadFailure(error)) {
-        await assertDatabaseReachable(this.db)
-      }
-      throw error
-    }
+    const session = await this.auth.api.getSession({
+      headers,
+      query: { disableCookieCache: true },
+    })
     if (!session) return null
     return this.ensurePlatformProjection(betterAuthSessionProjectionSchema.parse(session))
   }
@@ -280,10 +242,4 @@ function normalizeDateString(value: string | Date | null | undefined): string | 
   if (!value) return null
   const date = value instanceof Date ? value : new Date(value)
   return Number.isNaN(date.getTime()) ? null : date.toISOString()
-}
-
-function isBetterAuthSessionReadFailure(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false
-  const body = Reflect.get(error, 'body')
-  return Boolean(body && typeof body === 'object' && Reflect.get(body, 'code') === 'FAILED_TO_GET_SESSION')
 }

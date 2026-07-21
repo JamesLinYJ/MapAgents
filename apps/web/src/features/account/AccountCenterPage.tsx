@@ -9,11 +9,9 @@
 // --------------------------------------------------------------------------
 
 import { Link } from 'react-router-dom'
-import { CalendarClock, Fingerprint, LogOut, ServerCog, ShieldCheck, UserRound, UsersRound } from 'lucide-react'
+import { CalendarClock, Fingerprint, LogOut, ShieldCheck, UserRound, UsersRound } from 'lucide-react'
 import type { AuthMe } from '@geo-agent-platform/shared-types'
 import type { ReactNode } from 'react'
-
-import { canOpenOperations } from '../../shared/operationsAccess'
 
 interface AccountCenterPageProps {
   authMe: AuthMe
@@ -25,7 +23,6 @@ export function AccountCenterPage({ authMe, onLogout }: AccountCenterPageProps) 
   const defaultWorkspace = authMe.defaultWorkspace
   const canOpenSecurity = authMe.platformRoles.includes('platform_admin')
     || authMe.memberships.some(item => item.role === 'workspace_admin')
-  const showOperations = canOpenOperations(authMe)
 
   return (
     <main className="account-page" aria-labelledby="account-page-title">
@@ -93,7 +90,6 @@ export function AccountCenterPage({ authMe, onLogout }: AccountCenterPageProps) 
             </dl>
             <div className="account-link-list">
               {canOpenSecurity ? <Link to="/security">打开安全管理</Link> : null}
-              {showOperations ? <a href="/operations/" target="_blank" rel="noreferrer"><ServerCog size={14} aria-hidden="true" />打开运维控制台</a> : null}
               <Link to="/privacy">查看隐私政策</Link>
               <Link to="/terms">查看服务协议</Link>
             </div>
