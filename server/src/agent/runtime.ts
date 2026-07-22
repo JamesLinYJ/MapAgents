@@ -90,6 +90,7 @@ import {
   createPlanModeTerminalGuardrail,
   planModeTerminalGuardrailMessage,
 } from './runtimeOutputGuardrails.js'
+import { evaluateTerminalDelivery } from './terminalDeliveryPolicy.js'
 
 export type { SandboxSessionFactory } from './runtimeSandbox.js'
 export type { RunOptions } from './runtimeTypes.js'
@@ -823,6 +824,7 @@ export class OpenAIAgentsRuntime {
     let outcome: 'completed' | 'waiting_approval' | 'clarification_needed' | null = null
     let nextInput: RunState<AgentsExecutionContext, Agent<AgentsExecutionContext, typeof supervisorDeliverySchema>> | AgentInputItem[] | string = resumeState ?? options.query
     let activeProjection: StreamProjectionState | null = null
+    let terminalRepairAttempts = 0
     try {
       while (true) {
         const projection = this.transcriptProjector.createState()
@@ -855,7 +857,10 @@ export class OpenAIAgentsRuntime {
         if (stream.error) throw stream.error
         await this.transcriptProjector.linkAssistantTranscriptEntries(options.runId, assembly, projection, itemSink)
         if (projection.reasoningItemId) {
-          itemSink.completeItem(projection.reasoningItemId, { body: projection.reasoningText })
+          itemSink.completeItem(projection.reasoningItemId, {
+            body: projection.visibleReasoningText,
+            metadata: { presentation: 'localized_summary' },
+          })
         }
         await this.updateUsage(options.runId, stream.rawResponses)
         const interruptions = stream.interruptions
@@ -899,6 +904,41 @@ export class OpenAIAgentsRuntime {
           throw new Error(`运行仍有未完成 Todo：${incompleteTodos.map(todo => todo.title).join('、')}。请先更新为完成、失败或受阻状态。`)
         }
         const delivery = parseSupervisorDelivery(stream.finalOutput)
+        const activeTranscript = await this.store.activeTranscript(assembly.threadId)
+        const successfulToolNames = new Set(activeTranscript.flatMap(entry => (
+          entry.runId === options.runId
+          && entry.kind === 'tool_result'
+          && entry.payload.ledgerStatus === 'completed'
+          && typeof entry.payload.name === 'string'
+            ? [entry.payload.name]
+            : []
+        )))
+        const terminalDecision = options.executionMode === 'plan'
+          ? { accepted: true as const }
+          : evaluateTerminalDelivery({
+              query: options.query,
+              delivery,
+              successfulToolNames,
+            })
+        if (!terminalDecision.accepted) {
+          if (terminalRepairAttempts >= 2) {
+            throw new Error(`Agent 最终交付缺少可核验证据：${terminalDecision.reason}`)
+          }
+          terminalRepairAttempts += 1
+          eventSink.emit('warning.raised', '最终回答缺少可核验证据，正在继续执行。', {
+            code: terminalDecision.code,
+            repairAttempt: terminalRepairAttempts,
+          })
+          await this.checkpoints.persist(options.runId, stream.state, assembly)
+          await eventSink.flush()
+          await itemSink.flush()
+          nextInput = [{
+            type: 'message',
+            role: 'user',
+            content: terminalDecision.repairInstruction,
+          }]
+          continue
+        }
         const finalOutput = delivery.markdown.trim()
         assertDeliveryArtifacts(runAfterTools, delivery)
         const lastAgentName = stream.lastAgent?.name

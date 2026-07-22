@@ -262,9 +262,9 @@ describe('DeepSeekChatCompletionsModel', () => {
     expect(observedRequests[0]).not.toHaveProperty('reasoning_effort')
     expect(observedRequests[1]).toMatchObject({
       reasoning_effort: 'high',
+      thinking: { type: 'enabled' },
     })
     expect(observedRequests[1]).not.toHaveProperty('tool_choice')
-    expect(observedRequests[1]).not.toHaveProperty('thinking')
     expect(observedRequests.every(item => !('cache_control' in item))).toBe(true)
   })
 
@@ -364,7 +364,7 @@ describe('DeepSeekChatCompletionsModel', () => {
     expect(system?.content).toContain('最终回答必须只包含一个有效 JSON object')
   })
 
-  it('retries a side-effect-free invalid structured final response before publishing events', async () => {
+  it('keeps tools available while retrying an invalid structured response before any tool result', async () => {
     let calls = 0
     const observed: Array<Record<string, unknown>> = []
     const valid = '{"artifactIds":[],"markdown":"完成","summary":"完成","warnings":[]}'
@@ -400,8 +400,21 @@ describe('DeepSeekChatCompletionsModel', () => {
 
     expect(calls).toBe(3)
     expect(observed[0]?.tools).toBeDefined()
-    expect(observed[1]?.tools).toBeUndefined()
-    expect(observed[2]?.tools).toBeUndefined()
+    expect(observed[1]?.tools).toBeDefined()
+    expect(observed[2]?.tools).toBeDefined()
+    expect(observed[2]?.thinking).toEqual({ type: 'disabled' })
+    const secondMessages = observed[1]?.messages as Array<{ role: string; content: string }>
+    const thirdMessages = observed[2]?.messages as Array<{ role: string; content: string }>
+    expect(secondMessages.at(-1)).toMatchObject({
+      role: 'user',
+      content: expect.stringContaining('<structured_output_retry attempt="1">'),
+    })
+    expect(secondMessages.at(-1)?.content).not.toContain('英文自述')
+    expect(thirdMessages.at(-1)).toMatchObject({
+      role: 'user',
+      content: expect.stringContaining('<structured_output_retry attempt="2">'),
+    })
+    expect(secondMessages.at(-1)?.content).not.toBe(thirdMessages.at(-1)?.content)
     expect(deltas.join('')).toBe(valid)
     expect(events.filter(event => event.type === 'response_started')).toHaveLength(1)
     expect(events.filter(event => event.type === 'response_done')).toHaveLength(1)
@@ -415,7 +428,7 @@ describe('DeepSeekChatCompletionsModel', () => {
     expect(done?.response.usage.inputTokensDetails).toHaveLength(3)
   })
 
-  it('applies the same side-effect-free structured retry contract to non-streaming calls', async () => {
+  it('uses a non-thinking, tool-free finalization retry after an executed tool result', async () => {
     let calls = 0
     const observed: Array<Record<string, unknown>> = []
     const valid = '{"artifactIds":[],"markdown":"完成","summary":"完成","warnings":[]}'
@@ -437,6 +450,17 @@ describe('DeepSeekChatCompletionsModel', () => {
     const model = new DeepSeekChatCompletionsModel({ client, model: 'deepseek-v4-pro' })
 
     const response = await model.getResponse(request({
+      input: [
+        { type: 'message', role: 'user', content: '查询图层' },
+        { type: 'reasoning', content: [], rawContent: [{ type: 'reasoning_text', text: '需要调用查询工具' }] },
+        { type: 'function_call', status: 'completed', callId: 'call_1', name: 'probe', arguments: '{}' },
+        { type: 'function_call_result', status: 'completed', callId: 'call_1', name: 'probe', output: { type: 'text', text: '查询完成' } },
+      ],
+      modelSettings: {
+        parallelToolCalls: false,
+        reasoning: { effort: 'high' },
+        providerData: { thinking: { type: 'enabled' } },
+      },
       outputType: {
         type: 'json_schema',
         name: 'delivery',
@@ -450,6 +474,13 @@ describe('DeepSeekChatCompletionsModel', () => {
     expect(observed[0]?.tools).toBeDefined()
     expect(observed[1]?.tools).toBeUndefined()
     expect(observed[2]?.tools).toBeUndefined()
+    expect(observed[1]?.thinking).toEqual({ type: 'disabled' })
+    expect(observed[1]).not.toHaveProperty('reasoning_effort')
+    const retryMessages = observed[1]?.messages as Array<{ role: string; content: string }>
+    expect(retryMessages.at(-1)).toMatchObject({
+      role: 'user',
+      content: expect.stringContaining('只输出一个以 { 开始、以 } 结束'),
+    })
     expect(response.usage).toMatchObject({
       requests: 3,
       inputTokens: 3,

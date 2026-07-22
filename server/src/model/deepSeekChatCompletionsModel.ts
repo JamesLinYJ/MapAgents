@@ -96,11 +96,20 @@ class DeepSeekModelStreamError extends Error {
 }
 
 class DeepSeekStructuredOutputError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
+  readonly outputKind: StructuredOutputKind
+  readonly outputLength: number
+  readonly outputDigest: string
+
+  constructor(message: string, output: string, options?: ErrorOptions) {
     super(message, options)
     this.name = 'DeepSeekStructuredOutputError'
+    this.outputKind = classifyStructuredOutput(output)
+    this.outputLength = output.length
+    this.outputDigest = digest(output)
   }
 }
+
+type StructuredOutputKind = 'empty' | 'markdown_fence' | 'dsml' | 'truncated_json' | 'json_scalar' | 'non_json_text'
 
 export interface DeepSeekChatCompletionsModelOptions {
   client: OpenAI
@@ -143,7 +152,7 @@ export class DeepSeekChatCompletionsModel implements Model {
     for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
       const attemptParams = attempt === 1
         ? params
-        : toFinalizationRequest(params)
+        : toStructuredRetryRequest(params, attempt)
       try {
         const response = await this.client.chat.completions.create(attemptParams, { signal: request.signal })
         const choice = response.choices[0]
@@ -164,7 +173,14 @@ export class DeepSeekChatCompletionsModel implements Model {
         }
       } catch (error) {
         if (error instanceof DeepSeekStructuredOutputError && attempt < maximumAttempts && !request.signal?.aborted) {
-          logger.info({ model: this.model, attempt, finalizationWithoutTools: true }, 'DeepSeek structured output retry')
+          logger.info({
+            model: this.model,
+            attempt,
+            finalizationWithoutTools: !attemptParams.tools?.length,
+            outputKind: error.outputKind,
+            outputLength: error.outputLength,
+            outputDigest: error.outputDigest,
+          }, 'DeepSeek structured output retry')
           continue
         }
         throw error
@@ -186,7 +202,7 @@ export class DeepSeekChatCompletionsModel implements Model {
       // 不会重放任何已经执行过的工具副作用。
       const attemptParams = attempt === 1
         ? params
-        : toFinalizationRequest(params)
+        : toStructuredRetryRequest(params, attempt)
       let emittedSemanticOutput = false
       const bufferedEvents: ResponseStreamEvent[] = []
       try {
@@ -275,7 +291,14 @@ export class DeepSeekChatCompletionsModel implements Model {
         return
       } catch (error) {
         if (error instanceof DeepSeekStructuredOutputError && attempt < maximumAttempts && !request.signal?.aborted) {
-          logger.info({ model: this.model, attempt, finalizationWithoutTools: true }, 'DeepSeek structured output retry')
+          logger.info({
+            model: this.model,
+            attempt,
+            finalizationWithoutTools: !attemptParams.tools?.length,
+            outputKind: error.outputKind,
+            outputLength: error.outputLength,
+            outputDigest: error.outputDigest,
+          }, 'DeepSeek structured output retry')
           continue
         }
         if (error instanceof UserError || error instanceof DeepSeekModelStreamError) throw error
@@ -298,7 +321,10 @@ export class DeepSeekChatCompletionsModel implements Model {
     assertSupportedRequest(request)
     const messages = toChatMessages(request.input)
     const structuredOutputInstruction = toStructuredOutputInstruction(request.outputType)
-    const systemInstructions = [request.systemInstructions, structuredOutputInstruction]
+    const systemInstructions = [
+      request.systemInstructions,
+      structuredOutputInstruction,
+    ]
       .filter((value): value is string => Boolean(value))
       .join('\n\n')
     if (systemInstructions) messages.unshift({ role: 'system', content: systemInstructions })
@@ -313,6 +339,7 @@ export class DeepSeekChatCompletionsModel implements Model {
     const responseFormat = toResponseFormat(request.outputType)
     const providerThinkingDisabled = isRecord(providerData.thinking)
       && providerData.thinking.type === 'disabled'
+    const providerThinkingConfigured = isRecord(providerData.thinking)
     if (!providerThinkingDisabled && isNonAutoToolChoice(request.modelSettings.toolChoice)) {
       throw new UserError('DeepSeek V4 thinking 模式不支持显式 toolChoice；请使用 auto，或显式关闭 thinking。')
     }
@@ -335,6 +362,9 @@ export class DeepSeekChatCompletionsModel implements Model {
       ...(responseFormat ? { response_format: responseFormat } : {}),
       ...(!providerThinkingDisabled && request.modelSettings.reasoning?.effort
         ? { reasoning_effort: request.modelSettings.reasoning.effort }
+        : {}),
+      ...(!providerThinkingConfigured && request.modelSettings.reasoning?.effort
+        ? { thinking: { type: 'enabled' } }
         : {}),
       ...providerData,
     } as unknown) as ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming
@@ -528,6 +558,42 @@ function toFinalizationRequest<
   return finalizationParams
 }
 
+// DeepSeek 官方说明 JSON Output 偶尔可能返回空内容，并建议修改提示后重试。
+// 尚无工具结果时，失败响应也没有产生可执行副作用，重试必须保留工具目录，
+// 否则模型会被迫在缺数据时编造最终答案。已有工具结果时才进入无工具最终化，
+// 并用官方 thinking 开关关闭修复轮推理，让 JSON envelope 更稳定。
+function toStructuredRetryRequest<
+  T extends ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming,
+>(params: T, attempt: number): T {
+  const retryNumber = Math.max(1, attempt - 1)
+  const hasExecutedToolResult = params.messages.some(message => message.role === 'tool')
+  const retryParams = hasExecutedToolResult ? toFinalizationRequest(params) : { ...params }
+  const shouldDisableThinking = hasExecutedToolResult || attempt >= 3
+  const result = {
+    ...retryParams,
+    messages: [
+      ...retryParams.messages,
+      {
+        role: 'user',
+        content: [
+          `<structured_output_retry attempt="${retryNumber}">`,
+          '上一响应为空或不是合法的 json object，未被系统接受。',
+          hasExecutedToolResult
+            ? '已有工具结果，请直接完成同一回答；只输出一个以 { 开始、以 } 结束且符合既定 schema 的 JSON object。'
+            : '如果回答依赖可用工具数据，请先返回合法工具调用；否则只输出一个以 { 开始、以 } 结束且符合既定 schema 的 JSON object。',
+          '不要输出 Markdown 代码围栏、解释、前后缀或空白占位。',
+          '</structured_output_retry>',
+        ].join('\n'),
+      },
+    ],
+  } as T
+  if (shouldDisableThinking) {
+    delete result.reasoning_effort
+    Object.assign(result, { thinking: { type: 'disabled' } })
+  }
+  return result
+}
+
 // DeepSeek json_object 承诺返回单个合法 JSON object。适配器在供应商边界
 // 先验证该协议，再把正文交给 Agents SDK 做业务 schema 校验，避免把传输层
 // 拼接错误误报成业务 outputType 错误。
@@ -537,9 +603,22 @@ function assertStructuredOutput(outputType: ModelRequest['outputType'], text: st
   try {
     parsed = JSON.parse(text)
   } catch (error) {
-    throw new DeepSeekStructuredOutputError('DeepSeek JSON Output 未返回单个合法 JSON object', { cause: error })
+    throw new DeepSeekStructuredOutputError('DeepSeek JSON Output 未返回单个合法 JSON object', text, { cause: error })
   }
-  if (!isRecord(parsed)) throw new DeepSeekStructuredOutputError('DeepSeek JSON Output 的根值必须是 JSON object')
+  if (!isRecord(parsed)) throw new DeepSeekStructuredOutputError('DeepSeek JSON Output 的根值必须是 JSON object', text)
+}
+
+function classifyStructuredOutput(text: string): StructuredOutputKind {
+  const trimmed = text.trim()
+  if (!trimmed) return 'empty'
+  if (trimmed.startsWith('```')) return 'markdown_fence'
+  if (/DSML|<tool_calls?>|<invoke\b/iu.test(trimmed)) return 'dsml'
+  if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && !/[}\]]\s*$/u.test(trimmed)) return 'truncated_json'
+  try {
+    return isRecord(JSON.parse(trimmed)) ? 'non_json_text' : 'json_scalar'
+  } catch {
+    return 'non_json_text'
+  }
 }
 
 // DeepSeek Chat Completions 只公开 json_object；SDK 的 schema 仍由最终输出

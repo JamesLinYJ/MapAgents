@@ -20,12 +20,18 @@ describe('service environment isolation', () => {
       PATH: 'test-path',
       API_PORT: '8000',
       OPENAI_API_KEY: 'provider-secret',
+      OPEN_METEO_TIMEOUT_MS: '10000',
       GEOFORGE_SUPERVISOR_TOKEN: 'supervisor-secret',
       GEOFORGE_LOCAL_ROOT_SECRET: 'root-secret',
       UNRELATED_SECRET: 'unrelated-secret',
     }, { GEOFORGE_ROOT: 'C:\\project' })
 
-    expect(result).toMatchObject({ PATH: 'test-path', API_PORT: '8000', OPENAI_API_KEY: 'provider-secret' })
+    expect(result).toMatchObject({
+      PATH: 'test-path',
+      API_PORT: '8000',
+      OPENAI_API_KEY: 'provider-secret',
+      OPEN_METEO_TIMEOUT_MS: '10000',
+    })
     expect(result).not.toHaveProperty('GEOFORGE_SUPERVISOR_TOKEN')
     expect(result).not.toHaveProperty('GEOFORGE_LOCAL_ROOT_SECRET')
     expect(result).not.toHaveProperty('UNRELATED_SECRET')

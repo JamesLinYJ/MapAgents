@@ -73,8 +73,8 @@ export const SERVICE_CATALOG: Readonly<Record<OperationsServiceId, ServiceDefini
           linux: { file: 'bash', args: ['./scripts/check-infra-production.sh'] },
         },
       },
-      timeoutMs: 10_000,
-      periodMs: 3_000,
+      timeoutMs: 30_000,
+      periodMs: 10_000,
       initialDelayMs: 3_000,
     },
     portEnvironments: {

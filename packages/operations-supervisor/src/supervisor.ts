@@ -78,6 +78,7 @@ interface ManagedService {
   lastExitCode: string | number | null
   healthFailures: number
   healthTimer: NodeJS.Timeout | null
+  healthProbeInFlight: boolean
   restartTimer: NodeJS.Timeout | null
   metrics: ProcessTreeMetrics
   containers: OperationsServiceSnapshot['containers']
@@ -132,6 +133,7 @@ export class OperationsSupervisor {
         lastExitCode: null,
         healthFailures: 0,
         healthTimer: null,
+        healthProbeInFlight: false,
         restartTimer: null,
         metrics: { cpuPercent: unavailable('服务没有运行进程。'), memoryBytes: unavailable('服务没有运行进程。') },
         containers: [],
@@ -498,6 +500,11 @@ export class OperationsSupervisor {
     if (record.restartTimer) clearTimeout(record.restartTimer)
     record.restartTimer = null
     if (!record.command) {
+      // 基础设施日志跟随进程若先于容器退出，监督句柄可能已经消失；此时
+      // stop/shutdown 仍必须执行固定关闭钩子，不能把残留容器谎报为已停止。
+      if (record.definition.shutdown && record.state !== 'stopped' && record.state !== 'conflict') {
+        await this.runShutdownHook(record)
+      }
       record.state = record.state === 'conflict' ? 'conflict' : 'stopped'
       record.healthMessage = record.state === 'conflict' ? record.healthMessage : '已停止'
       return
@@ -552,25 +559,34 @@ export class OperationsSupervisor {
   }
 
   private async monitorHealth(record: ManagedService): Promise<void> {
-    if (!record.command || record.stopping) return
-    const result = await this.probe(record)
-    if (result.ok) {
-      record.healthFailures = 0
-      record.state = 'healthy'
-      record.healthMessage = result.message
-      if (record.startedAt && Date.now() - record.startedAt.getTime() >= 10 * 60_000) record.failureTimes = []
-    } else {
-      record.healthFailures += 1
-      if (record.healthFailures >= 3) {
-        record.state = 'degraded'
+    if (!record.command || record.stopping || record.healthProbeInFlight) return
+    const observedCommand = record.command
+    record.healthProbeInFlight = true
+    try {
+      const result = await this.probe(record)
+      // probe 是异步边界。期间 close/stop 可以清空或替换命令句柄；旧探针
+      // 不得再改写新状态，更不能把 null 传给 concurrently 的 canKill。
+      if (record.command !== observedCommand || record.stopping) return
+      if (result.ok) {
+        record.healthFailures = 0
+        record.state = 'healthy'
         record.healthMessage = result.message
+        if (record.startedAt && Date.now() - record.startedAt.getTime() >= 10 * 60_000) record.failureTimes = []
+      } else {
+        record.healthFailures += 1
+        if (record.healthFailures >= 3) {
+          record.state = 'degraded'
+          record.healthMessage = result.message
+        }
+        if (record.healthFailures >= 10 && record.definition.dependencies.every(id => this.requireRecord(id).state === 'healthy')) {
+          record.healthMessage = '连续健康失败，正在自动重启。'
+          if (Command.canKill(observedCommand)) observedCommand.kill('SIGTERM')
+        }
       }
-      if (record.healthFailures >= 10 && record.definition.dependencies.every(id => this.requireRecord(id).state === 'healthy')) {
-        record.healthMessage = '连续健康失败，正在自动重启。'
-        if (Command.canKill(record.command)) record.command.kill('SIGTERM')
-      }
+      this.emitSnapshot()
+    } finally {
+      record.healthProbeInFlight = false
     }
-    this.emitSnapshot()
   }
 
   private async probe(record: ManagedService): Promise<{ ok: boolean; message: string }> {

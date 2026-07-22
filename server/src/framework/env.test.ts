@@ -17,6 +17,10 @@ describe('parseEnv', () => {
 
     expect(env.BETTER_AUTH_ALLOW_SIGN_UP).toBe(false)
     expect(env.BETTER_AUTH_REQUIRE_EMAIL_VERIFICATION).toBe(true)
+    expect(env.OPEN_METEO_FORECAST_BASE_URL).toBe('https://api.open-meteo.com')
+    expect(env.OPEN_METEO_GEOCODING_BASE_URL).toBe('https://geocoding-api.open-meteo.com')
+    expect(env.OPEN_METEO_AIR_QUALITY_BASE_URL).toBe('https://air-quality-api.open-meteo.com')
+    expect(env.OPEN_METEO_TIMEOUT_MS).toBe(10_000)
   })
 })
 

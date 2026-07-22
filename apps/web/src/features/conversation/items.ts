@@ -75,17 +75,18 @@ export function deriveEntriesFromItems(
     }
 
     if (item.itemType === 'reasoning') {
-      const body = itemText(item)
+      const body = visibleReasoningBody(item)
       if (!body) continue
       entries.push({
         id: item.itemId,
         kind: 'message',
         role: 'assistant',
         timestamp: item.timestamp,
-        title: '思考',
+        title: '中文分析',
         body,
         status: itemStatus(item),
         badge: 'thinking',
+        details: item.metadata ?? null,
       })
       continue
     }
@@ -153,7 +154,9 @@ function buildToolEntry(
   const parsedOutput = outputParse.ok ? outputParse.value : {}
   const body = output
     ? readableToolOutput(toolName, outputParse, outputText, Boolean(output.isError))
-    : '执行中，等待工具返回...'
+    : status === 'failed'
+      ? itemText(call) || '工具执行失败，未返回结果。'
+      : '执行中，等待工具返回...'
   const metadata = output?.metadata ?? call?.metadata ?? {}
   const artifacts = Array.isArray(metadata.artifacts) ? metadata.artifacts.filter(isRecord) : []
   const artifactId = typeof metadata.artifactId === 'string'
@@ -320,8 +323,17 @@ function upsertToolEntry(entries: ConversationEntry[], entry: ConversationEntry)
   }
 }
 
-function itemText(item: ConversationItem) {
-  return item.body ?? item.output ?? ''
+function itemText(item: ConversationItem | undefined) {
+  return item?.body ?? item?.output ?? ''
+}
+
+function visibleReasoningBody(item: ConversationItem): string {
+  if (item.metadata?.presentation === 'localized_summary') return itemText(item)
+  // 旧数据和其它供应商可能保存不可控语言的原始 chain-of-thought。
+  // 界面只呈现忠实的生命周期摘要，不冒充逐字翻译，也不泄露原始思维链。
+  return item.status === 'running'
+    ? '正在分析问题，并核对回答所需的信息。'
+    : '已完成分析，并据此整理了回答。'
 }
 
 function itemStatus(item?: ConversationItem): LedgerEntryStatus {

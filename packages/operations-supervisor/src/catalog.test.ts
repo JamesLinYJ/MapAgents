@@ -24,6 +24,14 @@ describe('fixed service catalog', () => {
     expect(transitiveDependents('worker')).toEqual(['api', 'web'])
   })
 
+  it('allows the serialized Docker Desktop probe to finish without false timeout failures', () => {
+    expect(SERVICE_CATALOG.infra.health).toMatchObject({
+      kind: 'exec',
+      timeoutMs: 30_000,
+      periodMs: 10_000,
+    })
+  })
+
   it('does not admit commands, paths or environment values through the public catalog key', () => {
     for (const serviceId of SERVICE_ORDER) {
       expect(SERVICE_CATALOG[serviceId].serviceId).toBe(serviceId)

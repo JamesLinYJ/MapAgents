@@ -6,6 +6,10 @@
 #
 #   日期:       2026年07月21日
 #   作者:       OpenAI Codex
+#
+#   维护记录 (2026-07-23):
+#     作者: OpenAI Codex
+#     说明: 移除开发期 Uvicorn reload 子监督器，统一由 GeoForge 监督进程生命周期。
 # --------------------------------------------------------------------------
 
 $ErrorActionPreference = 'Stop'
@@ -46,8 +50,6 @@ if ($env:NODE_ENV -eq 'production') {
         throw 'Worker 启动失败：生产环境的 WORKER_PROCESSES 必须是 1 到 64 之间的整数。'
     }
     $Arguments += @('--workers', [string]$WorkerProcesses)
-} else {
-    $Arguments += '--reload'
 }
 
 & $PythonCommand @Arguments

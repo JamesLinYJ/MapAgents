@@ -23,6 +23,7 @@ import memoryProvider from '../tools/memory/index.js'
 import planProvider from '../tools/plan/index.js'
 import developerProvider from '../tools/developer/index.js'
 import { createMeteorologyProvider } from '../tools/meteorology/index.js'
+import { createPublicWeatherProvider } from '../tools/publicWeather/index.js'
 import { createSpatialProvider } from '../tools/spatial/index.js'
 import { createRoutingProvider } from '../tools/routing/index.js'
 
@@ -205,6 +206,7 @@ function builtinProviders(): ToolProvider[] {
     planProvider as ToolProvider,
     developerProvider as ToolProvider,
     createMeteorologyProvider(env),
+    createPublicWeatherProvider(env),
     createSpatialProvider(managedLayers, { runtimeRoot: env.RUNTIME_ROOT }),
     createRoutingProvider({
       valhallaBaseUrl: env.VALHALLA_BASE_URL,

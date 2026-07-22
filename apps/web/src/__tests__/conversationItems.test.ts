@@ -23,7 +23,7 @@ describe('deriveEntriesFromItems', () => {
       item({ itemId: 'assistant:run1', itemType: 'message', role: 'assistant', body: '杭州今天有雨。' }),
     ])
 
-    expect(entries.map((entry) => entry.title)).toEqual(['用户', '思考', '回答'])
+    expect(entries.map((entry) => entry.title)).toEqual(['用户', '中文分析', '回答'])
     expect(entries.at(1)?.status).toBe('running')
     expect(entries.at(2)?.body).toBe('杭州今天有雨。')
   })
@@ -166,6 +166,27 @@ describe('deriveEntriesFromItems', () => {
     expect(entries.at(0)?.commands?.at(0)?.body).toBe('5分钟后将下中雨，未来3小时持续下雨。')
   })
 
+  it('工具调用失败且没有输出条目时显示真实失败原因', () => {
+    const entries = deriveEntriesFromItems([
+      item({
+        itemId: 'call:failed',
+        itemType: 'function_call',
+        callId: 'call_failed',
+        name: 'geocode_place',
+        arguments: '{"query":"杭州西湖"}',
+        body: '地点地理编码服务未配置。',
+        status: 'failed',
+        isError: true,
+      }),
+    ])
+
+    expect(entries.at(0)).toMatchObject({
+      status: 'failed',
+      body: '地点地理编码服务未配置。',
+    })
+    expect(entries.at(0)?.commands?.at(0)?.body).toBe('地点地理编码服务未配置。')
+  })
+
   it('把工具调用前的普通 assistant 文本显示为过程说明而不是思考过程', () => {
     const entries = deriveEntriesFromItems([
       item({
@@ -185,7 +206,29 @@ describe('deriveEntriesFromItems', () => {
       body: '我先检查一下已上传的数据。',
       badge: 'commentary',
     })
-    expect(entries.at(1)).toMatchObject({ title: '思考', badge: 'thinking' })
+    expect(entries.at(1)).toMatchObject({
+      title: '中文分析',
+      body: '已完成分析，并据此整理了回答。',
+      badge: 'thinking',
+    })
+    expect(entries.at(1)?.body).not.toContain('内部推理片段')
+  })
+
+  it('保留服务端生成的中文分析摘要而不改写', () => {
+    const entries = deriveEntriesFromItems([
+      item({
+        itemId: 'reasoning:localized',
+        itemType: 'reasoning',
+        body: '正在理解你的问题，并确定需要核对的数据与条件。',
+        metadata: { presentation: 'localized_summary' },
+      }),
+    ])
+
+    expect(entries.at(0)).toMatchObject({
+      title: '中文分析',
+      body: '正在理解你的问题，并确定需要核对的数据与条件。',
+      details: { presentation: 'localized_summary' },
+    })
   })
 
   it('不把成功 terminal result 重复渲染为最终回答', () => {

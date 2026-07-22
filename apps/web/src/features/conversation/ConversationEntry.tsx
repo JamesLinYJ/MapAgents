@@ -16,7 +16,7 @@
 import { AnimatePresence, m, type Variants } from 'framer-motion'
 import { CheckCircle2, ChevronDown, GitBranchPlus, LoaderCircle, ShieldCheck } from 'lucide-react'
 import { buildFadeMotion, buildFadeUpMotion } from '../../shared/motion'
-import { Markdown } from '../../shared/components/Markdown'
+import { ProgressiveMarkdown } from './ProgressiveMarkdown'
 import { VoiceBar } from './VoiceBar'
 import { ToolMiniAppResult } from '../tools/ToolMiniApp'
 import { miniAppKindForTool } from '../tools/toolMiniAppModel'
@@ -26,6 +26,7 @@ interface ConversationEntryViewProps {
   entry: ConversationEntry
   entryVariants: Variants
   reducedMotion: boolean
+  animateText?: boolean
   expandedIds: Set<string>
   anchorId?: string
   onToggleExpanded: (id: string) => void
@@ -37,6 +38,7 @@ export function ConversationEntryView({
   entry,
   entryVariants,
   reducedMotion,
+  animateText = false,
   expandedIds,
   anchorId,
   onToggleExpanded,
@@ -93,14 +95,26 @@ export function ConversationEntryView({
               <AnimatePresence initial={false}>
                 {thoughtExpanded && (
                   <m.div className="cc-assistant-copy cc-assistant-copy--thought" {...buildFadeMotion(reducedMotion)}>
-                    <Markdown streaming={entry.status === 'running'}>{entry.body}</Markdown>
+                    <ProgressiveMarkdown
+                      animate={animateText}
+                      reducedMotion={reducedMotion}
+                      sourceStreaming={entry.status === 'running'}
+                    >
+                      {entry.body}
+                    </ProgressiveMarkdown>
                   </m.div>
                 )}
               </AnimatePresence>
             </>
           ) : (
             <div className="cc-assistant-copy">
-              <Markdown streaming={entry.status === 'running'}>{entry.body}</Markdown>
+              <ProgressiveMarkdown
+                animate={animateText}
+                reducedMotion={reducedMotion}
+                sourceStreaming={entry.status === 'running'}
+              >
+                {entry.body}
+              </ProgressiveMarkdown>
             </div>
           )}
           {entry.artifactId && (
@@ -473,8 +487,8 @@ function isThoughtEntry(entry: ConversationEntry) {
 }
 
 function formatThoughtLabel(entry: ConversationEntry) {
-  if (entry.status === 'running') return '思考中'
-  return '思考过程'
+  if (entry.status === 'running') return '中文分析中'
+  return '中文分析'
 }
 
 function formatCommandBatchTitle(entry: ConversationEntry) {

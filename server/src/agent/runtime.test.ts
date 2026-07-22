@@ -1402,7 +1402,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     expect(transcriptResultIndex).toBeLessThan(transcriptFinalIndex)
   })
 
-  it('keeps provider reasoning UI-only while completing a tool continuation', async () => {
+  it('keeps provider reasoning in the SDK run while publishing only a localized UI summary', async () => {
     const tools = new ToolRegistry()
     tools.register(providerFromTools('reasoning-replay-test', [{
       ...toolDefinition('lookup_context', ['query']),
@@ -1417,7 +1417,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         return { text: '工具后总结。' }
       }
       return {
-        reasoning: '这里是 provider reasoning，只能用于 UI 折叠区。',
+        reasoning: 'The provider may return an English chain of thought.',
         text: '我先查询上下文。',
         toolCalls: [{ id: 'call_lookup', name: 'lookup_context', arguments: '{"query":"杭州"}' }],
       }
@@ -1430,8 +1430,61 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     // Agents SDK 会把 reasoning 带到同一 run 的下一次 Model 请求；Chat Completions
     // 的不可重放边界在 DeepSeekChatCompletionsModel 中统一执行。
     expect(secondTurnInput.some(item => isRecord(item) && item.type === 'reasoning')).toBe(true)
-    expect(outcome.items.some(item => item.itemType === 'reasoning' && item.body?.includes('provider reasoning'))).toBe(true)
+    expect(outcome.items.some(item => (
+      item.itemType === 'reasoning'
+      && item.body === '正在理解你的问题，并确定需要核对的数据与条件。'
+      && item.metadata.presentation === 'localized_summary'
+    ))).toBe(true)
+    expect(outcome.items.some(item => item.body?.includes('English chain of thought'))).toBe(false)
     expect(outcome.items.some(item => item.itemType === 'message' && item.body === '工具后总结。')).toBe(true)
+  })
+
+  it('repairs a premature current-weather delivery until the required tool evidence exists', async () => {
+    const tools = new ToolRegistry()
+    tools.register(providerFromTools('terminal-weather-evidence-test', [{
+      ...toolDefinition('query_public_weather', ['place']),
+      handler: async () => result('Open-Meteo 公开天气已返回', [], {
+        location: '浙江省杭州市西湖区',
+        precipitationProbability: 72,
+      }),
+    }]))
+    let turns = 0
+    const model = scriptedModel(request => {
+      turns += 1
+      if (hasToolResultNamed(request, 'query_public_weather')) {
+        return { text: '西湖附近明天下午降水概率最高为 72%，数据来自 Open-Meteo。' }
+      }
+      if (requestTexts(request).some(text => text.includes('<terminal_delivery_repair>'))) {
+        return {
+          reasoning: 'I should use the weather tool now.',
+          toolCalls: [{
+            id: 'call_public_weather',
+            name: 'query_public_weather',
+            arguments: '{"place":"浙江杭州西湖"}',
+          }],
+        }
+      }
+      return { text: '## 查询西湖位置\n我先查询西湖的精确位置，以便获取准确的天气预报。' }
+    })
+
+    const outcome = await executeTextRun(
+      model,
+      tools,
+      '浙江杭州西湖附近明天会下雨吗？请告诉我最可能下雨的时段、概率和雨量。',
+    )
+
+    expect(outcome.run.status).toBe('completed')
+    expect(turns).toBe(3)
+    expect(outcome.transcript.filter(entry => (
+      entry.kind === 'tool_result'
+      && entry.payload.name === 'query_public_weather'
+      && entry.payload.ledgerStatus === 'completed'
+    ))).toHaveLength(1)
+    expect(outcome.items.some(item => (
+      item.itemType === 'message'
+      && item.body === '西湖附近明天下午降水概率最高为 72%，数据来自 Open-Meteo。'
+    ))).toBe(true)
+    expect(outcome.items.some(item => item.body?.includes('我先查询西湖'))).toBe(false)
   })
 
   it('runs configured subagents as Agent tools with inherited model and persisted transcript', async () => {
@@ -2252,14 +2305,14 @@ function structuredResponse(response: ScriptedResponse, request: ModelRequest): 
   return response
 }
 
-async function executeTextRun(model: Model, tools = new ToolRegistry()) {
+async function executeTextRun(model: Model, tools = new ToolRegistry(), query = '回答测试问题') {
   const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-stream-'))
   try {
     const store = createTestPersistenceFacade(root)
     await store.initialize()
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '模型流测试')
-    const run = await store.createRun(session.id, '回答测试问题', {
+    const run = await store.createRun(session.id, query, {
       threadId: thread.id,
       modelProvider: 'fake',
       runtimeConfigSnapshot: testRuntimeConfig(),
@@ -2382,6 +2435,7 @@ function toolDefinition(name: string, required: string[]): Omit<ToolDef, 'handle
     verified_recovery: '验证恢复数据',
     collect_guidance_data: '采集引导测试数据',
     build_guidance_table: '生成引导测试表格',
+    query_public_weather: '查询公开天气',
   }
   const label = labels[name]
   if (!label) throw new Error(`测试工具 '${name}' 缺少中文展示名称`)

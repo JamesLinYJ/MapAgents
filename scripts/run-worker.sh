@@ -7,6 +7,10 @@
 #
 #   日期:       2026年07月21日
 #   作者:       OpenAI Codex
+#
+#   维护记录 (2026-07-23):
+#     作者: OpenAI Codex
+#     说明: 移除开发期 Uvicorn reload 子监督器，统一由 GeoForge 监督进程生命周期。
 # --------------------------------------------------------------------------
 set -euo pipefail
 
@@ -53,8 +57,6 @@ if [[ "${NODE_ENV:-development}" == production ]]; then
     exit 2
   fi
   arguments+=(--workers "$WORKER_PROCESSES_VALUE")
-else
-  arguments+=(--reload)
 fi
 
 exec "$PYTHON_COMMAND" "${arguments[@]}"

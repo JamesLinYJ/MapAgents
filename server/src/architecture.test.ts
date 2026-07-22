@@ -735,6 +735,9 @@ describe('conversation architecture', () => {
       'src/tools/meteorology/index.ts',
       'src/tools/meteorology/meteorologyTools.ts',
       'src/tools/meteorology/meteorologyWorkerClient.ts',
+      'src/tools/publicWeather/index.ts',
+      'src/tools/publicWeather/handler.ts',
+      'src/tools/publicWeather/openMeteoClient.ts',
     ]
 
     for (const relativePath of forbiddenFiles) {

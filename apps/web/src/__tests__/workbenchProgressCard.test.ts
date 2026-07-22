@@ -75,6 +75,49 @@ describe('workbench progress card model', () => {
     expect(items.find(item => item.id === 'deliver')?.description).toContain('没有生成地图、文件或下载产物')
   })
 
+  it('keeps completed tool work visible when no artifact was generated', () => {
+    const events = [
+      {
+        eventId: 'event_tool_started',
+        runId: 'run_weather',
+        threadId: 'thread_weather',
+        type: 'tool.started',
+        message: '查询公开天气',
+        timestamp: '2026-07-23T00:00:00.000Z',
+        payload: { tool: 'query_public_weather' },
+      },
+      {
+        eventId: 'event_tool_completed',
+        runId: 'run_weather',
+        threadId: 'thread_weather',
+        type: 'tool.completed',
+        message: 'Open-Meteo 公开天气已返回：北京当前阴，22.7°C。',
+        timestamp: '2026-07-23T00:00:01.000Z',
+        payload: { tool: 'query_public_weather' },
+      },
+      {
+        eventId: 'event_run_completed',
+        runId: 'run_weather',
+        threadId: 'thread_weather',
+        type: 'run.completed',
+        message: '运行完成',
+        timestamp: '2026-07-23T00:00:02.000Z',
+        payload: {},
+      },
+    ] satisfies RunEvent[]
+
+    const items = buildProgressItems({ runStatus: 'completed', artifacts: [], events })
+
+    expect(items.find(item => item.id === 'understand')).toMatchObject({
+      status: 'done',
+      description: '已理解本轮问题，并据此完成后续处理。',
+    })
+    expect(items.find(item => item.id === 'prepare')?.description).toBe('已通过业务工具取得本轮所需数据。')
+    expect(items.find(item => item.id === 'analyze')?.description).toContain('Open-Meteo 公开天气已返回')
+    expect(items.find(item => item.id === 'deliver')?.description).toContain('工具结果已整理为回答')
+    expect(items.map(item => item.description).join('\n')).not.toContain('本轮不需要')
+  })
+
   it('surfaces failed runs as warnings with a concrete latest detail', () => {
     const summary = deriveWorkbenchProgressSummary({
       runStatus: 'failed',

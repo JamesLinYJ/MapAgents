@@ -23,7 +23,7 @@ const PREFIXES: Record<OperationsServiceId, readonly string[]> = {
   api: [
     'API_', 'APP_', 'WEB_', 'WORKER_', 'DATABASE_', 'POSTGRES_', 'POSTGIS_', 'MARTIN_',
     'TITILER_', 'BETTER_AUTH_', 'CSRF_', 'TRUSTED_', 'OPENAI_', 'DEEPSEEK_', 'MODEL_',
-    'GATEWAY_', 'AMAP_', 'ENABLED_', 'DEVELOPER_', 'SEED_', 'SCHEDULED_', 'RUNTIME_',
+    'GATEWAY_', 'AMAP_', 'OPEN_METEO_', 'ENABLED_', 'DEVELOPER_', 'SEED_', 'SCHEDULED_', 'RUNTIME_',
     'OTEL_', 'LOG_',
   ],
   web: ['VITE_', 'WEB_DEV_', 'WEB_STATIC_', 'API_PROXY_', 'NODE_ENV'],

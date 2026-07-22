@@ -85,6 +85,10 @@ const envSchema = z.object({
   SANDBOX_DOCKER_IMAGE: z.string().default('node:22-bookworm-slim'),
   ENABLED_TOOL_PROVIDERS: z.string(),
   DEVELOPER_TOOL_ALLOWED_ROOTS: z.string().optional(),
+  OPEN_METEO_FORECAST_BASE_URL: z.string().url().default('https://api.open-meteo.com'),
+  OPEN_METEO_GEOCODING_BASE_URL: z.string().url().default('https://geocoding-api.open-meteo.com'),
+  OPEN_METEO_AIR_QUALITY_BASE_URL: z.string().url().default('https://air-quality-api.open-meteo.com'),
+  OPEN_METEO_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(30_000).default(10_000),
   VALHALLA_BASE_URL: z.string().url().optional(),
   ROUTING_TIMEOUT_MS: z.coerce.number().int().positive().default(20_000),
   // Tianditu

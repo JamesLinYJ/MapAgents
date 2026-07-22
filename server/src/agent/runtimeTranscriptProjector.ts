@@ -24,6 +24,8 @@ export class RuntimeTranscriptProjector {
       assistantItemId: null,
       reasoningItemId: null,
       reasoningText: '',
+      visibleReasoningText: '',
+      reasoningPass: 0,
       lastAssistantText: '',
       completedAssistantItems: [],
       subAgentCallItemIds: new Map(),
@@ -48,10 +50,16 @@ export class RuntimeTranscriptProjector {
         const delta = extractReasoningDelta(event.data.event)
         if (delta) {
           if (!projection.reasoningItemId) {
-            projection.reasoningItemId = itemSink.startItem('reasoning', { role: 'assistant' }).itemId
+            projection.visibleReasoningText = localizedReasoningSummary(projection.reasoningPass)
+            projection.reasoningItemId = itemSink.startItem('reasoning', {
+              role: 'assistant',
+              metadata: { presentation: 'localized_summary' },
+            }).itemId
+            itemSink.deltaItem(projection.reasoningItemId, projection.visibleReasoningText)
           }
+          // DeepSeek 官方只定义 reasoning_content 的传输与回放，没有语言控制字段。
+          // 保留原始增量供当前运行诊断，但绝不把不可控的英文思维链投影给用户。
           projection.reasoningText += delta
-          itemSink.deltaItem(projection.reasoningItemId, delta)
         }
       }
       return
@@ -72,8 +80,14 @@ export class RuntimeTranscriptProjector {
     }
     if (event.name === 'reasoning_item_created') {
       if (projection.reasoningItemId) {
-        itemSink.completeItem(projection.reasoningItemId, { body: projection.reasoningText })
+        itemSink.completeItem(projection.reasoningItemId, {
+          body: projection.visibleReasoningText,
+          metadata: { presentation: 'localized_summary' },
+        })
         projection.reasoningItemId = null
+        projection.reasoningText = ''
+        projection.visibleReasoningText = ''
+        projection.reasoningPass += 1
       }
       return
     }
@@ -349,4 +363,9 @@ export class RuntimeTranscriptProjector {
       },
     })
   }
+}
+
+function localizedReasoningSummary(pass: number): string {
+  if (pass === 0) return '正在理解你的问题，并确定需要核对的数据与条件。'
+  return '正在结合已取得的结果，核对关键数据并整理中文回答。'
 }

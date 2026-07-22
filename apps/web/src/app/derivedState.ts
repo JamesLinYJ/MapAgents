@@ -470,6 +470,9 @@ export function buildProgressItems({
   events: RunEvent[]
 }) {
   const latestEvent = latestOperationalRunEvent(events)
+  const completedToolEvents = events.filter(event => event.type === 'tool.completed')
+  const latestCompletedToolEvent = completedToolEvents.at(-1)
+  const hasToolActivity = completedToolEvents.length > 0 || events.some(event => event.type === 'tool.started')
   const hasWorkStarted = Boolean(latestEvent) || runStatus === 'running' || runStatus === 'completed'
 
   return [
@@ -481,14 +484,18 @@ export function buildProgressItems({
           ? '系统已经识别出问题，但还需要补充确认。'
           : intent
             ? '已识别本轮问题里的地点、对象和空间关系。'
-            : '等待输入问题后开始整理分析意图。',
+            : hasToolActivity || runStatus === 'completed'
+              ? '已理解本轮问题，并据此完成后续处理。'
+              : '等待输入问题后开始整理分析意图。',
       status:
         runStatus === 'clarification_needed'
           ? ('warning' as const)
           : intent
             ? ('done' as const)
-            : hasWorkStarted
-              ? ('active' as const)
+            : hasToolActivity || runStatus === 'completed'
+              ? ('done' as const)
+              : hasWorkStarted
+                ? ('active' as const)
               : ('pending' as const),
     },
     {
@@ -497,10 +504,16 @@ export function buildProgressItems({
       description:
         agentWorkflow?.steps.length
           ? `已经整理出 ${agentWorkflow.steps.length} 个分析步骤。`
+          : hasToolActivity
+            ? '已通过业务工具取得本轮所需数据。'
           : runStatus === 'completed' && !artifacts.length
-            ? '本轮不需要准备外部数据。'
+            ? '本轮直接基于已有上下文完成回答。'
           : '会按当前目录、上传图层或外部来源准备数据。',
-      status: agentWorkflow?.steps.length ? ('done' as const) : hasWorkStarted ? ('active' as const) : ('pending' as const),
+      status: agentWorkflow?.steps.length || hasToolActivity || runStatus === 'completed'
+        ? ('done' as const)
+        : hasWorkStarted
+          ? ('active' as const)
+          : ('pending' as const),
     },
     {
       id: 'analyze',
@@ -512,8 +525,10 @@ export function buildProgressItems({
             ? '计划或受控动作正在等待确认，尚未继续执行。'
           : artifacts.length
             ? '空间分析已经完成，结果正在整理。'
+            : runStatus === 'completed' && latestCompletedToolEvent
+              ? formatUiRunEventMessage(latestCompletedToolEvent)
             : runStatus === 'completed'
-              ? '本轮不需要执行空间计算或业务工具。'
+              ? '本轮直接基于已有上下文完成回答。'
             : '需要空间计算时，会基于真实工具执行。',
       status:
         runStatus === 'running' || runStatus === 'waiting_approval'
@@ -531,7 +546,9 @@ export function buildProgressItems({
         runStatus === 'completed'
           ? artifacts.length
             ? '结果图层、下载入口或文件产物已经生成。'
-            : '本轮回复已完成，没有生成地图、文件或下载产物。'
+            : hasToolActivity
+              ? '工具结果已整理为回答；本轮没有生成额外地图、文件或下载产物。'
+              : '本轮回复已完成，没有生成地图、文件或下载产物。'
           : runStatus === 'waiting_approval'
             ? '待审批动作尚未执行；已有结果保持可见。'
           : runStatus === 'failed'

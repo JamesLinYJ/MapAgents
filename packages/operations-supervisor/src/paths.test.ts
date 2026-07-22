@@ -33,5 +33,5 @@ describe('operations secret files', () => {
 
     expect(reopened).toBe(created)
     await expect(assertProductionSecretPermissions(filePath)).resolves.toBeUndefined()
-  })
+  }, process.platform === 'win32' ? 15_000 : 5_000)
 })

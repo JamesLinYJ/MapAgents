@@ -64,6 +64,31 @@ describe('system prompt', () => {
     expect(prompt).toContain('Artifact 已注册，但视觉内容尚未验证')
   })
 
+  it('keeps provider reasoning internal and presents localized lifecycle summaries', () => {
+    const prompt = buildSystemPrompt(defaultRuntimeConfig(), null, '', '', '')
+
+    expect(prompt).toContain('reasoning_content 只参与模型推理')
+    expect(prompt).toContain('运行事件生成简洁中文分析摘要')
+    expect(prompt).toContain('不直接暴露原始思维链')
+  })
+
+  it('routes simple public weather questions separately from uploaded meteorological analysis', () => {
+    const prompt = buildSystemPrompt(defaultRuntimeConfig(), null, '', '', '')
+
+    expect(prompt).toContain('调用 query_public_weather')
+    expect(prompt).toContain('不要要求用户先上传 NC、GRIB 或雷达文件')
+    expect(prompt).toContain('必须明确说明这是城市级近似预报')
+    expect(prompt).toContain('地点归属不明、同名歧义、经纬度输入')
+    expect(prompt).toContain('必须披露降级范围和原因')
+    expect(prompt).toContain('US EPA AQI 与 European AQI')
+    expect(prompt).toContain('都不得冒充中国法定 AQI')
+    expect(prompt).toContain('当前 run 成功返回的 query_public_weather')
+    expect(prompt).toContain('准备查询的说明不能代替本轮数据调用')
+    expect(prompt).toContain('数值模式网格，不是当地气象站或观测站数据')
+    expect(prompt).toContain('不要声称“系统日期与用户预期不一致”')
+    expect(prompt).toContain('复核当地官方预警')
+  })
+
   it('matches structured-workflow instructions to the dynamically visible tool set', () => {
     const state = agentStateSchema.parse({
       sessionId: 'session_1',

@@ -19,6 +19,7 @@ import memoryProvider from '../tools/memory/index.js'
 import planProvider from '../tools/plan/index.js'
 import developerProvider from '../tools/developer/index.js'
 import { createMeteorologyProvider } from '../tools/meteorology/index.js'
+import { createPublicWeatherProvider } from '../tools/publicWeather/index.js'
 import { createSpatialProvider } from '../tools/spatial/index.js'
 import { createRoutingProvider } from '../tools/routing/index.js'
 import { createScheduledWakeUpProvider } from '../tools/scheduledWakeUp/index.js'
@@ -40,6 +41,7 @@ export async function discoverAndLoad(
   })
   const mediaProvider = createMediaProvider(env)
   const meteorologyProvider = createMeteorologyProvider(env)
+  const publicWeatherProvider = createPublicWeatherProvider(env)
   const scheduledWakeUpProvider = deps.scheduledTaskService
     ? createScheduledWakeUpProvider(deps.scheduledTaskService)
     : null
@@ -51,6 +53,7 @@ export async function discoverAndLoad(
     planProvider as ToolProvider,
     developerProvider as ToolProvider,
     meteorologyProvider as ToolProvider,
+    publicWeatherProvider as ToolProvider,
     spatialProvider as ToolProvider,
     routingProvider as ToolProvider,
     ...(scheduledWakeUpProvider ? [scheduledWakeUpProvider as ToolProvider] : []),

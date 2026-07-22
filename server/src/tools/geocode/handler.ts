@@ -2,7 +2,7 @@
 //
 //   地理智能平台 - 地点地理编码工具
 //
-//   文件:       geocodePlace.ts
+//   文件:       handler.ts
 //
 //   日期:       2026年06月05日
 //   作者:       JamesLinYJ
@@ -35,14 +35,26 @@ export const geocodePlaceTool: ToolDef = {
         },
         required: ['query'],
     },
-    async handler(args) {
+    async handler(args, context) {
         const query = requiredText(args.query, 'query');
         const limit = boundedLimit(args.limit);
         const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=${limit}`;
-        const response = await fetch(url, {
-            headers: { 'User-Agent': 'geo-agent-platform/0.1' },
-            signal: AbortSignal.timeout(5000),
-        });
+        const timeoutSignal = AbortSignal.timeout(5000);
+        let response: Response;
+        try {
+            response = await fetch(url, {
+                headers: { 'User-Agent': 'GeoForge/0.1 geocode' },
+                signal: AbortSignal.any([context.signal, timeoutSignal]),
+            });
+        } catch (error) {
+            if (context.signal.aborted) {
+                throw new Error('地理编码查询已取消。', { cause: error });
+            }
+            if (timeoutSignal.aborted) {
+                throw new Error('地理编码查询超时，请改用城市或区县标准名称重试。', { cause: error });
+            }
+            throw new Error('地理编码网络请求失败。', { cause: error });
+        }
         if (!response.ok) {
             throw new Error(`地理编码查询失败: HTTP ${response.status}`);
         }

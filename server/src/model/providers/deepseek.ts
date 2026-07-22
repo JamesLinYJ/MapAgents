@@ -67,12 +67,15 @@ export function createDeepSeekAdapter(opts: DeepSeekOptions): ModelAdapter {
       const model = (kwargs?.model as string) ?? opts.defaultModel
       const messages = (kwargs?.messages as Array<{ role: string; content: string }>) ?? [{ role: 'user', content: prompt }]
 
-      const request: ChatCompletionCreateParamsNonStreaming = {
+      const request: ChatCompletionCreateParamsNonStreaming & {
+        thinking: { type: 'enabled' | 'disabled' }
+      } = {
         model,
         messages: messages.map(m => toBasicMessage(m.role, m.content)),
         stream: false,
         ...(typeof kwargs?.temperature === 'number' ? { temperature: kwargs.temperature } : {}),
         ...(kwargs?.reasoning !== false ? { reasoning_effort: 'high' as const } : {}),
+        thinking: { type: kwargs?.reasoning === false ? 'disabled' : 'enabled' },
       }
       const completion = await client.chat.completions.create(request, {
         signal: abortSignalWithTimeout(kwargs?.signal, 60_000),
@@ -89,6 +92,7 @@ function inferContextWindow(model: string): number {
   const normalized = model.toLowerCase()
   if (normalized.includes('gpt-4.1')) return 1_000_000
   if (normalized.includes('gpt-4o')) return 128_000
+  if (normalized.includes('deepseek-v4')) return 1_000_000
   if (normalized.includes('deepseek')) return 128_000
   return 128_000
 }
