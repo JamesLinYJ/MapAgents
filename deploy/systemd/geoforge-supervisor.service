@@ -1,0 +1,23 @@
+[Unit]
+Description=GeoForge TypeScript Process Supervisor
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=geoforge
+Group=geoforge
+SupplementaryGroups=geoforge-ops
+WorkingDirectory="@@GEOFORGE_ROOT@@"
+EnvironmentFile=/etc/geoforge/geoforge.env
+ExecStart=/usr/bin/node "@@GEOFORGE_ROOT@@/packages/operations-supervisor/dist/cli.js" daemon --root "@@GEOFORGE_ROOT@@" --profile production
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=120
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

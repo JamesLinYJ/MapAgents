@@ -134,11 +134,32 @@ describe('conversation architecture', () => {
   it('keeps the Windows development stack bound to loopback explicitly', async () => {
     const repositoryRoot = path.resolve(process.cwd(), '..')
     const source = await readFile(path.join(repositoryRoot, 'dev.ps1'), 'utf8')
+    const environmentSource = await readFile(
+      path.join(repositoryRoot, 'scripts/dev-environment.ps1'),
+      'utf8',
+    )
 
-    expect(source.includes("Set-ProcessValue 'API_HOST' '127.0.0.1'")).toBe(true)
-    expect(source.includes("Set-ProcessValue 'WEB_DEV_HOST' '127.0.0.1'")).toBe(true)
-    expect(source.includes("Set-ProcessDefault 'API_HOST' '127.0.0.1'")).toBe(false)
-    expect(source.includes("Set-ProcessDefault 'WEB_DEV_HOST' '127.0.0.1'")).toBe(false)
+    expect(source.includes("scripts\\dev-environment.ps1")).toBe(true)
+    expect(environmentSource.includes("Set-GeoForgeValue 'API_HOST' '127.0.0.1'")).toBe(true)
+    expect(environmentSource.includes("Set-GeoForgeValue 'WEB_DEV_HOST' '127.0.0.1'")).toBe(true)
+    expect(environmentSource.includes("Set-GeoForgeDefault 'API_HOST' '127.0.0.1'")).toBe(false)
+    expect(environmentSource.includes("Set-GeoForgeDefault 'WEB_DEV_HOST' '127.0.0.1'")).toBe(false)
+  })
+
+  it('keeps remote browser terminal dependencies and runtimes removed', async () => {
+    const repositoryRoot = path.resolve(process.cwd(), '..')
+    const lockSource = await readFile(path.join(repositoryRoot, 'package-lock.json'), 'utf8')
+    const devEntry = await readFile(path.join(repositoryRoot, 'dev.ps1'), 'utf8')
+
+    for (const dependency of ['"node-pty"', '"@xterm/xterm"', '"@xterm/headless"', '"pm2"']) {
+      expect(lockSource.includes(dependency), dependency).toBe(false)
+    }
+    for (const runtimeName of ['OpsGateway', 'TerminalBroker']) {
+      expect(devEntry.includes(runtimeName), runtimeName).toBe(false)
+    }
+    expect(devEntry.includes('@geo-agent-platform/operations-supervisor')).toBe(true)
+    expect(devEntry.includes('process-compose')).toBe(false)
+    await expect(stat(path.join(repositoryRoot, 'apps/operations'))).rejects.toThrow()
   })
 
   it('keeps PlatformPersistenceFacade as a resource facade instead of a writer god object', async () => {
@@ -952,9 +973,13 @@ describe('conversation architecture', () => {
     const workerSidecarSource = await readFile(path.join(root, 'apps/worker/src/worker_app/sidecar.py'), 'utf8')
     const workerLoggingSource = await readFile(path.join(root, 'apps/worker/src/worker_app/logging.py'), 'utf8')
 
-    for (const file of serverFiles.filter(file => !/\.test\.ts$/u.test(file))) {
+    const interactiveConsoleFiles = new Set([
+      path.join(root, 'server/src/operations/localConsole.tsx'),
+      path.join(root, 'server/src/operations/localConsoleEntry.ts'),
+    ])
+    for (const file of serverFiles.filter(file => !/\.test\.ts$/u.test(file) && !interactiveConsoleFiles.has(file))) {
       const source = await readFile(file, 'utf8')
-      expect(source.includes('console.'), file).toBe(false)
+      expect(/\bconsole\.(?:debug|error|info|log|trace|warn)\s*\(/u.test(source), file).toBe(false)
     }
     expect(mainSource.includes("c.header('x-geoforge-trace-id'")).toBe(true)
     expect(mainSource.includes('withLogContext')).toBe(true)

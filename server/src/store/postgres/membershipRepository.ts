@@ -15,7 +15,7 @@ import {
   type AdminMembershipCreate,
   type PlatformRole,
 } from '@geo-agent-platform/shared-types/platform'
-import { asc, eq } from 'drizzle-orm'
+import { and, asc, eq } from 'drizzle-orm'
 
 import type { Database, DatabaseTransaction } from '../../db/connection.js'
 import { platformMemberships, platformUsers } from '../../db/schema.js'
@@ -83,6 +83,33 @@ export class MembershipRepository {
       .where(eq(platformMemberships.membershipId, membershipId))
       .limit(1)
     return rows[0]?.workspaceId ?? null
+  }
+
+  async deleteRoleForUser(
+    userId: string,
+    role: PlatformRole,
+    executor: Database | DatabaseTransaction = this.db,
+  ): Promise<Array<{ membershipId: string; workspaceId: string }>> {
+    return executor.delete(platformMemberships)
+      .where(and(eq(platformMemberships.userId, userId), eq(platformMemberships.role, role)))
+      .returning({
+        membershipId: platformMemberships.membershipId,
+        workspaceId: platformMemberships.workspaceId,
+      })
+  }
+
+  async deleteRoleBinding(
+    input: { workspaceId: string; userId: string; role: PlatformRole },
+    executor: Database | DatabaseTransaction = this.db,
+  ): Promise<boolean> {
+    const rows = await executor.delete(platformMemberships)
+      .where(and(
+        eq(platformMemberships.workspaceId, input.workspaceId),
+        eq(platformMemberships.userId, input.userId),
+        eq(platformMemberships.role, input.role),
+      ))
+      .returning({ membershipId: platformMemberships.membershipId })
+    return rows.length === 1
   }
 
   async delete(membershipId: string): Promise<boolean> {

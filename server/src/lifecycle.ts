@@ -31,21 +31,38 @@ interface LifecycleOptions {
 // 这里不尝试伪装多进程 runtime 写入安全；单进程在收到信号后只做有界排空，
 // 超时则显式失败退出，避免半关闭状态继续接收新的 Agent 任务。
 export function installLifecycleManager(options: LifecycleOptions): void {
+  installStandaloneLifecycleManager({
+    component: 'main-api',
+    onShutdownStart: options.onShutdownStart,
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+    drain: () => drain(options),
+  })
+}
+
+export interface StandaloneLifecycleOptions {
+  component: string
+  drain: () => Promise<void>
+  onShutdownStart?: () => void
+  timeoutMs?: number
+}
+
+/** 为静态服务等独立进程提供同一套有界关闭语义。 */
+export function installStandaloneLifecycleManager(options: StandaloneLifecycleOptions): void {
   let shuttingDown = false
   const shutdown = async (signal: NodeJS.Signals) => {
     if (shuttingDown) return
     shuttingDown = true
-    options.onShutdownStart()
+    options.onShutdownStart?.()
     const timeoutMs = options.timeoutMs ?? 10_000
     const timeout = new Promise<never>((_, reject) => {
       setTimeout(() => reject(new Error(`服务关闭超时：${timeoutMs}ms`)), timeoutMs).unref()
     })
 
     try {
-      await Promise.race([drain(options), timeout])
+      await Promise.race([options.drain(), timeout])
       process.exit(0)
     } catch (error) {
-      logger.error({ error: errorLogPayload(error), signal }, 'shutdown failed')
+      logger.error({ error: errorLogPayload(error), signal, component: options.component }, 'shutdown failed')
       process.exit(1)
     }
   }

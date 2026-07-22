@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS auth_user (
   email           TEXT NOT NULL,
   email_verified  BOOLEAN NOT NULL DEFAULT FALSE,
   image           TEXT,
+  role            TEXT NOT NULL DEFAULT 'user',
+  banned          BOOLEAN NOT NULL DEFAULT FALSE,
+  ban_reason      TEXT,
+  ban_expires     TIMESTAMPTZ,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -34,6 +38,7 @@ CREATE TABLE IF NOT EXISTS auth_session (
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   ip_address   TEXT,
   user_agent   TEXT,
+  impersonated_by TEXT,
   user_id      TEXT NOT NULL REFERENCES auth_user(id) ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_session_token_unique ON auth_session (token);

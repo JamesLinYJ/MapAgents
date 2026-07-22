@@ -10,14 +10,18 @@
 
 import { betterAuth } from 'better-auth'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
-import { createHash, createHmac } from 'node:crypto'
+import { admin } from 'better-auth/plugins'
+import { createHmac } from 'node:crypto'
 import { z } from 'zod'
 import type { Database } from '../db/connection.js'
 import { authAccount, authSession, authUser, authVerification } from '../db/schema.js'
 import type { Env } from '../framework/env.js'
+import { logger } from '../observability/logger.js'
 import type { AuthContext, AuthRoleBinding } from './types.js'
 import type { AuthMe } from '../schemas/types.js'
 import type { PlatformIdentityService } from './platformIdentityService.js'
+import { personalWorkspaceIdFor, platformUserIdFor } from './platformIdentityIds.js'
+import { deriveLocalConsoleCredential, isLocalConsoleEmail } from './localConsolePrincipal.js'
 
 const betterAuthSessionProjectionSchema = z.object({
   session: z.object({
@@ -31,7 +35,23 @@ const betterAuthSessionProjectionSchema = z.object({
     name: z.string().min(1),
     image: z.string().nullable().optional(),
     emailVerified: z.boolean().optional(),
+    role: z.string().nullable().optional(),
+    banned: z.boolean().optional(),
   }),
+})
+
+const localAuthUserSchema = z.object({
+  id: z.string().min(1),
+  email: z.string().email(),
+  name: z.string().min(1),
+  role: z.string().nullable().optional(),
+  banned: z.boolean().optional(),
+})
+
+const localCreatedUserSchema = z.object({ user: localAuthUserSchema })
+const localListedUsersSchema = z.object({
+  users: z.array(localAuthUserSchema),
+  total: z.number().int().nonnegative(),
 })
 
 type BetterAuthSessionProjection = z.infer<typeof betterAuthSessionProjectionSchema>
@@ -63,10 +83,28 @@ function createBetterAuthRuntime(db: Database, env: Env, trustedOrigins: string[
         expiresIn: 60 * 60 * 12,
         updateAge: 60 * 60,
       },
+      plugins: [admin()],
     })
 }
 
 type BetterAuthRuntime = ReturnType<typeof createBetterAuthRuntime>
+
+export interface LocalConsoleAuthorization {
+  readonly authUserId: string
+  readonly email: string
+  readonly keyVersion: string
+  readonly headers: Headers
+}
+
+export interface LocalAuthUser {
+  id: string
+  email: string
+  name: string
+  role: string | null
+  banned: boolean
+}
+
+export type LocalAuthRole = 'admin' | 'user'
 
 export class BetterAuthService {
   readonly auth: BetterAuthRuntime
@@ -79,8 +117,162 @@ export class BetterAuthService {
     this.auth = createBetterAuthRuntime(input.db, input.env, [...this.trustedOrigins()])
   }
 
-  handler(request: Request): Promise<Response> {
+  async handler(request: Request): Promise<Response> {
+    if (new URL(request.url).pathname.startsWith('/api/auth/admin/')) {
+      return Promise.resolve(Response.json({ detail: '该认证管理接口仅允许通过服务器本地 Console 使用。' }, { status: 404 }))
+    }
+    if (request.method !== 'GET' && await requestContainsConsoleEmail(request)) {
+      return Response.json({ detail: '该保留身份不能通过公共认证入口使用。' }, { status: 403 })
+    }
     return this.auth.handler(request)
+  }
+
+  /** 每次本机账户写操作都建立独立的短期服务主体会话，完成后立即登出。 */
+  async withLocalConsoleAuthorization<T>(
+    rootSecret: string,
+    action: (authorization: LocalConsoleAuthorization) => Promise<T>,
+  ): Promise<T> {
+    const credential = deriveLocalConsoleCredential(rootSecret)
+    let authorization: LocalConsoleAuthorization | null = null
+    try {
+      authorization = await this.signInLocalConsole(credential).catch(async () => {
+        // Better Auth 官方 Admin createUser 在无 request/headers 的服务器调用中允许引导首个主体。
+        await this.auth.api.createUser({
+          body: {
+            email: credential.email,
+            password: credential.password,
+            name: 'GeoForge Local Console',
+            role: 'admin',
+          },
+        })
+        return this.signInLocalConsole(credential)
+      })
+      await this.removeRotatedConsolePrincipals(authorization)
+      return await action(authorization)
+    } finally {
+      if (authorization) await this.auth.api.signOut({ headers: authorization.headers }).catch(() => undefined)
+    }
+  }
+
+  /** 使用已认证的 Console 主体通过 Admin Plugin 官方 API 创建认证管理员。 */
+  async createLocalAdminUser(
+    authorization: LocalConsoleAuthorization,
+    input: { email: string; password: string; name: string },
+  ): Promise<LocalAuthUser> {
+    const result = await this.auth.api.createUser({
+      headers: authorization.headers,
+      body: {
+        email: input.email.trim().toLowerCase(),
+        password: input.password,
+        name: input.name.trim(),
+        role: 'admin',
+      },
+    })
+    const user = localCreatedUserSchema.parse(result).user
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role ?? null,
+      banned: user.banned ?? false,
+    }
+  }
+
+  private async signInLocalConsole(
+    credential: ReturnType<typeof deriveLocalConsoleCredential>,
+  ): Promise<LocalConsoleAuthorization> {
+    const response = await this.auth.api.signInEmail({
+      body: {
+        email: credential.email,
+        password: credential.password,
+        rememberMe: false,
+      },
+      asResponse: true,
+    })
+    if (!response.ok) throw new Error('Better Auth 未能认证本机 Console 服务主体。')
+    const headers = cookieRequestHeaders(response.headers)
+    const sessionValue = await this.auth.api.getSession({
+      headers,
+      query: { disableCookieCache: true },
+    })
+    if (!sessionValue) throw new Error('Better Auth 未签发可验证的 Console 会话。')
+    const session = betterAuthSessionProjectionSchema.parse(sessionValue)
+    const emailMatches = session.user.email.toLowerCase() === credential.email.toLowerCase()
+    const roles = splitAuthRoles(session.user.role)
+    if (!emailMatches || session.user.banned || !roles.includes('admin')) {
+      logger.warn({ emailMatches, banned: session.user.banned ?? false, roles }, 'local Console session validation failed')
+      await this.auth.api.signOut({ headers })
+      throw new Error('Console 服务主体身份或 Better Auth 管理角色无效。')
+    }
+    return {
+      authUserId: session.user.id,
+      email: credential.email,
+      keyVersion: credential.keyVersion,
+      headers,
+    }
+  }
+
+  private async removeRotatedConsolePrincipals(current: LocalConsoleAuthorization): Promise<void> {
+    const result = localListedUsersSchema.parse(await this.auth.api.listUsers({
+      headers: current.headers,
+      query: {
+        searchValue: '@console.geoforge.invalid',
+        searchField: 'email',
+        searchOperator: 'ends_with',
+        limit: 100,
+      },
+    }))
+    for (const user of result.users) {
+      if (user.id === current.authUserId || !isLocalConsoleEmail(user.email)) continue
+      await this.auth.api.removeUser({ headers: current.headers, body: { userId: user.id } })
+    }
+  }
+
+  async setLocalAuthRole(
+    authorization: LocalConsoleAuthorization,
+    authUserId: string,
+    role: LocalAuthRole | LocalAuthRole[],
+  ): Promise<void> {
+    if (Array.isArray(role) && role.length === 0) {
+      throw new Error('Better Auth 角色集合不能为空。')
+    }
+    await this.auth.api.setRole({
+      headers: authorization.headers,
+      body: { userId: authUserId, role },
+    })
+  }
+
+  async setLocalUserPassword(
+    authorization: LocalConsoleAuthorization,
+    authUserId: string,
+    newPassword: string,
+  ): Promise<void> {
+    await this.auth.api.setUserPassword({
+      headers: authorization.headers,
+      body: { userId: authUserId, newPassword },
+    })
+  }
+
+  async setLocalUserBanned(
+    authorization: LocalConsoleAuthorization,
+    authUserId: string,
+    banned: boolean,
+  ): Promise<void> {
+    if (banned) {
+      await this.auth.api.banUser({
+        headers: authorization.headers,
+        body: { userId: authUserId, banReason: '由服务器本地 Console 禁用' },
+      })
+      return
+    }
+    await this.auth.api.unbanUser({ headers: authorization.headers, body: { userId: authUserId } })
+  }
+
+  async revokeLocalUserSessions(
+    authorization: LocalConsoleAuthorization,
+    authUserId: string,
+  ): Promise<void> {
+    await this.auth.api.revokeUserSessions({ headers: authorization.headers, body: { userId: authUserId } })
   }
 
   async authenticateRequest(request: Request): Promise<AuthContext | null> {
@@ -159,7 +351,7 @@ export class BetterAuthService {
       authUserId,
       email,
       displayName,
-      personalWorkspaceId: workspaceIdFor(email),
+      personalWorkspaceId: personalWorkspaceIdFor(email),
       bootstrapAdmin: this.env.BOOTSTRAP_ADMIN_EMAIL?.toLowerCase() === email,
     })
     if (platformUser.status !== 'active') {
@@ -216,14 +408,6 @@ export class BetterAuthService {
   }
 }
 
-function platformUserIdFor(authUserId: string): string {
-  return `user_${createHash('sha256').update(authUserId).digest('hex').slice(0, 24)}`
-}
-
-function workspaceIdFor(email: string): string {
-  return `workspace_${createHash('sha256').update(email).digest('hex').slice(0, 24)}`
-}
-
 function pickDefaultWorkspace(roles: AuthRoleBinding[]): string {
   const workspaceRole = roles.find(item => item.role === 'workspace_admin')
     ?? roles.find(item => item.role === 'analyst')
@@ -242,4 +426,38 @@ function normalizeDateString(value: string | Date | null | undefined): string | 
   if (!value) return null
   const date = value instanceof Date ? value : new Date(value)
   return Number.isNaN(date.getTime()) ? null : date.toISOString()
+}
+
+function splitAuthRoles(value: string | null | undefined): string[] {
+  return value?.split(',').map(role => role.trim()).filter(Boolean) ?? []
+}
+
+function cookieRequestHeaders(responseHeaders: Headers): Headers {
+  const setCookies = responseHeaders.getSetCookie()
+  const cookie = setCookies
+    .map(value => value.split(';', 1)[0])
+    .filter((value): value is string => Boolean(value))
+    .join('; ')
+  if (!cookie) throw new Error('Better Auth 登录成功但没有返回会话 Cookie。')
+  return new Headers({ cookie })
+}
+
+async function requestContainsConsoleEmail(request: Request): Promise<boolean> {
+  const contentType = request.headers.get('content-type')?.toLowerCase() ?? ''
+  try {
+    if (contentType.includes('application/json')) {
+      const value: unknown = await request.clone().json()
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+      return Object.entries(value).some(([name, field]) =>
+        name.toLowerCase().includes('email') && typeof field === 'string' && isLocalConsoleEmail(field))
+    }
+    if (contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data')) {
+      const form = await request.clone().formData()
+      return [...form.entries()].some(([name, field]) =>
+        name.toLowerCase().includes('email') && typeof field === 'string' && isLocalConsoleEmail(field))
+    }
+  } catch {
+    return false
+  }
+  return false
 }

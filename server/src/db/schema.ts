@@ -23,6 +23,10 @@ export const authUser = pgTable('auth_user', {
   email: text('email').notNull(),
   emailVerified: boolean('email_verified').notNull().default(false),
   image: text('image'),
+  role: text('role').notNull().default('user'),
+  banned: boolean('banned').notNull().default(false),
+  banReason: text('ban_reason'),
+  banExpires: timestamp('ban_expires', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
@@ -37,6 +41,7 @@ export const authSession = pgTable('auth_session', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   ipAddress: text('ip_address'),
   userAgent: text('user_agent'),
+  impersonatedBy: text('impersonated_by'),
   userId: text('user_id').notNull().references(() => authUser.id, { onDelete: 'cascade' }),
 }, (table) => ({
   tokenIdx: uniqueIndex('idx_auth_session_token_unique').on(table.token),

@@ -1,0 +1,241 @@
+// +-------------------------------------------------------------------------
+//
+//   GeoForge 地理智能平台 - 本机运维监督协议
+//
+//   文件:       operations.ts
+//
+//   日期:       2026年07月22日
+//   作者:       OpenAI Codex
+// --------------------------------------------------------------------------
+
+import { z } from 'zod'
+
+export const OPERATIONS_PROTOCOL_VERSION = 1 as const
+
+export const operationsServiceIdSchema = z.enum(['infra', 'worker', 'api', 'web'])
+export const operationsProfileSchema = z.enum(['development', 'production'])
+export const operationsServiceStateSchema = z.enum([
+  'stopped',
+  'waiting_dependency',
+  'starting',
+  'healthy',
+  'degraded',
+  'stopping',
+  'restart_wait',
+  'failed',
+  'conflict',
+])
+
+export const operationsMetricSchema = z.object({
+  value: z.number().finite().nullable(),
+  unavailableReason: z.string().min(1).optional(),
+}).strict().superRefine((value, context) => {
+  if (value.value === null && !value.unavailableReason) {
+    context.addIssue({
+      code: 'custom',
+      message: '不可用指标必须说明原因。',
+      path: ['unavailableReason'],
+    })
+  }
+  if (value.value !== null && value.unavailableReason) {
+    context.addIssue({
+      code: 'custom',
+      message: '可用指标不能同时声明不可用原因。',
+      path: ['unavailableReason'],
+    })
+  }
+})
+
+export const operationsContainerSnapshotSchema = z.object({
+  containerId: z.string().min(1),
+  serviceName: z.string().min(1),
+  name: z.string().min(1),
+  state: z.string().min(1),
+  cpuPercent: operationsMetricSchema,
+  memoryBytes: operationsMetricSchema,
+  processCount: operationsMetricSchema,
+}).strict()
+
+export const operationsServiceSnapshotSchema = z.object({
+  serviceId: operationsServiceIdSchema,
+  displayName: z.string().min(1),
+  description: z.string().min(1),
+  state: operationsServiceStateSchema,
+  healthMessage: z.string().min(1),
+  pid: z.number().int().positive().nullable(),
+  cpuPercent: operationsMetricSchema,
+  memoryBytes: operationsMetricSchema,
+  startedAt: z.string().datetime().nullable(),
+  uptimeSeconds: z.number().int().nonnegative().nullable(),
+  restartCount: z.number().int().nonnegative(),
+  lastExitCode: z.union([z.string(), z.number().int()]).nullable(),
+  blockedBy: z.array(operationsServiceIdSchema),
+  containers: z.array(operationsContainerSnapshotSchema),
+}).strict()
+
+export const operationsHostSnapshotSchema = z.object({
+  hostname: z.string().min(1),
+  platform: z.string().min(1),
+  release: z.string().min(1),
+  profile: operationsProfileSchema,
+  supervisorPid: z.number().int().positive(),
+  supervisorStartedAt: z.string().datetime(),
+  cpuPercent: operationsMetricSchema,
+  memoryUsedBytes: operationsMetricSchema,
+  memoryTotalBytes: operationsMetricSchema,
+  runtimeDiskUsedBytes: operationsMetricSchema,
+  runtimeDiskTotalBytes: operationsMetricSchema,
+  sampledAt: z.string().datetime(),
+}).strict()
+
+export const operationsSnapshotSchema = z.object({
+  sequence: z.number().int().nonnegative(),
+  host: operationsHostSnapshotSchema,
+  services: z.array(operationsServiceSnapshotSchema).length(4),
+}).strict().superRefine((value, context) => {
+  if (new Set(value.services.map(service => service.serviceId)).size !== 4) {
+    context.addIssue({ code: 'custom', message: '服务快照必须且只能包含四个固定服务。', path: ['services'] })
+  }
+})
+
+export const operationsLogLevelSchema = z.enum(['debug', 'info', 'warn', 'error', 'unknown'])
+export const operationsLogStreamSchema = z.enum(['stdout', 'stderr', 'supervisor'])
+export const operationsLogEntrySchema = z.object({
+  sequence: z.number().int().nonnegative(),
+  serviceId: operationsServiceIdSchema.nullable(),
+  stream: operationsLogStreamSchema,
+  level: operationsLogLevelSchema,
+  message: z.string(),
+  createdAt: z.string().datetime(),
+}).strict()
+
+export const operationsActionSchema = z.enum(['start', 'stop', 'restart', 'shutdown'])
+export const operationsTargetSchema = z.union([operationsServiceIdSchema, z.literal('all')])
+export const operationsOperationResultSchema = z.object({
+  operationId: z.string().uuid(),
+  action: operationsActionSchema,
+  target: operationsTargetSchema,
+  outcome: z.enum(['succeeded', 'failed', 'partial']),
+  message: z.string().min(1),
+  startedAt: z.string().datetime(),
+  completedAt: z.string().datetime(),
+}).strict()
+
+const requestBaseSchema = z.object({
+  kind: z.literal('request'),
+  requestId: z.string().uuid(),
+})
+
+export const operationsRequestSchema = z.discriminatedUnion('action', [
+  requestBaseSchema.extend({ action: z.literal('status') }).strict(),
+  requestBaseSchema.extend({
+    action: z.literal('subscribe'),
+    metrics: z.boolean(),
+    logs: z.boolean(),
+  }).strict(),
+  requestBaseSchema.extend({
+    action: z.enum(['start', 'restart']),
+    operationId: z.string().uuid(),
+    target: operationsTargetSchema,
+  }).strict(),
+  requestBaseSchema.extend({
+    action: z.literal('stop'),
+    operationId: z.string().uuid(),
+    target: operationsTargetSchema,
+    keepInfra: z.boolean().optional(),
+  }).strict(),
+  requestBaseSchema.extend({
+    action: z.literal('logs'),
+    services: z.array(operationsServiceIdSchema).min(1).max(4),
+    tail: z.number().int().min(0).max(10_000),
+  }).strict(),
+  requestBaseSchema.extend({
+    action: z.literal('operation_result'),
+    operationId: z.string().uuid(),
+  }).strict(),
+  requestBaseSchema.extend({
+    action: z.literal('shutdown'),
+    operationId: z.string().uuid(),
+  }).strict(),
+])
+
+export const operationsResponsePayloadSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('snapshot'), snapshot: operationsSnapshotSchema }).strict(),
+  z.object({ type: z.literal('subscribed') }).strict(),
+  z.object({ type: z.literal('logs'), entries: z.array(operationsLogEntrySchema) }).strict(),
+  z.object({ type: z.literal('operation'), operation: operationsOperationResultSchema.nullable() }).strict(),
+])
+
+export const operationsResponseSchema = z.discriminatedUnion('ok', [
+  z.object({
+    kind: z.literal('response'),
+    requestId: z.string().uuid(),
+    ok: z.literal(true),
+    payload: operationsResponsePayloadSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal('response'),
+    requestId: z.string().uuid(),
+    ok: z.literal(false),
+    error: z.object({
+      code: z.enum(['invalid_request', 'unauthorized', 'not_found', 'conflict', 'operation_failed', 'internal_error']),
+      message: z.string().min(1),
+    }).strict(),
+  }).strict(),
+])
+
+export const operationsEventSchema = z.discriminatedUnion('event', [
+  z.object({ kind: z.literal('event'), event: z.literal('snapshot'), snapshot: operationsSnapshotSchema }).strict(),
+  z.object({ kind: z.literal('event'), event: z.literal('log'), entry: operationsLogEntrySchema }).strict(),
+  z.object({ kind: z.literal('event'), event: z.literal('operation'), operation: operationsOperationResultSchema }).strict(),
+])
+
+export const operationsClientHelloSchema = z.object({
+  kind: z.literal('hello'),
+  protocolVersion: z.literal(OPERATIONS_PROTOCOL_VERSION),
+  token: z.string().min(32).max(512),
+  client: z.object({
+    processId: z.number().int().positive(),
+    osUser: z.string().min(1),
+    hostname: z.string().min(1),
+    interactive: z.boolean(),
+  }).strict(),
+}).strict()
+
+export const operationsServerHelloSchema = z.object({
+  kind: z.literal('welcome'),
+  protocolVersion: z.literal(OPERATIONS_PROTOCOL_VERSION),
+  daemonId: z.string().uuid(),
+  workspaceId: z.string().min(16),
+  profile: operationsProfileSchema,
+}).strict()
+
+export const operationsServerRejectSchema = z.object({
+  kind: z.literal('rejected'),
+  protocolVersion: z.number().int().positive(),
+  code: z.enum(['invalid_handshake', 'incompatible_version', 'unauthorized', 'frame_too_large']),
+  message: z.string().min(1),
+}).strict()
+
+export const operationsServerHandshakeSchema = z.discriminatedUnion('kind', [
+  operationsServerHelloSchema,
+  operationsServerRejectSchema,
+])
+
+export type OperationsServiceId = z.infer<typeof operationsServiceIdSchema>
+export type OperationsProfile = z.infer<typeof operationsProfileSchema>
+export type OperationsServiceState = z.infer<typeof operationsServiceStateSchema>
+export type OperationsMetric = z.infer<typeof operationsMetricSchema>
+export type OperationsContainerSnapshot = z.infer<typeof operationsContainerSnapshotSchema>
+export type OperationsServiceSnapshot = z.infer<typeof operationsServiceSnapshotSchema>
+export type OperationsHostSnapshot = z.infer<typeof operationsHostSnapshotSchema>
+export type OperationsSnapshot = z.infer<typeof operationsSnapshotSchema>
+export type OperationsLogEntry = z.infer<typeof operationsLogEntrySchema>
+export type OperationsOperationResult = z.infer<typeof operationsOperationResultSchema>
+export type OperationsRequest = z.infer<typeof operationsRequestSchema>
+export type OperationsResponse = z.infer<typeof operationsResponseSchema>
+export type OperationsEvent = z.infer<typeof operationsEventSchema>
+export type OperationsClientHello = z.infer<typeof operationsClientHelloSchema>
+export type OperationsServerHello = z.infer<typeof operationsServerHelloSchema>
+export type OperationsServerReject = z.infer<typeof operationsServerRejectSchema>
+export type OperationsHandshake = OperationsClientHello | z.infer<typeof operationsServerHandshakeSchema>

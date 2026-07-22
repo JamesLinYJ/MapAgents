@@ -8,6 +8,7 @@
 //   作者:       OpenAI Codex
 //
 //   P0 重构 (2026-07-03):
+//     作者: Claude Code
 //     启动期不再执行任何 CREATE/ALTER/INDEX/ADD COLUMN。
 //     改为纯校验：缺表或缺列时抛出明确错误，提示运行 baseline migration。
 //     保留 RBAC 默认 policy 的 INSERT seed（数据级，非 DDL）。
@@ -59,8 +60,8 @@ const DEFAULT_POLICIES = [
 
 // 核心安全/平台表 schema 定义（table → required columns）
 const SECURITY_TABLES: Record<string, string[]> = {
-  auth_user: ['id', 'name', 'email', 'email_verified', 'image', 'created_at', 'updated_at'],
-  auth_session: ['id', 'expires_at', 'token', 'created_at', 'updated_at', 'ip_address', 'user_agent', 'user_id'],
+  auth_user: ['id', 'name', 'email', 'email_verified', 'image', 'role', 'banned', 'ban_reason', 'ban_expires', 'created_at', 'updated_at'],
+  auth_session: ['id', 'expires_at', 'token', 'created_at', 'updated_at', 'ip_address', 'user_agent', 'impersonated_by', 'user_id'],
   auth_account: ['id', 'account_id', 'provider_id', 'user_id', 'access_token', 'refresh_token', 'id_token', 'access_token_expires_at', 'refresh_token_expires_at', 'scope', 'password', 'created_at', 'updated_at'],
   auth_verification: ['id', 'identifier', 'value', 'expires_at', 'created_at', 'updated_at'],
   platform_users: ['user_id', 'subject', 'email', 'display_name', 'status', 'last_login_at', 'created_at', 'updated_at'],

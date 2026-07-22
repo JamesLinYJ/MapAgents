@@ -46,8 +46,8 @@ function fakeDb(config: FakeDbConfig): Database {
 
 function completeSecurityTables(): Record<string, string[]> {
   return {
-    auth_user: ['id', 'name', 'email', 'email_verified', 'image', 'created_at', 'updated_at'],
-    auth_session: ['id', 'expires_at', 'token', 'created_at', 'updated_at', 'ip_address', 'user_agent', 'user_id'],
+    auth_user: ['id', 'name', 'email', 'email_verified', 'image', 'role', 'banned', 'ban_reason', 'ban_expires', 'created_at', 'updated_at'],
+    auth_session: ['id', 'expires_at', 'token', 'created_at', 'updated_at', 'ip_address', 'user_agent', 'impersonated_by', 'user_id'],
     auth_account: ['id', 'account_id', 'provider_id', 'user_id', 'access_token', 'refresh_token', 'id_token', 'access_token_expires_at', 'refresh_token_expires_at', 'scope', 'password', 'created_at', 'updated_at'],
     auth_verification: ['id', 'identifier', 'value', 'expires_at', 'created_at', 'updated_at'],
     platform_users: ['user_id', 'subject', 'email', 'display_name', 'status', 'last_login_at', 'created_at', 'updated_at'],

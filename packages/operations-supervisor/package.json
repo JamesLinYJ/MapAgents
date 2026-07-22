@@ -1,0 +1,36 @@
+{
+  "name": "@geo-agent-platform/operations-supervisor",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "geoforge-supervisor": "./dist/cli.js"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./client": "./dist/client.js"
+  },
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
+    "test": "vitest run src",
+    "test:watch": "vitest src"
+  },
+  "dependencies": {
+    "@geo-agent-platform/shared-types": "file:../shared-types",
+    "concurrently": "10.0.3",
+    "dotenv": "17.4.2",
+    "pino": "10.3.1",
+    "proper-lockfile": "4.1.2",
+    "strip-ansi": "7.2.0",
+    "systeminformation": "5.33.0",
+    "tree-kill": "1.2.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.2",
+    "@types/proper-lockfile": "^4.1.4",
+    "typescript": "~6.0.2",
+    "vitest": "^4.0.8"
+  }
+}

@@ -1,742 +1,171 @@
 # +-------------------------------------------------------------------------
 #
-#   地理智能平台 - Windows 本地开发 TUI
+#   GeoForge 地理智能平台 - Windows 本地开发进程入口
 #
 #   文件:       dev.ps1
 #
 #   日期:       2026年06月15日
 #   作者:       OpenAI Codex
+#
+#   维护记录 (2026-07-22):
+#     作者: OpenAI Codex
+#     说明: 进程事实源迁移到 TypeScript 监督后台；无参数进入中文本地运维台。
 # --------------------------------------------------------------------------
 
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('start', 'stop', 'restart', 'status', 'logs')]
-    [string]$Action = 'start',
+    [ValidateSet('default', 'start', 'stop', 'restart', 'status', 'logs', 'console', 'shutdown')]
+    [string]$Action = 'default',
 
-    [ValidateSet('all', 'worker', 'api', 'web')]
+    [Parameter(Position = 1)]
+    [ValidateSet('all', 'infra', 'worker', 'api', 'web')]
     [string]$Service = 'all',
 
-    [ValidateRange(10, 500)]
+    [ValidateRange(0, 10000)]
     [int]$Tail = 80,
 
     [switch]$OpenBrowser,
     [switch]$KeepPostgis,
-    [switch]$FollowLogs
+    [switch]$FollowLogs,
+    [switch]$Json,
+    [switch]$Check
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
-
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location -LiteralPath $Root
+. (Join-Path $Root 'scripts\dev-environment.ps1')
+Initialize-GeoForgeDevEnvironment -ProjectRoot $Root
 
-$RuntimeRoot = Join-Path $Root 'runtime'
-$PidDir = Join-Path $RuntimeRoot 'pids'
-$LogDir = Join-Path $RuntimeRoot 'logs'
-$ComposeFile = Join-Path $Root 'infra\compose\docker-compose.dev.yml'
-$DockerDesktop = 'C:\Program Files\Docker\Docker\Docker Desktop.exe'
+$SupervisorCli = Join-Path $Root 'packages\operations-supervisor\dist\cli.js'
+$OpsRoot = Join-Path $env:RUNTIME_ROOT 'ops'
+$LaunchOut = Join-Path $OpsRoot 'supervisor-launch.stdout.log'
+$LaunchError = Join-Path $OpsRoot 'supervisor-launch.stderr.log'
+$Node = (Get-Command node.exe -ErrorAction Stop).Source
 
-New-Item -ItemType Directory -Force -Path $RuntimeRoot, $PidDir, $LogDir | Out-Null
-
-# 颜色和输出只服务于 TUI；运行状态始终由端口、健康端点和 PID 文件判断。
-$Colors = @{
-    Accent  = 'Cyan'
-    Muted   = 'DarkGray'
-    Good    = 'Green'
-    Warn    = 'Yellow'
-    Bad     = 'Red'
-    Text    = 'White'
+function Invoke-GeoForgeBuild {
+    npm run build --workspace '@geo-agent-platform/shared-types'
+    if ($LASTEXITCODE -ne 0) { throw '共享协议包构建失败。' }
+    npm run build --workspace '@geo-agent-platform/operations-supervisor'
+    if ($LASTEXITCODE -ne 0) { throw 'TypeScript 监督器构建失败。' }
 }
 
-function Write-Rule {
-    param([string]$Title = '')
-    $width = 88
-    try { $width = [Math]::Min([Math]::Max([Console]::WindowWidth - 2, 72), 108) } catch {}
-    $label = if ($Title) { " $Title " } else { '' }
-    $remaining = [Math]::Max(0, $width - $label.Length - 2)
-    Write-Host ('╭─' + $label + ('─' * $remaining) + '╮') -ForegroundColor $Colors.Muted
+function Invoke-Supervisor {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+    & $Node $SupervisorCli @Arguments --root $Root --profile development
+    if ($LASTEXITCODE -ne 0) { throw "GeoForge 监督命令失败（exit $LASTEXITCODE）。" }
 }
 
-function Write-Footer {
-    $width = 88
-    try { $width = [Math]::Min([Math]::Max([Console]::WindowWidth - 2, 72), 108) } catch {}
-    Write-Host ('╰' + ('─' * ($width - 2)) + '╯') -ForegroundColor $Colors.Muted
+function Test-Supervisor {
+    if (-not (Test-Path -LiteralPath $SupervisorCli -PathType Leaf)) { return $false }
+    try {
+        & $Node $SupervisorCli status --root $Root --profile development --json *> $null
+        return $LASTEXITCODE -eq 0
+    } catch { return $false }
 }
 
-function Write-Brand {
-    Write-Host ''
-    Write-Rule 'GeoForge Windows Dev Console'
-    Write-Host '  地理智能平台' -ForegroundColor $Colors.Text -NoNewline
-    Write-Host '  /  PostGIS in Docker, applications on Windows host' -ForegroundColor $Colors.Muted
-    Write-Host "  Workspace  $Root" -ForegroundColor $Colors.Muted
-    Write-Footer
+function Protect-NativeArgument {
+    param([Parameter(Mandatory = $true)][string]$Value)
+    if ($Value.Contains('"')) { throw '启动参数包含非法双引号。' }
+    return '"' + $Value + '"'
 }
 
-function Write-Step {
-    param([string]$Message)
-    Write-Host '  › ' -ForegroundColor $Colors.Accent -NoNewline
-    Write-Host $Message -ForegroundColor $Colors.Text
-}
-
-function Write-Result {
-    param(
-        [string]$Label,
-        [ValidateSet('ok', 'warn', 'error', 'info')]
-        [string]$Kind = 'info'
+function Start-Supervisor {
+    if (Test-Supervisor) { return }
+    New-Item -ItemType Directory -Force -Path $OpsRoot | Out-Null
+    $Arguments = @(
+        (Protect-NativeArgument $SupervisorCli),
+        'daemon',
+        '--root', (Protect-NativeArgument $Root),
+        '--profile', 'development'
     )
-    $mark = switch ($Kind) {
-        'ok' { '●'; $Colors.Good }
-        'warn' { '●'; $Colors.Warn }
-        'error' { '●'; $Colors.Bad }
-        default { '●'; $Colors.Accent }
-    }
-    Write-Host "  $($mark[0]) " -ForegroundColor $mark[1] -NoNewline
-    Write-Host $Label -ForegroundColor $Colors.Text
-}
-
-function Resolve-SystemPython {
-    $configured = [Environment]::GetEnvironmentVariable('WORKER_PYTHON', 'Process')
-    if ($configured -and (Test-Path -LiteralPath $configured)) {
-        return (Resolve-Path -LiteralPath $configured).Path
-    }
-
-    $localPrograms = Join-Path $env:LocalAppData 'Programs\Python'
-    $candidates = @()
-    if (Test-Path -LiteralPath $localPrograms) {
-        $candidates += Get-ChildItem -LiteralPath $localPrograms -Directory -Filter 'Python*' -ErrorAction SilentlyContinue |
-            Sort-Object Name -Descending |
-            ForEach-Object { Join-Path $_.FullName 'python.exe' }
-    }
-    $candidates += Get-Command python.exe -All -ErrorAction SilentlyContinue |
-        Select-Object -ExpandProperty Source |
-        Where-Object {
-            $_ -and
-            $_ -notlike '*\hermes\hermes-agent\venv\*' -and
-            $_ -notlike '*\WindowsApps\python.exe'
-        }
-
-    foreach ($candidate in $candidates) {
-        if (Test-Path -LiteralPath $candidate) {
-            return (Resolve-Path -LiteralPath $candidate).Path
-        }
-    }
-    throw '未找到系统 Python。请安装 Python 3.12，或设置 WORKER_PYTHON 指向 python.exe。'
-}
-
-function Set-DefaultEnvironment {
-    Import-DotEnv (Join-Path $Root '.env')
-
-    Set-ProcessDefault 'POSTGIS_PORT' '55432'
-    Set-ProcessDefault 'MARTIN_PORT' '3000'
-    Set-ProcessDefault 'TITILER_PORT' '8001'
-    # 本地一键启动只对当前主机开放；生产监听地址由生产启动环境单独配置。
-    Set-ProcessValue 'API_HOST' '127.0.0.1'
-    Set-ProcessDefault 'API_PORT' '8000'
-    Set-ProcessDefault 'WORKER_PORT' '8012'
-    Set-ProcessDefault 'WORKER_PYTHON' (Resolve-SystemPython)
-    Set-ProcessDefault 'WORKER_SHARED_SECRET' 'development-only-worker-shared-secret-change-before-production'
-    Set-ProcessValue 'WEB_DEV_HOST' '127.0.0.1'
-    Set-ProcessDefault 'WEB_DEV_PORT' '5173'
-    Set-ProcessDefault 'RUNTIME_ROOT' $RuntimeRoot
-    Set-ProcessDefault 'SEED_LAYERS_DIR' (Join-Path $Root 'infra\seeds\layers')
-    Set-ResolvedDevPort 'API_PORT' 'api' ([int]$env:API_PORT) 8100
-    Set-ResolvedDevPort 'WORKER_PORT' 'worker' ([int]$env:WORKER_PORT) 8102
-    Set-ResolvedDevPort 'WEB_DEV_PORT' 'web' ([int]$env:WEB_DEV_PORT) 5300
-    Set-ProcessValue 'DATABASE_URL' "postgresql://geo_agent:geo_agent@127.0.0.1:$($env:POSTGIS_PORT)/geo_agent"
-    Set-ProcessValue 'MARTIN_INTERNAL_URL' "http://127.0.0.1:$($env:MARTIN_PORT)"
-    Set-ProcessValue 'TITILER_INTERNAL_URL' "http://127.0.0.1:$($env:TITILER_PORT)"
-    Set-ProcessDefault 'MAP_TILE_TIMEOUT_MS' '30000'
-    Set-ProcessValue 'WORKER_URL' "http://127.0.0.1:$($env:WORKER_PORT)"
-    Set-ProcessValue 'API_PROXY_TARGET' "http://127.0.0.1:$($env:API_PORT)"
-    Set-ProcessValue 'APP_BASE_URL' "http://127.0.0.1:$($env:API_PORT)"
-    Set-ProcessValue 'WEB_BASE_URL' "http://127.0.0.1:$($env:WEB_DEV_PORT)"
-    Set-ProcessValue 'BETTER_AUTH_URL' $env:APP_BASE_URL
-    # 本地 Vite 开发环境统一通过同源 /api 与 /ws 代理访问 API。
-    # 这样端口自动调整后，浏览器端不会继续注入 .env 中过期的跨端口 API 地址。
-    Set-ProcessValue 'VITE_API_BASE_URL' '/'
-    Set-ProcessDefault 'BETTER_AUTH_SECRET' 'development-only-better-auth-secret-change-before-production'
-    Set-ProcessDefault 'BETTER_AUTH_ALLOW_SIGN_UP' 'true'
-    Set-ProcessDefault 'BETTER_AUTH_REQUIRE_EMAIL_VERIFICATION' 'false'
-    Set-ProcessDefault 'BETTER_AUTH_MIN_PASSWORD_LENGTH' '12'
-    Set-ProcessDefault 'CSRF_HEADER_NAME' 'x-geoforge-csrf'
-    Set-ProcessValue 'TRUSTED_ORIGINS' "http://127.0.0.1:$($env:WEB_DEV_PORT),http://localhost:$($env:WEB_DEV_PORT)"
-    $devToolProviders = 'geo-platform-chart,geo-platform-geocode,geo-platform-plan,geo-platform-developer-tools,geo-platform-spatial,geo-platform-routing,geo-platform-meteorology,geo-platform-scheduled-wake-up'
-    Set-ProcessDefault 'ENABLED_TOOL_PROVIDERS' $devToolProviders
-    Ensure-ProcessCsvIncludes 'ENABLED_TOOL_PROVIDERS' $devToolProviders.Split(',')
-    Set-ProcessDefault 'DEVELOPER_TOOL_ALLOWED_ROOTS' "$Root;$RuntimeRoot"
-    Set-ProcessDefault 'VALHALLA_BASE_URL' 'https://valhalla1.openstreetmap.de'
-    Set-ProcessDefault 'ROUTING_TIMEOUT_MS' '20000'
-
-    # 相对 runtime 路径在后台进程里容易受工作目录影响，统一收敛为绝对路径。
-    if (-not [IO.Path]::IsPathRooted($env:RUNTIME_ROOT)) {
-        $env:RUNTIME_ROOT = [IO.Path]::GetFullPath((Join-Path $Root $env:RUNTIME_ROOT))
-    }
-}
-
-function Import-DotEnv {
-    param([string]$Path)
-    if (-not (Test-Path -LiteralPath $Path)) { return }
-
-    foreach ($line in Get-Content -LiteralPath $Path) {
-        $trimmed = $line.Trim()
-        if (-not $trimmed -or $trimmed.StartsWith('#') -or -not $trimmed.Contains('=')) { continue }
-        $parts = $trimmed.Split('=', 2)
-        $key = $parts[0].Trim()
-        $value = $parts[1].Trim()
-        if ($value.Length -ge 2 -and (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'")))) {
-            $value = $value.Substring(1, $value.Length - 2)
-        }
-        if ($key -match '^[A-Za-z_][A-Za-z0-9_]*$' -and -not [Environment]::GetEnvironmentVariable($key, 'Process')) {
-            [Environment]::SetEnvironmentVariable($key, $value, 'Process')
-        }
-    }
-}
-
-function Set-ProcessDefault {
-    param([string]$Name, [string]$Value)
-    if (-not [Environment]::GetEnvironmentVariable($Name, 'Process')) {
-        [Environment]::SetEnvironmentVariable($Name, $Value, 'Process')
-    }
-}
-
-function Set-ProcessValue {
-    param([string]$Name, [string]$Value)
-    [Environment]::SetEnvironmentVariable($Name, $Value, 'Process')
-}
-
-function Test-TcpPortBindable {
-    param([int]$Port)
-    $listener = $null
-    try {
-        $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $Port)
-        $listener.Start()
-        return $true
-    } catch {
-        return $false
-    } finally {
-        if ($listener) {
-            $listener.Stop()
-        }
-    }
-}
-
-function Test-PortOwnedByManagedTree {
-    param([string]$ServiceName, [int]$Port)
-    $managedProcessId = Get-ManagedPid $ServiceName
-    if (-not $managedProcessId) { return $false }
-    $portProcessId = Get-PortPid $Port
-    if (-not $portProcessId) { return $false }
-    if ($portProcessId -eq $managedProcessId) { return $true }
-    return @(Get-DescendantProcessIds $managedProcessId) -contains $portProcessId
-}
-
-function Set-ResolvedDevPort {
-    param([string]$EnvName, [string]$ServiceName, [int]$PreferredPort, [int]$FallbackStart)
-    if ((Test-TcpPortBindable $PreferredPort) -or (Test-PortOwnedByManagedTree $ServiceName $PreferredPort)) {
-        Set-ProcessValue $EnvName ([string]$PreferredPort)
-        return
-    }
-
-    for ($candidate = $FallbackStart; $candidate -lt ($FallbackStart + 600); $candidate++) {
-        if ((Test-TcpPortBindable $candidate) -or (Test-PortOwnedByManagedTree $ServiceName $candidate)) {
-            Set-ProcessValue $EnvName ([string]$candidate)
-            return
-        }
-    }
-    throw "$EnvName 端口不可用：首选 $PreferredPort，且 $FallbackStart-$($FallbackStart + 599) 没有可绑定端口。"
-}
-
-function Ensure-ProcessCsvIncludes {
-    param([string]$Name, [string[]]$RequiredValues)
-    # Windows 终端常常保留上一次 dev 进程的环境变量；本地一键启动必须显式启用
-    # 平台内置 provider，否则工具注册会缺项并在前端表现为“工具未注册”。
-    $current = [Environment]::GetEnvironmentVariable($Name, 'Process')
-    $items = @()
-    if ($current) {
-        $items += $current.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
-    }
-    foreach ($required in $RequiredValues) {
-        $normalized = $required.Trim()
-        if ($normalized -and -not ($items -contains $normalized)) {
-            $items += $normalized
-        }
-    }
-    [Environment]::SetEnvironmentVariable($Name, ($items -join ','), 'Process')
-}
-
-function Assert-Prerequisites {
-    if ($PSVersionTable.PSVersion.Major -lt 7) {
-        throw '需要 PowerShell 7。请使用 pwsh.exe 运行此脚本。'
-    }
-    foreach ($command in @('docker.exe', 'npm.cmd')) {
-        if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
-            throw "缺少命令：$command"
-        }
-    }
-    $python = Resolve-SystemPython
-    $version = & $python --version 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "系统 Python 不可用：$python"
-    }
-    if ($version -notmatch 'Python 3\.') {
-        throw "需要 Python 3，当前为：$version"
-    }
-    if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules'))) {
-        throw 'node_modules 不存在，请先运行 npm install。'
-    }
-}
-
-function Test-Http {
-    param([string]$Url, [int]$TimeoutSeconds = 2)
-    try {
-        $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec $TimeoutSeconds
-        return $response.StatusCode -ge 200 -and $response.StatusCode -lt 400
-    } catch {
-        return $false
-    }
-}
-
-function Wait-Http {
-    param([string]$Name, [string]$Url, [int]$TimeoutSeconds = 90)
-    $started = Get-Date
-    while (((Get-Date) - $started).TotalSeconds -lt $TimeoutSeconds) {
-        if (Test-Http $Url) { return $true }
-        Start-Sleep -Milliseconds 750
-    }
-    Show-LogTail $Name 24
-    return $false
-}
-
-function Test-DockerReady {
-    & docker.exe info *> $null
-    return $LASTEXITCODE -eq 0
-}
-
-function Start-DockerEngine {
-    if (Test-DockerReady) {
-        Write-Result 'Docker Desktop 已就绪' 'ok'
-        return
-    }
-    if (-not (Test-Path -LiteralPath $DockerDesktop)) {
-        throw 'Docker 引擎未运行，且未找到 Docker Desktop。'
-    }
-    Write-Step '正在启动 Docker Desktop'
-    Start-Process -FilePath $DockerDesktop -WindowStyle Hidden | Out-Null
-    $started = Get-Date
-    while (((Get-Date) - $started).TotalSeconds -lt 150) {
-        Start-Sleep -Seconds 2
-        if (Test-DockerReady) {
-            Write-Result 'Docker Desktop 已就绪' 'ok'
-            return
-        }
-    }
-    throw 'Docker Desktop 在 150 秒内未就绪。'
-}
-
-function Get-PostgisState {
-    try {
-        $json = & docker.exe compose -f $ComposeFile ps --format json postgis 2>$null
-        if (-not $json) { return 'STOPPED' }
-        $record = $json | ConvertFrom-Json
-        if ($record.Health -eq 'healthy') { return 'RUNNING' }
-        if ($record.State -eq 'running') { return 'STARTING' }
-        return 'STOPPED'
-    } catch {
-        return 'STOPPED'
-    }
-}
-
-function Get-PostgisPublishedPort {
-    if (Test-DockerReady) {
-        $published = & docker.exe compose -f $ComposeFile port postgis 5432 2>$null | Select-Object -First 1
-        if ($published -match ':(\d+)$') {
-            return [int]$Matches[1]
-        }
-    }
-    return [int]$env:POSTGIS_PORT
-}
-
-function Start-Postgis {
-    Start-DockerEngine
-    Write-Step '正在启动 PostGIS、Martin 与 TiTiler'
-    & docker.exe compose -f $ComposeFile up -d postgis martin titiler | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw '地图数据基础设施启动失败。' }
-
-    $started = Get-Date
-    while (((Get-Date) - $started).TotalSeconds -lt 120) {
-        $postgisReady = (Get-PostgisState) -eq 'RUNNING'
-        $martinReady = Test-Http "http://127.0.0.1:$($env:MARTIN_PORT)/health"
-        $titilerReady = Test-Http "http://127.0.0.1:$($env:TITILER_PORT)/healthz"
-        if ($postgisReady -and $martinReady -and $titilerReady) {
-            Write-Result "地图数据基础设施已健康 · PostGIS $(Get-PostgisPublishedPort) · Martin $($env:MARTIN_PORT) · TiTiler $($env:TITILER_PORT)" 'ok'
-            return
-        }
-        Start-Sleep -Seconds 1
-    }
-    throw 'PostGIS、Martin 或 TiTiler 在 120 秒内未通过健康检查。'
-}
-
-function Stop-Postgis {
-    if (-not (Test-DockerReady)) {
-        Write-Result 'Docker 未运行，跳过 PostGIS 停止' 'warn'
-        return
-    }
-    Write-Step '正在停止地图数据基础设施'
-    & docker.exe compose -f $ComposeFile stop postgis martin titiler | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw '地图数据基础设施停止失败。' }
-    Write-Result 'PostGIS、Martin 与 TiTiler 已停止' 'ok'
-}
-
-function Get-ServiceDefinition {
-    param([string]$Name)
-    switch ($Name) {
-        'worker' {
-            return [pscustomobject]@{
-                Name = 'worker'; Label = '气象计算 Worker'; Port = [int]$env:WORKER_PORT
-                Url = "http://127.0.0.1:$($env:WORKER_PORT)/health"
-                FilePath = (Resolve-SystemPython)
-                Arguments = @('-m', 'uvicorn', 'worker_app.sidecar:app', '--app-dir', 'apps/worker/src', '--host', '127.0.0.1', '--port', $env:WORKER_PORT, '--reload')
-            }
-        }
-        'api' {
-            return [pscustomobject]@{
-                Name = 'api'; Label = 'Node API + WebSocket'; Port = [int]$env:API_PORT
-                Url = "http://127.0.0.1:$($env:API_PORT)/health"
-                FilePath = $env:ComSpec
-                Arguments = @('/d', '/s', '/c', 'npm.cmd run dev:server')
-            }
-        }
-        'web' {
-            return [pscustomobject]@{
-                Name = 'web'; Label = 'Vite Web'; Port = [int]$env:WEB_DEV_PORT
-                Url = "http://127.0.0.1:$($env:WEB_DEV_PORT)"
-                FilePath = $env:ComSpec
-                Arguments = @('/d', '/s', '/c', 'npm.cmd run dev:web')
-            }
-        }
-        default { throw "未知服务：$Name" }
-    }
-}
-
-function Get-ManagedPid {
-    param([string]$Name)
-    $pidFile = Join-Path $PidDir "$Name.pid"
-    if (-not (Test-Path -LiteralPath $pidFile)) { return $null }
-    $raw = (Get-Content -LiteralPath $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
-    $parsed = 0
-    if (-not [int]::TryParse($raw, [ref]$parsed)) {
-        Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
-        return $null
-    }
-    if (-not (Get-Process -Id $parsed -ErrorAction SilentlyContinue)) {
-        Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
-        return $null
-    }
-    return $parsed
-}
-
-function Get-PortPid {
-    param([int]$Port)
-    $connection = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue | Select-Object -First 1
-    return $connection.OwningProcess
-}
-
-function Get-AppServiceState {
-    param([string]$Name)
-    $definition = Get-ServiceDefinition $Name
-    $managedPid = Get-ManagedPid $Name
-    $portPid = Get-PortPid $definition.Port
-    $healthy = Test-Http $definition.Url
-    $state = if ($healthy -and $managedPid) {
-        'RUNNING'
-    } elseif ($healthy) {
-        'EXTERNAL'
-    } elseif ($managedPid -and -not $portPid) {
-        'FAILED'
-    } elseif ($managedPid -or $portPid) {
-        'STARTING'
-    } else {
-        'STOPPED'
-    }
-    return [pscustomobject]@{
-        Name = $Name
-        Label = $definition.Label
-        Port = $definition.Port
-        Url = $definition.Url
-        State = $state
-        Pid = if ($managedPid) { $managedPid } else { $portPid }
-        Managed = [bool]$managedPid
-    }
-}
-
-function Clear-ManagedAppService {
-    param([string]$Name)
-    $managedProcessId = Get-ManagedPid $Name
-    if ($managedProcessId) {
-        $descendants = @(Get-DescendantProcessIds $managedProcessId)
-        [Array]::Reverse($descendants)
-        foreach ($childPid in $descendants) {
-            Stop-Process -Id $childPid -Force -ErrorAction SilentlyContinue
-        }
-        Stop-Process -Id $managedProcessId -Force -ErrorAction SilentlyContinue
-    }
-    Remove-Item -LiteralPath (Join-Path $PidDir "$Name.pid") -Force -ErrorAction SilentlyContinue
-}
-
-function Start-AppService {
-    param([string]$Name)
-    $definition = Get-ServiceDefinition $Name
-    $state = Get-AppServiceState $Name
-    if ($state.State -eq 'RUNNING') {
-        Write-Result "$($definition.Label) 已运行 · $($definition.Url)" 'ok'
-        return
-    }
-    if ($state.State -eq 'EXTERNAL') {
-        Write-Result "$($definition.Label) 已由外部进程运行 · PID $($state.Pid)" 'warn'
-        return
-    }
-    if ($state.State -eq 'FAILED') {
-        Write-Result "$($definition.Label) 上次启动未通过健康检查，正在清理旧进程 · PID $($state.Pid)" 'warn'
-        Clear-ManagedAppService $Name
-    }
-    if ($state.State -eq 'STARTING') {
-        throw "$($definition.Label) 端口 $($definition.Port) 已被占用，但健康检查失败。"
-    }
-
-    $stdout = Join-Path $LogDir "$Name.out.log"
-    $stderr = Join-Path $LogDir "$Name.err.log"
-    Write-Step "正在启动 $($definition.Label)"
-    $process = Start-Process `
-        -FilePath $definition.FilePath `
-        -ArgumentList $definition.Arguments `
+    $Process = Start-Process -FilePath $Node `
+        -ArgumentList $Arguments `
         -WorkingDirectory $Root `
+        -RedirectStandardOutput $LaunchOut `
+        -RedirectStandardError $LaunchError `
         -WindowStyle Hidden `
-        -RedirectStandardOutput $stdout `
-        -RedirectStandardError $stderr `
         -PassThru
-    Set-Content -LiteralPath (Join-Path $PidDir "$Name.pid") -Value $process.Id
-
-    if (-not (Wait-Http $Name $definition.Url)) {
-        Show-LogTail $Name 40
-        throw "$($definition.Label) 启动失败，请查看 $stderr"
-    }
-    Write-Result "$($definition.Label) 已健康 · $($definition.Url)" 'ok'
-}
-
-function Get-DescendantProcessIds {
-    param([int]$RootPid)
-    $all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId
-    $result = [Collections.Generic.List[int]]::new()
-    $queue = [Collections.Generic.Queue[int]]::new()
-    $queue.Enqueue($RootPid)
-    while ($queue.Count -gt 0) {
-        $parent = $queue.Dequeue()
-        foreach ($child in $all | Where-Object ParentProcessId -eq $parent) {
-            $result.Add([int]$child.ProcessId)
-            $queue.Enqueue([int]$child.ProcessId)
+    $Deadline = (Get-Date).AddSeconds(20)
+    do {
+        if (Test-Supervisor) { return }
+        if ($Process.HasExited) {
+            $Details = @(
+                Get-Content -LiteralPath $LaunchError -Tail 40 -ErrorAction SilentlyContinue
+                Get-Content -LiteralPath $LaunchOut -Tail 40 -ErrorAction SilentlyContinue
+            ) | Where-Object { $_ }
+            throw "TypeScript 监督器提前退出（exit $($Process.ExitCode)）。`n$($Details -join "`n")"
         }
-    }
-    return $result
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $Deadline)
+    Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+    throw 'TypeScript 监督器未在 20 秒内开放本机 IPC。'
 }
 
-function Stop-AppService {
-    param([string]$Name)
-    $definition = Get-ServiceDefinition $Name
-    $managedProcessId = Get-ManagedPid $Name
-    if (-not $managedProcessId) {
-        $state = Get-AppServiceState $Name
-        if ($state.State -eq 'EXTERNAL') {
-            Write-Result "$($definition.Label) 由外部进程运行，未停止 · PID $($state.Pid)" 'warn'
-        } else {
-            Write-Result "$($definition.Label) 已停止" 'ok'
-        }
-        return
-    }
-
-    Write-Step "正在停止 $($definition.Label)"
-    $descendants = @(Get-DescendantProcessIds $managedProcessId)
-    [Array]::Reverse($descendants)
-    foreach ($childPid in $descendants) {
-        Stop-Process -Id $childPid -Force -ErrorAction SilentlyContinue
-    }
-    Stop-Process -Id $managedProcessId -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath (Join-Path $PidDir "$Name.pid") -Force -ErrorAction SilentlyContinue
-
-    $started = Get-Date
-    while (((Get-Date) - $started).TotalSeconds -lt 15) {
-        if (-not (Test-Http $definition.Url 1)) {
-            Write-Result "$($definition.Label) 已停止" 'ok'
-            return
-        }
-        Start-Sleep -Milliseconds 500
-    }
-    Write-Result "$($definition.Label) 仍可访问，可能存在外部进程" 'warn'
+function Ensure-Supervisor {
+    if (-not (Test-Path -LiteralPath $SupervisorCli -PathType Leaf)) { Invoke-GeoForgeBuild }
+    Start-Supervisor
 }
 
-function Show-LogTail {
-    param([string]$Name, [int]$Lines = $Tail)
-    $printed = $false
-    foreach ($suffix in @('out', 'err')) {
-        $path = Join-Path $LogDir "$Name.$suffix.log"
-        if (-not (Test-Path -LiteralPath $path)) { continue }
-        Write-Host ''
-        Write-Host "  $Name.$suffix.log" -ForegroundColor $Colors.Accent
-        $content = @(Get-Content -LiteralPath $path -Tail $Lines)
-        if (-not $content.Count) {
-            Write-Host "    暂无日志输出" -ForegroundColor $Colors.Muted
-        }
-        $content | ForEach-Object {
-            Write-Host "    $_" -ForegroundColor $(if ($suffix -eq 'err') { $Colors.Warn } else { $Colors.Muted })
-        }
-        $printed = $true
-    }
-    if (-not $printed) {
-        Write-Host ''
-        Write-Host "  $Name 日志文件尚未创建" -ForegroundColor $Colors.Muted
-    }
+function Open-LocalConsole {
+    Ensure-Supervisor
+    $Arguments = @('run', 'console', '--workspace', 'server')
+    if ($Check) { $Arguments += @('--', '--check') }
+    & npm @Arguments
+    if ($LASTEXITCODE -ne 0) { throw "GeoForge 本地运维台异常退出（exit $LASTEXITCODE）。" }
 }
 
-function Get-SelectedAppServices {
-    if ($Service -eq 'all') {
-        return @('worker', 'api', 'web')
-    }
-    return @($Service)
-}
+if ($Action -in @('default', 'start', 'restart', 'console')) { Invoke-GeoForgeBuild }
 
-function Show-SelectedLogs {
-    param([int]$Lines = $Tail)
-    Write-Rule 'Recent logs'
-    foreach ($name in Get-SelectedAppServices) {
-        Show-LogTail $name $Lines
+switch ($Action) {
+    'default' {
+        Ensure-Supervisor
+        Invoke-Supervisor start all
+        Open-LocalConsole
     }
-    Write-Footer
-}
-
-function Follow-SelectedLogs {
-    $paths = @()
-    foreach ($name in Get-SelectedAppServices) {
-        foreach ($suffix in @('out', 'err')) {
-            $path = Join-Path $LogDir "$name.$suffix.log"
-            if (Test-Path -LiteralPath $path) {
-                $paths += $path
-            }
-        }
+    'start' {
+        Ensure-Supervisor
+        $Arguments = @('start', $Service)
+        if ($Json) { $Arguments += '--json' }
+        Invoke-Supervisor @Arguments
     }
-    if (-not $paths.Count) {
-        Write-Result '没有可追踪的日志文件。' 'warn'
-        return
+    'stop' {
+        if (-not (Test-Supervisor)) { Write-Host 'GeoForge 监督器未运行。' -ForegroundColor DarkGray; break }
+        $Arguments = @('stop', $Service)
+        if ($KeepPostgis) { $Arguments += '--keep-infra' }
+        if ($Json) { $Arguments += '--json' }
+        Invoke-Supervisor @Arguments
     }
-    Write-Host ''
-    Write-Rule 'Following logs'
-    Write-Host '  按 Ctrl+C 停止日志追踪；服务进程会继续运行。' -ForegroundColor $Colors.Muted
-    Write-Footer
-    Get-Content -LiteralPath $paths -Tail 0 -Wait
-}
-
-function Show-Dashboard {
-    Write-Host ''
-    Write-Rule 'Service status'
-    Write-Host ('  {0,-22} {1,-12} {2,-9} {3,-12} {4}' -f 'SERVICE', 'STATE', 'PORT', 'PID', 'ENDPOINT') -ForegroundColor $Colors.Muted
-
-    $postgis = Get-PostgisState
-    $postgisPort = Get-PostgisPublishedPort
-    Write-ServiceRow 'PostGIS' $postgis $postgisPort 'docker' "postgresql://127.0.0.1:$postgisPort"
-    Write-ServiceRow 'Martin MVT' $(if (Test-Http "http://127.0.0.1:$($env:MARTIN_PORT)/health") { 'RUNNING' } else { 'STOPPED' }) $env:MARTIN_PORT 'docker' $env:MARTIN_INTERNAL_URL
-    Write-ServiceRow 'TiTiler COG' $(if (Test-Http "http://127.0.0.1:$($env:TITILER_PORT)/healthz") { 'RUNNING' } else { 'STOPPED' }) $env:TITILER_PORT 'docker' $env:TITILER_INTERNAL_URL
-    foreach ($name in @('worker', 'api', 'web')) {
-        $state = Get-AppServiceState $name
-        Write-ServiceRow $state.Label $state.State $state.Port $(if ($state.Pid) { $state.Pid } else { '-' }) $state.Url
+    'restart' {
+        Ensure-Supervisor
+        $Arguments = @('restart', $Service)
+        if ($Json) { $Arguments += '--json' }
+        Invoke-Supervisor @Arguments
     }
-    Write-Footer
-}
-
-function Write-ServiceRow {
-    param([string]$Label, [string]$State, [object]$Port, [object]$ProcessId, [string]$Endpoint)
-    $color = switch ($State) {
-        'RUNNING' { $Colors.Good }
-        'EXTERNAL' { $Colors.Warn }
-        'STARTING' { $Colors.Warn }
-        'FAILED' { $Colors.Bad }
-        default { $Colors.Bad }
+    'status' {
+        if (-not (Test-Supervisor)) { Write-Host 'GeoForge 监督器未运行。' -ForegroundColor Yellow; break }
+        $Arguments = @('status')
+        if ($Json) { $Arguments += '--json' }
+        Invoke-Supervisor @Arguments
     }
-    Write-Host ('  {0,-22} ' -f $Label) -ForegroundColor $Colors.Text -NoNewline
-    Write-Host ('{0,-12} ' -f $State) -ForegroundColor $color -NoNewline
-    Write-Host ('{0,-9} {1,-12} {2}' -f $Port, $ProcessId, $Endpoint) -ForegroundColor $Colors.Muted
-}
-
-function Start-Stack {
-    Write-Rule 'Starting'
-    if ($Service -eq 'all') {
-        Start-Postgis
-        Start-AppService 'worker'
-        Start-AppService 'api'
-        Start-AppService 'web'
-    } else {
-        if ($Service -eq 'api') {
-            Start-Postgis
-        }
-        Start-AppService $Service
+    'logs' {
+        if (-not (Test-Supervisor)) { throw 'GeoForge 监督器未运行。' }
+        $Arguments = @('logs', $Service, '--tail', [string]$Tail)
+        if ($FollowLogs) { $Arguments += '--follow' }
+        Invoke-Supervisor @Arguments
     }
-    Write-Footer
-    Show-Dashboard
-    Write-Host ''
-    if ($Service -eq 'all') {
-        Write-Result '开发环境已就绪' 'ok'
-        Write-Host "  Web       http://127.0.0.1:$($env:WEB_DEV_PORT)" -ForegroundColor $Colors.Accent
-        Write-Host "  Debug     http://127.0.0.1:$($env:WEB_DEV_PORT)/debug" -ForegroundColor $Colors.Accent
-        Write-Host "  Auth      http://127.0.0.1:$($env:API_PORT)/api/auth/get-session" -ForegroundColor $Colors.Accent
-    } else {
-        Write-Result "$((Get-ServiceDefinition $Service).Label) 已就绪" 'ok'
-    }
-    Write-Host "  Logs      $LogDir" -ForegroundColor $Colors.Muted
-    Show-SelectedLogs ([Math]::Min($Tail, 80))
-    if ($OpenBrowser -and $Service -in @('all', 'web')) {
-        Start-Process "http://127.0.0.1:$($env:WEB_DEV_PORT)" | Out-Null
-    }
-    if ($FollowLogs) {
-        Follow-SelectedLogs
+    'console' { Open-LocalConsole }
+    'shutdown' {
+        if (-not (Test-Supervisor)) { Write-Host 'GeoForge 监督器未运行。' -ForegroundColor DarkGray; break }
+        $Arguments = @('shutdown')
+        if ($Json) { $Arguments += '--json' }
+        Invoke-Supervisor @Arguments
     }
 }
 
-function Stop-Stack {
-    Write-Rule 'Stopping'
-    if ($Service -eq 'all') {
-        foreach ($name in @('web', 'api', 'worker')) { Stop-AppService $name }
-        if (-not $KeepPostgis) { Stop-Postgis }
-    } else {
-        Stop-AppService $Service
-    }
-    Write-Footer
-    Show-Dashboard
-}
-
-Set-DefaultEnvironment
-Write-Brand
-
-try {
-    Assert-Prerequisites
-    switch ($Action) {
-        'start' { Start-Stack }
-        'stop' { Stop-Stack }
-        'restart' {
-            Stop-Stack
-            Write-Host ''
-            Start-Stack
-        }
-        'status' { Show-Dashboard }
-        'logs' {
-            Show-SelectedLogs $Tail
-            if ($FollowLogs) {
-                Follow-SelectedLogs
-            }
-        }
-    }
-    exit 0
-} catch {
-    Write-Host ''
-    Write-Result $_.Exception.Message 'error'
-    Write-Host "  运行 .\dev.ps1 logs -Service all 查看日志。" -ForegroundColor $Colors.Muted
-    exit 1
+if ($OpenBrowser -and $Action -in @('default', 'start', 'restart')) {
+    Start-Process "http://127.0.0.1:$($env:WEB_DEV_PORT)"
 }

@@ -5,7 +5,8 @@
   "workspaces": [
     "server",
     "apps/web",
-    "packages/shared-types"
+    "packages/shared-types",
+    "packages/operations-supervisor"
   ],
   "//": "Python worker only hosts packages/gis-meteorology scientific execution.",
   "scripts": {
@@ -13,13 +14,16 @@
     "dev:windows": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./dev.ps1 start",
     "dev:windows:status": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./dev.ps1 status",
     "dev:windows:stop": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./dev.ps1 stop",
+    "console:windows": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./dev.ps1 console",
     "dev:server": "npm run dev --workspace server",
     "dev:web": "npm run dev --workspace apps/web",
     "dev:worker": "python -m uvicorn worker_app.sidecar:app --app-dir apps/worker/src --host 127.0.0.1 --port 8012 --reload",
-    "build": "npm run typecheck --workspace @geo-agent-platform/shared-types && npm run build --workspace server && npm run build --workspace apps/web",
+    "build": "npm run build --workspace @geo-agent-platform/shared-types && npm run build --workspace @geo-agent-platform/operations-supervisor && npm run build --workspace server && npm run build --workspace apps/web",
+    "build:supervisor": "npm run build --workspace @geo-agent-platform/operations-supervisor",
     "build:server": "npm run build --workspace server",
     "build:web": "npm run build --workspace apps/web",
-    "test": "npm run test --workspace server && npm run test --workspace apps/web",
+    "test": "npm run build --workspace @geo-agent-platform/shared-types && npm run test --workspace @geo-agent-platform/operations-supervisor && npm run test --workspace server && npm run test --workspace apps/web",
+    "test:supervisor": "npm run test --workspace @geo-agent-platform/operations-supervisor",
     "test:server": "npm run test --workspace server",
     "test:web": "npm run test --workspace apps/web",
     "test:e2e": "playwright test",
@@ -32,7 +36,7 @@
   },
   "dependencies": {
     "@openai/agents": "0.13.5",
-    "openai": "^6.42.0"
+    "openai": "6.48.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0"
