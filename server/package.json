@@ -49,6 +49,7 @@
     "@types/pg": "^8.11.0",
     "@types/ws": "^8.18.1",
     "ink-testing-library": "4.0.0",
+    "string-width": "8.2.2",
     "tsx": "^4.19.0",
     "typescript": "~6.0.2",
     "vitest": "^4.0.8"

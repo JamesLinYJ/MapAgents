@@ -13,16 +13,19 @@
 // --------------------------------------------------------------------------
 
 import { EventEmitter } from 'node:events'
+import { stripVTControlCharacters } from 'node:util'
 
 import type { OperationsClient } from '@geo-agent-platform/operations-supervisor/client'
-import type { OperationsSnapshot } from '@geo-agent-platform/shared-types/operations'
+import type { OperationsLogEntry, OperationsSnapshot } from '@geo-agent-platform/shared-types/operations'
 import { ThemeProvider } from '@inkjs/ui'
 import { cleanup, render } from 'ink-testing-library'
+import stringWidth from 'string-width'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { LocalConsoleApp } from './localConsole.js'
 import { geoForgeConsoleTheme } from './localConsoleTheme.js'
-import type { LocalConsoleOptions } from './localConsoleTypes.js'
+import type { LocalConsoleDataPlane, LocalConsoleOptions } from './localConsoleTypes.js'
+import type { TerminalMouseEvent, TerminalMouseSource } from './terminalMouse.js'
 
 afterEach(() => cleanup())
 
@@ -37,7 +40,10 @@ describe('LocalConsoleApp', () => {
     const instance = renderConsole(client)
     resize(instance.stdout, columns, 36)
 
-    await vi.waitFor(() => expect(instance.lastFrame()).toContain(expected))
+    await vi.waitFor(() => {
+      expect(instance.lastFrame()).toContain(expected)
+      assertFrameFits(instance.lastFrame(), columns, 36)
+    })
   })
 
   it('shows a non-broken size guard below 80x24', async () => {
@@ -46,6 +52,36 @@ describe('LocalConsoleApp', () => {
 
     await vi.waitFor(() => expect(instance.lastFrame()).toContain('终端尺寸不足'))
     expect(instance.lastFrame()).toContain('至少需要 80×24')
+  })
+
+  it('keeps the complete control shell usable at the minimum 80x24 size', async () => {
+    const instance = renderConsole(createClient())
+    resize(instance.stdout, 80, 24)
+
+    await vi.waitFor(() => {
+      expect(instance.lastFrame()).toContain('服务操作')
+      assertFrameFits(instance.lastFrame(), 80, 24)
+    })
+    expect(instance.lastFrame()).not.toContain('终端尺寸不足')
+    expect(instance.lastFrame()).toContain('鼠标不可用')
+    expect(instance.lastFrame()).toContain('分离')
+  })
+
+  it('keeps every page within the minimum terminal viewport', async () => {
+    const instance = renderConsole(createClient())
+    resize(instance.stdout, 80, 24)
+
+    for (const [key, expected] of [
+      ['2', '服务:all'],
+      ['3', 'admin@example.com'],
+      ['4', 'console.account.grant'],
+    ] as const) {
+      instance.stdin.write(key)
+      await vi.waitFor(() => {
+        expect(instance.lastFrame()).toContain(expected)
+        assertFrameFits(instance.lastFrame(), 80, 24)
+      })
+    }
   })
 
   it('keeps service controls visible when the account database is unavailable', async () => {
@@ -74,14 +110,88 @@ describe('LocalConsoleApp', () => {
     await vi.waitFor(() => expect(client.close).toHaveBeenCalled())
     expect(client.shutdown).not.toHaveBeenCalled()
   })
+
+  it('switches pages through a real measured mouse hit region', async () => {
+    const mouse = new TestMouseSource()
+    const instance = renderConsole(createClient(), mouse)
+    resize(instance.stdout, 140, 36)
+    await vi.waitFor(() => expect(instance.lastFrame()).toContain('服务检查器'))
+
+    mouse.click(12, 5)
+
+    await vi.waitFor(() => expect(instance.lastFrame()).toContain('服务:all'))
+    expect(instance.lastFrame()).toContain('鼠标开启')
+  })
+
+  it('pauses and scrolls the log window with the mouse wheel', async () => {
+    const mouse = new TestMouseSource()
+    const client = createClient(createLogs(40))
+    const instance = renderConsole(client, mouse)
+    resize(instance.stdout, 140, 36)
+    await vi.waitFor(() => expect(instance.lastFrame()).toContain('服务检查器'))
+    mouse.click(12, 5)
+    await vi.waitFor(() => expect(instance.lastFrame()).toContain('20–40/40'))
+
+    mouse.wheel(80, 15, -1)
+
+    await vi.waitFor(() => expect(instance.lastFrame()).toContain('Ⅱ 已暂停'))
+    expect(instance.lastFrame()).toContain('17–37/40')
+  })
+
+  it('routes a mouse service action through the typed supervisor client', async () => {
+    const mouse = new TestMouseSource()
+    const client = createClient()
+    const instance = renderConsole(client, mouse)
+    resize(instance.stdout, 140, 36)
+    await vi.waitFor(() => expect(instance.lastFrame()).toContain('服务操作'))
+    await new Promise(resolve => setTimeout(resolve, 20))
+
+    mouse.move(14, 8)
+    await vi.waitFor(() => expect(instance.lastFrame()).toContain('› 启动'))
+    mouse.click(14, 8)
+
+    await vi.waitFor(() => expect(client.operate).toHaveBeenCalledWith({ action: 'start', target: 'infra' }))
+    await vi.waitFor(() => expect(instance.lastFrame()).toContain('启动杭州基础设施完成'))
+  })
 })
 
-function renderConsole(client: OperationsClient) {
+function renderConsole(
+  client: OperationsClient,
+  mouse?: TerminalMouseSource,
+  openDataPlane: LocalConsoleOptions['openDataPlane'] = async () => createDataPlane(),
+) {
   return render(
     <ThemeProvider theme={geoForgeConsoleTheme}>
-      <LocalConsoleApp options={createOptions(client, vi.fn())} />
+      <LocalConsoleApp options={createOptions(client, openDataPlane)} {...(mouse ? { mouse } : {})} />
     </ThemeProvider>,
   )
+}
+
+class TestMouseSource implements TerminalMouseSource {
+  readonly enabled = true
+  private readonly events = new EventEmitter()
+
+  subscribe(listener: (event: TerminalMouseEvent) => void): () => void {
+    this.events.on('mouse', listener)
+    return () => this.events.off('mouse', listener)
+  }
+
+  click(column: number, row: number): void {
+    this.events.emit('mouse', mouseEvent('press', column, row))
+    this.events.emit('mouse', mouseEvent('release', column, row))
+  }
+
+  wheel(column: number, row: number, deltaY: -1 | 1): void {
+    this.events.emit('mouse', { ...mouseEvent('wheel', column, row), button: 'none', deltaY })
+  }
+
+  move(column: number, row: number): void {
+    this.events.emit('mouse', { ...mouseEvent('move', column, row), button: 'none' })
+  }
+}
+
+function mouseEvent(kind: TerminalMouseEvent['kind'], column: number, row: number): TerminalMouseEvent {
+  return { kind, column, row, button: 'left', deltaY: 0, shift: false, meta: false, ctrl: false }
 }
 
 function createOptions(client: OperationsClient, openDataPlane: LocalConsoleOptions['openDataPlane']): LocalConsoleOptions {
@@ -92,13 +202,21 @@ function createOptions(client: OperationsClient, openDataPlane: LocalConsoleOpti
   }
 }
 
-function createClient(): OperationsClient {
+function createClient(logs: OperationsLogEntry[] = []): OperationsClient {
   const events = new EventEmitter()
   const client = {
     status: vi.fn().mockResolvedValue(snapshot),
-    logs: vi.fn().mockResolvedValue([]),
+    logs: vi.fn().mockResolvedValue(logs),
     subscribe: vi.fn().mockResolvedValue(undefined),
-    operate: vi.fn(),
+    operate: vi.fn().mockResolvedValue({
+      operationId: '12345678-1234-4234-8234-123456789abc',
+      action: 'start',
+      target: 'infra',
+      outcome: 'succeeded',
+      message: '基础设施已启动。',
+      startedAt: '2026-07-22T00:00:00.000Z',
+      completedAt: '2026-07-22T00:00:01.000Z',
+    }),
     shutdown: vi.fn(),
     close: vi.fn(() => events.emit('disconnected', new Error('client detached'))),
     onEvent: vi.fn((listener: (...args: unknown[]) => void) => {
@@ -113,10 +231,65 @@ function createClient(): OperationsClient {
   return client as unknown as OperationsClient
 }
 
+function createLogs(count: number): OperationsLogEntry[] {
+  return Array.from({ length: count }, (_, index) => ({
+    sequence: index + 1,
+    serviceId: 'api',
+    stream: 'stdout',
+    level: 'info',
+    message: `日志 ${index + 1}`,
+    createdAt: new Date(Date.UTC(2026, 6, 22, 0, 0, index)).toISOString(),
+  }))
+}
+
+function createDataPlane(): LocalConsoleDataPlane {
+  return {
+    accounts: {
+      listAccounts: vi.fn().mockResolvedValue([{
+        authUserId: 'auth-user-1',
+        email: 'admin@example.com',
+        displayName: '杭州平台管理员',
+        authRole: 'admin',
+        banned: false,
+        platformUserId: 'platform-user-1',
+        platformStatus: 'active',
+        platformRoles: [{ workspaceId: 'platform', role: 'platform_admin' }],
+      }]),
+      createPlatformAdmin: vi.fn(),
+      grantPlatformAdmin: vi.fn(),
+      revokePlatformAdmin: vi.fn(),
+      setAccountEnabled: vi.fn(),
+      resetPassword: vi.fn(),
+      revokeSessions: vi.fn(),
+    },
+    listAuditEvents: vi.fn().mockResolvedValue([{
+      auditEventId: 'audit-1',
+      actorUserId: 'local-operator',
+      workspaceId: null,
+      action: 'console.account.grant',
+      objectType: 'platform_user',
+      objectId: 'platform-user-1',
+      outcome: 'allowed',
+      metadata: {},
+      createdAt: '2026-07-22T00:00:00.000Z',
+    }]),
+    close: vi.fn().mockResolvedValue(undefined),
+  }
+}
+
 function resize(stdout: EventEmitter, columns: number, rows: number): void {
   Object.defineProperty(stdout, 'columns', { configurable: true, value: columns })
   Object.defineProperty(stdout, 'rows', { configurable: true, value: rows })
   stdout.emit('resize')
+}
+
+function assertFrameFits(frame: string, columns: number, rows: number): void {
+  const lines = frame.split('\n')
+  expect(lines.length).toBeLessThanOrEqual(rows)
+  for (const line of lines) {
+    const width = stringWidth(stripVTControlCharacters(line))
+    expect(width, width > columns ? `${line}\n\n完整画面：\n${frame}` : line).toBeLessThanOrEqual(columns)
+  }
 }
 
 const unavailable = { value: null, unavailableReason: '尚未采集' } as const

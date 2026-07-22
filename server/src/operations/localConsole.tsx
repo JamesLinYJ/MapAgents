@@ -23,8 +23,10 @@ import type { AuditEvent } from '@geo-agent-platform/shared-types/platform'
 import { Box, Text, render, useApp, useInput, usePaste, useWindowSize } from 'ink'
 
 import type { LocalManagedAccount } from '../store/postgres/localAccountRepository.js'
+import { LocalConsoleMouseProvider, MouseRegion, type MouseRegionState } from './localConsoleMouse.js'
 import { consolePalette, geoForgeConsoleTheme } from './localConsoleTheme.js'
 import type { LocalConsoleDataPlane, LocalConsoleOptions, LocalConsoleTab } from './localConsoleTypes.js'
+import { createTerminalMouseController, type TerminalMouseSource } from './terminalMouse.js'
 
 const ALL_SERVICES: OperationsServiceId[] = ['infra', 'worker', 'api', 'web']
 const TAB_ORDER: LocalConsoleTab[] = ['services', 'logs', 'accounts', 'audit']
@@ -51,20 +53,27 @@ type ConsoleDialog =
     }
 
 export async function runLocalConsole(options: LocalConsoleOptions): Promise<void> {
+  const mouse = createTerminalMouseController()
   const instance = render(
     <ThemeProvider theme={geoForgeConsoleTheme}>
-      <LocalConsoleApp options={options} />
+      <LocalConsoleApp options={options} mouse={mouse} />
     </ThemeProvider>,
     {
       alternateScreen: true,
       exitOnCtrlC: false,
       patchConsole: false,
+      stdin: mouse.stdin,
     },
   )
-  await instance.waitUntilExit()
+  mouse.activate()
+  try {
+    await instance.waitUntilExit()
+  } finally {
+    mouse.close()
+  }
 }
 
-export function LocalConsoleApp({ options }: { options: LocalConsoleOptions }) {
+export function LocalConsoleApp({ options, mouse }: { options: LocalConsoleOptions; mouse?: TerminalMouseSource }) {
   const { exit } = useApp()
   const { columns, rows } = useWindowSize()
   const [tab, setTab] = useState<LocalConsoleTab>('services')
@@ -88,6 +97,7 @@ export function LocalConsoleApp({ options }: { options: LocalConsoleOptions }) {
   const [logService, setLogService] = useState<OperationsServiceId | 'all'>('all')
   const [wrapLogs, setWrapLogs] = useState(false)
   const [showInspector, setShowInspector] = useState(false)
+  const [logScrollOffset, setLogScrollOffset] = useState(0)
   const dataPlaneRef = useRef<Promise<LocalConsoleDataPlane> | null>(null)
 
   const ensureDataPlane = useCallback((): Promise<LocalConsoleDataPlane> => {
@@ -274,6 +284,63 @@ export function LocalConsoleApp({ options }: { options: LocalConsoleOptions }) {
     })
   }, [executeAccountAction, runOperation, selectedAccount])
 
+  const visibleLogs = useMemo(() => {
+    const normalizedSearch = search.trim().toLowerCase()
+    return logs.filter(entry => {
+      if (pausedSequence !== null && entry.sequence > pausedSequence) return false
+      if (logService !== 'all' && entry.serviceId !== logService) return false
+      if (logLevel !== 'all' && entry.level !== logLevel) return false
+      return !normalizedSearch || entry.message.toLowerCase().includes(normalizedSearch)
+    })
+  }, [logLevel, logService, logs, pausedSequence, search])
+
+  useEffect(() => {
+    const capacity = calculateLogCapacity(tab, columns, rows, showInspector)
+    setLogScrollOffset(offset => Math.min(offset, Math.max(0, visibleLogs.length - capacity)))
+  }, [columns, rows, showInspector, tab, visibleLogs.length])
+
+  const toggleLogFollow = useCallback((): void => {
+    setLogPaused(current => {
+      const next = !current
+      setPausedSequence(next ? (logs.at(-1)?.sequence ?? 0) : null)
+      if (!next) setLogScrollOffset(0)
+      return next
+    })
+  }, [logs])
+
+  const scrollLogWindow = useCallback((direction: -1 | 1, distance = 3): void => {
+    if (direction < 0) {
+      setLogPaused(true)
+      setPausedSequence(current => current ?? (logs.at(-1)?.sequence ?? 0))
+    }
+    setLogScrollOffset(current => {
+      const delta = direction < 0 ? distance : -distance
+      const capacity = calculateLogCapacity(tab, columns, rows, showInspector)
+      return Math.max(0, Math.min(Math.max(0, visibleLogs.length - capacity), current + delta))
+    })
+  }, [columns, logs, rows, showInspector, tab, visibleLogs.length])
+
+  const cycleTab = useCallback((direction: -1 | 1): void => {
+    setTab(current => {
+      const index = TAB_ORDER.indexOf(current)
+      return TAB_ORDER[(index + direction + TAB_ORDER.length) % TAB_ORDER.length] ?? 'services'
+    })
+  }, [])
+
+  const requestShutdown = useCallback((): void => {
+    setDialog({
+      kind: 'confirm',
+      title: '停止全部服务并关闭监督器',
+      detail: '这与普通分离不同：所有服务都会停止，监督后台也会退出。',
+      expected: '停止全部',
+      execute: () => runOperation('停止全部并退出', async () => {
+        if (!client) throw new Error('监督器尚未连接。')
+        assertOperationSucceeded(await client.shutdown())
+        exit()
+      }),
+    })
+  }, [client, exit, runOperation])
+
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
       exit()
@@ -284,17 +351,7 @@ export function LocalConsoleApp({ options }: { options: LocalConsoleOptions }) {
       return
     }
     if (input === 'Q') {
-      setDialog({
-        kind: 'confirm',
-        title: '停止全部服务并关闭监督器',
-        detail: '这与普通分离不同：所有服务都会停止，监督后台也会退出。',
-        expected: '停止全部',
-        execute: () => runOperation('停止全部并退出', async () => {
-          if (!client) throw new Error('监督器尚未连接。')
-          assertOperationSucceeded(await client.shutdown())
-          exit()
-        }),
-      })
+      requestShutdown()
       return
     }
     if (input === '?') {
@@ -306,16 +363,44 @@ export function LocalConsoleApp({ options }: { options: LocalConsoleOptions }) {
       if (next) setTab(next)
       return
     }
+    if (key.tab) {
+      cycleTab(key.shift ? -1 : 1)
+      return
+    }
     if (key.upArrow) {
       if (tab === 'services') setServiceIndex(index => Math.max(0, index - 1))
+      if (tab === 'logs') scrollLogWindow(-1, 1)
       if (tab === 'accounts') setAccountIndex(index => Math.max(0, index - 1))
       if (tab === 'audit') setAuditIndex(index => Math.max(0, index - 1))
       return
     }
     if (key.downArrow) {
       if (tab === 'services') setServiceIndex(index => Math.min((snapshot?.services.length ?? 1) - 1, index + 1))
+      if (tab === 'logs') scrollLogWindow(1, 1)
       if (tab === 'accounts') setAccountIndex(index => Math.min(Math.max(0, accounts.length - 1), index + 1))
       if (tab === 'audit') setAuditIndex(index => Math.min(Math.max(0, audits.length - 1), index + 1))
+      return
+    }
+    if (key.pageUp || key.pageDown) {
+      const direction = key.pageUp ? -1 : 1
+      const pageSize = Math.max(5, rows - 12)
+      if (tab === 'logs') scrollLogWindow(direction, pageSize)
+      if (tab === 'accounts') setAccountIndex(index => clampIndex(index + direction * pageSize, accounts.length))
+      if (tab === 'audit') setAuditIndex(index => clampIndex(index + direction * pageSize, audits.length))
+      return
+    }
+    if (key.home || key.end) {
+      const last = key.end
+      if (tab === 'logs') {
+        if (last) {
+          setLogScrollOffset(0)
+          setLogPaused(false)
+          setPausedSequence(null)
+        } else scrollLogWindow(-1, Math.max(0, visibleLogs.length - 1))
+      }
+      if (tab === 'services') setServiceIndex(last ? Math.max(0, (snapshot?.services.length ?? 1) - 1) : 0)
+      if (tab === 'accounts') setAccountIndex(last ? Math.max(0, accounts.length - 1) : 0)
+      if (tab === 'audit') setAuditIndex(last ? Math.max(0, audits.length - 1) : 0)
       return
     }
     if (tab === 'services') {
@@ -326,13 +411,7 @@ export function LocalConsoleApp({ options }: { options: LocalConsoleOptions }) {
     }
     if (tab === 'logs' || tab === 'services') {
       if (input === '/') setDialog({ kind: 'search' })
-      if (input.toLowerCase() === 'f') {
-        setLogPaused(value => {
-          const next = !value
-          setPausedSequence(next ? (logs.at(-1)?.sequence ?? 0) : null)
-          return next
-        })
-      }
+      if (input.toLowerCase() === 'f') toggleLogFollow()
       if (input.toLowerCase() === 'w') setWrapLogs(value => !value)
       if (input.toLowerCase() === 'l') {
         setLogLevel(value => LOG_LEVELS[(LOG_LEVELS.indexOf(value) + 1) % LOG_LEVELS.length] ?? 'all')
@@ -354,16 +433,6 @@ export function LocalConsoleApp({ options }: { options: LocalConsoleOptions }) {
     }
     if (tab === 'audit' && input.toLowerCase() === 'u') void loadAudits()
   }, { isActive: dialog === null && busy === null })
-
-  const visibleLogs = useMemo(() => {
-    const normalizedSearch = search.trim().toLowerCase()
-    return logs.filter(entry => {
-      if (pausedSequence !== null && entry.sequence > pausedSequence) return false
-      if (logService !== 'all' && entry.serviceId !== logService) return false
-      if (logLevel !== 'all' && entry.level !== logLevel) return false
-      return !normalizedSearch || entry.message.toLowerCase().includes(normalizedSearch)
-    })
-  }, [logLevel, logService, logs, pausedSequence, search])
 
   const submitCreate = useCallback((value: string): void => {
     if (!dialog || dialog.kind !== 'create') return
@@ -418,14 +487,17 @@ export function LocalConsoleApp({ options }: { options: LocalConsoleOptions }) {
   }, [dialog, ensureDataPlane, refreshAccountViews, runOperation])
 
   if (columns < 80 || rows < 24) {
-    return <SizeWarning columns={columns} rows={rows} onExit={exit} />
+    return <LocalConsoleMouseProvider source={mouse}>
+      <SizeWarning columns={columns} rows={rows} onExit={exit} />
+    </LocalConsoleMouseProvider>
   }
 
   return (
-    <Box width={columns} height={rows} flexDirection="column" backgroundColor={tone(consolePalette.canvas)}>
-      <ConsoleHeader snapshot={snapshot} connection={connection} />
-      <TabBar active={tab} />
-      <Box flexGrow={1} paddingX={1} paddingY={1}>
+    <LocalConsoleMouseProvider source={mouse}>
+      <Box width={columns} height={rows} flexDirection="column" backgroundColor={tone(consolePalette.canvas)}>
+        <ConsoleHeader snapshot={snapshot} connection={connection} mouseEnabled={Boolean(mouse?.enabled)} columns={columns} />
+        <TabBar active={tab} onSelect={setTab} onHelp={() => setDialog({ kind: 'help' })} />
+        <Box flexGrow={1} flexShrink={1} minHeight={0} paddingX={1} paddingY={1}>
         {dialog
           ? <DialogView
               dialog={dialog}
@@ -444,63 +516,142 @@ export function LocalConsoleApp({ options }: { options: LocalConsoleOptions }) {
                 rows={rows}
                 showInspector={showInspector}
                 wrapLogs={wrapLogs}
+                logOffset={logScrollOffset}
+                logPaused={logPaused}
+                onSelect={setServiceIndex}
+                onAction={requestServiceAction}
+                onToggleInspector={() => setShowInspector(value => !value)}
+                onScrollLogs={scrollLogWindow}
               />
             : tab === 'logs'
               ? <LogsView
                   entries={visibleLogs}
-                  rows={rows - 8}
+                  columns={columns}
+                  rows={Math.max(5, rows - 11)}
                   paused={logPaused}
                   search={search}
                   level={logLevel}
                   service={logService}
                   wrap={wrapLogs}
+                  offset={logScrollOffset}
+                  onToggleFollow={toggleLogFollow}
+                  onToggleWrap={() => setWrapLogs(value => !value)}
+                  onCycleLevel={() => setLogLevel(value => LOG_LEVELS[(LOG_LEVELS.indexOf(value) + 1) % LOG_LEVELS.length] ?? 'all')}
+                  onCycleService={() => setLogService(value => cycleService(value, 1))}
+                  onSearch={() => setDialog({ kind: 'search' })}
+                  onClearSearch={() => setSearch('')}
+                  onScroll={scrollLogWindow}
                 />
               : tab === 'accounts'
-                ? <AccountsView accounts={accounts} selectedIndex={accountIndex} error={dataPlaneError} />
-                : <AuditView audits={audits} selectedIndex={auditIndex} error={dataPlaneError} />}
+                ? <AccountsView
+                    accounts={accounts}
+                    columns={columns}
+                    selectedIndex={accountIndex}
+                    error={dataPlaneError}
+                    rows={Math.max(5, rows - 11)}
+                    onSelect={setAccountIndex}
+                    onScroll={direction => setAccountIndex(index => clampIndex(index + direction * 3, accounts.length))}
+                    onCreate={() => setDialog({ kind: 'create', step: 'email', email: '', name: '', password: '' })}
+                    onAction={requestAccountAction}
+                    onPassword={() => selectedAccount && setDialog({ kind: 'password', step: 'password', targetEmail: selectedAccount.email, password: '' })}
+                    onRefresh={() => void loadAccounts()}
+                  />
+                : <AuditView
+                    audits={audits}
+                    columns={columns}
+                    selectedIndex={auditIndex}
+                    error={dataPlaneError}
+                    rows={Math.max(5, rows - 11)}
+                    onSelect={setAuditIndex}
+                    onScroll={direction => setAuditIndex(index => clampIndex(index + direction * 3, audits.length))}
+                    onRefresh={() => void loadAudits()}
+                  />}
+        </Box>
+        <ConsoleFooter
+          tab={tab}
+          feedback={busy ?? feedback}
+          columns={columns}
+          mouseEnabled={Boolean(mouse?.enabled)}
+          onDetach={exit}
+          onShutdown={requestShutdown}
+        />
       </Box>
-      <ConsoleFooter tab={tab} feedback={busy ?? feedback} />
-    </Box>
+    </LocalConsoleMouseProvider>
   )
 }
 
-function ConsoleHeader({ snapshot, connection }: { snapshot: OperationsSnapshot | null; connection: string }) {
+function ConsoleHeader({ snapshot, connection, mouseEnabled, columns }: {
+  snapshot: OperationsSnapshot | null
+  connection: string
+  mouseEnabled: boolean
+  columns: number
+}) {
+  const compact = columns < 100
+  const connectionLabel = connection === '已连接'
+    ? compact
+      ? `● 在线 · 鼠标${mouseEnabled ? '开' : '关'}`
+      : `● 已连接 · 鼠标${mouseEnabled ? '开启' : '不可用'}`
+    : `◐ ${connection}`
+  const identity = snapshot
+    ? `${snapshot.host.hostname} · ${snapshot.host.profile === 'production' ? '生产' : '开发'} · PID ${snapshot.host.supervisorPid}`
+    : '等待监督状态'
+  const metrics = `CPU ${formatMetric(snapshot?.host.cpuPercent.value ?? null, '%')} · 内存 ${formatPercent(snapshot?.host.memoryUsedBytes.value ?? null, snapshot?.host.memoryTotalBytes.value ?? null)} · 磁盘 ${formatPercent(snapshot?.host.runtimeDiskUsedBytes.value ?? null, snapshot?.host.runtimeDiskTotalBytes.value ?? null)}`
+  if (compact) {
+    return (
+      <Box width="100%" flexShrink={0} flexDirection="column" borderStyle="round" borderColor={tone(consolePalette.border)} paddingX={1}>
+        <Box width="100%">
+          <Box flexGrow={1} flexShrink={1} minWidth={0}>
+            <Text wrap="truncate-end" bold color={tone(consolePalette.focus)}>◆ GeoForge 本地运维台</Text>
+          </Box>
+          <Text color={tone(connection === '已连接' ? consolePalette.healthy : consolePalette.warning)}>{connectionLabel}</Text>
+        </Box>
+        <Text wrap="truncate-end" color={tone(consolePalette.muted)}>{identity} · {metrics}</Text>
+      </Box>
+    )
+  }
   return (
-    <Box borderStyle="round" borderColor={tone(consolePalette.border)} paddingX={1} justifyContent="space-between">
-      <Box flexDirection="column">
+    <Box width="100%" flexShrink={0} borderStyle="round" borderColor={tone(consolePalette.border)} paddingX={1} justifyContent="space-between">
+      <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
         <Text bold color={tone(consolePalette.focus)}>◆ GeoForge 本地运维台</Text>
-        <Text color={tone(consolePalette.muted)}>
-          {snapshot ? `${snapshot.host.hostname} · ${snapshot.host.profile === 'production' ? '生产' : '开发'} · 监督 PID ${snapshot.host.supervisorPid}` : '等待监督状态'}
-        </Text>
+        <Text wrap="truncate-end" color={tone(consolePalette.muted)}>{identity}</Text>
       </Box>
-      <Box flexDirection="column" alignItems="flex-end">
+      <Box flexDirection="column" alignItems="flex-end" flexShrink={0}>
         <Text color={tone(connection === '已连接' ? consolePalette.healthy : consolePalette.warning)}>
-          {connection === '已连接' ? '● 已连接' : `◐ ${connection}`}
+          {connectionLabel}
         </Text>
-        <Text color={tone(consolePalette.text)}>
-          主机 CPU {formatMetric(snapshot?.host.cpuPercent.value ?? null, '%')} · 内存 {formatPercent(snapshot?.host.memoryUsedBytes.value ?? null, snapshot?.host.memoryTotalBytes.value ?? null)} · 磁盘 {formatPercent(snapshot?.host.runtimeDiskUsedBytes.value ?? null, snapshot?.host.runtimeDiskTotalBytes.value ?? null)}
-        </Text>
+        <Text color={tone(consolePalette.text)}>{metrics}</Text>
       </Box>
     </Box>
   )
 }
 
-function TabBar({ active }: { active: LocalConsoleTab }) {
+function TabBar({ active, onSelect, onHelp }: {
+  active: LocalConsoleTab
+  onSelect: (tab: LocalConsoleTab) => void
+  onHelp: () => void
+}) {
   const labels: Array<[LocalConsoleTab, string]> = [
     ['services', '1 服务'], ['logs', '2 日志'], ['accounts', '3 账户'], ['audit', '4 审计'],
   ]
   return (
-    <Box paddingX={2} gap={1}>
+    <Box flexShrink={0} paddingX={2} gap={1} aria-role="tablist">
       {labels.map(([tab, label]) => (
-        <Text
+        <MouseRegion
           key={tab}
-          bold={active === tab}
-          color={tone(active === tab ? consolePalette.canvas : consolePalette.muted)}
-          backgroundColor={tone(active === tab ? consolePalette.focus : consolePalette.panel)}
-        > {label} </Text>
+          priority={20}
+          aria-role="tab"
+          aria-state={{ selected: active === tab }}
+          onClick={() => onSelect(tab)}
+        >
+          {state => <Text
+            bold={active === tab || state.hovered}
+            color={tone(active === tab ? consolePalette.canvas : state.hovered ? consolePalette.text : consolePalette.muted)}
+            backgroundColor={tone(active === tab ? consolePalette.focus : state.hovered ? consolePalette.selected : consolePalette.panel)}
+          > {label} </Text>}
+        </MouseRegion>
       ))}
       <Box flexGrow={1} />
-      <Text color={tone(consolePalette.muted)}>? 帮助</Text>
+      <ActionButton label="? 帮助" onPress={onHelp} subtle />
     </Box>
   )
 }
@@ -513,51 +664,93 @@ function ServicesView(input: {
   rows: number
   showInspector: boolean
   wrapLogs: boolean
+  logOffset: number
+  logPaused: boolean
+  onSelect: (index: number) => void
+  onAction: (action: 'start' | 'stop' | 'restart') => void
+  onToggleInspector: () => void
+  onScrollLogs: (direction: -1 | 1, distance?: number) => void
 }) {
   const services = input.snapshot?.services ?? []
   const selected = services[input.selectedIndex] ?? null
   const wide = input.columns >= 140
+  const compact = input.columns < 100
   const showInspector = wide || input.showInspector
-  const logRows = Math.max(5, input.rows - 20)
+  const servicePanelRows = showInspector ? 14 : 9
+  const logMargin = input.rows >= 26 ? 1 : 0
+  const logRows = Math.max(1, input.rows - 14 - servicePanelRows - logMargin)
+  const logWindow = selectLogWindow(input.logs, logRows, input.logOffset)
   return (
     <Box flexDirection="column" flexGrow={1}>
-      <Box minHeight={9}>
+      <Box height={servicePanelRows} flexShrink={0}>
         <Box flexDirection="column" flexGrow={1} borderStyle="round" borderColor={tone(consolePalette.border)} paddingX={1}>
-          <ServiceTableHeader wide={wide} />
-          {services.length
-            ? services.map((service, index) => <ServiceRow key={service.serviceId} service={service} selected={index === input.selectedIndex} wide={wide} />)
-            : <Text color={tone(consolePalette.warning)}>◐ 正在等待监督器快照…</Text>}
+          <Box gap={1}>
+            <Text bold color={tone(consolePalette.focus)}>服务操作</Text>
+            <ActionButton label="启动" onPress={() => input.onAction('start')} disabled={!selected} intent="healthy" />
+            <ActionButton label="停止" onPress={() => input.onAction('stop')} disabled={!selected} intent="danger" />
+            <ActionButton label="重启" onPress={() => input.onAction('restart')} disabled={!selected} intent="warning" />
+            <ActionButton label="详情" onPress={input.onToggleInspector} active={showInspector} />
+          </Box>
+          {showInspector && !wide
+            ? <ServiceInspectorBody service={selected} compact />
+            : <>
+                <ServiceTableHeader wide={wide} compact={compact} />
+                {services.length
+                  ? services.map((service, index) => (
+                      <MouseRegion key={service.serviceId} width="100%" priority={10} onClick={() => input.onSelect(index)}>
+                        {state => <ServiceRow service={service} selected={index === input.selectedIndex} hovered={state.hovered} wide={wide} compact={compact} />}
+                      </MouseRegion>
+                    ))
+                  : <Text color={tone(consolePalette.warning)}>◐ 正在等待监督器快照…</Text>}
+              </>}
         </Box>
-        {showInspector && <ServiceInspector service={selected} width={wide ? 46 : 38} />}
+        {wide && <ServiceInspector service={selected} width={46} />}
       </Box>
-      <Box marginTop={1} flexDirection="column" flexGrow={1} borderStyle="round" borderColor={tone(consolePalette.border)} paddingX={1}>
-        <Text bold color={tone(consolePalette.focus)}>实时日志 · 最近 {Math.min(input.logs.length, logRows)} 行</Text>
-        <LogLines entries={input.logs.slice(-logRows)} wrap={input.wrapLogs} />
-      </Box>
+      <MouseRegion
+        marginTop={logMargin}
+        flexDirection="column"
+        flexGrow={1}
+        borderStyle="round"
+        borderColor={tone(consolePalette.border)}
+        paddingX={1}
+        priority={1}
+        onWheel={direction => input.onScrollLogs(direction)}
+      >
+        <Text bold color={tone(input.logPaused ? consolePalette.warning : consolePalette.focus)}>
+          {input.logPaused ? 'Ⅱ 日志已暂停' : '▶ 实时日志'} · {logWindow.label} · 滚轮浏览
+        </Text>
+        <LogLines entries={logWindow.entries} wrap={input.wrapLogs} />
+      </MouseRegion>
     </Box>
   )
 }
 
-function ServiceTableHeader({ wide }: { wide: boolean }) {
+function ServiceTableHeader({ wide, compact }: { wide: boolean; compact: boolean }) {
   return (
     <Box>
-      <Cell width={13} muted>状态</Cell><Cell width={15} muted>服务</Cell><Cell width={8} muted>PID</Cell>
-      <Cell width={10} muted>CPU</Cell><Cell width={12} muted>内存</Cell>
+      <Cell width={compact ? 11 : 13} muted>状态</Cell><Cell width={compact ? 13 : 15} muted>服务</Cell><Cell width={compact ? 7 : 8} muted>PID</Cell>
+      <Cell width={compact ? 8 : 10} muted>CPU</Cell><Cell width={compact ? 10 : 12} muted>内存</Cell>
       {wide && <><Cell width={12} muted>运行时间</Cell><Cell width={7} muted>重启</Cell></>}
       <Cell muted>健康</Cell>
     </Box>
   )
 }
 
-function ServiceRow({ service, selected, wide }: { service: OperationsServiceSnapshot; selected: boolean; wide: boolean }) {
+function ServiceRow({ service, selected, hovered, wide, compact }: {
+  service: OperationsServiceSnapshot
+  selected: boolean
+  hovered: boolean
+  wide: boolean
+  compact: boolean
+}) {
   const presentation = servicePresentation(service)
   return (
-    <Box backgroundColor={tone(selected ? consolePalette.selected : consolePalette.canvas)}>
-      <Cell width={13} color={presentation.color}>{presentation.symbol} {presentation.label}</Cell>
-      <Cell width={15} bold={selected}>{service.displayName}</Cell>
-      <Cell width={8}>{service.pid ?? '—'}</Cell>
-      <Cell width={10}>{formatMetric(service.cpuPercent.value, '%')}</Cell>
-      <Cell width={12}>{formatBytes(service.memoryBytes.value)}</Cell>
+    <Box width="100%" backgroundColor={tone(selected ? consolePalette.selected : hovered ? consolePalette.panelRaised : consolePalette.canvas)}>
+      <Cell width={compact ? 11 : 13} color={presentation.color}>{presentation.symbol} {presentation.label}</Cell>
+      <Cell width={compact ? 13 : 15} bold={selected}>{service.displayName}</Cell>
+      <Cell width={compact ? 7 : 8}>{service.pid ?? '—'}</Cell>
+      <Cell width={compact ? 8 : 10}>{formatMetric(service.cpuPercent.value, '%')}</Cell>
+      <Cell width={compact ? 10 : 12}>{formatBytes(service.memoryBytes.value)}</Cell>
       {wide && <><Cell width={12}>{formatDuration(service.uptimeSeconds)}</Cell><Cell width={7}>{service.restartCount}</Cell></>}
       <Cell color={service.state === 'healthy' ? consolePalette.muted : presentation.color}>{service.healthMessage}</Cell>
     </Box>
@@ -567,46 +760,82 @@ function ServiceRow({ service, selected, wide }: { service: OperationsServiceSna
 function ServiceInspector({ service, width }: { service: OperationsServiceSnapshot | null; width: number }) {
   return (
     <Box width={width} marginLeft={1} flexDirection="column" borderStyle="round" borderColor={tone(consolePalette.border)} paddingX={1}>
-      <Text bold color={tone(consolePalette.focus)}>服务检查器</Text>
-      {service
-        ? <>
-            <Text bold>{service.displayName}</Text>
-            <Text color={tone(consolePalette.muted)}>{service.description}</Text>
-            <Text>状态：{servicePresentation(service).label}</Text>
-            <Text>依赖阻塞：{service.blockedBy.length ? service.blockedBy.join('、') : '无'}</Text>
-            <Text>容器：{service.containers.length || '无'}</Text>
-            {service.containers.slice(0, 4).map(container => (
-              <Text key={container.containerId} color={tone(consolePalette.muted)}>
-                • {container.serviceName} · {formatMetric(container.cpuPercent.value, '% 核心')} · {formatBytes(container.memoryBytes.value)}
-              </Text>
-            ))}
-          </>
-        : <Text color={tone(consolePalette.muted)}>选择服务后显示探针与容器摘要。</Text>}
+      <ServiceInspectorBody service={service} />
     </Box>
   )
 }
 
+function ServiceInspectorBody({ service, compact = false }: { service: OperationsServiceSnapshot | null; compact?: boolean }) {
+  return <>
+    <Text bold color={tone(consolePalette.focus)}>服务检查器</Text>
+    {service
+      ? <>
+          <Text wrap="truncate-end" bold>{servicePresentation(service).symbol} {service.displayName} · {servicePresentation(service).label}</Text>
+          <Text wrap="truncate-end" color={tone(consolePalette.muted)}>{service.description}</Text>
+          <Text wrap="truncate-end">PID：{service.pid ?? '—'} · 运行 {formatDuration(service.uptimeSeconds)} · 重启 {service.restartCount}</Text>
+          <Text wrap="truncate-end">CPU：{metricDetail(service.cpuPercent, '%')} · 内存：{metricBytesDetail(service.memoryBytes)}</Text>
+          {!compact && <Text wrap="truncate-end">启动：{service.startedAt ? shortDate(service.startedAt) : '—'} · 退出码：{service.lastExitCode ?? '—'}</Text>}
+          <Text wrap="truncate-end" color={tone(service.state === 'healthy' ? consolePalette.healthy : consolePalette.warning)}>探针：{service.healthMessage}</Text>
+          <Text wrap="truncate-end">依赖阻塞：{service.blockedBy.length ? service.blockedBy.join('、') : '无'}</Text>
+          <Text wrap="truncate-end">容器：{service.containers.length ? `${service.containers.length} 个实际容器` : '无'}</Text>
+          {service.containers.slice(0, compact ? 2 : 4).map(container => (
+            <Text key={container.containerId} wrap="truncate-end" color={tone(consolePalette.muted)}>
+              {container.state === 'running' ? '●' : '○'} {container.serviceName} · {formatMetric(container.cpuPercent.value, '% 核心')} · {formatBytes(container.memoryBytes.value)} · {formatMetric(container.processCount.value, ' 进程')}
+            </Text>
+          ))}
+        </>
+      : <Text color={tone(consolePalette.muted)}>选择服务后显示探针与容器摘要。</Text>}
+  </>
+}
+
 function LogsView(input: {
   entries: OperationsLogEntry[]
+  columns: number
   rows: number
   paused: boolean
   search: string
   level: LogLevelFilter
   service: OperationsServiceId | 'all'
   wrap: boolean
+  offset: number
+  onToggleFollow: () => void
+  onToggleWrap: () => void
+  onCycleLevel: () => void
+  onCycleService: () => void
+  onSearch: () => void
+  onClearSearch: () => void
+  onScroll: (direction: -1 | 1, distance?: number) => void
 }) {
-  const visible = input.entries.slice(-Math.max(3, input.rows - 4))
+  const compact = input.columns < 100
+  const visible = selectLogWindow(input.entries, Math.max(3, input.rows - (compact ? 5 : 4)), input.offset)
+  const primaryActions = <>
+    <ActionButton label={input.paused ? '跟随' : '暂停'} onPress={input.onToggleFollow} active={input.paused} intent={input.paused ? 'warning' : 'healthy'} />
+    <ActionButton label={`服务:${input.service}`} onPress={input.onCycleService} />
+    <ActionButton label={`级别:${input.level}`} onPress={input.onCycleLevel} />
+  </>
+  const secondaryActions = <>
+    <ActionButton label={`换行:${input.wrap ? '开' : '关'}`} onPress={input.onToggleWrap} active={input.wrap} />
+    <ActionButton label="搜索" onPress={input.onSearch} />
+    <ActionButton label="清除" onPress={input.onClearSearch} disabled={!input.search} subtle />
+  </>
   return (
-    <Box flexDirection="column" flexGrow={1} borderStyle="round" borderColor={tone(consolePalette.border)} paddingX={1}>
-      <Box gap={2}>
-        <Text color={tone(input.paused ? consolePalette.warning : consolePalette.healthy)}>{input.paused ? 'Ⅱ 已暂停' : '▶ 实时跟随'}</Text>
-        <Text color={tone(consolePalette.muted)}>服务 {input.service}</Text>
-        <Text color={tone(consolePalette.muted)}>级别 {input.level}</Text>
-        <Text color={tone(consolePalette.muted)}>搜索 {input.search || '无'}</Text>
-        <Text color={tone(consolePalette.muted)}>换行 {input.wrap ? '开' : '关'}</Text>
-      </Box>
-      <LogLines entries={visible} wrap={input.wrap} />
-    </Box>
+    <MouseRegion
+      flexDirection="column"
+      flexGrow={1}
+      borderStyle="round"
+      borderColor={tone(consolePalette.border)}
+      paddingX={1}
+      priority={1}
+      onWheel={direction => input.onScroll(direction)}
+    >
+      {compact
+        ? <Box flexDirection="column"><Box gap={1}>{primaryActions}</Box><Box gap={1}>{secondaryActions}</Box></Box>
+        : <Box gap={1}>{primaryActions}{secondaryActions}</Box>}
+      <Text wrap="truncate-end" color={tone(consolePalette.muted)}>
+        {input.paused ? 'Ⅱ 已暂停' : '▶ 实时跟随'} · {visible.label} · 搜索“{input.search || '无'}” · 滚轮/PgUp/PgDn
+      </Text>
+      <LogLines entries={visible.entries} wrap={input.wrap} />
+    </MouseRegion>
   )
 }
 
@@ -619,42 +848,125 @@ function LogLines({ entries, wrap }: { entries: OperationsLogEntry[]; wrap: bool
   ))}</>
 }
 
-function AccountsView(input: { accounts: LocalManagedAccount[]; selectedIndex: number; error: string | null }) {
+function AccountsView(input: {
+  accounts: LocalManagedAccount[]
+  columns: number
+  selectedIndex: number
+  error: string | null
+  rows: number
+  onSelect: (index: number) => void
+  onScroll: (direction: -1 | 1) => void
+  onCreate: () => void
+  onAction: (action: AccountAction) => void
+  onPassword: () => void
+  onRefresh: () => void
+}) {
+  const compact = input.columns < 100
+  const selected = input.accounts[input.selectedIndex] ?? null
+  const isPlatformAdmin = Boolean(selected?.platformRoles.some(binding => binding.role === 'platform_admin'))
+  const isDisabled = Boolean(selected?.banned || selected?.platformStatus === 'disabled')
+  const visible = selectListWindow(input.accounts, input.selectedIndex, Math.max(4, input.rows - (compact ? 8 : 7)))
   return (
-    <Box flexDirection="column" flexGrow={1} borderStyle="round" borderColor={tone(consolePalette.border)} paddingX={1}>
+    <MouseRegion flexDirection="column" flexGrow={1} borderStyle="round" borderColor={tone(consolePalette.border)} paddingX={1} priority={1} onWheel={input.onScroll}>
       <Text bold color={tone(consolePalette.focus)}>Better Auth 账户 + GeoForge RBAC 投影</Text>
       {input.error && <Text color={tone(consolePalette.danger)}>✕ {input.error}</Text>}
-      <Box><Cell width={30} muted>邮箱</Cell><Cell width={18} muted>名称</Cell><Cell width={16} muted>认证状态</Cell><Cell width={20} muted>平台状态</Cell><Cell muted>平台角色</Cell></Box>
-      {input.accounts.map((account, index) => (
-        <Box key={account.authUserId} backgroundColor={tone(index === input.selectedIndex ? consolePalette.selected : consolePalette.canvas)}>
-          <Cell width={30} bold={index === input.selectedIndex}>{account.email}</Cell>
-          <Cell width={18}>{account.displayName}</Cell>
-          <Cell width={16} color={account.banned ? consolePalette.danger : consolePalette.healthy}>{account.banned ? '✕ 已禁用' : '● 正常'}</Cell>
-          <Cell width={20}>{account.platformStatus ?? '未投影'}</Cell>
-          <Cell>{formatAccountRoles(account)}</Cell>
-        </Box>
+      <AccountActions
+        compact={compact}
+        selected={Boolean(selected)}
+        isPlatformAdmin={isPlatformAdmin}
+        isDisabled={isDisabled}
+        onCreate={input.onCreate}
+        onAction={input.onAction}
+        onPassword={input.onPassword}
+        onRefresh={input.onRefresh}
+      />
+      <Box>
+        <Cell width={compact ? 24 : 30} muted>邮箱</Cell>
+        {!compact && <Cell width={18} muted>名称</Cell>}
+        <Cell width={compact ? 13 : 16} muted>认证状态</Cell>
+        <Cell width={compact ? 14 : 20} muted>平台状态</Cell>
+        <Cell muted>平台角色</Cell>
+      </Box>
+      {visible.entries.map(({ item: account, index }) => (
+        <MouseRegion key={account.authUserId} width="100%" priority={10} onClick={() => input.onSelect(index)}>
+          {state => <Box width="100%" backgroundColor={tone(index === input.selectedIndex ? consolePalette.selected : state.hovered ? consolePalette.panelRaised : consolePalette.canvas)}>
+            <Cell width={compact ? 24 : 30} bold={index === input.selectedIndex}>{account.email}</Cell>
+            {!compact && <Cell width={18}>{account.displayName}</Cell>}
+            <Cell width={compact ? 13 : 16} color={account.banned ? consolePalette.danger : consolePalette.healthy}>{account.banned ? '✕ 已禁用' : '● 正常'}</Cell>
+            <Cell width={compact ? 14 : 20}>{account.platformStatus ?? '未投影'}</Cell>
+            <Cell>{formatAccountRoles(account)}</Cell>
+          </Box>}
+        </MouseRegion>
       ))}
       {!input.accounts.length && !input.error && <Text color={tone(consolePalette.muted)}>当前没有公开认证账户；Console 服务主体不会出现在此列表。</Text>}
-    </Box>
+      {selected && <Text color={tone(consolePalette.muted)}>
+        选中 {selected.email} · Better Auth 角色 {selected.authRole} · {visible.label} · 滚轮/PgUp/PgDn 浏览
+      </Text>}
+    </MouseRegion>
   )
 }
 
-function AuditView(input: { audits: AuditEvent[]; selectedIndex: number; error: string | null }) {
+function AccountActions(input: {
+  compact: boolean
+  selected: boolean
+  isPlatformAdmin: boolean
+  isDisabled: boolean
+  onCreate: () => void
+  onAction: (action: AccountAction) => void
+  onPassword: () => void
+  onRefresh: () => void
+}) {
+  const primary = <>
+    <ActionButton label="新建" onPress={input.onCreate} intent="healthy" />
+    <ActionButton label={input.isPlatformAdmin ? '撤销管理员' : '授予管理员'} onPress={() => input.onAction(input.isPlatformAdmin ? 'revoke' : 'grant')} disabled={!input.selected} intent={input.isPlatformAdmin ? 'danger' : 'healthy'} />
+    <ActionButton label={input.isDisabled ? '启用账户' : '禁用账户'} onPress={() => input.onAction(input.isDisabled ? 'enable' : 'disable')} disabled={!input.selected} intent={input.isDisabled ? 'healthy' : 'danger'} />
+  </>
+  const secondary = <>
+    <ActionButton label="重置密码" onPress={input.onPassword} disabled={!input.selected} intent="warning" />
+    <ActionButton label="撤销会话" onPress={() => input.onAction('sessions')} disabled={!input.selected} />
+    <ActionButton label="刷新" onPress={input.onRefresh} subtle />
+  </>
+  return input.compact
+    ? <Box flexDirection="column"><Box gap={1}>{primary}</Box><Box gap={1}>{secondary}</Box></Box>
+    : <Box gap={1}>{primary}{secondary}</Box>
+}
+
+function AuditView(input: {
+  audits: AuditEvent[]
+  columns: number
+  selectedIndex: number
+  error: string | null
+  rows: number
+  onSelect: (index: number) => void
+  onScroll: (direction: -1 | 1) => void
+  onRefresh: () => void
+}) {
+  const compact = input.columns < 100
+  const selected = input.audits[input.selectedIndex] ?? null
+  const visible = selectListWindow(input.audits, input.selectedIndex, Math.max(4, input.rows - 6))
   return (
-    <Box flexDirection="column" flexGrow={1} borderStyle="round" borderColor={tone(consolePalette.border)} paddingX={1}>
-      <Text bold color={tone(consolePalette.focus)}>本机运维与平台审计</Text>
+    <MouseRegion flexDirection="column" flexGrow={1} borderStyle="round" borderColor={tone(consolePalette.border)} paddingX={1} priority={1} onWheel={input.onScroll}>
+      <Box justifyContent="space-between">
+        <Text bold color={tone(consolePalette.focus)}>本机运维与平台审计</Text>
+        <ActionButton label="刷新" onPress={input.onRefresh} subtle />
+      </Box>
       {input.error && <Text color={tone(consolePalette.danger)}>✕ {input.error}</Text>}
-      <Box><Cell width={20} muted>时间</Cell><Cell width={38} muted>动作</Cell><Cell width={12} muted>结果</Cell><Cell muted>对象</Cell></Box>
-      {input.audits.slice(0, 24).map((event, index) => (
-        <Box key={event.auditEventId} backgroundColor={tone(index === input.selectedIndex ? consolePalette.selected : consolePalette.canvas)}>
-          <Cell width={20}>{shortDate(event.createdAt)}</Cell>
-          <Cell width={38} bold={index === input.selectedIndex}>{event.action}</Cell>
-          <Cell width={12} color={event.outcome === 'allowed' ? consolePalette.healthy : event.outcome === 'denied' ? consolePalette.warning : consolePalette.danger}>{event.outcome}</Cell>
-          <Cell>{event.objectType} {event.objectId ?? ''}</Cell>
-        </Box>
+      <Box><Cell width={compact ? 17 : 20} muted>时间</Cell><Cell width={compact ? 29 : 38} muted>动作</Cell><Cell width={compact ? 10 : 12} muted>结果</Cell><Cell muted>对象</Cell></Box>
+      {visible.entries.map(({ item: event, index }) => (
+        <MouseRegion key={event.auditEventId} width="100%" priority={10} onClick={() => input.onSelect(index)}>
+          {state => <Box width="100%" backgroundColor={tone(index === input.selectedIndex ? consolePalette.selected : state.hovered ? consolePalette.panelRaised : consolePalette.canvas)}>
+            <Cell width={compact ? 17 : 20}>{shortDate(event.createdAt)}</Cell>
+            <Cell width={compact ? 29 : 38} bold={index === input.selectedIndex}>{event.action}</Cell>
+            <Cell width={compact ? 10 : 12} color={event.outcome === 'allowed' ? consolePalette.healthy : event.outcome === 'denied' ? consolePalette.warning : consolePalette.danger}>{event.outcome}</Cell>
+            <Cell>{event.objectType} {event.objectId ?? ''}</Cell>
+          </Box>}
+        </MouseRegion>
       ))}
       {!input.audits.length && !input.error && <Text color={tone(consolePalette.muted)}>暂无审计事件。</Text>}
-    </Box>
+      {selected && <Text color={tone(consolePalette.muted)}>
+        选中 {selected.action} · {selected.outcome} · {visible.label} · 滚轮/PgUp/PgDn 浏览
+      </Text>}
+    </MouseRegion>
   )
 }
 
@@ -678,6 +990,7 @@ function DialogView(input: {
           <Text bold color={tone(consolePalette.focus)}>日志搜索</Text>
           <Text color={tone(consolePalette.muted)}>输入关键字；支持中文与粘贴。空值清除筛选。</Text>
           <PasteTextInput placeholder="关键字" onSubmit={input.onSearch} />
+          <Box gap={1}><ActionButton label="清除筛选" onPress={() => input.onSearch('')} /><ActionButton label="取消" onPress={input.onCancel} subtle /></Box>
         </>}
         {dialog.kind === 'confirm' && <>
           <Text bold color={tone(dialog.expected ? consolePalette.danger : consolePalette.warning)}>{dialog.title}</Text>
@@ -690,7 +1003,13 @@ function DialogView(input: {
                   else input.onCancel()
                 }} />
               </>
-            : <ConfirmInput defaultChoice="cancel" onConfirm={() => void dialog.execute()} onCancel={input.onCancel} />}
+            : <>
+                <ConfirmInput defaultChoice="cancel" onConfirm={() => void dialog.execute()} onCancel={input.onCancel} />
+                <Box gap={1}>
+                  <ActionButton label="确认执行" onPress={() => void dialog.execute()} intent="warning" />
+                  <ActionButton label="取消" onPress={input.onCancel} subtle />
+                </Box>
+              </>}
         </>}
         {dialog.kind === 'create' && <>
           <Text bold color={tone(consolePalette.focus)}>创建平台管理员 · 本机根权限</Text>
@@ -708,7 +1027,10 @@ function DialogView(input: {
           {dialog.step === 'repeat' && <><Text>再次输入新密码：</Text><PasswordInput onSubmit={input.onPasswordSubmit} /></>}
           {dialog.step === 'confirm' && <><Text>输入目标邮箱确认：</Text><PasteTextInput key="password-confirm" onSubmit={input.onPasswordSubmit} /></>}
         </>}
-        <Text color={tone(consolePalette.muted)}>Esc 取消</Text>
+        <Box justifyContent="space-between">
+          <Text color={tone(consolePalette.muted)}>Esc 取消 · 鼠标可选择按钮</Text>
+          <ActionButton label={dialog.kind === 'help' ? '关闭' : '取消'} onPress={input.onCancel} subtle />
+        </Box>
       </Box>
     </Box>
   )
@@ -732,11 +1054,12 @@ function PasteTextInput(input: { placeholder?: string; onSubmit: (value: string)
 
 function HelpContent() {
   return <>
-    <Text bold color={tone(consolePalette.focus)}>快捷键</Text>
-    <Text>1–4 切换页面 · ↑↓ 选择 · Enter 检查器</Text>
+    <Text bold color={tone(consolePalette.focus)}>键盘与鼠标</Text>
+    <Text>1–4 / Tab 切换页面 · ↑↓ 选择 · Enter 检查器</Text>
     <Text>S 启动 · X 停止 · R 重启 · / 搜索日志</Text>
-    <Text>F 暂停/跟随 · W 换行 · L 级别 · [ ] 服务</Text>
+    <Text>F 暂停/跟随 · W 换行 · L 级别 · [ ] 服务 · Home/End/PgUp/PgDn</Text>
     <Text>账户：N 新建 · G 授权 · X 撤权 · E 启停 · P 密码 · V 会话</Text>
+    <Text color={tone(consolePalette.focus)}>鼠标：单击标签、行和操作按钮；滚轮浏览日志、账户与审计。</Text>
     <Text color={tone(consolePalette.healthy)}>q / Ctrl+C：仅分离，服务继续运行</Text>
     <Text color={tone(consolePalette.danger)}>Q：输入“停止全部”后停止服务并关闭监督器</Text>
   </>
@@ -751,23 +1074,91 @@ function SizeWarning({ columns, rows, onExit }: { columns: number; rows: number;
       <Text bold color={tone(consolePalette.warning)}>终端尺寸不足，界面已安全暂停渲染。</Text>
       <Text>当前 {columns}×{rows}，至少需要 80×24。</Text>
       <Text color={tone(consolePalette.muted)}>请放大窗口；q / Ctrl+C 仅分离。</Text>
+      <ActionButton label="分离运维台" onPress={onExit} />
     </Box>
   )
 }
 
-function ConsoleFooter({ tab, feedback }: { tab: LocalConsoleTab; feedback: string }) {
+function ConsoleFooter({ tab, feedback, mouseEnabled, columns, onDetach, onShutdown }: {
+  tab: LocalConsoleTab
+  feedback: string
+  mouseEnabled: boolean
+  columns: number
+  onDetach: () => void
+  onShutdown: () => void
+}) {
+  const compact = columns < 100
   const keys = tab === 'services'
-    ? '↑↓ 选择  Enter 检查器  S 启动  X 停止  R 重启  / 搜索'
+    ? compact ? '↑↓ 选择 · Enter 详情 · S/X/R 启停重启 · / 搜索' : '↑↓ 选择  Enter 检查器  S 启动  X 停止  R 重启  / 搜索'
     : tab === 'logs'
-      ? 'F 暂停/跟随  W 换行  L 级别  [ ] 服务  / 搜索'
+      ? compact ? 'F 跟随 · W 换行 · L 级别 · [ ] 服务 · / 搜索' : 'F 暂停/跟随  W 换行  L 级别  [ ] 服务  / 搜索'
       : tab === 'accounts'
-        ? '↑↓ 选择  N 新建  G 授权  X 撤权  E 启停  P 密码  V 会话  U 刷新'
+        ? compact ? '↑↓ 选择 · N 新建 · G/X 权限 · E 启停 · P 密码 · U 刷新' : '↑↓ 选择  N 新建  G 授权  X 撤权  E 启停  P 密码  V 会话  U 刷新'
         : '↑↓ 选择  U 刷新'
   return (
-    <Box borderStyle="single" borderColor={tone(consolePalette.border)} paddingX={1} justifyContent="space-between">
-      <Text color={tone(consolePalette.text)}>{keys}</Text>
-      <Text color={tone(consolePalette.muted)}>{feedback} · q 分离</Text>
+    <Box flexShrink={0} borderStyle="single" borderColor={tone(consolePalette.border)} paddingX={1} flexDirection="column">
+      <Text wrap="truncate-end" color={tone(consolePalette.text)}>{keys}</Text>
+      <Box width="100%">
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Text wrap="truncate-end" color={tone(consolePalette.muted)}>{feedback} · 鼠标{mouseEnabled ? '可用' : '不可用'}</Text>
+        </Box>
+        <Box gap={1} flexShrink={0}>
+          <ActionButton label="分离" onPress={onDetach} subtle />
+          <ActionButton label={compact ? '全停' : '停止全部'} onPress={onShutdown} intent="danger" subtle />
+        </Box>
+      </Box>
     </Box>
+  )
+}
+
+function ActionButton(input: {
+  label: string
+  onPress: () => void
+  disabled?: boolean
+  active?: boolean
+  subtle?: boolean
+  intent?: 'default' | 'healthy' | 'warning' | 'danger'
+}) {
+  const disabled = Boolean(input.disabled)
+  const intentColor = input.intent === 'healthy'
+    ? consolePalette.healthy
+    : input.intent === 'warning'
+      ? consolePalette.warning
+      : input.intent === 'danger'
+        ? consolePalette.danger
+        : consolePalette.focus
+  return (
+    <MouseRegion
+      priority={30}
+      disabled={disabled}
+      aria-role="button"
+      aria-label={input.label}
+      aria-state={{ disabled, selected: Boolean(input.active) }}
+      onClick={input.onPress}
+    >
+      {(state: MouseRegionState) => {
+        const background = state.pressed
+          ? intentColor
+          : state.hovered || input.active
+            ? consolePalette.selected
+            : input.subtle
+              ? consolePalette.canvas
+              : consolePalette.panel
+        const color = disabled
+          ? consolePalette.muted
+          : state.pressed
+            ? consolePalette.canvas
+            : input.active || state.hovered
+              ? intentColor
+              : input.subtle
+                ? consolePalette.muted
+                : consolePalette.text
+        const marker = disabled ? '×' : state.pressed ? '◆' : input.active ? '●' : state.hovered ? '›' : '·'
+        return <Text bold={Boolean(state.hovered || input.active)} color={tone(color)} backgroundColor={tone(background)}>
+          {' '}{marker} {input.label}{' '}
+        </Text>
+      }}
+    </MouseRegion>
   )
 }
 
@@ -829,6 +1220,14 @@ function formatMetric(value: number | null, suffix: string): string {
   return value === null ? '未知' : `${value.toFixed(1)}${suffix}`
 }
 
+function metricDetail(metric: { value: number | null; unavailableReason?: string | undefined }, suffix: string): string {
+  return metric.value === null ? `未知${metric.unavailableReason ? `（${metric.unavailableReason}）` : ''}` : formatMetric(metric.value, suffix)
+}
+
+function metricBytesDetail(metric: { value: number | null; unavailableReason?: string | undefined }): string {
+  return metric.value === null ? `未知${metric.unavailableReason ? `（${metric.unavailableReason}）` : ''}` : formatBytes(metric.value)
+}
+
 function formatBytes(value: number | null): string {
   if (value === null) return '未知'
   if (value < 1024) return `${value.toFixed(0)} B`
@@ -861,6 +1260,50 @@ function shortDate(value: string): string {
 
 function clampIndex(index: number, length: number): number {
   return Math.max(0, Math.min(index, Math.max(0, length - 1)))
+}
+
+function selectLogWindow(entries: OperationsLogEntry[], capacity: number, offset: number): {
+  entries: OperationsLogEntry[]
+  label: string
+} {
+  const safeCapacity = Math.max(1, capacity)
+  const safeOffset = Math.max(0, Math.min(offset, Math.max(0, entries.length - safeCapacity)))
+  const end = Math.max(0, entries.length - safeOffset)
+  const start = Math.max(0, end - safeCapacity)
+  return {
+    entries: entries.slice(start, end),
+    label: entries.length ? `${start + 1}–${end}/${entries.length}` : '0/0',
+  }
+}
+
+function calculateLogCapacity(
+  tab: LocalConsoleTab,
+  columns: number,
+  rows: number,
+  inspectorRequested: boolean,
+): number {
+  if (tab !== 'services') return Math.max(3, rows - 15)
+  const inspectorVisible = columns >= 140 || inspectorRequested
+  const servicePanelRows = inspectorVisible ? 14 : 9
+  const margin = rows >= 26 ? 1 : 0
+  return Math.max(1, rows - 14 - servicePanelRows - margin)
+}
+
+function selectListWindow<T>(items: T[], selectedIndex: number, capacity: number): {
+  entries: Array<{ item: T; index: number }>
+  label: string
+} {
+  const safeCapacity = Math.max(1, capacity)
+  const selected = clampIndex(selectedIndex, items.length)
+  const start = Math.max(0, Math.min(
+    selected - Math.floor(safeCapacity / 2),
+    Math.max(0, items.length - safeCapacity),
+  ))
+  const end = Math.min(items.length, start + safeCapacity)
+  return {
+    entries: items.slice(start, end).map((item, index) => ({ item, index: start + index })),
+    label: items.length ? `${start + 1}–${end}/${items.length}` : '0/0',
+  }
 }
 
 function createStepNumber(step: Extract<ConsoleDialog, { kind: 'create' }>['step']): number {
