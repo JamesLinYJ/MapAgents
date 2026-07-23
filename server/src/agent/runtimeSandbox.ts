@@ -18,8 +18,9 @@ import {
   localBindMountStrategy,
   Manifest,
   mount,
+  type SandboxClient,
   type SandboxPathGrantInit,
-  type SandboxSessionLike,
+  type SandboxRunConfig,
 } from '@openai/agents/sandbox'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
@@ -29,10 +30,7 @@ import {
 } from '@openai/agents/sandbox/local'
 import type { RuntimeSandboxConfig } from '../schemas/types.js'
 
-export type SandboxSessionFactory = (
-  manifest: Manifest,
-  config: RuntimeSandboxConfig,
-) => Promise<SandboxSessionLike>
+export type SandboxClientFactory = (config: RuntimeSandboxConfig) => SandboxClient
 
 export interface RuntimeSandboxResources {
   artifactDirectory?: string
@@ -90,15 +88,26 @@ export async function prepareRunArtifactDirectory(runtimeRoot: string, runId: st
   return artifactDirectory
 }
 
-export async function createConfiguredSandboxSession(
-  manifest: Manifest,
+export function createConfiguredSandboxClient(
   config: RuntimeSandboxConfig,
-): Promise<SandboxSessionLike> {
+): SandboxClient {
   if (config.backend === 'docker') {
-    return new DockerSandboxClient({ image: config.dockerImage }).create(manifest)
+    return new DockerSandboxClient({ image: config.dockerImage })
   }
   if (config.backend === 'unix_local') {
-    return new UnixLocalSandboxClient().create(manifest)
+    return new UnixLocalSandboxClient()
   }
   throw new Error(`不支持的 sandbox backend：${config.backend}`)
+}
+
+export function buildSandboxRunConfig(
+  manifest: Manifest,
+  config: RuntimeSandboxConfig,
+  factory: SandboxClientFactory = createConfiguredSandboxClient,
+): SandboxRunConfig {
+  const client = factory(config)
+  if (client.backendId !== config.backend) {
+    throw new Error(`Sandbox client backend '${client.backendId}' 与运行配置 '${config.backend}' 不匹配`)
+  }
+  return { client, manifest }
 }

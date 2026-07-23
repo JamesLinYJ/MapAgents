@@ -24,7 +24,6 @@ import type { ConversationChatMessage } from './contextManager.js'
 
 export function modelSettings(reasoning = true): ModelSettings {
   return {
-    parallelToolCalls: false,
     // 计划模式的安全边界由 ToolExecutionCoordinator 和终止状态校验负责。
     // `required` 会迫使模型调用无关工具，且与部分供应商的 thinking 模式冲突。
     toolChoice: 'auto',
@@ -39,24 +38,13 @@ export function modelSettings(reasoning = true): ModelSettings {
 
 export function conversationMessagesToAgentItems(
   sourceMessages: ConversationChatMessage[],
-  currentQuery: string,
   systemPrompt: string,
 ): AgentInputItem[] {
   const items: AgentInputItem[] = []
   const callNames = new Map<string, string>()
-  let messages = sourceMessages[0]?.role === 'system' && sourceMessages[0].content === systemPrompt
+  const messages = sourceMessages[0]?.role === 'system' && sourceMessages[0].content === systemPrompt
     ? sourceMessages.slice(1)
     : [...sourceMessages]
-  let skippedCurrentInput = false
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]
-    if (!message) continue
-    if (!skippedCurrentInput && message.role === 'user' && message.content?.trim() === currentQuery.trim()) {
-      messages = [...messages.slice(0, index), ...messages.slice(index + 1)]
-      skippedCurrentInput = true
-      break
-    }
-  }
   for (const message of messages) {
     if (message.role === 'system') {
       items.push({ type: 'message', role: 'system', content: message.content ?? '' })
@@ -90,6 +78,13 @@ export function conversationMessagesToAgentItems(
     }
   }
   return items
+}
+
+export function combineSessionInput(
+  historyItems: AgentInputItem[],
+  currentItems: AgentInputItem[],
+): AgentInputItem[] {
+  return [...historyItems, ...currentItems]
 }
 
 export function serializeAgentEvent(event: RunStreamEvent): Record<string, unknown> {

@@ -465,32 +465,37 @@ WS 控制面必须使用命令注册表，而不是单个 `handleMessage()` 大�
 
 ### 6.1 核心原则
 
-- `AgentStateModel` 是单次 run 的执行快照，其持久化版本保存在 PostgreSQL run 记录中
-- PostgreSQL Transcript Entry、Conversation Item、Run Event、Run Input 与 Tool Value 是运行历史事实；内存索引和前端状态都是可重建投影
-- 文件系统中的 SDK checkpoint 只保存恢复载荷；checkpoint 的 run 归属、版本、digest 和状态必须由 PostgreSQL 记录约束
-- `event_msg` 是实时叙事和 UI 重放日志；`context_entry` 和 `compacted` 是持久化会话事实，均不得依赖目录扫描恢复
+- OpenAI Agents SDK `Runner` 是单次 run 内唯一的 Agent 编排状态机。不得在平台层复制 turn loop、handoff loop、工具并发调度或创建并行 Runner
+- SDK `RunState` 是唯一恢复载荷；`AgentState` 只保存平台工作流、审批、UI 和审计投影，不能反向驱动一套重复的 Agent 状态机
+- PostgreSQL Transcript Entry、Conversation Item、Run Event、Run Input、Workflow、Approval 与 Tool Value 是运行历史事实；内存索引和前端状态都是可重建投影
+- 内容寻址存储中的 SDK checkpoint 只保存恢复载荷；checkpoint 的 run 归属、schema 版本、SDK 版本、运行配置摘要和状态必须由 PostgreSQL 记录约束
+- 运行时入口是 facade。SDK 装配、SDK 执行、上下文预算和平台投影必须保持独立职责，调用方不得穿透这些边界
+- `event_msg` 是实时叙事和 UI 重放日志；canonical transcript 与压缩摘要是持久化会话事实，均不得依赖目录扫描恢复
 
 ### 6.2 上下文规则
 
 这些规则是硬约束，不是建议：
 
-1. **禁止自动注入历史**：历史 run 的日志、event、transcript 不得被运行时扫描并静默注入 prompt。之前的 fact 只能通过两种方式进入当前 turn：(a) 显式的 compaction（摘要压缩），(b) 模型主动调用 `list_context_references` 或 `search_thread_context` 等上下文工具
+1. **按身份组合输入**：SDK `sessionInputCallback` 负责组合 canonical 历史与当前输入。当前消息必须按 transcript entry、turn 或 run 身份排除，禁止按文本内容去重；用户重复提出相同问题时仍是两个独立输入
 
-2. **默认不可见**：Supervisor 系统提示词可以声明"存在索引化的历史上下文"，但不能默认注入具体的历史 fact、artifact 名、坐标、图层 key、引用 ID。模型必须通过工具调用才能获取这些信息
+2. **输入过滤不改写事实**：`callModelInputFilter` 只产生本次模型调用视图，不修改 canonical transcript。它可以合并运行中 steering、把旧的大型工具结果替换为可解析引用，并在预算阈值内压缩完整的旧消息/工具组
 
-3. **当前 run 隔离**：当前 run 产出的数据不得在同一 run 中作为"历史线程上下文"注入
+3. **协议组不可拆散**：当前输入、近期轮次、未完成工具调用、调用与结果配对、审批项以及提供商要求的 reasoning 配对必须完整保留。达到硬上限且无法安全压缩时必须失败，不得静默删消息或留下孤立调用
 
-4. **valueRef 是唯一的数据流**：工具产出的标量值、坐标、bbox、变量名、统计数据、时间索引必须通过 `valueRef` 在运行时黑板中流转。后续工具自己解析引用，遇到未知 ref 必须失败——**禁止模型直接复制原始值**
+4. **摘要可追溯**：跨轮压缩由 GeoForge 管理。摘要必须按来源消息组记录摘要哈希、来源数量和预算变化；同一来源可幂等复用，不能冒充提供商服务端 compaction
 
-5. **恢复校验**：run 恢复时必须验证三项：runtime config digest、SDK 版本、state schema 版本。任何一项不匹配必须拒绝恢复，不允许静默降级或 best-effort 恢复
+5. **valueRef 是唯一的数据流**：工具产出的标量值、坐标、bbox、变量名、统计数据、时间索引必须通过 `valueRef` 在运行时黑板中流转。后续工具自己解析引用，遇到未知 ref 必须失败——**禁止模型直接复制原始值**
 
-6. **硬失败**：Guardrail 触发、模型错误、工具错误、schema 错误必须表面化为具体的 guardrail 原因或错误消息。**禁止隐藏失败**——不允许 fallback 成功文案、合成 artifact、兼容 hack
+6. **恢复校验**：run 恢复时必须验证 runtime config digest、SDK 版本和 state schema 版本，并校验可恢复外部资源的 backend。任何一项不匹配必须拒绝恢复，不允许静默降级或 best-effort 恢复
+
+7. **硬失败**：Guardrail、上下文预算、模型、工具和 schema 错误必须表面化为稳定中文原因。**禁止隐藏失败**——不允许 fallback 成功文案、合成 artifact、兼容 hack
 
 ### 6.3 审批系统
 
 - 工具可以声明 `isDestructive`、`requiresApproval` 或进入 `approvalInterruptTools` 列表
 - 审批触发后，运行进入 `waiting_approval` 状态，SDK RunState 被序列化保存
 - 用户批准/拒绝后，运行时重新装配、恢复 SDK 状态、校验 callId 存在于 interruptions 中，然后继续执行
+- 子智能体内的审批属于父 Runner 的同一个 RunState，不另建不可恢复的子运行循环
 - 审批 payload 中的 `consumed` 标记防止重复处理
 
 ### 6.4 计划模式
@@ -506,6 +511,22 @@ WS 控制面必须使用命令注册表，而不是单个 `handleMessage()` 大�
 - 旁路触发条件必须明确可审计：谓词集中实现、测试覆盖，禁止散落在 prompt 或 UI 文案中
 - 旁路工具链是确定性序列——不经过 LLM 调用；序列可以由配置和工具契约声明，但不能由模型临时拼装
 - 旁路失败时不得回退到 LLM——只能返回明确错误或请求更多信息
+
+### 6.6 多智能体与工具并发
+
+- 返回主智能体的子智能体使用 SDK `Agent.asTool()`，转交所有权使用 SDK `handoff()`；不得增加自定义 batch 工具、手动并行 Runner 或第二套工具调度队列
+- 工具和 Agent-as-tool 默认进入独占执行通道。只有显式声明 `parallelSafe`，并且完整调用闭包均为只读、非破坏、免审批能力时，才允许进入共享并发通道
+- 写工具、审批工具、MCP 工具和不能证明安全的子智能体始终独占执行；安全声明不是对权限、审批和审计的豁免
+- 并发数量由 SDK Runner 的工具并发上限约束；GeoForge 执行闸门只实施业务安全约束，不负责重新调度模型返回的调用
+- 工具 `customDataExtractor` 只保存经过 schema 校验的结果引用、valueRef、Artifact 和展示元数据。自定义元数据可进入 RunState 和平台投影，但不得取代数据库结果账本或注入模型上下文
+
+### 6.7 Sandbox、MCP 与模型协议
+
+- Sandbox 通过 `SandboxClient + Manifest` 交给 Runner。创建、序列化、恢复和清理由 SDK 生命周期负责；平台不得提前创建 session、凭 PID 认领 session 或在中断时手动关闭 SDK 所有的可恢复资源
+- MCP 只使用 SDK 客户端管理的本地 function tools 模式。连接、工具缓存、过滤、结构化结果和关闭必须走统一 SDK 生命周期；Hosted MCP 和 connector 不进入配置契约
+- DeepSeek Agent 主线使用专属 OpenAI-compatible Chat Completions 适配器。适配器不得发送供应商未声明的并行控制字段，也不得伪装支持 Responses、远程 Conversation、Hosted Tools 或服务端 compaction
+- thinking 模式必须保存并按协议回放 `reasoning_content`；工具选择遵从 DeepSeek 的兼容约束，不能用冲突字段强行控制
+- 外部 Agent tracing 默认关闭。平台只保留本地、脱敏、可审计的事件和用量投影
 
 ---
 

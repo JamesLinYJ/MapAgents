@@ -12,8 +12,10 @@ export function createOllamaAdapter(opts: OllamaOptions): ModelAdapter {
     defaultModel: opts.defaultModel,
     agentToolSchemaMode: 'compatible',
     agentRuntimeCapabilities: {
+      transport: 'none',
       structuredOutput: 'none', functionTools: false, localMcp: false,
-      hostedTools: false, handoffs: false, remoteConversation: false, serverCompaction: false,
+      hostedTools: false, handoffs: false, multiToolResponse: false,
+      providerParallelToolControl: false, remoteConversation: false, serverCompaction: false,
     },
     isConfigured: () => Boolean(baseUrl && opts.defaultModel),
     capabilities: () => ['chat'],

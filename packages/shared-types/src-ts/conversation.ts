@@ -52,6 +52,8 @@ export const threadManifestSchema = z.object({
   updatedAt: z.string(),
 })
 
+export const AGENTS_SDK_STATE_SCHEMA_VERSION = 3 as const
+
 export const runCheckpointSchema = z.object({
   schemaVersion: z.literal(2).default(2),
   run: z.lazy(() => analysisRunSchema),
@@ -63,7 +65,7 @@ export const runCheckpointSchema = z.object({
   sdkStateContentHash: z.string().regex(/^[a-f0-9]{64}$/u).nullable().default(null),
   agentsSdkVersion: z.string().nullable().default(null),
   runtimeConfigDigest: z.string().nullable().default(null),
-  sdkStateSchemaVersion: z.literal(2).nullable().default(null),
+  sdkStateSchemaVersion: z.literal(AGENTS_SDK_STATE_SCHEMA_VERSION).nullable().default(null),
   sdkStateUpdatedAt: z.string().nullable().default(null),
 })
 

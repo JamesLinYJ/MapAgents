@@ -34,7 +34,8 @@ import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js
 import type { ToolProvider } from '../framework/types.js'
 import { defaultRuntimeConfig } from '../agent/defaultRuntimeConfig.js'
 import { createTestPersistenceFacade } from '../../test-support/persistenceFacadeHarness.js'
-import { OpenAIAgentsRuntime, type SandboxSessionFactory } from '../agent/runtime.js'
+import { OpenAIAgentsRuntime } from '../agent/runtime.js'
+import { testSandboxClientFactory } from '../../test-support/agentsSandboxClient.js'
 import { RunTaskManager } from '../agent/runTaskManager.js'
 import { UsageStatsService } from '../usage/usageStatsService.js'
 import { createWsHandler as createWsHandlerBase } from './handler.js'
@@ -70,7 +71,7 @@ function createWsHandler(server: Parameters<typeof createWsHandlerBase>[0], depe
     dependencies.store,
     dependencies.toolRegistry,
     dependencies.modelRegistry,
-    { createSandboxSession: dependencies.createSandboxSession },
+    { createSandboxClient: dependencies.createSandboxClient },
   )
   return createWsHandlerBase(server, {
     ...dependencies,
@@ -82,18 +83,6 @@ function createWsHandler(server: Parameters<typeof createWsHandlerBase>[0], depe
     usageStats: dependencies.usageStats ?? new UsageStatsService(dependencies.store, dependencies.env ?? testEnv()),
   })
 }
-
-const testSandboxSessionFactory: SandboxSessionFactory = async manifest => ({
-  state: { manifest, workspaceReady: true },
-  createEditor: () => ({
-    createFile: async () => { throw new Error('测试 sandbox 不允许写入文件') },
-    updateFile: async () => { throw new Error('测试 sandbox 不允许修改文件') },
-    deleteFile: async () => { throw new Error('测试 sandbox 不允许删除文件') },
-  }),
-  execCommand: async () => { throw new Error('测试 sandbox 不允许执行 shell 命令') },
-  supportsPty: () => false,
-  close: async () => {},
-})
 
 const cleanups: Array<() => Promise<void>> = []
 afterEach(async () => {
@@ -251,7 +240,7 @@ describe('WebSocket run subscriptions', () => {
       modelRegistry: registryWith(fakeAdapter(textModel('已收到补充。'))),
       managedLayers: {} as unknown as ManagedLayerService,
       runtimeRoot: root,
-      createSandboxSession: testSandboxSessionFactory,
+      createSandboxClient: testSandboxClientFactory,
       security: testSecurity(),
     })
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -311,7 +300,7 @@ describe('WebSocket run subscriptions', () => {
       ? { text: '工具已执行。' }
       : { toolCalls: [{ id: 'call_sensitive', name: 'sensitive_tool', arguments: '{"value":1}' }] })))
     const waiting = await new OpenAIAgentsRuntime(store, tools, models, {
-      createSandboxSession: testSandboxSessionFactory,
+      createSandboxClient: testSandboxClientFactory,
     }).run({
       runId: run.id,
       threadId: thread.id,
@@ -333,7 +322,7 @@ describe('WebSocket run subscriptions', () => {
       modelRegistry: models,
       managedLayers: {} as unknown as ManagedLayerService,
       runtimeRoot: root,
-      createSandboxSession: testSandboxSessionFactory,
+      createSandboxClient: testSandboxClientFactory,
       security: testSecurity(),
     })
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))

@@ -85,8 +85,6 @@ export function SdkExtensionManagement({
     return {
       total: servers.length,
       enabled: servers.filter(server => server.enabled).length,
-      hosted: servers.filter(server => server.executionMode === 'hosted').length,
-      stdio: servers.filter(server => server.transport === 'stdio').length,
     }
   }, [draft?.sdk.mcp.servers])
 
@@ -314,7 +312,7 @@ export function SdkExtensionManagement({
                     <span className="sdk-mcp-card__icon"><Server size={15} aria-hidden="true" /></span>
                     <span className="sdk-mcp-card__body">
                       <strong>{server.name || `server-${index + 1}`}</strong>
-                      <small>{server.transport} · {server.executionMode}</small>
+                      <small>{server.transport} · 本地 Function Tools</small>
                     </span>
                     <span className={server.enabled ? 'tool-card__status tool-card__status--ready' : 'tool-card__status'} />
                   </button>
@@ -344,8 +342,9 @@ export function SdkExtensionManagement({
                     <SelectField
                       label="执行模式"
                       value={selectedServer.executionMode}
-                      options={[['function_tools', '函数工具'], ['hosted', 'Hosted MCP']]}
-                      onChange={executionMode => updateMcpServer(selectedMcpIndex, { executionMode: executionMode as RuntimeMcpServerConfig['executionMode'] })}
+                      options={[['function_tools', '本地 Function Tools']]}
+                      onChange={() => undefined}
+                      disabled
                     />
                     <SelectField
                       label="审批策略"
@@ -355,7 +354,6 @@ export function SdkExtensionManagement({
                     />
                     <NumberField label="工具超时 ms" value={selectedServer.timeoutMs} onChange={timeoutMs => updateMcpServer(selectedMcpIndex, { timeoutMs })} />
                     <TextField label="URL" value={selectedServer.url ?? ''} onChange={url => updateMcpServer(selectedMcpIndex, { url: emptyToNull(url) })} />
-                    <TextField label="Connector ID" value={selectedServer.connectorId ?? ''} onChange={connectorId => updateMcpServer(selectedMcpIndex, { connectorId: emptyToNull(connectorId) })} />
                     <TextField label="stdio command" value={selectedServer.command ?? ''} onChange={command => updateMcpServer(selectedMcpIndex, { command: emptyToNull(command) })} />
                     <TextField label="stdio args" value={joinCsv(selectedServer.args)} onChange={args => updateMcpServer(selectedMcpIndex, { args: splitCsv(args) })} />
                     <TextField label="工作目录" value={selectedServer.cwd ?? ''} onChange={cwd => updateMcpServer(selectedMcpIndex, { cwd: emptyToNull(cwd) })} />
@@ -602,16 +600,18 @@ function SelectField({
   value,
   options,
   onChange,
+  disabled = false,
 }: {
   label: string
   value: string
   options: Array<[string, string]>
   onChange: (value: string) => void
+  disabled?: boolean
 }) {
   return (
     <label className="composer__label sdk-field">
       <span>{label}</span>
-      <select className="composer__select" value={value} onChange={event => onChange(event.target.value)}>
+      <select className="composer__select" value={value} disabled={disabled} onChange={event => onChange(event.target.value)}>
         {options.map(([optionValue, optionLabel]) => (
           <option key={optionValue} value={optionValue}>{optionLabel}</option>
         ))}
@@ -652,7 +652,6 @@ function createMcpServerDraft(index: number): RuntimeMcpServerConfig {
     transport: 'streamable_http',
     executionMode: 'function_tools',
     url: null,
-    connectorId: null,
     command: null,
     args: [],
     cwd: null,

@@ -133,6 +133,7 @@ function makeTool(partial: Partial<ToolDescriptor> & Pick<ToolDescriptor, 'name'
     language: partial.language ?? 'typescript',
     isReadOnly: partial.isReadOnly ?? true,
     isDestructive: partial.isDestructive ?? false,
+    parallelSafe: partial.parallelSafe ?? false,
     available: partial.available ?? true,
     tags: partial.tags ?? [],
     parameters: partial.parameters ?? [],

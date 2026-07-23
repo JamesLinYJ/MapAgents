@@ -163,7 +163,7 @@ export interface RunCheckpointRepository {
     contentHash: string
     agentsSdkVersion: string
     runtimeConfigDigest: string
-    sdkStateSchemaVersion: 2
+    sdkStateSchemaVersion: RunCheckpoint['sdkStateSchemaVersion']
   }): Promise<void>
 }
 

@@ -39,6 +39,8 @@ const FUNCTION_NAME = /^[a-zA-Z0-9_-]+$/u
 const RESERVED_PROVIDER_FIELDS = new Set([
   'model', 'messages', 'tools', 'stream', 'stream_options', 'response_format',
   'tool_choice', 'parallel_tool_calls', 'reasoning_effort',
+  'previous_response_id', 'conversation', 'conversation_id',
+  'context_management', 'prompt', 'input',
 ])
 
 type DeepSeekAssistantMessage = ChatCompletion['choices'][number]['message'] & {
@@ -356,7 +358,6 @@ export class DeepSeekChatCompletionsModel implements Model {
       presence_penalty: request.modelSettings.presencePenalty,
       max_tokens: request.modelSettings.maxTokens,
       ...(!omitToolChoice && toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
-      parallel_tool_calls: request.modelSettings.parallelToolCalls ?? false,
       stream,
       ...(stream ? { stream_options: { include_usage: true } } : {}),
       ...(responseFormat ? { response_format: responseFormat } : {}),
@@ -426,7 +427,6 @@ function requestCacheFingerprints(
       presence_penalty: params.presence_penalty,
       response_format: params.response_format,
       tool_choice: params.tool_choice,
-      parallel_tool_calls: params.parallel_tool_calls,
       reasoning_effort: 'reasoning_effort' in params ? params.reasoning_effort : undefined,
     }),
     systemPrefix: digest(systemMessages),
@@ -554,7 +554,6 @@ function toFinalizationRequest<
   const finalizationParams = { ...params } as T
   delete finalizationParams.tools
   delete finalizationParams.tool_choice
-  finalizationParams.parallel_tool_calls = false
   return finalizationParams
 }
 

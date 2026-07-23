@@ -71,6 +71,7 @@ export function createPublicWeatherTool(client: PublicWeatherClient): ToolDef {
     tags: ['weather', 'forecast', 'air-quality', 'public-data'],
     isReadOnly: true,
     isDestructive: false,
+    parallelSafe: true,
     executionSurfaces: ['agent', 'automation', 'debug'],
     agentResultMode: 'continue',
     jsonSchema: PUBLIC_WEATHER_JSON_SCHEMA,

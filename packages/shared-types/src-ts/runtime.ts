@@ -25,7 +25,7 @@ export const runtimeSubAgentConfigSchema = z.object({
   name: z.string(),
   role: z.string(),
   summary: z.string(),
-  delegationMode: z.enum(['as_tool', 'parallel_batch', 'handoff']).default('as_tool'),
+  delegationMode: z.enum(['as_tool', 'handoff']).default('as_tool'),
   parallelSafe: z.boolean().default(false),
   systemPrompt: z.string().nullable().default(null),
   model: z.string().nullable().default(null),
@@ -39,15 +39,6 @@ export const subAgentInvocationSchema = z.object({
   expectedDeliverables: z.array(z.string().trim().min(1)).min(1),
   contextRefs: z.array(z.string().trim().min(1)),
   constraints: z.array(z.string().trim().min(1)),
-}).strict()
-
-export const agentBatchTaskSchema = subAgentInvocationSchema.extend({
-  taskId: z.string().trim().min(1),
-  agentId: z.string().trim().min(1),
-}).strict()
-
-export const agentBatchInvocationSchema = z.object({
-  tasks: z.array(agentBatchTaskSchema).min(1).max(4),
 }).strict()
 
 const deliveryArtifactIdSchema = z.string()
@@ -79,18 +70,18 @@ export const subAgentDeliverySchema = z.object({
   error: z.string().trim().min(1).nullable().describe('status=failed 时的错误；completed 时必须为 null'),
 }).strict()
 
-export const agentBatchTaskResultSchema = z.object({
-  taskId: z.string().trim().min(1),
-  agentId: z.string().trim().min(1),
-  status: z.enum(['completed', 'failed']),
-  delivery: subAgentDeliverySchema.nullable(),
-  error: z.string().trim().min(1).nullable(),
-  durationMs: z.number().nonnegative(),
-}).strict()
-
-export const agentBatchDeliverySchema = z.object({
-  status: z.enum(['completed', 'partial_failure', 'failed']),
-  tasks: z.array(agentBatchTaskResultSchema).min(1),
+export const agentToolOutputMetadataSchema = z.object({
+  schemaVersion: z.literal(1).default(1),
+  callId: z.string().trim().min(1),
+  toolName: z.string().trim().min(1),
+  resultId: z.string().trim().min(1).nullable(),
+  valueRefIds: z.array(z.string().trim().min(1)),
+  artifactIds: z.array(z.string().trim().min(1)),
+  display: z.object({
+    label: z.string().trim().min(1),
+    summary: z.string().nullable(),
+    source: z.string().nullable(),
+  }).strict().nullable(),
 }).strict()
 
 export const supervisorRuntimeConfigSchema = z.object({
@@ -206,7 +197,7 @@ export const runtimeSandboxConfigSchema = z.object({
 })
 
 export const runtimeMcpTransportSchema = z.enum(['streamable_http', 'sse', 'stdio'])
-export const runtimeMcpExecutionModeSchema = z.enum(['function_tools', 'hosted'])
+export const runtimeMcpExecutionModeSchema = z.literal('function_tools')
 export const runtimeMcpApprovalSchema = z.enum(['always', 'never'])
 
 export const runtimeMcpServerConfigSchema = z.object({
@@ -216,7 +207,6 @@ export const runtimeMcpServerConfigSchema = z.object({
   transport: runtimeMcpTransportSchema.default('streamable_http'),
   executionMode: runtimeMcpExecutionModeSchema.default('function_tools'),
   url: z.string().nullable().default(null),
-  connectorId: z.string().nullable().default(null),
   command: z.string().nullable().default(null),
   args: z.array(z.string()).default([]),
   cwd: z.string().nullable().default(null),
@@ -232,22 +222,7 @@ export const runtimeMcpServerConfigSchema = z.object({
   approval: runtimeMcpApprovalSchema.default('always'),
   timeoutMs: z.number().int().positive().default(20_000),
 }).superRefine((server, context) => {
-  if (server.executionMode === 'hosted') {
-    if (server.transport !== 'streamable_http') {
-      context.addIssue({
-        code: 'custom',
-        path: ['transport'],
-        message: 'Hosted MCP 只支持 streamable_http。',
-      })
-    }
-    if (!server.url && !server.connectorId) {
-      context.addIssue({
-        code: 'custom',
-        path: ['url'],
-        message: 'Hosted MCP 必须配置 url 或 connectorId。',
-      })
-    }
-  } else if (server.transport === 'stdio') {
+  if (server.transport === 'stdio') {
     if (!server.command?.trim()) {
       context.addIssue({
         code: 'custom',
@@ -297,7 +272,6 @@ export const agentRuntimeConfigSchema = z.object({
   loopTraceLimit: z.number().default(80),
   maxTurns: z.number().default(50),
   maxFunctionToolConcurrency: z.number().int().min(1).max(16).default(4),
-  maxParallelSubAgents: z.number().int().min(1).max(4).default(3),
   sandbox: runtimeSandboxConfigSchema.default({ backend: 'docker', dockerImage: 'node:22-bookworm-slim' }),
   sdk: runtimeSdkConfigSchema.default({
     mcp: { enabled: false, connectTimeoutMs: 10_000, closeTimeoutMs: 2_000, servers: [] },
@@ -396,13 +370,10 @@ export type PermissionRuleEntry = z.infer<typeof permissionRuleSchema>
 export type HookConfigEntry = z.infer<typeof hookConfigSchema>
 export type RuntimeSubAgentConfig = z.infer<typeof runtimeSubAgentConfigSchema>
 export type SubAgentInvocation = z.infer<typeof subAgentInvocationSchema>
-export type AgentBatchTask = z.infer<typeof agentBatchTaskSchema>
-export type AgentBatchInvocation = z.infer<typeof agentBatchInvocationSchema>
 export type SupervisorDelivery = z.infer<typeof supervisorDeliverySchema>
 export type SubAgentEvidence = z.infer<typeof subAgentEvidenceSchema>
 export type SubAgentDelivery = z.infer<typeof subAgentDeliverySchema>
-export type AgentBatchTaskResult = z.infer<typeof agentBatchTaskResultSchema>
-export type AgentBatchDelivery = z.infer<typeof agentBatchDeliverySchema>
+export type AgentToolOutputMetadata = z.infer<typeof agentToolOutputMetadataSchema>
 export type SupervisorRuntimeConfig = z.infer<typeof supervisorRuntimeConfigSchema>
 export type RuntimeUiConfig = z.infer<typeof runtimeUiConfigSchema>
 export type RuntimeCatalogConfig = z.infer<typeof runtimeCatalogConfigSchema>

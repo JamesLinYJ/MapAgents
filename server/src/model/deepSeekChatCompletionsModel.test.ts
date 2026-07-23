@@ -185,6 +185,20 @@ describe('DeepSeekChatCompletionsModel', () => {
     await expect(collect(model.getStreamedResponse(request({ conversationId: 'conv_1' })))).rejects.toThrow(/conversationId/u)
   })
 
+  it('rejects Responses-only fields injected through providerData', async () => {
+    const model = createModel([])
+    await expect(collect(model.getStreamedResponse(request({
+      modelSettings: {
+        providerData: { previous_response_id: 'resp_1' },
+      },
+    })))).rejects.toThrow(/previous_response_id/u)
+    await expect(collect(model.getStreamedResponse(request({
+      modelSettings: {
+        providerData: { context_management: [{ type: 'compaction' }] },
+      },
+    })))).rejects.toThrow(/context_management/u)
+  })
+
   // 历史 reasoning 只属于 UI/replay 诊断，不得变成 Chat Completions 的空 assistant 消息。
   it('drops reasoning-only history when serializing Chat Completions messages', async () => {
     let observedMessages: unknown[] = []
@@ -266,6 +280,9 @@ describe('DeepSeekChatCompletionsModel', () => {
     })
     expect(observedRequests[1]).not.toHaveProperty('tool_choice')
     expect(observedRequests.every(item => !('cache_control' in item))).toBe(true)
+    expect(observedRequests.every(item => !('parallel_tool_calls' in item))).toBe(true)
+    expect(observedRequests.every(item => !('previous_response_id' in item))).toBe(true)
+    expect(observedRequests.every(item => !('conversation' in item))).toBe(true)
   })
 
   it('stabilizes tool and JSON schema ordering for DeepSeek prefix caching', async () => {

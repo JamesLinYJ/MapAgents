@@ -14,7 +14,13 @@ import type { ModelAdapter } from '../model/registry.js'
 import { recordModelCompletionUsage, type ModelCompletionService } from '../model/modelResultCache.js'
 import type { ToolExecutionStore } from '../store/runtimePorts.js'
 import type { AuthContext } from '../security/types.js'
-import { subAgentInvocationSchema, type AgentWorkflowStep, type TodoItem } from '../schemas/types.js'
+import {
+  agentToolOutputMetadataSchema,
+  subAgentInvocationSchema,
+  type AgentToolOutputMetadata,
+  type AgentWorkflowStep,
+  type TodoItem,
+} from '../schemas/types.js'
 import { persistToolExecutionResult, resolveRuntimeValueRef } from '../tools/resultPersistence.js'
 import { makeId } from '../utils/ids.js'
 import { ItemSink } from '../conversation/itemSink.js'
@@ -57,6 +63,7 @@ export class ToolExecutionCoordinator {
   private readonly claimedWorkflowSteps = new Map<string, string>()
   private readonly externalAgentCalls = new Map<string, string>()
   private readonly pendingToolCallIds = new Set<string>()
+  private readonly outputMetadata = new Map<string, AgentToolOutputMetadata>()
   private workflowMutation: Promise<void> = Promise.resolve()
   private resultMutation: Promise<void> = Promise.resolve()
   private checkpointMutation: Promise<void> = Promise.resolve()
@@ -123,7 +130,10 @@ export class ToolExecutionCoordinator {
 
   isExternalAgentEnabled(agentId: string): boolean {
     const state = this.options.store.getRun(this.options.runId).state
-    return !state.planMode && this.hasReadyWorkflowStep(agentId, agentId)
+    return !state.planMode && (
+      this.hasReadyWorkflowStep(agentId, agentId)
+      || this.hasRunningExternalAgentStep(agentId)
+    )
   }
 
   isHandoffEnabled(agentId: string): boolean {
@@ -136,6 +146,23 @@ export class ToolExecutionCoordinator {
   activateHandoff(agentId: string): void {
     if (!this.isHandoffEnabled(agentId)) {
       throw new Error(`当前运行边界禁止转交给子智能体 '${agentId}'`)
+    }
+    this.activeHandoffAgentId = agentId
+  }
+
+  restoreHandoffOwnership(agentId: string): void {
+    const state = this.options.store.getRun(this.options.runId).state
+    const owner = state.subAgents.find(candidate => candidate.agentId === agentId)
+    if (
+      state.planMode
+      || state.agentWorkflow !== null
+      || !owner
+      || owner.status !== 'running'
+    ) {
+      throw new Error(`Handoff 子智能体 '${agentId}' 没有可恢复的对话所有权`)
+    }
+    if (this.activeHandoffAgentId && this.activeHandoffAgentId !== agentId) {
+      throw new Error(`Handoff 所有权已属于 '${this.activeHandoffAgentId}'，不能恢复 '${agentId}'`)
     }
     this.activeHandoffAgentId = agentId
   }
@@ -246,12 +273,6 @@ export class ToolExecutionCoordinator {
     this.preparedCalls.add(callId)
   }
 
-  // 并行批次的父调用只负责聚合多个子步骤，不直接占有某个 workflow step；
-  // 但它仍是一个已准备的 SDK tool call，必须由同一协调器结清 checkpoint。
-  async settlePreparedExternalAgentCall(callId: string): Promise<void> {
-    await this.updatePendingToolCall(callId, false)
-  }
-
   async executeForModel(toolName: string, args: Record<string, unknown>, callId: string): Promise<string> {
     const result = await this.execute(toolName, args, callId)
     const tool = this.options.registry.get(toolName)
@@ -286,6 +307,28 @@ export class ToolExecutionCoordinator {
     return stepId
   }
 
+  restoreExternalAgentStep(
+    agentId: string,
+    callId: string,
+    stepId: string | null,
+  ): void {
+    const state = this.options.store.getRun(this.options.runId).state
+    if (stepId) {
+      const step = state.agentWorkflow?.steps.find(candidate => candidate.stepId === stepId)
+      if (!step
+        || step.status !== 'running'
+        || step.kind !== 'agent'
+        || step.toolName !== agentId
+        || step.ownerAgentId !== agentId) {
+        throw new Error(`子智能体 '${agentId}' 的运行中工作流步骤 '${stepId}' 无法恢复`)
+      }
+      this.claimedWorkflowSteps.set(callId, stepId)
+    } else if (state.agentWorkflow) {
+      throw new Error(`子智能体 '${agentId}' 缺少可恢复的工作流步骤`)
+    }
+    this.externalAgentCalls.set(callId, agentId)
+  }
+
   async completeExternalAgentStep(callId: string, summary: string): Promise<void> {
     try {
       await this.completeClaimedAgentWorkflowStep(callId, summary)
@@ -293,6 +336,12 @@ export class ToolExecutionCoordinator {
       this.externalAgentCalls.delete(callId)
       await this.updatePendingToolCall(callId, false)
     }
+  }
+
+  toolOutputMetadata(callId: string): AgentToolOutputMetadata {
+    const metadata = this.outputMetadata.get(callId)
+    if (!metadata) throw new Error(`工具调用 '${callId}' 尚无可投影的输出元数据`)
+    return metadata
   }
 
   async failExternalAgentStep(callId: string, message: string): Promise<void> {
@@ -342,6 +391,9 @@ export class ToolExecutionCoordinator {
       await this.appendLedger(callId, toolName, 'started')
       const toolLabel = this.toolLabel(toolName)
       this.options.eventSink.emit('tool.started', toolLabel, { tool: toolName, toolLabel, callId })
+      const existingArtifactIds = new Set(
+        this.options.store.getRun(this.options.runId).state.artifacts.map(artifact => artifact.artifactId),
+      )
       const result = await this.options.registry.execute(toolName, args, this.createToolContext())
       this.assertPlanModeDiscoveryResult(toolName, result)
       await this.enqueueResultMutation(async () => {
@@ -389,6 +441,25 @@ export class ToolExecutionCoordinator {
           metadata: { toolLabel: this.toolLabel(toolName), resultId: result.resultId, source: result.source, valueRefs: result.valueRefs ?? [], artifacts: result.artifacts ?? [] },
         })
         await this.appendToolResult(callId, toolName, result)
+        const generatedArtifactIds = this.options.store.getRun(this.options.runId).state.artifacts
+          .map(artifact => artifact.artifactId)
+          .filter(artifactId => !existingArtifactIds.has(artifactId))
+        this.outputMetadata.set(callId, agentToolOutputMetadataSchema.parse({
+          schemaVersion: 1,
+          callId,
+          toolName,
+          resultId: result.resultId,
+          valueRefIds: (result.valueRefs ?? []).map(reference => reference.refId),
+          artifactIds: [...new Set([
+            ...(result.artifacts ?? []).map(artifact => artifact.artifactId),
+            ...generatedArtifactIds,
+          ])],
+          display: {
+            label: toolLabel,
+            summary: result.message,
+            source: result.source,
+          },
+        }))
         await this.updatePendingToolCall(callId, false)
       })
       return result
@@ -398,6 +469,19 @@ export class ToolExecutionCoordinator {
         await this.failClaimedAgentWorkflowStep(callId, message)
         await this.appendLedger(callId, toolName, 'failed', message)
         await this.appendToolFailure(callId, toolName, message)
+        this.outputMetadata.set(callId, agentToolOutputMetadataSchema.parse({
+          schemaVersion: 1,
+          callId,
+          toolName,
+          resultId: null,
+          valueRefIds: [],
+          artifactIds: [],
+          display: {
+            label: this.toolLabel(toolName),
+            summary: message,
+            source: null,
+          },
+        }))
         await this.options.store.mutateRunState(this.options.runId, state => ({
           warnings: [...state.warnings, `工具“${this.toolLabel(toolName)}”调用失败：${message}`],
           errors: [...state.errors, message],
@@ -734,6 +818,8 @@ export class ToolExecutionCoordinator {
         contentRef,
         ledgerStatus: 'completed',
         resultId: result.resultId,
+        valueRefIds: (result.valueRefs ?? []).map(reference => reference.refId),
+        artifactIds: (result.artifacts ?? []).map(artifact => artifact.artifactId),
       },
     })
   }
@@ -751,6 +837,23 @@ export class ToolExecutionCoordinator {
       && step.ownerAgentId === ownerAgentId
       && !claimed.has(step.stepId)
       && step.dependsOn.every(dependency => completed.has(dependency))
+    ))
+  }
+
+  private hasRunningExternalAgentStep(agentId: string): boolean {
+    const state = this.options.store.getRun(this.options.runId).state
+    const subAgent = state.subAgents.find(candidate => (
+      candidate.agentId === agentId
+      && candidate.status === 'running'
+      && candidate.currentStepId
+    ))
+    if (!subAgent?.currentStepId || state.agentWorkflow?.status !== 'running') return false
+    return state.agentWorkflow.steps.some(step => (
+      step.stepId === subAgent.currentStepId
+      && step.status === 'running'
+      && step.kind === 'agent'
+      && step.toolName === agentId
+      && step.ownerAgentId === agentId
     ))
   }
 
@@ -834,7 +937,7 @@ export function validateAgentWorkflowDraft(
   subAgents: ReadonlyArray<{
     agentId: string
     tools?: string[]
-    delegationMode?: 'as_tool' | 'parallel_batch' | 'handoff'
+    delegationMode?: 'as_tool' | 'handoff'
   }>,
 ): string | null {
   const workflow = isRecord(args.workflow) ? args.workflow : null

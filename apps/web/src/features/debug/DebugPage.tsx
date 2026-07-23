@@ -36,7 +36,11 @@ import type {
 import { apiBaseUrl } from '../../api/client'
 import { deriveEntriesFromItems, pickConversationHeadline } from '../conversation/items'
 import { buildFadeUpMotion, buildListItemVariants, buildListVariants, buildPressMotion } from '../../shared/motion'
-import { providerUnavailableLabel, supportsAgentSdkLiveSupervisor } from '../../shared/providerCapabilities'
+import {
+  agentRuntimeCapabilitySummary,
+  providerUnavailableLabel,
+  supportsAgentSdkLiveSupervisor,
+} from '../../shared/providerCapabilities'
 import { StatusPill } from '../../shared/components/StatusPill'
 import { LiquidGlassLayer } from '../../shared/components/LiquidGlassLayer'
 import { ToolWorkbench } from './tools/ToolWorkbench'
@@ -160,6 +164,7 @@ export function DebugPage({
   // 调试页的目标不是做漂亮摘要，而是把一次运行里最关键的对象
   // 统一摆在同一页上：输入、状态、事件、数据资产、工具和目录配置。
   const selectedArtifact = artifacts.find((artifact) => artifact.artifactId === selectedArtifactId) ?? artifacts[0]
+  const selectedProvider = providers.find((item) => item.provider === provider)
   const conversationPath = currentRun?.conversationPath
   const selectedMetadata = selectedArtifact ? artifactMetadata[selectedArtifact.artifactId] : undefined
   const latestRuns = sessionRuns.slice(0, 5)
@@ -354,6 +359,7 @@ export function DebugPage({
                   />
                 </div>
               </div>
+              <p className="panel__muted">{agentRuntimeCapabilitySummary(selectedProvider)}</p>
             </div>
             <div className="panel__section">
               <label className="composer__label" htmlFor="debug-query-input">

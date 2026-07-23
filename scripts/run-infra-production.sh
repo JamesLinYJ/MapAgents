@@ -19,6 +19,7 @@ cleanup() { docker compose -f "$COMPOSE" down; }
 trap cleanup EXIT INT TERM
 docker compose -f "$COMPOSE" up -d --wait
 docker compose -f "$COMPOSE" exec -T postgis psql -U "${POSTGRES_USER:-geo_agent}" -d "${POSTGRES_DB:-geo_agent}" -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/003_better_auth_admin.sql
+docker compose -f "$COMPOSE" exec -T postgis psql -U "${POSTGRES_USER:-geo_agent}" -d "${POSTGRES_DB:-geo_agent}" -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/004_agents_sdk_native_runtime.sql
 while true; do
   since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   if docker compose -f "$COMPOSE" logs --follow --no-color --since "$since"; then

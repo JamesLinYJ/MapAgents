@@ -14,12 +14,10 @@ import { modelSettings } from './runtimeSdkProjection.js'
 describe('runtimeSdkProjection', () => {
   it('keeps autonomous tool choice so plan mode cannot force unrelated calls', () => {
     expect(modelSettings(true)).toMatchObject({
-      parallelToolCalls: false,
       toolChoice: 'auto',
       reasoning: { effort: 'high' },
     })
     expect(modelSettings(false)).toMatchObject({
-      parallelToolCalls: false,
       toolChoice: 'auto',
     })
     expect(modelSettings(false)).not.toHaveProperty('reasoning')

@@ -75,7 +75,7 @@ export class PostgresRunRepository implements RunRepository {
     contentHash: string
     agentsSdkVersion: string
     runtimeConfigDigest: string
-    sdkStateSchemaVersion: 2
+    sdkStateSchemaVersion: RunCheckpoint['sdkStateSchemaVersion']
   }): Promise<void> {
     return this.checkpoints.saveAgentsSdkCheckpoint(runId, input)
   }

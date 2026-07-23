@@ -94,13 +94,12 @@ ${toolDescriptions}`)
 function buildSubAgentIdentityDirectory(subAgents: AgentRuntimeConfig['subAgents']): string {
   if (!subAgents.length) return ''
   const modeLabel = (mode: AgentRuntimeConfig['subAgents'][number]['delegationMode']): string => {
-    if (mode === 'parallel_batch') return '只读并行批次'
     if (mode === 'handoff') return 'Handoff 直接接管'
     return 'Agent-as-tool，完成后返回主智能体'
   }
   return [
     '## 已配置协作智能体',
-    '本目录只用于识别用户指定的负责人，不表示当前阶段已经允许调用。Agent-as-tool 与只读并行批次必须进入计划、通过审批并匹配可执行步骤；Handoff 会直接转移最终对话所有权。',
+    '本目录只用于识别用户指定的负责人，不表示当前阶段已经允许调用。Agent-as-tool 必须进入计划、通过审批并匹配可执行步骤；Handoff 会直接转移最终对话所有权。',
     ...[...subAgents]
       .sort((left, right) => left.agentId.localeCompare(right.agentId))
       .map(agent => `- ${agent.agentId}（${agent.name}；${modeLabel(agent.delegationMode)}）：${singleLine(agent.summary)}`),
@@ -123,7 +122,7 @@ export function buildPlanningCapabilityCatalog(
     .map(agent => [
       `- ${agent.agentId}（子智能体 ${agent.name}）：${singleLine(agent.summary)}`,
       '调用参数 {objective: string 必填; expectedDeliverables: string[] 必填; contextRefs: string[] 必填; constraints: string[] 必填}',
-      `委派模式 ${agent.delegationMode === 'parallel_batch' ? '只读并行批次' : 'Agent-as-tool（完成后返回主智能体）'}`,
+      '委派模式 Agent-as-tool（完成后返回主智能体）',
       `授权工具 [${agent.tools.join(', ') || '无'}]`,
       `最大运行轮次 ${agent.maxTurns}`,
       `单次调用超时 ${agent.timeoutMs}ms`,

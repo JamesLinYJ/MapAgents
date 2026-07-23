@@ -10,9 +10,11 @@
 
 import {
   invokeFunctionTool,
+  type FunctionToolCustomDataContext,
   type Tool,
 } from '@openai/agents'
 import {
+  agentToolOutputMetadataSchema,
   subAgentInvocationSchema,
 } from '@geo-agent-platform/shared-types/runtime'
 
@@ -30,6 +32,7 @@ import {
   SubAgentStateController,
   type SubAgentRuntimeDependencies,
 } from './subAgentRuntimeSupport.js'
+import { toolExecutionLane } from './runToolConcurrencyGate.js'
 
 const AGENT_TOOL_NAME = /^[a-zA-Z0-9_-]+$/u
 
@@ -49,6 +52,7 @@ export async function createSubAgentTools(
   return options.configs.filter(config => config.delegationMode === 'as_tool').map(config => {
     if (!AGENT_TOOL_NAME.test(config.agentId)) throw new Error(`子 Agent id '${config.agentId}' 不能作为工具名`)
     if (options.toolRegistry.get(config.agentId)) throw new Error(`子 Agent id '${config.agentId}' 与现有工具重名`)
+    assertParallelSafeConfiguration(config, options)
     const subAgent = createSubAgentDeliveryAgent(config, options)
     const subAgentExecutionContext = createSubAgentExecutionContext(config, options)
     const agentTool = subAgent.asTool({
@@ -81,6 +85,7 @@ export async function createSubAgentTools(
             item: item.toJSON(),
           })
         }
+        if (output.interruptions.length) return ''
         return JSON.stringify(output.finalOutput)
       },
       onStream: async ({ event }) => {
@@ -94,37 +99,98 @@ export async function createSubAgentTools(
       timeoutBehavior: 'raise_exception' as const,
       invoke,
     }
-    return {
-      ...agentTool,
+    // 必须保留 Agent.asTool() 返回对象的身份。SDK 用 WeakMap 把该工具关联到
+    // 源 Agent，RunState 恢复会沿此关联重建嵌套 Agent 图；复制对象会破坏恢复。
+    return Object.assign(agentTool, {
+      customDataExtractor: ({ toolCall, output }: FunctionToolCustomDataContext<AgentsExecutionContext>) => {
+        if (output === '') {
+          return agentToolOutputMetadataSchema.parse({
+            schemaVersion: 1,
+            callId: toolCall.callId,
+            toolName: config.agentId,
+            resultId: null,
+            valueRefIds: [],
+            artifactIds: [],
+            display: {
+              label: config.name,
+              summary: '子智能体等待审批',
+              source: 'openai_agents_agent_as_tool',
+            },
+          })
+        }
+        const delivery = parseSubAgentDelivery(config.agentId, output)
+        return agentToolOutputMetadataSchema.parse({
+          schemaVersion: 1,
+          callId: toolCall.callId,
+          toolName: config.agentId,
+          resultId: null,
+          valueRefIds: [],
+          artifactIds: delivery.artifactIds,
+          display: {
+            label: config.name,
+            summary: delivery.summary,
+            source: 'openai_agents_agent_as_tool',
+          },
+        })
+      },
       // 用 SDK 公开的 invokeFunctionTool 在工作流状态包装器内部执行超时。
       // 这样超时会先把子智能体和步骤落为 failed，再作为硬失败返回父运行。
-      invoke: async (runContext, input, details) => {
+      invoke: async (
+        runContext: Parameters<typeof agentTool.invoke>[0],
+        input: Parameters<typeof agentTool.invoke>[1],
+        details: Parameters<typeof agentTool.invoke>[2],
+      ) => {
         const callId = details?.toolCall?.callId
         if (!callId) throw new Error(`子 Agent '${config.agentId}' 缺少 callId`)
         const invocation = parseSubAgentInvocation(config.agentId, input)
-        const workflowStepId = await stateController.start(config, invocation, callId)
-        try {
-          const output = await invokeFunctionTool({
-            tool: timedAgentTool,
-            runContext,
-            input,
-            details,
-          })
-          if (typeof output !== 'string') {
-            throw new Error(`子 Agent '${config.agentId}' 返回了非文本工具结果`)
-          }
-          const delivery = parseSubAgentDelivery(config.agentId, output)
-          assertSubAgentDeliveryArtifacts(delivery, options)
-          await stateController.complete(config, callId, workflowStepId, delivery)
-          return JSON.stringify(delivery)
-        } catch (error) {
-          const message = subAgentFailureMessage(error, config)
-          await stateController.fail(config, callId, workflowStepId, message)
-          throw new Error(message, { cause: error })
-        }
+        return options.executionGate.run(
+          config.parallelSafe ? 'shared' : 'exclusive',
+          async () => {
+            const workflowStepId = details.resumeState
+              ? await stateController.resume(config, callId)
+              : await stateController.start(config, invocation, callId)
+            try {
+              const output = await invokeFunctionTool({
+                tool: timedAgentTool,
+                runContext,
+                input,
+                details,
+              })
+              if (output === '') return output
+              if (typeof output !== 'string') {
+                throw new Error(`子 Agent '${config.agentId}' 返回了非文本工具结果`)
+              }
+              const delivery = parseSubAgentDelivery(config.agentId, output)
+              assertSubAgentDeliveryArtifacts(delivery, options)
+              await stateController.complete(config, callId, workflowStepId, delivery)
+              return JSON.stringify(delivery)
+            } catch (error) {
+              const message = subAgentFailureMessage(error, config)
+              await stateController.fail(config, callId, workflowStepId, message)
+              throw new Error(message, { cause: error })
+            }
+          },
+        )
       },
-    }
+    })
   })
+}
+
+function assertParallelSafeConfiguration(
+  config: AgentRuntimeConfig['subAgents'][number],
+  options: SubAgentToolFactoryOptions,
+): void {
+  if (!config.parallelSafe) return
+  for (const toolName of config.tools) {
+    const definition = options.toolRegistry.get(toolName)
+    if (!definition) throw new Error(`并发安全子 Agent '${config.agentId}' 引用了未知工具 '${toolName}'`)
+    const approvalRequired = options.approvalTools.has(toolName)
+    if (toolExecutionLane(definition, approvalRequired) !== 'shared') {
+      throw new Error(
+        `子 Agent '${config.agentId}' 只有在全部工具都显式 parallelSafe、只读、无破坏且免审批时才能共享并发；'${toolName}' 不符合。`,
+      )
+    }
+  }
 }
 
 function parseSubAgentInvocation(agentId: string, input: string) {

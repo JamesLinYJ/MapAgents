@@ -1,5 +1,5 @@
 import type { Agent, Runner } from '@openai/agents'
-import type { SandboxSessionLike } from '@openai/agents/sandbox'
+import type { SandboxRunConfig } from '@openai/agents/sandbox'
 
 import type { AgentRuntimeConfig, supervisorDeliverySchema } from '@geo-agent-platform/shared-types/runtime'
 import type { ModelAdapter } from '../model/registry.js'
@@ -8,6 +8,7 @@ import type { FileAgentsSession } from './fileAgentsSession.js'
 import type { AgentsExecutionContext } from './agentsToolBridge.js'
 import type { ToolExecutionCoordinator } from './toolExecutionCoordinator.js'
 import type { RuntimeSdkIntegration } from './runtimeSdkIntegrations.js'
+import type { RuntimeModelInputController } from './runtimeModelInput.js'
 
 export interface RunOptions {
   runId: string
@@ -31,8 +32,9 @@ export interface RuntimeAssembly {
   context: AgentsExecutionContext
   coordinator: ToolExecutionCoordinator
   adapter: ModelAdapter
-  sandboxSession: SandboxSessionLike
+  sandbox: SandboxRunConfig
   sdkIntegration: RuntimeSdkIntegration
+  modelInput: RuntimeModelInputController
   configDigest: string
   sdkVersion: string
   threadId: string

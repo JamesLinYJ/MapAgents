@@ -19,7 +19,7 @@ import type { ManagedLayerService } from '../gis/managedLayers/managedLayerServi
 import type { ModelAdapterRegistry } from '../model/registry.js'
 import type { ModelCompletionService } from '../model/modelResultCache.js'
 import type { ToolRegistry } from '../framework/registry.js'
-import type { SandboxSessionFactory } from '../agent/runtime.js'
+import type { SandboxClientFactory } from '../agent/runtime.js'
 import type { OpenAIAgentsRuntime } from '../agent/runtime.js'
 import type { RunTaskManager } from '../agent/runTaskManager.js'
 import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
@@ -39,7 +39,7 @@ export interface WsDependencies {
   managedLayers: ManagedLayerService
   runtimeRoot: string
   defaultRuntimeConfig?: AgentRuntimeConfig
-  createSandboxSession?: SandboxSessionFactory
+  createSandboxClient?: SandboxClientFactory
   runtime: OpenAIAgentsRuntime
   runTasks: RunTaskManager
   scheduledTaskService: ScheduledTaskService

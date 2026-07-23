@@ -77,6 +77,7 @@ export async function assembleThreadContext(
   threadId: string,
   config: AgentRuntimeConfig['context'],
   systemPrompt: string,
+  options: { excludeRunId?: string } = {},
 ): Promise<AssembledThreadContext> {
   const [rawChain, manifest, memory] = await Promise.all([
     store.activeTranscript(threadId),
@@ -87,14 +88,17 @@ export async function assembleThreadContext(
   const latestSummaryIndex = findLastIndex(chain, entry => entry.kind === 'compact_summary')
   const visibleChain = latestSummaryIndex >= 0 ? chain.slice(latestSummaryIndex) : chain
   const resourceMessage = await buildThreadResourceMessage(store, threadId, visibleChain)
-  let transcriptMessages = composeTranscriptMessages(visibleChain, resourceMessage)
-  let includedEntries = visibleChain.filter(isModelVisibleEntry)
+  const historyChain = options.excludeRunId
+    ? visibleChain.filter(entry => entry.runId !== options.excludeRunId)
+    : visibleChain
+  let transcriptMessages = transcriptEntriesToChatMessages(historyChain)
+  let includedEntries = historyChain.filter(isModelVisibleEntry)
 
   const baseTokens = estimateTokens(systemPrompt) + estimateTokens(memory.content)
   const hardBudget = Math.floor(config.contextWindowTokens * config.hardLimitRatio)
   if (baseTokens + estimateMessages(transcriptMessages) > hardBudget) {
-    const trimmed = preserveRecentTurns(visibleChain, config.preserveRecentTurns)
-    transcriptMessages = composeTranscriptMessages(trimmed, resourceMessage)
+    const trimmed = preserveRecentTurns(historyChain, config.preserveRecentTurns)
+    transcriptMessages = transcriptEntriesToChatMessages(trimmed)
     includedEntries = trimmed.filter(isModelVisibleEntry)
   }
 
@@ -104,6 +108,7 @@ export async function assembleThreadContext(
   const messages: ConversationChatMessage[] = [
     { role: 'system', content: systemPrompt },
     ...memoryMessages,
+    ...(resourceMessage ? [{ role: 'system', content: resourceMessage }] : []),
     ...transcriptMessages,
   ]
   const systemTokens = estimateTokens(systemPrompt)
@@ -124,7 +129,7 @@ export async function assembleThreadContext(
     compactionRecommended: usageRatio >= config.compactRatio,
     hardLimitReached: usageRatio >= config.hardLimitRatio,
     includedEntryIds: [...includedIds],
-    omittedEntryCount: chain.filter(isModelVisibleEntry).filter(entry => !includedIds.has(entry.entryId)).length,
+    omittedEntryCount: historyChain.filter(isModelVisibleEntry).filter(entry => !includedIds.has(entry.entryId)).length,
     latestCompactionId: manifest.latestCompactionId,
     sections: [
       { name: 'system', estimatedTokens: systemTokens },
@@ -311,17 +316,6 @@ async function buildThreadResourceMessage(
     ...valueRefs.map(reference => `valueRef: refId=${reference.refId}; kind=${reference.kind}; label=${reference.label}`),
     '</thread-resources>',
   ].join('\n')
-}
-
-function composeTranscriptMessages(entries: TranscriptEntry[], resourceMessage: string | null): ConversationChatMessage[] {
-  if (!resourceMessage) return transcriptEntriesToChatMessages(entries)
-  const currentUserIndex = findLastIndex(entries, entry => entry.kind === 'message' && entry.payload.role === 'user')
-  if (currentUserIndex < 0) return transcriptEntriesToChatMessages(entries)
-  return [
-    ...transcriptEntriesToChatMessages(entries.slice(0, currentUserIndex)),
-    { role: 'system', content: resourceMessage },
-    ...transcriptEntriesToChatMessages(entries.slice(currentUserIndex)),
-  ]
 }
 
 function transcriptEntriesToChatMessages(entries: TranscriptEntry[]): ConversationChatMessage[] {

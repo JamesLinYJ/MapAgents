@@ -1,4 +1,8 @@
 import type { AgentInputItem, RunStreamEvent } from '@openai/agents'
+import {
+  agentToolOutputMetadataSchema,
+  type AgentToolOutputMetadata,
+} from '@geo-agent-platform/shared-types/runtime'
 
 import type { ItemSink } from '../conversation/itemSink.js'
 import type { ToolRegistry } from '../framework/registry.js'
@@ -9,6 +13,7 @@ import {
   isAssistantContentCheckpoint,
   parseArguments,
   sdkNativeLedgerStatus,
+  toolResultText,
 } from './runtimeSdkProjection.js'
 import type { RuntimeAssembly, StreamProjectionState } from './runtimeTypes.js'
 
@@ -114,6 +119,22 @@ export class RuntimeTranscriptProjector {
           })
           projection.subAgentCallItemIds.set(raw.callId, item.itemId)
         }
+      } else if (
+        raw.type === 'function_call'
+        && !this.isPlatformManagedTool(raw.name, assembly)
+      ) {
+        const exists = (await this.store.activeTranscript(assembly.threadId))
+          .some(entry => entry.kind === 'tool_call' && entry.payload.callId === raw.callId)
+        if (!exists) {
+          await this.appendSdkNativeToolCallTranscript(
+            assembly.context.runId,
+            assembly.threadId,
+            assembly.turnId,
+            raw,
+            itemSink,
+            sdkToolPresentation(raw.name, assembly),
+          )
+        }
       }
       const eventLabel = raw.type === 'function_call'
         ? assembly.subAgentToolNames.has(raw.name)
@@ -127,6 +148,15 @@ export class RuntimeTranscriptProjector {
     }
     if (event.name === 'tool_output') {
       const raw = event.item.rawItem
+      const metadata = event.item.type === 'tool_call_output_item'
+        && raw.type === 'function_call_result'
+        ? parseOutputMetadata(
+            event.item.customData,
+            this.isPlatformManagedTool(raw.name, assembly)
+              || assembly.subAgentToolNames.has(raw.name)
+              || assembly.mcpToolNames.has(raw.name),
+          )
+        : null
       if (raw.type === 'function_call_result' && assembly.subAgentToolNames.has(raw.name)) {
         const failed = raw.status === 'incomplete'
         const itemId = projection.subAgentCallItemIds.get(raw.callId)
@@ -146,6 +176,66 @@ export class RuntimeTranscriptProjector {
           agentId: raw.name,
           status: failed ? 'failed' : 'completed',
         })
+      }
+      if (
+        raw.type === 'function_call_result'
+        && (
+          assembly.subAgentToolNames.has(raw.name)
+          || !this.isPlatformManagedTool(raw.name, assembly)
+        )
+      ) {
+        const transcript = await this.store.activeTranscript(assembly.threadId)
+        const exists = transcript.some(entry => (
+          entry.kind === 'tool_result' && entry.payload.callId === raw.callId
+        ))
+        if (!exists) {
+          const presentation = sdkToolPresentation(raw.name, assembly)
+          const content = toolResultText(raw.output)
+          const ledgerStatus = sdkNativeLedgerStatus(raw.status)
+          await this.store.appendTranscript({
+            threadId: assembly.threadId,
+            runId: assembly.context.runId,
+            turnId: assembly.turnId,
+            kind: 'tool_result',
+            payload: {
+              callId: raw.callId,
+              name: raw.name,
+              label: metadata?.display?.label ?? presentation.label,
+              summary: metadata?.display?.summary ?? content,
+              content,
+              contentRef: null,
+              ledgerStatus,
+              resultId: metadata?.resultId ?? null,
+              valueRefIds: metadata?.valueRefIds ?? [],
+              artifactIds: metadata?.artifactIds ?? [],
+              source: metadata?.display?.source ?? presentation.source,
+            },
+          })
+          if (!assembly.subAgentToolNames.has(raw.name)) {
+            const outputItem = itemSink.startItem('function_call_output', {
+              callId: raw.callId,
+              name: raw.name,
+              role: 'tool',
+              metadata: {
+                toolLabel: metadata?.display?.label ?? presentation.label,
+                source: metadata?.display?.source ?? presentation.source,
+              },
+            })
+            itemSink.completeItem(outputItem.itemId, {
+              callId: raw.callId,
+              name: raw.name,
+              output: content,
+              isError: ledgerStatus === 'failed',
+              metadata: {
+                toolLabel: metadata?.display?.label ?? presentation.label,
+                source: metadata?.display?.source ?? presentation.source,
+                resultId: metadata?.resultId ?? null,
+                valueRefIds: metadata?.valueRefIds ?? [],
+                artifactIds: metadata?.artifactIds ?? [],
+              },
+            })
+          }
+        }
       }
       return
     }
@@ -349,4 +439,35 @@ export class RuntimeTranscriptProjector {
       },
     })
   }
+}
+
+function parseOutputMetadata(
+  value: unknown,
+  requiredPlatformContract: boolean,
+): AgentToolOutputMetadata | null {
+  if (value === undefined) return null
+  const parsed = agentToolOutputMetadataSchema.safeParse(value)
+  if (!parsed.success) {
+    if (requiredPlatformContract) {
+      throw new Error('Agents SDK 工具输出 customData 不符合平台契约')
+    }
+    return null
+  }
+  return parsed.data
+}
+
+function sdkToolPresentation(
+  toolName: string,
+  assembly: RuntimeAssembly,
+): { label: string; source: string } {
+  if (assembly.handoffToolNames.has(toolName)) {
+    return { label: 'Handoff 转交', source: 'openai_agents_handoff' }
+  }
+  if (assembly.mcpToolNames.has(toolName)) {
+    return { label: 'MCP 工具调用', source: 'openai_agents_mcp' }
+  }
+  if (assembly.subAgentToolNames.has(toolName)) {
+    return { label: '子智能体任务', source: 'openai_agents_agent_as_tool' }
+  }
+  return { label: '沙箱工具调用', source: 'openai_agents_sandbox' }
 }

@@ -12,8 +12,10 @@ export function createGeminiAdapter(opts: GeminiOptions): ModelAdapter {
     defaultModel: opts.defaultModel,
     agentToolSchemaMode: 'compatible',
     agentRuntimeCapabilities: {
+      transport: 'none',
       structuredOutput: 'none', functionTools: false, localMcp: false,
-      hostedTools: false, handoffs: false, remoteConversation: false, serverCompaction: false,
+      hostedTools: false, handoffs: false, multiToolResponse: false,
+      providerParallelToolControl: false, remoteConversation: false, serverCompaction: false,
     },
     isConfigured: () => Boolean(opts.apiKey && opts.defaultModel),
     capabilities: () => ['chat', 'structured'],

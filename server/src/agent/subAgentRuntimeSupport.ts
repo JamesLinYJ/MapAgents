@@ -30,6 +30,7 @@ import { createAgentsTools, type AgentsExecutionContext } from './agentsToolBrid
 import { errorMessage, modelSettings } from './runtimeSdkProjection.js'
 import type { ToolExecutionCoordinator } from './toolExecutionCoordinator.js'
 import type { RunEventSink } from './turnRunner.js'
+import type { RunToolConcurrencyGate } from './runToolConcurrencyGate.js'
 
 export interface SubAgentRuntimeDependencies {
   selectedModel: string
@@ -43,6 +44,7 @@ export interface SubAgentRuntimeDependencies {
   threadId: string
   eventSink: RunEventSink
   coordinator: ToolExecutionCoordinator
+  executionGate: RunToolConcurrencyGate
   agentTracing?: LocalAgentTracing
 }
 
@@ -84,6 +86,8 @@ export function createSubAgentExecutionContext(
       args,
       callId,
     ),
+    runToolExecution: (lane, operation) => dependencies.executionGate.run(lane, operation),
+    toolOutputMetadata: callId => dependencies.coordinator.toolOutputMetadata(callId),
   }
 }
 
@@ -183,6 +187,22 @@ export class SubAgentStateController {
         }),
       }
     })
+    const state = this.dependencies.store.getRun(this.dependencies.runId).state
+    const handoffConfigs = new Map(
+      configs
+        .filter(config => config.delegationMode === 'handoff')
+        .map(config => [config.agentId, config]),
+    )
+    const runningHandoffs = state.subAgents.filter(agent => (
+      agent.status === 'running' && handoffConfigs.has(agent.agentId)
+    ))
+    if (runningHandoffs.length > 1) {
+      throw new Error(`检测到多个运行中的 Handoff 所有者：${runningHandoffs.map(agent => agent.agentId).join('、')}`)
+    }
+    const runningHandoff = runningHandoffs[0]
+    if (runningHandoff) {
+      this.dependencies.coordinator.restoreHandoffOwnership(runningHandoff.agentId)
+    }
   }
 
   async start(
@@ -207,6 +227,24 @@ export class SubAgentStateController {
       status: 'running',
       stepId,
     })
+    return stepId
+  }
+
+  async resume(
+    config: RuntimeSubAgentConfig,
+    callId: string,
+  ): Promise<string | null> {
+    const state = this.dependencies.store.getRun(this.dependencies.runId).state
+    const subAgent = state.subAgents.find(candidate => candidate.agentId === config.agentId)
+    if (!subAgent || subAgent.status !== 'running') {
+      throw new Error(`子 Agent '${config.agentId}' 没有可恢复的运行中状态`)
+    }
+    const stepId = subAgent.currentStepId
+    this.dependencies.coordinator.restoreExternalAgentStep(
+      config.agentId,
+      callId,
+      stepId,
+    )
     return stepId
   }
 

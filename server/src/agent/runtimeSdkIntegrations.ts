@@ -23,14 +23,17 @@ import {
   connectMcpServers,
   createMCPToolStaticFilter,
   getAllMcpTools,
-  hostedMcpTool,
   type Agent,
+  type FunctionToolCustomDataContext,
   type GetAllMcpToolsOptions,
   type MCPServer,
   type MCPServersOptions,
   type RunContext,
   type Tool,
 } from '@openai/agents'
+import {
+  agentToolOutputMetadataSchema,
+} from '@geo-agent-platform/shared-types/runtime'
 import {
   Capability,
   dir,
@@ -44,6 +47,7 @@ import type {
   RuntimeSkillConfig,
 } from '../schemas/types.js'
 import type { AgentsExecutionContext } from './agentsToolBridge.js'
+import { RunToolConcurrencyGate } from './runToolConcurrencyGate.js'
 
 interface ConnectedMcpServers {
   active: MCPServer[]
@@ -66,12 +70,6 @@ export interface RuntimeSdkMcpFactory {
 
 export interface RuntimeSdkIntegration {
   tools: Tool<AgentsExecutionContext>[]
-  mcpServers: MCPServer[]
-  mcpConfig: {
-    convertSchemasToStrict: boolean
-    includeServerInToolNames: boolean
-    errorFunction: null
-  }
   mcpToolNames: ReadonlySet<string>
   activeMcpServers: string[]
   close(): Promise<void>
@@ -92,7 +90,10 @@ interface SkillDirectory {
 
 export function buildRuntimeSdkSandboxIntegration(
   config: AgentRuntimeConfig,
-  options: { baseDir?: string } = {},
+  options: {
+    baseDir?: string
+    executionGate?: RunToolConcurrencyGate
+  } = {},
 ): RuntimeSdkSandboxIntegration {
   const skillConfig = config.sdk.skills
   if (!skillConfig.enabled) {
@@ -116,7 +117,10 @@ export function buildRuntimeSdkSandboxIntegration(
   })
   return {
     capabilities: [
-      new ExecutionGatedCapability(createSkillsCapability),
+      new ExecutionGatedCapability(
+        createSkillsCapability,
+        options.executionGate ?? new RunToolConcurrencyGate(),
+      ),
     ],
     pathGrants: [],
     activeSkills: skillDirectories.map(skill => skill.name),
@@ -126,6 +130,7 @@ export function buildRuntimeSdkSandboxIntegration(
 export async function createRuntimeSdkIntegration(
   config: AgentRuntimeConfig,
   reservedToolNames: ReadonlySet<string>,
+  executionGate: RunToolConcurrencyGate,
   factory: RuntimeSdkMcpFactory = {},
 ): Promise<RuntimeSdkIntegration> {
   const mcpConfig = config.sdk.mcp
@@ -136,22 +141,14 @@ export async function createRuntimeSdkIntegration(
   const connect = factory.connectMcpServers ?? connectMcpServers
   const loadTools = factory.getAllMcpTools ?? ((options) => getAllMcpTools<AgentsExecutionContext>(options))
   const tools: Tool<AgentsExecutionContext>[] = []
-  const nativeMcpServers: MCPServer[] = []
-  const nativeServerConfigs: RuntimeMcpServerConfig[] = []
   const managers: ConnectedMcpServers[] = []
   const activeMcpServers: string[] = []
   const exposedFunctionToolNames = new Set(reservedToolNames)
 
   try {
     for (const serverConfig of mcpConfig.servers.filter(server => server.enabled)) {
-      if (serverConfig.executionMode === 'hosted') {
-        tools.push(createHostedMcpTool(serverConfig) as Tool<AgentsExecutionContext>)
-        activeMcpServers.push(serverConfig.name)
-        continue
-      }
-
       const manager = await connect(
-        [createMcpServer(serverConfig, serverConfig.approval === 'never')],
+        [createMcpServer(serverConfig)],
         {
           strict: true,
           dropFailed: false,
@@ -166,11 +163,6 @@ export async function createRuntimeSdkIntegration(
       }
       managers.push(manager)
       activeMcpServers.push(serverConfig.name)
-      if (serverConfig.approval === 'never') {
-        nativeMcpServers.push(...manager.active)
-        nativeServerConfigs.push(serverConfig)
-        continue
-      }
       const serverTools = await loadTools({
         mcpServers: manager.active,
         convertSchemasToStrict: serverConfig.convertSchemasToStrict,
@@ -180,28 +172,17 @@ export async function createRuntimeSdkIntegration(
       })
       appendUniqueFunctionTools(
         tools,
-        serverTools.map(tool => applyMcpExecutionPhasePolicy(applyMcpApprovalPolicy(tool, serverConfig))),
+        serverTools.map(tool => applyMcpExecutionPolicy(
+          applyMcpApprovalPolicy(applyMcpOutputMetadata(tool, serverConfig), serverConfig),
+          executionGate,
+        )),
         exposedFunctionToolNames,
       )
     }
 
-    const nativeMcpConfig = resolveNativeMcpConfig(nativeServerConfigs)
-    const nativeToolNames = nativeMcpServers.length
-      ? new Set((await loadTools({
-          mcpServers: nativeMcpServers,
-          ...nativeMcpConfig,
-          reservedToolNames: new Set(exposedFunctionToolNames),
-        })).map(tool => tool.name))
-      : new Set<string>()
-
     return {
       tools,
-      mcpServers: nativeMcpServers,
-      mcpConfig: nativeMcpConfig,
-      mcpToolNames: new Set([
-        ...nativeToolNames,
-        ...tools.filter(tool => tool.type === 'function').map(tool => tool.name),
-      ]),
+      mcpToolNames: new Set(tools.filter(tool => tool.type === 'function').map(tool => tool.name)),
       activeMcpServers,
       close: async () => {
         await Promise.all(managers.map(manager => manager.close()))
@@ -220,7 +201,10 @@ class ExecutionGatedCapability extends Capability {
   readonly type: string
   private modelName = ''
 
-  constructor(private readonly createCapability: () => Capability) {
+  constructor(
+    private readonly createCapability: () => Capability,
+    private readonly executionGate: RunToolConcurrencyGate,
+  ) {
     super()
     this.type = createCapability().type
   }
@@ -238,7 +222,7 @@ class ExecutionGatedCapability extends Capability {
   }
 
   override tools(): Tool<unknown>[] {
-    return gateSdkExtensionTools(this.boundCapability().tools())
+    return gateSdkExtensionTools(this.boundCapability().tools(), this.executionGate)
   }
 
   override processManifest(
@@ -274,7 +258,10 @@ class ExecutionGatedCapability extends Capability {
   }
 }
 
-function gateSdkExtensionTools<TContext>(tools: Tool<TContext>[]): Tool<TContext>[] {
+function gateSdkExtensionTools<TContext>(
+  tools: Tool<TContext>[],
+  executionGate: RunToolConcurrencyGate,
+): Tool<TContext>[] {
   return tools.map(tool => {
     if (tool.type !== 'function') return tool
     const isEnabled: typeof tool.isEnabled = async (runContext, agent) => {
@@ -289,14 +276,15 @@ function gateSdkExtensionTools<TContext>(tools: Tool<TContext>[]): Tool<TContext
       const enabled = typeof context.isSdkExtensionEnabled === 'function'
         && context.isSdkExtensionEnabled()
       if (!enabled) throw new Error(`当前规划或结构化工作流边界禁止调用 SDK Skill 工具 '${tool.name}'。`)
-      return tool.invoke(runContext, input, details)
+      return executionGate.run('exclusive', () => tool.invoke(runContext, input, details))
     }
     return { ...tool, isEnabled, invoke }
   })
 }
 
-function applyMcpExecutionPhasePolicy(
+function applyMcpExecutionPolicy(
   tool: Tool<AgentsExecutionContext>,
+  executionGate: RunToolConcurrencyGate,
 ): Tool<AgentsExecutionContext> {
   if (tool.type !== 'function') return tool
   const isEnabled = async (
@@ -309,7 +297,7 @@ function applyMcpExecutionPhasePolicy(
     if (!runContext.context.isSdkExtensionEnabled()) {
       throw new Error(`当前规划或结构化工作流边界禁止调用 MCP 工具 '${tool.name}'。`)
     }
-    return tool.invoke(runContext, input, details)
+    return executionGate.run('exclusive', () => tool.invoke(runContext, input, details))
   }
   return { ...tool, isEnabled, invoke }
 }
@@ -317,29 +305,20 @@ function applyMcpExecutionPhasePolicy(
 function emptyToolIntegration(): RuntimeSdkIntegration {
   return {
     tools: [],
-    mcpServers: [],
-    mcpConfig: {
-      convertSchemasToStrict: true,
-      includeServerInToolNames: true,
-      errorFunction: null,
-    },
     mcpToolNames: new Set(),
     activeMcpServers: [],
     close: async () => {},
   }
 }
 
-function createMcpServer(config: RuntimeMcpServerConfig, nativeExecution: boolean): MCPServer {
+function createMcpServer(config: RuntimeMcpServerConfig): MCPServer {
   const filterConfig = {
     ...(config.allowedTools.length ? { allowed: config.allowedTools } : {}),
     ...(config.blockedTools.length ? { blocked: config.blockedTools } : {}),
   }
-  const staticToolFilter = Object.keys(filterConfig).length
+  const toolFilter = Object.keys(filterConfig).length
     ? createMCPToolStaticFilter(filterConfig)
     : undefined
-  const toolFilter = nativeExecution
-    ? createNativeMcpToolFilter(config)
-    : staticToolFilter
   const common = {
     name: config.name,
     cacheToolsList: config.cacheToolsList,
@@ -371,49 +350,6 @@ function createMcpServer(config: RuntimeMcpServerConfig, nativeExecution: boolea
   })
 }
 
-function createNativeMcpToolFilter(config: RuntimeMcpServerConfig) {
-  const allowed = config.allowedTools.length ? new Set(config.allowedTools) : null
-  const blocked = new Set(config.blockedTools)
-  return async (context: { runContext: RunContext<unknown> }, tool: { name: string }): Promise<boolean> => {
-    const executionContext = context.runContext.context
-    if (!hasSdkExtensionPolicy(executionContext) || !executionContext.isSdkExtensionEnabled()) return false
-    if (allowed && !allowed.has(tool.name)) return false
-    return !blocked.has(tool.name)
-  }
-}
-
-function hasSdkExtensionPolicy(value: unknown): value is Pick<AgentsExecutionContext, 'isSdkExtensionEnabled'> {
-  return typeof value === 'object'
-    && value !== null
-    && 'isSdkExtensionEnabled' in value
-    && typeof value.isSdkExtensionEnabled === 'function'
-}
-
-function resolveNativeMcpConfig(configs: RuntimeMcpServerConfig[]): RuntimeSdkIntegration['mcpConfig'] {
-  const first = configs.at(0)
-  if (!first) {
-    return {
-      convertSchemasToStrict: true,
-      includeServerInToolNames: true,
-      errorFunction: null,
-    }
-  }
-  const incompatible = configs.find(config => (
-    config.convertSchemasToStrict !== first.convertSchemasToStrict
-    || config.includeServerInToolNames !== first.includeServerInToolNames
-  ))
-  if (incompatible) {
-    throw new Error(
-      `原生 MCP servers 必须共享 convertSchemasToStrict 与 includeServerInToolNames；'${incompatible.name}' 的配置不一致。`,
-    )
-  }
-  return {
-    convertSchemasToStrict: first.convertSchemasToStrict,
-    includeServerInToolNames: first.includeServerInToolNames,
-    errorFunction: null,
-  }
-}
-
 function appendUniqueFunctionTools(
   target: Tool<AgentsExecutionContext>[],
   additions: Tool<AgentsExecutionContext>[],
@@ -428,52 +364,6 @@ function appendUniqueFunctionTools(
   }
 }
 
-function createHostedMcpTool(config: RuntimeMcpServerConfig): Tool {
-  const headers = resolveMcpHeaders(config)
-  const allowedTools = config.allowedTools.length ? { toolNames: config.allowedTools } : undefined
-  const authorization = resolveMcpAuthorization(config)
-  const description = config.description || undefined
-  const optionalConfig = {
-    ...(authorization ? { authorization } : {}),
-    ...(allowedTools ? { allowedTools } : {}),
-    ...(description ? { serverDescription: description } : {}),
-  }
-  if (config.connectorId?.trim()) {
-    if (config.approval === 'never') {
-      return hostedMcpTool({
-        serverLabel: config.name,
-        connectorId: config.connectorId.trim(),
-        headers,
-        ...optionalConfig,
-        requireApproval: 'never',
-      })
-    }
-    return hostedMcpTool({
-      serverLabel: config.name,
-      connectorId: config.connectorId.trim(),
-      headers,
-      ...optionalConfig,
-      requireApproval: 'always',
-    })
-  }
-  if (config.approval === 'never') {
-    return hostedMcpTool({
-      serverLabel: config.name,
-      serverUrl: requireHttpUrl(config),
-      headers,
-      ...optionalConfig,
-      requireApproval: 'never',
-    })
-  }
-  return hostedMcpTool({
-    serverLabel: config.name,
-    serverUrl: requireHttpUrl(config),
-    headers,
-    ...optionalConfig,
-    requireApproval: 'always',
-  })
-}
-
 function applyMcpApprovalPolicy(
   tool: Tool<AgentsExecutionContext>,
   config: RuntimeMcpServerConfig,
@@ -482,6 +372,29 @@ function applyMcpApprovalPolicy(
   return {
     ...tool,
     needsApproval: async () => true,
+  }
+}
+
+function applyMcpOutputMetadata(
+  tool: Tool<AgentsExecutionContext>,
+  config: RuntimeMcpServerConfig,
+): Tool<AgentsExecutionContext> {
+  if (tool.type !== 'function') return tool
+  return {
+    ...tool,
+    customDataExtractor: ({ toolCall }: FunctionToolCustomDataContext<AgentsExecutionContext>) => agentToolOutputMetadataSchema.parse({
+      schemaVersion: 1,
+      callId: toolCall.callId,
+      toolName: tool.name,
+      resultId: null,
+      valueRefIds: [],
+      artifactIds: [],
+      display: {
+        label: tool.name,
+        summary: null,
+        source: `mcp:${config.name}`,
+      },
+    }),
   }
 }
 

@@ -65,7 +65,7 @@ export class PostgresRunCheckpointRepository implements RunCheckpointRepository 
     contentHash: string
     agentsSdkVersion: string
     runtimeConfigDigest: string
-    sdkStateSchemaVersion: 2
+    sdkStateSchemaVersion: RunCheckpoint['sdkStateSchemaVersion']
   }): Promise<void> {
     await this.runMutations.run(runId, async () => {
       const updatedAt = new Date()

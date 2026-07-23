@@ -144,7 +144,7 @@ export class PostgresConversationPersistence implements ConversationPersistence 
     contentHash: string
     agentsSdkVersion: string
     runtimeConfigDigest: string
-    sdkStateSchemaVersion: 2
+    sdkStateSchemaVersion: RunCheckpoint['sdkStateSchemaVersion']
   }): Promise<void> {
     await this.runs.saveAgentsSdkCheckpoint(runId, input)
   }

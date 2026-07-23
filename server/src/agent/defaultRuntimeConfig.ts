@@ -18,7 +18,6 @@ export function defaultRuntimeConfig(options: DefaultRuntimeConfigOptions = {}):
     loopTraceLimit: 80,
     maxTurns: 50,
     maxFunctionToolConcurrency: 4,
-    maxParallelSubAgents: 3,
     sandbox,
     sdk: {
       mcp: {

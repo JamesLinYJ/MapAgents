@@ -60,11 +60,14 @@ export const basemapDescriptorSchema = z.object({
 })
 
 export const agentRuntimeCapabilitiesSchema = z.object({
+  transport: z.enum(['deepseek_chat_completions', 'none']),
   structuredOutput: z.enum(['json_object', 'json_schema', 'none']),
   functionTools: z.boolean(),
   localMcp: z.boolean(),
   hostedTools: z.boolean(),
   handoffs: z.boolean(),
+  multiToolResponse: z.boolean(),
+  providerParallelToolControl: z.boolean(),
   remoteConversation: z.boolean(),
   serverCompaction: z.boolean(),
 })
@@ -139,6 +142,7 @@ export const toolDescriptorSchema = z.object({
   language: z.string().nullable().default(null),
   isReadOnly: z.boolean().default(true),
   isDestructive: z.boolean().default(false),
+  parallelSafe: z.boolean().default(false),
   available: z.boolean().default(true),
   tags: z.array(z.string()).default([]),
   parameters: z.array(toolParameterDescriptorSchema).default([]),

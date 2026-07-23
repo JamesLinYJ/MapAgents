@@ -11,9 +11,12 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import type { AgentRuntimeConfig } from '../schemas/types.js'
+import {
+  AGENTS_SDK_STATE_SCHEMA_VERSION,
+  type AgentRuntimeConfig,
+} from '../schemas/types.js'
 
-export const SDK_STATE_SCHEMA_VERSION = 2
+export const SDK_STATE_SCHEMA_VERSION = AGENTS_SDK_STATE_SCHEMA_VERSION
 
 let versionPromise: Promise<string> | null = null
 

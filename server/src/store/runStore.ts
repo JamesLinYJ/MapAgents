@@ -18,6 +18,7 @@ import type {
   RunSummary,
   ToolValueRef,
 } from '../schemas/types.js'
+import { AGENTS_SDK_STATE_SCHEMA_VERSION } from '../schemas/types.js'
 import { summarizeAssistantText } from '../conversation/items.js'
 import { errorLogPayload, logger } from '../observability/logger.js'
 import { makeId, nowUtc } from '../utils/ids.js'
@@ -301,7 +302,7 @@ export class RunStore {
       contentHash: reference.hash,
       agentsSdkVersion: metadata.agentsSdkVersion,
       runtimeConfigDigest: metadata.runtimeConfigDigest,
-      sdkStateSchemaVersion: 2,
+      sdkStateSchemaVersion: AGENTS_SDK_STATE_SCHEMA_VERSION,
     })
   }
 

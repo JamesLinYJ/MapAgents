@@ -1061,6 +1061,54 @@ describe('conversation architecture', () => {
     }
   })
 
+  it('keeps Agents SDK orchestration in the native runtime boundaries', async () => {
+    const root = path.resolve(process.cwd(), '..')
+    const runtimeSource = await readFile(path.join(root, 'server/src/agent/runtime.ts'), 'utf8')
+    const assemblySource = await readFile(path.join(root, 'server/src/agent/runtimeAssembly.ts'), 'utf8')
+    const executorSource = await readFile(path.join(root, 'server/src/agent/runtimeSdkExecutor.ts'), 'utf8')
+    const inputSource = await readFile(path.join(root, 'server/src/agent/runtimeModelInput.ts'), 'utf8')
+    const projectorSource = await readFile(path.join(root, 'server/src/agent/runtimeTranscriptProjector.ts'), 'utf8')
+    const subAgentSource = await readFile(path.join(root, 'server/src/agent/subAgentToolFactory.ts'), 'utf8')
+    const handoffSource = await readFile(path.join(root, 'server/src/agent/handoffAgentFactory.ts'), 'utf8')
+    const integrationSource = await readFile(path.join(root, 'server/src/agent/runtimeSdkIntegrations.ts'), 'utf8')
+    const sharedRuntimeSource = await readFile(path.join(root, 'packages/shared-types/src-ts/runtime.ts'), 'utf8')
+
+    expect(runtimeSource).toContain('RuntimeAssemblyFactory')
+    expect(runtimeSource).toContain('RuntimeSdkExecutor')
+    expect(runtimeSource).not.toContain('new Runner(')
+    expect(runtimeSource).not.toContain('.runner.run(')
+    expect(assemblySource).toContain('new Runner(')
+    expect(executorSource).toContain('assembly.runner.run(')
+    expect(inputSource).toContain('class RuntimeModelInputController')
+    expect(projectorSource).toContain('class RuntimeTranscriptProjector')
+    expect(subAgentSource).toContain('.asTool(')
+    expect(handoffSource).toContain('handoff(')
+    expect(integrationSource).toContain('connectMcpServers')
+    expect(integrationSource).toContain('getAllMcpTools')
+
+    const retiredFactory = path.join(root, 'server/src/agent/parallelSubAgentToolFactory.ts')
+    await expect(stat(retiredFactory)).rejects.toMatchObject({ code: 'ENOENT' })
+    const retiredTokens = [
+      'delegate_agent_batch',
+      'parallel_batch',
+      'maxParallelSubAgents',
+      'AgentBatch',
+      'hostedMcpTool',
+      'connectorId',
+    ]
+    const activeContracts = [
+      assemblySource,
+      executorSource,
+      subAgentSource,
+      handoffSource,
+      integrationSource,
+      sharedRuntimeSource,
+    ].join('\n')
+    for (const token of retiredTokens) {
+      expect(activeContracts, token).not.toContain(token)
+    }
+  })
+
   it('keeps short-nowcast orchestration in the generic Automation boundary', async () => {
     const root = path.resolve(process.cwd(), '..')
     const dedicatedRunner = path.join(root, 'server/src/agent/deterministicNowcastRunner.ts')

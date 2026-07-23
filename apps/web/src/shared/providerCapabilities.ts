@@ -33,3 +33,28 @@ export function providerUnavailableLabel(provider?: ModelProviderDescriptor | nu
   if (!supportsAgentSdkLiveSupervisor(provider)) return '（不支持 Agent 运行时）'
   return ''
 }
+
+export function agentRuntimeCapabilitySummary(
+  provider?: ModelProviderDescriptor | null,
+): string {
+  if (!provider) return '尚未选择模型提供商。'
+  const runtime = provider.agentRuntime
+  if (runtime.transport === 'none') return '该提供商当前未接入 Agent 运行时。'
+
+  const multiTool = runtime.multiToolResponse ? '支持同轮多工具响应' : '不支持同轮多工具响应'
+  const concurrency = runtime.providerParallelToolControl
+    ? '提供商可控制并行'
+    : '由 GeoForge 本地安全闸门控制并发'
+  const unavailable = [
+    !runtime.hostedTools ? 'Hosted Tools' : null,
+    !runtime.remoteConversation ? '远程 Conversation' : null,
+    !runtime.serverCompaction ? '服务端压缩' : null,
+  ].filter((item): item is string => Boolean(item))
+
+  return [
+    'DeepSeek Chat Completions',
+    multiTool,
+    concurrency,
+    unavailable.length ? `${unavailable.join('、')}不可用` : null,
+  ].filter((item): item is string => Boolean(item)).join(' · ')
+}

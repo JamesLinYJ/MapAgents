@@ -60,6 +60,8 @@ export function createHandoffAgents(options: HandoffAgentFactoryOptions): Handof
         args,
         callId,
       ),
+      runToolExecution: (lane, operation) => options.executionGate.run(lane, operation),
+      toolOutputMetadata: callId => options.coordinator.toolOutputMetadata(callId),
     }
     const agent = new Agent<AgentsExecutionContext, typeof supervisorDeliverySchema>({
       name: config.agentId,

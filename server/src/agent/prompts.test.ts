@@ -21,7 +21,6 @@ describe('system prompt', () => {
         transport: 'streamable_http',
         executionMode: 'function_tools',
         url: 'http://127.0.0.1:7777/mcp',
-        connectorId: null,
         command: null,
         args: [],
         cwd: null,

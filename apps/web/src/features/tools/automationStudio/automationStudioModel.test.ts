@@ -30,6 +30,7 @@ const tool: ToolDescriptor = {
   language: 'typescript',
   isReadOnly: true,
   isDestructive: false,
+  parallelSafe: false,
   available: true,
   tags: [],
   parameters: [{

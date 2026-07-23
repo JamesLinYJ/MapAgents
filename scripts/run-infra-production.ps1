@@ -22,6 +22,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw '生产 Docker 基础设施启动失败。' }
     & docker compose -f $Compose exec -T postgis psql -U $DatabaseUser -d $DatabaseName -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/003_better_auth_admin.sql
     if ($LASTEXITCODE -ne 0) { throw 'Better Auth Admin Plugin migration 执行失败。' }
+    & docker compose -f $Compose exec -T postgis psql -U $DatabaseUser -d $DatabaseName -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/004_agents_sdk_native_runtime.sql
+    if ($LASTEXITCODE -ne 0) { throw 'Agents SDK 原生运行时 migration 执行失败。' }
     while ($true) {
         $Since = [DateTime]::UtcNow.ToString('o')
         $LogExitCode = 0

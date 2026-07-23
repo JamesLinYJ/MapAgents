@@ -121,6 +121,16 @@ describe('createAgentsTools', () => {
       rejectPreparedToolCall: async () => {},
       prepareToolCall: async () => {},
       executeTool: async () => 'ok',
+      runToolExecution: async (_lane, operation) => operation(),
+      toolOutputMetadata: callId => ({
+        schemaVersion: 1,
+        callId,
+        toolName: 'test',
+        resultId: null,
+        valueRefIds: [],
+        artifactIds: [],
+        display: null,
+      }),
     })
     const agent = {} as never
 

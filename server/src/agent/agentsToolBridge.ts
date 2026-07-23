@@ -9,10 +9,15 @@
 // --------------------------------------------------------------------------
 
 import { ToolGuardrailFunctionOutputFactory, tool, type RunContext, type Tool } from '@openai/agents'
+import {
+  agentToolOutputMetadataSchema,
+  type AgentToolOutputMetadata,
+} from '@geo-agent-platform/shared-types/runtime'
 import type { ToolRegistry } from '../framework/registry.js'
 import type { ToolDef } from '../framework/types.js'
 import { enrichValueRefDescriptions, ensureToolSchemas, isRecord, parametersForAgentsSdk, parametersForCompatibleAgentsSdk, stripNullObjectValues, valueRefRules } from '../framework/schema.js'
 import type { AgentToolSchemaMode } from '../model/registry.js'
+import { toolExecutionLane, type ToolExecutionLane } from './runToolConcurrencyGate.js'
 
 export interface AgentsExecutionContext {
   runId: string
@@ -24,6 +29,8 @@ export interface AgentsExecutionContext {
   rejectPreparedToolCall(toolName: string, callId: string, message: string): Promise<void>
   prepareToolCall(toolName: string, args: Record<string, unknown>, callId: string): Promise<void>
   executeTool(toolName: string, args: Record<string, unknown>, callId: string): Promise<string>
+  runToolExecution<T>(lane: ToolExecutionLane, operation: () => Promise<T>): Promise<T>
+  toolOutputMetadata(callId: string): AgentToolOutputMetadata
 }
 
 export interface CreateAgentsToolsOptions {
@@ -39,6 +46,8 @@ export interface AgentsToolExecutionScope {
   rejectPreparedToolCall(toolName: string, callId: string, message: string): Promise<void>
   prepareToolCall(toolName: string, args: Record<string, unknown>, callId: string): Promise<void>
   executeTool(toolName: string, args: Record<string, unknown>, callId: string): Promise<string>
+  runToolExecution<T>(lane: ToolExecutionLane, operation: () => Promise<T>): Promise<T>
+  toolOutputMetadata(callId: string): AgentToolOutputMetadata
 }
 
 export function createAgentsTools(
@@ -88,8 +97,18 @@ export function createAgentsTools(
       const callId = details?.toolCall?.callId
       if (!callId) throw new Error(`工具 '${definition.name}' 缺少 callId`)
       await execution.prepareToolCall(definition.name, args, callId)
-      return execution.executeTool(definition.name, args, callId)
+      const lane = toolExecutionLane(definition, approvalTools.has(definition.name))
+      return execution.runToolExecution(
+        lane,
+        () => execution.executeTool(definition.name, args, callId),
+      )
     }
+    const customDataExtractor = ({ runContext, toolCall }: {
+      runContext: RunContext<AgentsExecutionContext>
+      toolCall: { callId: string }
+    }): AgentToolOutputMetadata => agentToolOutputMetadataSchema.parse(
+      scope(runContext).toolOutputMetadata(toolCall.callId),
+    )
     const errorFunction = (runContext: RunContext, error: unknown): string => {
       const message = error instanceof Error ? error.message : String(error)
       // 策略性错误（plan mode、审批拒绝等）应传播而非让模型重试
@@ -125,6 +144,7 @@ export function createAgentsTools(
         isEnabled,
         inputGuardrails: workflowGuardrails,
         execute,
+        customDataExtractor,
       })
     }
 
@@ -139,6 +159,7 @@ export function createAgentsTools(
       isEnabled,
       inputGuardrails: workflowGuardrails,
       execute,
+      customDataExtractor,
     })
   })
 }
@@ -169,7 +190,9 @@ function requireContext(runContext?: RunContext<unknown>): AgentsExecutionContex
     || typeof context.formatToolFailureForModel !== 'function'
     || typeof context.rejectPreparedToolCall !== 'function'
     || typeof context.prepareToolCall !== 'function'
-    || typeof context.executeTool !== 'function') {
+    || typeof context.executeTool !== 'function'
+    || typeof context.runToolExecution !== 'function'
+    || typeof context.toolOutputMetadata !== 'function') {
     throw new Error('Agents SDK 工具缺少运行上下文')
   }
   return context as unknown as AgentsExecutionContext

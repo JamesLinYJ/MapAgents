@@ -27,6 +27,7 @@ export const geocodePlaceTool: ToolDef = {
     tags: ['geo', 'search'],
     isReadOnly: true,
     isDestructive: false,
+    parallelSafe: true,
     jsonSchema: {
         type: 'object',
         properties: {

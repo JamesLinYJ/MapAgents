@@ -291,16 +291,17 @@ describe('ToolExecutionCoordinator', () => {
       saveRunCheckpoint: vi.fn(async () => undefined),
       getRun: vi.fn(() => ({
         workspaceId: 'workspace_1',
-        state: { planMode: false, agentWorkflow: null, todos: [], warnings, errors },
+        state: { planMode: false, agentWorkflow: null, todos: [], artifacts: [], warnings, errors },
       })),
       mutateRunState: vi.fn(async (_runId: string, mutation: (state: {
         planMode: boolean
         agentWorkflow: null
         todos: never[]
+        artifacts: never[]
         warnings: string[]
         errors: string[]
       }) => Record<string, unknown>) => {
-        const state = { planMode: false, agentWorkflow: null, todos: [], warnings, errors }
+        const state = { planMode: false, agentWorkflow: null, todos: [], artifacts: [], warnings, errors }
         const updates = mutation(state)
         warnings = Array.isArray(updates.warnings) ? updates.warnings as string[] : warnings
         errors = Array.isArray(updates.errors) ? updates.errors as string[] : errors
@@ -602,6 +603,7 @@ function coordinatorHarness(
     warnings: [],
     errors: [],
     failedTool: null as string | null,
+    subAgents: [],
     toolValueRefs: [],
     artifacts: [],
     toolResults: [],

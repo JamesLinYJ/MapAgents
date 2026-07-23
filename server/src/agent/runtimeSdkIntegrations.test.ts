@@ -13,6 +13,7 @@ import {
 } from './runtimeSdkIntegrations.js'
 import { agentRuntimeConfigSchema } from '@geo-agent-platform/shared-types/runtime'
 import type { AgentsExecutionContext } from './agentsToolBridge.js'
+import { RunToolConcurrencyGate } from './runToolConcurrencyGate.js'
 
 describe('runtime SDK integrations', () => {
   it('keeps the default runtime SDK config schema-valid and disabled', () => {
@@ -38,7 +39,6 @@ describe('runtime SDK integrations', () => {
         transport: 'streamable_http',
         executionMode: 'function_tools',
         url: null,
-        connectorId: null,
         command: null,
         args: [],
         cwd: null,
@@ -116,6 +116,16 @@ describe('runtime SDK integrations', () => {
         rejectPreparedToolCall: async () => {},
         prepareToolCall: async () => {},
         executeTool: async () => 'ok',
+        runToolExecution: async (_lane, operation) => operation(),
+        toolOutputMetadata: callId => ({
+          schemaVersion: 1,
+          callId,
+          toolName: 'load_skill',
+          resultId: null,
+          valueRefIds: [],
+          artifactIds: [],
+          display: null,
+        }),
       })
       await expect(loadSkill.isEnabled(runContext, {} as never)).resolves.toBe(true)
       extensionEnabled = false
@@ -190,7 +200,7 @@ describe('runtime SDK integrations', () => {
     enableTestMcp(config, 'always')
     let closed = false
     const fakeServer = { name: 'docs' } as MCPServer
-    const integration = await createRuntimeSdkIntegration(config, new Set(), {
+    const integration = await createRuntimeSdkIntegration(config, new Set(), new RunToolConcurrencyGate(), {
       connectMcpServers: async () => ({
         active: [fakeServer],
         close: async () => { closed = true },
@@ -206,7 +216,6 @@ describe('runtime SDK integrations', () => {
     })
 
     expect(integration.activeMcpServers).toEqual(['docs'])
-    expect(integration.mcpServers).toEqual([])
     expect(integration.tools.map(candidate => candidate.name)).toEqual(['docs_search'])
     expect([...integration.mcpToolNames]).toEqual(['docs_search'])
     const [mcpTool] = integration.tools
@@ -224,9 +233,50 @@ describe('runtime SDK integrations', () => {
       rejectPreparedToolCall: async () => {},
       prepareToolCall: async () => {},
       executeTool: async () => 'ok',
+      runToolExecution: async (_lane, operation) => operation(),
+      toolOutputMetadata: callId => ({
+        schemaVersion: 1,
+        callId,
+        toolName: 'docs_search',
+        resultId: null,
+        valueRefIds: [],
+        artifactIds: [],
+        display: null,
+      }),
     })
     await expect(mcpTool.needsApproval(context, { query: 'abc' }, 'call_1')).resolves.toBe(true)
     await expect(mcpTool.isEnabled(context, {} as never)).resolves.toBe(true)
+    if (!mcpTool.customDataExtractor) throw new Error('MCP function tool 缺少 customDataExtractor')
+    expect(mcpTool.customDataExtractor({
+      runContext: context,
+      tool: mcpTool,
+      toolCall: {
+        type: 'function_call',
+        callId: 'call_1',
+        name: 'docs_search',
+        arguments: '{"query":"abc"}',
+      },
+      input: { query: 'abc' },
+      output: 'ok',
+      rawItem: {
+        type: 'function_call_result',
+        callId: 'call_1',
+        name: 'docs_search',
+        output: 'ok',
+      },
+    })).toEqual({
+      schemaVersion: 1,
+      callId: 'call_1',
+      toolName: 'docs_search',
+      resultId: null,
+      valueRefIds: [],
+      artifactIds: [],
+      display: {
+        label: 'docs_search',
+        summary: null,
+        source: 'mcp:docs',
+      },
+    })
     sdkExtensionEnabled = false
     await expect(mcpTool.isEnabled(context, {} as never)).resolves.toBe(false)
     await expect(mcpTool.invoke(context, '{"query":"abc"}')).rejects.toThrow('结构化工作流边界禁止调用 MCP 工具')
@@ -234,12 +284,16 @@ describe('runtime SDK integrations', () => {
     expect(closed).toBe(true)
   })
 
-  it('attaches approval-free local MCP through the Agent native mcpServers boundary', async () => {
+  it('exposes approval-free MCP only as a locally managed SDK function tool', async () => {
     const config = defaultRuntimeConfig()
     enableTestMcp(config, 'never')
     let connectedServer: MCPServer | null = null
     let closed = false
-    const integration = await createRuntimeSdkIntegration(config, new Set(['platform_tool']), {
+    const integration = await createRuntimeSdkIntegration(
+      config,
+      new Set(['platform_tool']),
+      new RunToolConcurrencyGate(),
+      {
       connectMcpServers: async servers => {
         connectedServer = servers[0] ?? null
         return {
@@ -259,21 +313,15 @@ describe('runtime SDK integrations', () => {
           execute: async () => 'ok',
         })]
       },
-    })
+      },
+    )
 
-    expect(integration.tools).toEqual([])
-    expect(integration.mcpServers).toHaveLength(1)
-    expect(integration.mcpServers[0]).toBe(connectedServer)
-    expect(integration.mcpConfig).toEqual({
-      convertSchemasToStrict: true,
-      includeServerInToolNames: true,
-      errorFunction: null,
-    })
+    expect(integration.tools.map(candidate => candidate.name)).toEqual(['docs_search'])
+    expect(connectedServer?.name).toBe('docs')
     expect([...integration.mcpToolNames]).toEqual(['docs_search'])
 
-    const filter = connectedServer?.toolFilter
-    expect(typeof filter).toBe('function')
-    if (typeof filter !== 'function') throw new Error('原生 MCP 必须使用动态执行阶段过滤器')
+    const [mcpTool] = integration.tools
+    if (mcpTool?.type !== 'function') throw new Error('MCP 必须作为本地 function tool 暴露')
     let sdkExtensionEnabled = true
     const runContext = new RunContext<AgentsExecutionContext>({
       runId: 'run_native_mcp',
@@ -285,11 +333,25 @@ describe('runtime SDK integrations', () => {
       rejectPreparedToolCall: async () => {},
       prepareToolCall: async () => {},
       executeTool: async () => 'ok',
+      runToolExecution: async (_lane, operation) => operation(),
+      toolOutputMetadata: callId => ({
+        schemaVersion: 1,
+        callId,
+        toolName: 'docs_search',
+        resultId: null,
+        valueRefIds: [],
+        artifactIds: [],
+        display: null,
+      }),
     })
-    const filterContext = { runContext, agent: {} as never, serverName: 'docs' }
-    await expect(filter(filterContext, { name: 'search' } as never)).resolves.toBe(true)
+    await expect(mcpTool.needsApproval(runContext, { query: 'abc' }, 'call_1')).resolves.toBe(false)
+    await expect(mcpTool.isEnabled(runContext, {} as never)).resolves.toBe(true)
+    await expect(mcpTool.invoke(runContext, '{"query":"abc"}')).resolves.toBe('ok')
     sdkExtensionEnabled = false
-    await expect(filter(filterContext, { name: 'search' } as never)).resolves.toBe(false)
+    await expect(mcpTool.isEnabled(runContext, {} as never)).resolves.toBe(false)
+    await expect(mcpTool.invoke(runContext, '{"query":"abc"}')).rejects.toThrow(
+      '结构化工作流边界禁止调用 MCP 工具',
+    )
 
     await integration.close()
     expect(closed).toBe(true)
@@ -311,7 +373,6 @@ function enableTestMcp(
       transport: 'streamable_http',
       executionMode: 'function_tools',
       url: 'http://127.0.0.1:9999/mcp',
-      connectorId: null,
       command: null,
       args: [],
       cwd: null,

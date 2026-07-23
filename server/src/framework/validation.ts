@@ -47,9 +47,10 @@ export function validateToolProvider(provider: ToolProvider): void {
         if (
             entry.isReadOnly !== tool.isReadOnly
             || entry.isDestructive !== tool.isDestructive
+            || (entry.parallelSafe ?? false) !== (tool.parallelSafe ?? false)
             || (entry.requiresApproval ?? false) !== (tool.requiresApproval ?? false)
         ) {
-            throw new Error(`工具 "${tool.name}" 的读写、破坏性或审批属性与 manifest 不一致`);
+            throw new Error(`工具 "${tool.name}" 的读写、并发安全、破坏性或审批属性与 manifest 不一致`);
         }
         validateManifestParity(entry, tool);
     }

@@ -317,7 +317,7 @@ export class InMemoryConversationPersistence implements ConversationPersistence 
     contentHash: string
     agentsSdkVersion: string
     runtimeConfigDigest: string
-    sdkStateSchemaVersion: 2
+    sdkStateSchemaVersion: RunCheckpoint['sdkStateSchemaVersion']
   }): Promise<void> {
     const current = this.requireCheckpoint(runId)
     const updatedAt = nowUtc()

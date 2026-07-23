@@ -33,23 +33,12 @@ import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js
 import { createTestPersistenceFacade, PersistenceFacadeTestHarness } from '../../test-support/persistenceFacadeHarness.js'
 import planProvider from '../tools/plan/index.js'
 import { defaultRuntimeConfig } from './defaultRuntimeConfig.js'
-import { OpenAIAgentsRuntime, type SandboxSessionFactory } from './runtime.js'
+import { OpenAIAgentsRuntime } from './runtime.js'
+import { testSandboxClientFactory } from '../../test-support/agentsSandboxClient.js'
 
 async function removeTempRoot(root: string): Promise<void> {
   await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
 }
-
-const testSandboxSessionFactory: SandboxSessionFactory = async manifest => ({
-  state: { manifest, workspaceReady: true },
-  createEditor: () => ({
-    createFile: async () => { throw new Error('测试 sandbox 不允许写入文件') },
-    updateFile: async () => { throw new Error('测试 sandbox 不允许修改文件') },
-    deleteFile: async () => { throw new Error('测试 sandbox 不允许删除文件') },
-  }),
-  execCommand: async () => { throw new Error('测试 sandbox 不允许执行 shell 命令') },
-  supportsPty: () => false,
-  close: async () => {},
-})
 
 function testRuntime(
   store: PlatformPersistenceFacade,
@@ -57,7 +46,7 @@ function testRuntime(
   models: ModelAdapterRegistry,
 ): OpenAIAgentsRuntime {
   return new OpenAIAgentsRuntime(store, tools, models, {
-    createSandboxSession: testSandboxSessionFactory,
+    createSandboxClient: testSandboxClientFactory,
   })
 }
 
@@ -177,6 +166,45 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         .toHaveLength(1)
       expect(secondItems.find(item => item.body === '我记得，项目代号是西湖。')?.metadata.transcriptEntryId)
         .toBe(assistantEntries[1].entryId)
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
+  it('keeps an earlier identical question by excluding the current turn by run identity', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-identical-query-'))
+    try {
+      const requests: ModelRequest[] = []
+      const models = registryWith(fakeAdapter(scriptedModel(request => {
+        requests.push(request)
+        return { text: '已记录。' }
+      })))
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '重复问题身份测试')
+      const query = '请记住项目代号是西湖'
+      const firstRun = await store.createRun(session.id, query, {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: testRuntimeConfig(),
+      })
+      await testRuntime(store, new ToolRegistry(), models).run(runOptions(firstRun, thread.id))
+      const secondRun = await store.createRun(session.id, query, {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: testRuntimeConfig(),
+      })
+
+      await testRuntime(store, new ToolRegistry(), models).run(runOptions(secondRun, thread.id))
+
+      expect(requestTexts(requests[1]).filter(text => text === query)).toHaveLength(2)
+      const transcript = await store.activeTranscript(thread.id)
+      expect(transcript.filter(entry => (
+        entry.kind === 'message'
+        && entry.payload.role === 'user'
+        && entry.payload.content === query
+      ))).toHaveLength(2)
     } finally {
       await removeTempRoot(root)
     }
@@ -962,6 +990,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       let maxActive = 0
       const parallelTool = (name: 'parallel_a' | 'parallel_b'): ToolDef => ({
         ...toolDefinition(name, []),
+        parallelSafe: true,
         handler: async () => {
           active += 1
           maxActive = Math.max(maxActive, active)
@@ -1362,8 +1391,8 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       throw new ReplaySafeTestError('terminated')
     }))
     expect(result.run.status).toBe('failed')
-    expect(result.run.state.errors[0]).toContain('terminated')
-    expect(result.items.at(-1)?.metadata.message).toContain('terminated')
+    expect(result.run.state.errors[0]).toBe('服务处理失败。请查看服务端日志。')
+    expect(result.items.at(-1)?.metadata.message).toBe('服务处理失败。请查看服务端日志。')
   })
 
   it('keeps normal tool preambles out of reasoning and delivers terminal tool output', async () => {
@@ -1483,6 +1512,149 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       && item.body === '西湖附近明天下午降水概率最高为 72%，数据来自 Open-Meteo。'
     ))).toBe(true)
     expect(outcome.items.some(item => item.body?.includes('我先查询西湖'))).toBe(false)
+  })
+
+  it('keeps the place context across natural-language weather follow-ups', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-weather-follow-up-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '天气连续追问')
+      const config = testRuntimeConfig()
+      const observedArgs: Record<string, unknown>[] = []
+      const tools = new ToolRegistry()
+      tools.register(providerFromTools('weather-follow-up-test', [{
+        ...toolDefinition('query_public_weather', ['place']),
+        jsonSchema: {
+          type: 'object',
+          properties: {
+            place: { type: 'string' },
+            date: { type: 'string', enum: ['today', 'tomorrow'] },
+          },
+          required: ['place', 'date'],
+        },
+        handler: async args => {
+          observedArgs.push(args)
+          return result('公开天气数据已返回', [], {
+            place: args.place,
+            precipitationProbability: args.date === 'tomorrow' ? 65 : 25,
+          })
+        },
+      }]))
+      const model = scriptedModel(request => {
+        const input = Array.isArray(request.input) ? request.input : []
+        const hasTomorrowResult = input.some(item => (
+          item.type === 'function_call_result' && item.callId === 'call_weather_tomorrow'
+        ))
+        const hasTodayResult = input.some(item => (
+          item.type === 'function_call_result' && item.callId === 'call_weather_today'
+        ))
+        const latestQuestion = requestTexts(request).at(-1) ?? ''
+        if (hasTomorrowResult) {
+          return { text: '根据 Open-Meteo 公开天气数据，杭州明天有 65% 的降水概率，建议出门带伞。' }
+        }
+        if (latestQuestion.includes('明天')) {
+          return {
+            toolCalls: [{
+              id: 'call_weather_tomorrow',
+              name: 'query_public_weather',
+              arguments: '{"place":"杭州","date":"tomorrow"}',
+            }],
+          }
+        }
+        if (hasTodayResult) {
+          return { text: '根据 Open-Meteo 公开天气数据，杭州今天降水概率为 25%，短时下雨可能性较低。' }
+        }
+        return {
+          toolCalls: [{
+            id: 'call_weather_today',
+            name: 'query_public_weather',
+            arguments: '{"place":"杭州","date":"today"}',
+          }],
+        }
+      })
+      const runtime = testRuntime(store, tools, registryWith(fakeAdapter(model)))
+      const firstRun = await store.createRun(session.id, '杭州今天会下雨吗？', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: config,
+      })
+      const first = await runtime.run({
+        ...runOptions(firstRun, thread.id),
+        runtimeConfig: config,
+      })
+      const secondRun = await store.createRun(session.id, '那明天呢？', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: config,
+      })
+      const second = await runtime.run({
+        ...runOptions(secondRun, thread.id),
+        runtimeConfig: config,
+      })
+
+      expect(first.state.errors, first.state.errors.join('\n')).toEqual([])
+      expect(second.state.errors, second.state.errors.join('\n')).toEqual([])
+      expect(first.status).toBe('completed')
+      expect(second.status).toBe('completed')
+      expect(observedArgs).toEqual([
+        { place: '杭州', date: 'today' },
+        { place: '杭州', date: 'tomorrow' },
+      ])
+      const transcript = await store.activeTranscript(thread.id)
+      expect(transcript.filter(entry => (
+        entry.kind === 'message' && entry.payload.role === 'user'
+      )).map(entry => entry.payload.content)).toEqual([
+        '杭州今天会下雨吗？',
+        '那明天呢？',
+      ])
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
+  it('asks a natural clarification when a weather question has no place', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-weather-clarification-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '天气地点澄清')
+      const config = testRuntimeConfig()
+      const run = await store.createRun(session.id, '今天会下雨吗？', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: config,
+      })
+      const tools = new ToolRegistry()
+      tools.register(planProvider)
+      const model = scriptedModel(() => ({
+        toolCalls: [{
+          id: 'call_weather_place_clarification',
+          name: 'request_clarification',
+          arguments: JSON.stringify({
+            question: '你想查询哪个城市或区县的天气？',
+            reason: '天气预报需要明确地点。',
+            options: [],
+            allowFreeText: true,
+          }),
+        }],
+      }))
+
+      const waiting = await testRuntime(store, tools, registryWith(fakeAdapter(model))).run({
+        ...runOptions(run, thread.id),
+        runtimeConfig: config,
+      })
+
+      expect(waiting.status).toBe('clarification_needed')
+      expect(waiting.state.clarification).toMatchObject({
+        question: '你想查询哪个城市或区县的天气？',
+        allowFreeText: true,
+      })
+    } finally {
+      await removeTempRoot(root)
+    }
   })
 
   it('runs configured subagents as Agent tools with inherited model and persisted transcript', async () => {
@@ -1628,7 +1800,140 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     }
   })
 
-  it('runs independent read-only subagents concurrently through one approved batch', async () => {
+  it('restores a nested Agent-as-tool approval from the parent SDK RunState', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-subagent-approval-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '子智能体审批恢复')
+      const config = testRuntimeConfig()
+      config.supervisor.approvalInterruptTools = ['sensitive_tool']
+      config.subAgents = [{
+        agentId: 'sensitive_analyst',
+        name: '敏感分析助手',
+        role: 'analyst',
+        summary: '执行需要审批的分析',
+        systemPrompt: '你是敏感分析子智能体。',
+        model: null,
+        tools: ['sensitive_tool'],
+        delegationMode: 'as_tool',
+        parallelSafe: false,
+        maxTurns: 12,
+        timeoutMs: 120_000,
+      }]
+      let executions = 0
+      const tools = new ToolRegistry()
+      tools.register(planProvider)
+      tools.register(approvalProvider(() => { executions += 1 }))
+      const invocation = subAgentArgs('执行敏感分析', ['审批后的分析结论'])
+      const workflow = {
+        goal: '由子智能体执行需要审批的分析',
+        steps: [{
+          stepId: 'step_sensitive_agent',
+          title: '委托敏感分析助手',
+          kind: 'agent' as const,
+          toolName: 'sensitive_analyst',
+          ownerAgentId: 'sensitive_analyst',
+          args: invocation,
+          reason: '由受限子智能体完成',
+          dependsOn: [],
+        }],
+      }
+      const model = scriptedModel(request => {
+        if (request.systemInstructions?.includes('敏感分析子智能体')) {
+          if (hasToolResultNamed(request, 'sensitive_tool')) {
+            return { text: '审批后的子分析已经完成。' }
+          }
+          return {
+            toolCalls: [{
+              id: 'call_nested_sensitive',
+              name: 'sensitive_tool',
+              arguments: '{"value":1}',
+            }],
+          }
+        }
+        if (hasToolResultNamed(request, 'sensitive_analyst')) {
+          return { text: '主智能体已汇总审批后的子分析。' }
+        }
+        if (hasToolResultNamed(request, 'submit_agent_workflow')) {
+          return {
+            toolCalls: [{
+              id: 'call_sensitive_agent',
+              name: 'sensitive_analyst',
+              arguments: JSON.stringify(invocation),
+            }],
+          }
+        }
+        return {
+          toolCalls: [{
+            id: 'call_sensitive_plan',
+            name: 'submit_agent_workflow',
+            arguments: JSON.stringify({ workflow }),
+          }],
+        }
+      })
+      const run = await store.createRun(session.id, '请执行一项需要审批的敏感分析', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: config,
+      })
+      const runtime = testRuntime(store, tools, registryWith(fakeAdapter(model)))
+      const workflowWaiting = await runtime.run({
+        ...runOptions(run, thread.id),
+        runtimeConfig: config,
+        executionMode: 'plan',
+      })
+      const workflowApproval = workflowWaiting.state.approvals.find(item => (
+        item.action === 'submit_agent_workflow' && item.status === 'pending'
+      ))
+      if (!workflowApproval) throw new Error('测试没有生成工作流审批')
+
+      const nestedWaiting = await runtime.resolveApproval(
+        run.id,
+        workflowApproval.approvalId,
+        true,
+      )
+      expect(nestedWaiting.state.errors, nestedWaiting.state.errors.join('\n')).toEqual([])
+      expect(nestedWaiting.status).toBe('waiting_approval')
+      const nestedApproval = nestedWaiting.state.approvals.find(item => (
+        item.action === 'sensitive_tool' && item.status === 'pending'
+      ))
+      if (!nestedApproval) throw new Error('测试没有生成子智能体内部审批')
+      const serialized = JSON.parse(await store.readAgentsSdkState(run.id)) as {
+        pendingAgentToolRuns?: Record<string, unknown>
+      }
+
+      expect(nestedWaiting.status).toBe('waiting_approval')
+      expect(executions).toBe(0)
+      expect(Object.keys(serialized.pendingAgentToolRuns ?? {})).not.toHaveLength(0)
+
+      const completed = await runtime.resolveApproval(
+        run.id,
+        nestedApproval.approvalId,
+        true,
+      )
+
+      expect(completed.state.errors, completed.state.errors.join('\n')).toEqual([])
+      expect(completed.status).toBe('completed')
+      expect(executions).toBe(1)
+      expect(completed.state.subAgents).toContainEqual(expect.objectContaining({
+        agentId: 'sensitive_analyst',
+        status: 'completed',
+      }))
+      expect(completed.state.agentWorkflow).toMatchObject({
+        status: 'completed',
+        steps: [expect.objectContaining({
+          stepId: 'step_sensitive_agent',
+          status: 'completed',
+        })],
+      })
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
+  it('runs two parallel-safe Agent-as-tool calls concurrently through the SDK Runner', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-parallel-subagents-'))
     try {
       const store = createTestPersistenceFacade(root)
@@ -1636,7 +1941,6 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '并行子智能体测试')
       const config = testRuntimeConfig()
-      config.maxParallelSubAgents = 2
       config.subAgents = [
         {
           agentId: 'parallel_alpha',
@@ -1646,7 +1950,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
           systemPrompt: '你是并行甲子智能体。',
           model: null,
           tools: ['parallel_a'],
-          delegationMode: 'parallel_batch',
+          delegationMode: 'as_tool',
           parallelSafe: true,
           maxTurns: 12,
           timeoutMs: 120_000,
@@ -1659,7 +1963,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
           systemPrompt: '你是并行乙子智能体。',
           model: null,
           tools: ['parallel_b'],
-          delegationMode: 'parallel_batch',
+          delegationMode: 'as_tool',
           parallelSafe: true,
           maxTurns: 12,
           timeoutMs: 120_000,
@@ -1671,6 +1975,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       tools.register(providerFromTools('parallel-subagent-tools', [
         {
           ...toolDefinition('parallel_a', []),
+          parallelSafe: true,
           handler: async () => {
             toolExecutions.push('parallel_a')
             return result('parallel_a', [], { checked: 'a' })
@@ -1678,6 +1983,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         },
         {
           ...toolDefinition('parallel_b', []),
+          parallelSafe: true,
           handler: async () => {
             toolExecutions.push('parallel_b')
             return result('parallel_b', [], { checked: 'b' })
@@ -1709,12 +2015,6 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
           },
         ],
       }
-      const batchInput = {
-        tasks: [
-          { taskId: 'task_alpha', agentId: 'parallel_alpha', ...subAgentArgs('检查数据甲', ['甲检查结论']) },
-          { taskId: 'task_beta', agentId: 'parallel_beta', ...subAgentArgs('检查数据乙', ['乙检查结论']) },
-        ],
-      }
       const baseModel = scriptedModel(request => {
         if (request.systemInstructions?.includes('并行甲子智能体')) {
           return hasToolResultNamed(request, 'parallel_a')
@@ -1726,14 +2026,23 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
             ? { text: '数据乙检查完成。' }
             : { toolCalls: [{ id: 'call_parallel_b', name: 'parallel_b', arguments: '{}' }] }
         }
-        if (hasToolResultNamed(request, 'delegate_agent_batch')) return { text: '两个只读检查都已汇总。' }
+        if (hasToolResultNamed(request, 'parallel_alpha') && hasToolResultNamed(request, 'parallel_beta')) {
+          return { text: '两个只读检查都已汇总。' }
+        }
         if (hasToolResultNamed(request, 'submit_agent_workflow')) {
           return {
-            toolCalls: [{
-              id: 'call_parallel_batch',
-              name: 'delegate_agent_batch',
-              arguments: JSON.stringify(batchInput),
-            }],
+            toolCalls: [
+              {
+                id: 'call_parallel_alpha_agent',
+                name: 'parallel_alpha',
+                arguments: JSON.stringify(subAgentArgs('检查数据甲', ['甲检查结论'])),
+              },
+              {
+                id: 'call_parallel_beta_agent',
+                name: 'parallel_beta',
+                arguments: JSON.stringify(subAgentArgs('检查数据乙', ['乙检查结论'])),
+              },
+            ],
           }
         }
         return {
@@ -1748,27 +2057,41 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       let firstChildArrivals = 0
       let activeChildRequests = 0
       let maxActiveChildRequests = 0
+      const isFirstChildRequest = (request: ModelRequest) => (
+        request.systemInstructions?.includes('并行甲子智能体')
+          ? !hasToolResultNamed(request, 'parallel_a')
+          : request.systemInstructions?.includes('并行乙子智能体')
+            ? !hasToolResultNamed(request, 'parallel_b')
+            : false
+      )
+      const waitForParallelChild = async () => {
+        activeChildRequests += 1
+        maxActiveChildRequests = Math.max(maxActiveChildRequests, activeChildRequests)
+        firstChildArrivals += 1
+        if (firstChildArrivals === 2) firstChildRequests.resolve()
+        await firstChildRequests.promise
+      }
       const model: Model = {
         async getResponse(request) {
-          const isFirstChildRequest = request.systemInstructions?.includes('并行甲子智能体')
-            ? !hasToolResultNamed(request, 'parallel_a')
-            : request.systemInstructions?.includes('并行乙子智能体')
-              ? !hasToolResultNamed(request, 'parallel_b')
-              : false
-          if (!isFirstChildRequest) return baseModel.getResponse(request)
-          activeChildRequests += 1
-          maxActiveChildRequests = Math.max(maxActiveChildRequests, activeChildRequests)
-          firstChildArrivals += 1
-          if (firstChildArrivals === 2) firstChildRequests.resolve()
+          if (!isFirstChildRequest(request)) return baseModel.getResponse(request)
           try {
-            await firstChildRequests.promise
+            await waitForParallelChild()
             return await baseModel.getResponse(request)
           } finally {
             activeChildRequests -= 1
           }
         },
         async *getStreamedResponse(request) {
-          yield* baseModel.getStreamedResponse(request)
+          if (!isFirstChildRequest(request)) {
+            yield* baseModel.getStreamedResponse(request)
+            return
+          }
+          try {
+            await waitForParallelChild()
+            yield* baseModel.getStreamedResponse(request)
+          } finally {
+            activeChildRequests -= 1
+          }
         },
       }
       const run = await store.createRun(session.id, '并行检查两份数据', {
@@ -1803,11 +2126,11 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const transcript = await store.activeTranscript(thread.id)
       expect(transcript).toContainEqual(expect.objectContaining({
         kind: 'tool_call',
-        payload: expect.objectContaining({ name: 'delegate_agent_batch' }),
+        payload: expect.objectContaining({ name: 'parallel_alpha' }),
       }))
       expect(transcript).toContainEqual(expect.objectContaining({
         kind: 'tool_result',
-        payload: expect.objectContaining({ name: 'delegate_agent_batch', ledgerStatus: 'completed' }),
+        payload: expect.objectContaining({ name: 'parallel_beta', ledgerStatus: 'completed' }),
       }))
       expect((await store.getRunCheckpoint(run.id)).pendingToolCallIds).toEqual([])
     } finally {
@@ -1831,7 +2154,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         systemPrompt: null,
         model: null,
         tools: ['write_layer'],
-        delegationMode: 'parallel_batch',
+        delegationMode: 'as_tool',
         parallelSafe: true,
         maxTurns: 12,
         timeoutMs: 120_000,
@@ -1856,7 +2179,9 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       ).run({ ...runOptions(run, thread.id), runtimeConfig: config })
 
       expect(failed.status).toBe('failed')
-      expect(failed.state.errors.at(-1)).toContain("只能使用只读、非破坏性工具；'write_layer' 不满足约束")
+      expect(failed.state.errors.at(-1)).toContain(
+        "只有在全部工具都显式 parallelSafe、只读、无破坏且免审批时才能共享并发；'write_layer' 不符合。",
+      )
     } finally {
       await removeTempRoot(root)
     }
@@ -1933,6 +2258,99 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         && event.payload.delegationMode === 'handoff'
         && event.payload.status === 'completed'
       ))).toBe(true)
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
+  it('restores handoff ownership before continuing an approved nested tool call', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-handoff-approval-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, 'Handoff 审批恢复')
+      const config = testRuntimeConfig()
+      config.supervisor.approvalInterruptTools = ['sensitive_tool']
+      config.subAgents = [{
+        agentId: 'sensitive_specialist',
+        name: '敏感专属助手',
+        role: 'specialist',
+        summary: '接管并执行需要审批的操作',
+        systemPrompt: '你是需要审批的 handoff 子智能体。',
+        model: null,
+        tools: ['sensitive_tool'],
+        delegationMode: 'handoff',
+        parallelSafe: false,
+        maxTurns: 12,
+        timeoutMs: 120_000,
+      }]
+      let executions = 0
+      const tools = new ToolRegistry()
+      tools.register(approvalProvider(() => { executions += 1 }))
+      const model = scriptedModel(request => {
+        if (request.systemInstructions?.includes('需要审批的 handoff 子智能体')) {
+          return hasToolResultNamed(request, 'sensitive_tool')
+            ? { text: 'Handoff 审批操作已经完成。' }
+            : {
+                toolCalls: [{
+                  id: 'call_handoff_sensitive_tool',
+                  name: 'sensitive_tool',
+                  arguments: '{"value":1}',
+                }],
+              }
+        }
+        return {
+          toolCalls: [{
+            id: 'call_handoff_sensitive_specialist',
+            name: 'handoff_to_sensitive_specialist',
+            arguments: JSON.stringify(subAgentArgs(
+              '执行需要审批的操作',
+              ['审批后的完成结论'],
+            )),
+          }],
+        }
+      })
+      const run = await store.createRun(session.id, '交给专属助手执行敏感操作', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: config,
+      })
+      const waiting = await testRuntime(
+        store,
+        tools,
+        registryWith(fakeAdapter(model)),
+      ).run({
+        ...runOptions(run, thread.id),
+        runtimeConfig: config,
+      })
+      const approval = waiting.state.approvals.find(item => (
+        item.action === 'sensitive_tool' && item.status === 'pending'
+      ))
+      if (!approval) throw new Error('测试没有生成 Handoff 内部审批')
+
+      expect(waiting.status).toBe('waiting_approval')
+      expect(executions).toBe(0)
+      expect(waiting.state.subAgents).toContainEqual(expect.objectContaining({
+        agentId: 'sensitive_specialist',
+        status: 'running',
+      }))
+
+      // 新建 Runtime 模拟服务进程重启；所有权必须从平台投影与 SDK RunState 恢复。
+      const completed = await testRuntime(
+        store,
+        tools,
+        registryWith(fakeAdapter(model)),
+      ).resolveApproval(run.id, approval.approvalId, true)
+
+      expect(completed.state.errors, completed.state.errors.join('\n')).toEqual([])
+      expect(completed.status).toBe('completed')
+      expect(executions).toBe(1)
+      expect(completed.state.subAgents).toContainEqual(expect.objectContaining({
+        agentId: 'sensitive_specialist',
+        status: 'completed',
+        latestMessage: 'Handoff 审批操作已经完成。',
+      }))
     } finally {
       await removeTempRoot(root)
     }

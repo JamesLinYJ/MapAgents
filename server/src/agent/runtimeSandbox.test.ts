@@ -1,0 +1,228 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - Agents SDK 沙箱边界测试
+//
+//   文件:       runtimeSandbox.test.ts
+//
+//   日期:       2026年07月23日
+//   作者:       OpenAI Codex
+// --------------------------------------------------------------------------
+
+import {
+  RunState,
+  Runner,
+  Usage,
+  tool,
+  type AgentOutputItem,
+  type Model,
+  type ModelRequest,
+  type ModelResponse,
+  type ResponseStreamEvent,
+} from '@openai/agents'
+import {
+  SandboxAgent,
+  shell,
+  type SandboxClient,
+} from '@openai/agents/sandbox'
+import { describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
+import { createInstrumentedTestSandboxClient } from '../../test-support/agentsSandboxClient.js'
+import {
+  buildSandboxManifest,
+  buildSandboxRunConfig,
+} from './runtimeSandbox.js'
+
+describe('runtimeSandbox', () => {
+  it('passes a client and manifest to Runner without creating a session early', () => {
+    const create = vi.fn()
+    const client: SandboxClient = { backendId: 'docker', create }
+    const manifest = buildSandboxManifest(
+      { runId: 'run_1', sessionId: 'session_1' },
+      'thread_1',
+    )
+
+    const runConfig = buildSandboxRunConfig(
+      manifest,
+      { backend: 'docker', dockerImage: 'node:22-bookworm-slim' },
+      () => client,
+    )
+
+    expect(runConfig).toEqual({ client, manifest })
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('rejects a client whose backend does not match the persisted runtime config', () => {
+    const manifest = buildSandboxManifest(
+      { runId: 'run_1', sessionId: 'session_1' },
+      'thread_1',
+    )
+
+    expect(() => buildSandboxRunConfig(
+      manifest,
+      { backend: 'docker', dockerImage: 'node:22-bookworm-slim' },
+      () => ({ backendId: 'unix_local' }),
+    )).toThrow("backend 'unix_local' 与运行配置 'docker' 不匹配")
+  })
+
+  it('lets the SDK preserve, serialize, resume and finally clean an owned session', async () => {
+    const { client, telemetry } = createInstrumentedTestSandboxClient('docker')
+    const manifest = buildSandboxManifest(
+      { runId: 'run_lifecycle', sessionId: 'session_lifecycle' },
+      'thread_lifecycle',
+    )
+    let protectedExecutions = 0
+    const protectedAction = tool({
+      name: 'protected_action',
+      description: '需要审批的测试动作',
+      parameters: z.object({}),
+      needsApproval: true,
+      execute: async () => {
+        protectedExecutions += 1
+        return 'approved'
+      },
+    })
+    const model = sandboxLifecycleModel()
+    const agent = new SandboxAgent({
+      name: 'sandbox-lifecycle-agent',
+      instructions: '按测试脚本调用工具。',
+      model,
+      tools: [protectedAction],
+      capabilities: [shell()],
+      defaultManifest: manifest,
+    })
+
+    const interrupted = await new Runner({ model, tracingDisabled: true }).run(
+      agent,
+      '先执行沙箱命令，再申请审批。',
+      { sandbox: { client, manifest } },
+    )
+
+    expect(interrupted.interruptions).toHaveLength(1)
+    expect(telemetry.createCount).toBe(1)
+    expect(telemetry.execCommands).toEqual(['echo lifecycle'])
+    expect(protectedExecutions).toBe(0)
+    expect(telemetry.cleanupOptions).toContainEqual(expect.objectContaining({
+      preserveOwnedSessions: true,
+    }))
+    const serialized = interrupted.state.toString()
+    expect(JSON.parse(serialized)).toMatchObject({
+      sandbox: { backendId: 'docker' },
+    })
+
+    const restored = await RunState.fromString(agent, serialized)
+    const approval = restored.getInterruptions()[0]
+    if (!approval) throw new Error('恢复后的 SDK RunState 缺少审批中断')
+    restored.approve(approval)
+    const completed = await new Runner({ model, tracingDisabled: true }).run(
+      agent,
+      restored,
+      { sandbox: { client, manifest } },
+    )
+
+    expect(completed.interruptions).toHaveLength(0)
+    expect(completed.finalOutput).toBe('生命周期完成')
+    expect(protectedExecutions).toBe(1)
+    expect(telemetry.resumeCount).toBe(1)
+    expect(telemetry.serializeCount).toBeGreaterThanOrEqual(2)
+    expect(telemetry.cleanupOptions.at(-1)).not.toMatchObject({
+      preserveOwnedSessions: true,
+    })
+  })
+
+  it('lets the SDK reject a checkpoint owned by another sandbox backend', async () => {
+    const docker = createInstrumentedTestSandboxClient('docker')
+    const unixLocal = createInstrumentedTestSandboxClient('unix_local')
+    const manifest = buildSandboxManifest(
+      { runId: 'run_backend_mismatch', sessionId: 'session_backend_mismatch' },
+      'thread_backend_mismatch',
+    )
+    const approvalTool = tool({
+      name: 'protected_action',
+      description: '制造可序列化中断',
+      parameters: z.object({}),
+      needsApproval: true,
+      execute: async () => 'approved',
+    })
+    const model = sandboxLifecycleModel()
+    const agent = new SandboxAgent({
+      name: 'sandbox-backend-check',
+      instructions: '按测试脚本调用工具。',
+      model,
+      tools: [approvalTool],
+      capabilities: [shell()],
+      defaultManifest: manifest,
+    })
+    const interrupted = await new Runner({ model, tracingDisabled: true }).run(
+      agent,
+      '创建 Docker sandbox 检查点。',
+      { sandbox: { client: docker.client, manifest } },
+    )
+    const restored = await RunState.fromString(agent, interrupted.state.toString())
+
+    await expect(new Runner({ model, tracingDisabled: true }).run(
+      agent,
+      restored,
+      { sandbox: { client: unixLocal.client, manifest } },
+    )).rejects.toThrow(/backend/iu)
+    expect(unixLocal.telemetry.resumeCount).toBe(0)
+  })
+})
+
+function sandboxLifecycleModel(): Model {
+  let turn = 0
+  const output = (_request: ModelRequest): AgentOutputItem[] => {
+    turn += 1
+    if (turn === 1) {
+      return [functionCall('call_shell', 'exec_command', {
+        cmd: 'echo lifecycle',
+      })]
+    }
+    if (turn === 2) {
+      return [functionCall('call_approval', 'protected_action', {})]
+    }
+    return [{
+      id: `message_${turn}`,
+      type: 'message',
+      role: 'assistant',
+      status: 'completed',
+      content: [{ type: 'output_text', text: '生命周期完成' }],
+    }]
+  }
+
+  return {
+    async getResponse(request): Promise<ModelResponse> {
+      return {
+        usage: new Usage(),
+        output: output(request),
+        responseId: `response_${turn}`,
+      }
+    },
+    async *getStreamedResponse(request): AsyncIterable<ResponseStreamEvent> {
+      const responseOutput = output(request)
+      yield { type: 'response_started' }
+      yield {
+        type: 'response_done',
+        response: {
+          id: `response_${turn}`,
+          usage: { requests: 1, inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          output: responseOutput,
+        },
+      }
+    },
+  }
+}
+
+function functionCall(
+  id: string,
+  name: string,
+  args: Record<string, unknown>,
+): AgentOutputItem {
+  return {
+    id,
+    type: 'function_call',
+    status: 'completed',
+    callId: id,
+    name,
+    arguments: JSON.stringify(args),
+  }
+}

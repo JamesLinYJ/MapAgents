@@ -26,6 +26,7 @@ export interface ToolManifestEntry {
     tags: string[];
     isReadOnly: boolean;
     isDestructive: boolean;
+    parallelSafe?: boolean;
     requiresApproval?: boolean;
     executionSurfaces?: ToolExecutionSurface[];
     agentResultMode?: AgentToolResultMode;
@@ -41,6 +42,7 @@ export interface ToolDef {
     tags: string[];
     isReadOnly: boolean;
     isDestructive: boolean;
+    parallelSafe?: boolean;
     requiresApproval?: boolean;
     executionSurfaces?: ToolExecutionSurface[];
     agentResultMode?: AgentToolResultMode;
