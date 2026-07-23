@@ -50,10 +50,7 @@ export interface RuntimeAssembly {
 export interface StreamProjectionState {
   assistantItemId: string | null
   reasoningItemId: string | null
-  /** 原始供应商推理只用于同一 SDK run 的协议回放，不进入用户时间线。 */
   reasoningText: string
-  visibleReasoningText: string
-  reasoningPass: number
   lastAssistantText: string
   completedAssistantItems: Array<{ itemId: string; text: string; entryId: string | null }>
   subAgentCallItemIds: Map<string, string>

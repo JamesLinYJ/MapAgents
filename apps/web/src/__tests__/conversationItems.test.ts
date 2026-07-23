@@ -23,7 +23,7 @@ describe('deriveEntriesFromItems', () => {
       item({ itemId: 'assistant:run1', itemType: 'message', role: 'assistant', body: '杭州今天有雨。' }),
     ])
 
-    expect(entries.map((entry) => entry.title)).toEqual(['用户', '中文分析', '回答'])
+    expect(entries.map((entry) => entry.title)).toEqual(['用户', '思考', '回答'])
     expect(entries.at(1)?.status).toBe('running')
     expect(entries.at(2)?.body).toBe('杭州今天有雨。')
   })
@@ -207,27 +207,24 @@ describe('deriveEntriesFromItems', () => {
       badge: 'commentary',
     })
     expect(entries.at(1)).toMatchObject({
-      title: '中文分析',
-      body: '已完成分析，并据此整理了回答。',
+      title: '思考',
+      body: '内部推理片段。',
       badge: 'thinking',
     })
-    expect(entries.at(1)?.body).not.toContain('内部推理片段')
   })
 
-  it('保留服务端生成的中文分析摘要而不改写', () => {
+  it('直接显示供应商返回的原始思考内容', () => {
     const entries = deriveEntriesFromItems([
       item({
-        itemId: 'reasoning:localized',
+        itemId: 'reasoning:provider',
         itemType: 'reasoning',
-        body: '正在理解你的问题，并确定需要核对的数据与条件。',
-        metadata: { presentation: 'localized_summary' },
+        body: 'I should inspect the available weather data first.',
       }),
     ])
 
     expect(entries.at(0)).toMatchObject({
-      title: '中文分析',
-      body: '正在理解你的问题，并确定需要核对的数据与条件。',
-      details: { presentation: 'localized_summary' },
+      title: '思考',
+      body: 'I should inspect the available weather data first.',
     })
   })
 

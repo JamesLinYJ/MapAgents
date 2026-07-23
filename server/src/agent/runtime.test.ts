@@ -1402,7 +1402,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     expect(transcriptResultIndex).toBeLessThan(transcriptFinalIndex)
   })
 
-  it('keeps provider reasoning in the SDK run while publishing only a localized UI summary', async () => {
+  it('keeps provider reasoning in the SDK run while publishing it to the reasoning panel', async () => {
     const tools = new ToolRegistry()
     tools.register(providerFromTools('reasoning-replay-test', [{
       ...toolDefinition('lookup_context', ['query']),
@@ -1432,10 +1432,8 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     expect(secondTurnInput.some(item => isRecord(item) && item.type === 'reasoning')).toBe(true)
     expect(outcome.items.some(item => (
       item.itemType === 'reasoning'
-      && item.body === '正在理解你的问题，并确定需要核对的数据与条件。'
-      && item.metadata.presentation === 'localized_summary'
+      && item.body?.includes('English chain of thought')
     ))).toBe(true)
-    expect(outcome.items.some(item => item.body?.includes('English chain of thought'))).toBe(false)
     expect(outcome.items.some(item => item.itemType === 'message' && item.body === '工具后总结。')).toBe(true)
   })
 

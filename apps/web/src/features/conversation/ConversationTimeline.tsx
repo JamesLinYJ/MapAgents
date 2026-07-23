@@ -137,26 +137,6 @@ export function ConversationTimeline({
     el.scrollTop = el.scrollHeight
   }, [conversation])
 
-  // 逐字投影不会修改 canonical conversation 数组；观察 DOM 增量，保证用户
-  // 停留在底部时正文增长仍持续跟随，手动上滚后则不抢夺阅读位置。
-  useEffect(() => {
-    const el = timelineRef.current
-    if (!el) return
-    let frame = 0
-    const observer = new MutationObserver(() => {
-      if (!nearBottom.current || frame) return
-      frame = window.requestAnimationFrame(() => {
-        frame = 0
-        el.scrollTop = el.scrollHeight
-      })
-    })
-    observer.observe(el, { childList: true, characterData: true, subtree: true })
-    return () => {
-      observer.disconnect()
-      if (frame) window.cancelAnimationFrame(frame)
-    }
-  }, [])
-
   return (
     <m.div className="cc-chat-mode" layout>
       <m.div ref={timelineRef} onScroll={handleTimelineScroll} className="cc-timeline" aria-label="对话" aria-live="polite" variants={feedVariants} initial="hidden" animate="visible">
@@ -204,7 +184,6 @@ export function ConversationTimeline({
                 entry={entry}
                 entryVariants={entryVariants}
                 reducedMotion={reducedMotion}
-                animateText={isSubmitting || runStatus === 'running'}
                 expandedIds={expandedIds}
                 anchorId={entry.kind === 'message' && entry.role === 'user' ? conversationJumpAnchorId(entry.id) : undefined}
                 onToggleExpanded={toggleExpanded}

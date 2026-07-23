@@ -64,14 +64,6 @@ describe('system prompt', () => {
     expect(prompt).toContain('Artifact 已注册，但视觉内容尚未验证')
   })
 
-  it('keeps provider reasoning internal and presents localized lifecycle summaries', () => {
-    const prompt = buildSystemPrompt(defaultRuntimeConfig(), null, '', '', '')
-
-    expect(prompt).toContain('reasoning_content 只参与模型推理')
-    expect(prompt).toContain('运行事件生成简洁中文分析摘要')
-    expect(prompt).toContain('不直接暴露原始思维链')
-  })
-
   it('routes simple public weather questions separately from uploaded meteorological analysis', () => {
     const prompt = buildSystemPrompt(defaultRuntimeConfig(), null, '', '', '')
 

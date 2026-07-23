@@ -857,10 +857,7 @@ export class OpenAIAgentsRuntime {
         if (stream.error) throw stream.error
         await this.transcriptProjector.linkAssistantTranscriptEntries(options.runId, assembly, projection, itemSink)
         if (projection.reasoningItemId) {
-          itemSink.completeItem(projection.reasoningItemId, {
-            body: projection.visibleReasoningText,
-            metadata: { presentation: 'localized_summary' },
-          })
+          itemSink.completeItem(projection.reasoningItemId, { body: projection.reasoningText })
         }
         await this.updateUsage(options.runId, stream.rawResponses)
         const interruptions = stream.interruptions
