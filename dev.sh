@@ -104,7 +104,7 @@ case "$ACTION" in
     build_supervisor
     ensure_supervisor
     supervisor start all "$@"
-    npm run console --workspace server ;;
+    npm run console --workspace geo-agent-server ;;
   start|restart)
     build_supervisor
     ensure_supervisor
@@ -119,10 +119,15 @@ case "$ACTION" in
   console)
     build_supervisor
     ensure_supervisor
-    npm run console --workspace server -- "$@" ;;
+    npm run console --workspace geo-agent-server -- "$@" ;;
+  agent)
+    build_supervisor
+    ensure_supervisor
+    supervisor start api
+    npm run agent --workspace geo-agent-server -- "$@" ;;
   shutdown)
     supervisor_live && supervisor shutdown "$@" || echo 'GeoForge 监督器未运行。' ;;
   *)
-    echo '用法：./dev.sh [start|stop|restart|status|logs|console|shutdown] [all|infra|worker|api|web] [--json]' >&2
+    echo '用法：./dev.sh [start|stop|restart|status|logs|console|agent|shutdown] [all|infra|worker|api|web] [--json]' >&2
     exit 2 ;;
 esac

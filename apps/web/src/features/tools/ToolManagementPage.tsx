@@ -222,7 +222,7 @@ export function ToolManagementPage({
             />
           </label>
           <div className="tool-doc-grid">
-            <DocShortcut icon={BookOpen} title="工具接入规范" pathValue="docs/tool-integration-standard.md" />
+            <DocShortcut icon={BookOpen} title="工具接入规范" pathValue="docs/standards/tool-integration-standard.md" />
             <DocShortcut icon={Code2} title="Provider Demo" pathValue="demo/tool-provider-demo" />
           </div>
         </div>

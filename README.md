@@ -4,12 +4,13 @@
 
 ## 架构
 
-- `server/`：Hono HTTP 数据面、`/ws` WebSocket 控制面、Agent runtime、ToolProvider 注册与文件型会话内核
+- `apps/server/`：Hono HTTP 数据面、`/ws` WebSocket 控制面、Agent runtime、ToolProvider 注册与 PostgreSQL 会话事实
 - `apps/web/`：React 工作台；业务控制和实时状态统一走 `/ws`
 - `apps/worker/`：无状态 Python 科学计算 Worker，不保存 session/thread/run
-- `Postgres/PostGIS`：图层、runtime config、tool catalog 和 artifact 可重建查询索引
-- `runtime/conversations/`：按 session、thread、run 分目录保存 manifest、transcript、checkpoint、event、valueRef、artifact、压缩记录和 memory，是会话唯一事实源
-- `runtime/uploads/files/`：通用线程文件；气象文件不使用专用数据库状态
+- `PostgreSQL/PostGIS`：用户、权限、Session、Thread、Run、Transcript、Workflow、Artifact 元数据、运行配置、工具目录与空间数据的结构化事实源
+- `runtime/objects/sha256/`：上传内容、Artifact 二进制、SDK checkpoint 和 Markdown 记忆正文等大载荷的内容寻址存储；数据库保存引用与生命周期
+- `runtime/conversations/`：只保存附件审计和 Agent 诊断载荷，不保存 Session、Run 或 Transcript 的第二份结构化事实
+- `runtime/uploads/files/`：通用线程文件的本地索引，文件正文统一引用内容寻址对象
 
 HTTP 只保留 `/health`、文件/图层上传替换、artifact 元数据/GeoJSON/下载和底图资源。会话、线程、运行、工具、配置、文件目录和图层目录命令统一使用 `/ws`。
 
@@ -30,11 +31,16 @@ HTTP 只保留 `/health`、文件/图层上传替换、artifact 元数据/GeoJSO
 .\dev.ps1 restart -Service api
 .\dev.ps1 status
 .\dev.ps1 logs -Service api -Tail 100
+.\dev.ps1 agent
+.\dev.ps1 agent -AgentPrompt "杭州明天会下雨吗？"
+.\dev.ps1 agent -Check
 .\dev.ps1 restart
 .\dev.ps1 stop
 ```
 
 也可以使用 `npm run dev:windows`、`npm run dev:windows:status` 和 `npm run dev:windows:stop`。双击 `stop-dev.cmd` 可完整停止开发环境。Windows TUI 只通过 Docker 启停 PostGIS，Worker、API 和 Web 都是宿主机后台进程，日志位于 `runtime/logs/`。
+
+`agent` 会打开无需输入平台账号密码的本机 Agent 终端。它使用操作系统 ACL 保护的本机根密钥建立短期、仅 loopback 可用的保留服务主体，并复用主 API 的 Agent Runner、工作流、审批和会话事实源。使用说明见 [GeoForge 本机 Agent CLI](docs/operations/local-agent-cli.md)。
 
 ### Bash / macOS / Linux
 
@@ -42,6 +48,8 @@ HTTP 只保留 `/health`、文件/图层上传替换、artifact 元数据/GeoJSO
 cp .env.example .env
 npm install
 ./dev.sh
+./dev.sh agent
+./dev.sh agent --prompt "杭州明天会下雨吗？"
 ```
 
 所有环境仅使用 Docker 运行 PostGIS；Python Worker、Node Server 与 Web 均直接运行在宿主机或宿主机进程管理器中。本地开发 PostGIS 默认映射到宿主机 `55432`，避免与已安装的本地 PostgreSQL 冲突。`./dev.sh` 会按 PostGIS → Python Worker → Node Server → Web 的顺序启动它们。也可以分别运行：

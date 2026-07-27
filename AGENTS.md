@@ -151,14 +151,17 @@ GeoForge 按能力平面划分，而不是按技术名词随意分层：
 
 目录结构反映架构分层。添加新文件时遵循以下规则：
 
-- **`server/src/agent/`**：Agent 运行时编排——run 生命周期、上下文管理、审批、沙箱。不含工具实现
-- **`server/src/framework/`**：工具注册、Provider 加载、环境配置、类型定义。框架级代码，不含业务逻辑
-- **`server/src/tools/`**：每个子目录是一个独立的 ToolProvider。工具适配器（薄层），不包含领域算法
-- **`server/src/store/`**：持久化门面和文件事实源。`platformPersistenceFacade.ts` 只做组合 facade，不拥有所有资源写逻辑；PostgreSQL 资源写入放入 `store/postgres/*Store.ts`；会话/线程/运行内存投影放入独立索引模块
-- **`server/src/routes/`**：HTTP 路由。一个文件一组相关端点
-- **`server/src/ws/`**：WebSocket 控制面。命令必须通过 registry 注册；一个文件一个命令组（如 `memoryCommand.ts`、`toolCommand.ts`），禁止新增大型 switch
-- **`server/src/security/`**：认证、授权、限速、CSRF。安全逻辑集中管理
-- **`server/src/app/` 或 `server/src/container/`**：应用级依赖装配。只创建 container、store、runtime、registry 和 route/WS 依赖，不写业务逻辑
+- **`apps/`**：可独立启动或部署的应用。Node Server、React Web 与 Python Worker 分别位于 `apps/server/`、`apps/web/`、`apps/worker/`
+- **`packages/`**：可复用能力与跨应用契约。源码统一放在各包的 `src/`，不得另建 `src-ts/` 等语言后缀目录
+- **`docs/`**：当前架构、运维手册、工程标准、历史评审和汇报材料分别进入 `architecture/`、`operations/`、`standards/`、`reviews/`、`presentations/`；历史评审不得冒充当前架构事实
+- **`apps/server/src/agent/`**：Agent 运行时编排——run 生命周期、上下文管理、审批、沙箱。不含工具实现
+- **`apps/server/src/framework/`**：工具注册、Provider 加载、环境配置、类型定义。框架级代码，不含业务逻辑
+- **`apps/server/src/tools/`**：每个子目录是一个独立的 ToolProvider。工具适配器（薄层），不包含领域算法
+- **`apps/server/src/store/`**：持久化门面和文件载荷存储。`platformPersistenceFacade.ts` 只做组合 facade，不拥有所有资源写逻辑；PostgreSQL 资源写入放入 `store/postgres/*Store.ts`；会话/线程/运行内存投影放入独立索引模块
+- **`apps/server/src/routes/`**：HTTP 路由。一个文件一组相关端点
+- **`apps/server/src/ws/`**：WebSocket 控制面。命令必须通过 registry 注册；一个文件一个命令组（如 `memoryCommand.ts`、`toolCommand.ts`），禁止新增大型 switch
+- **`apps/server/src/security/`**：认证、授权、限速、CSRF。安全逻辑集中管理
+- **`apps/server/src/app/` 或 `apps/server/src/container/`**：应用级依赖装配。只创建 container、store、runtime、registry 和 route/WS 依赖，不写业务逻辑
 - **`apps/web/src/app/`**：应用壳层、路由、全局 store 装配、启动流程
 - **`apps/web/src/app/stores/`**：Zustand slices。只保存跨功能事实状态和 WebSocket streaming 状态，不放 UI 临时表单字段
 - **`apps/web/src/features/`**：功能模块——每个子目录是一个自包含的功能域（含组件、局部状态、类型）
@@ -215,7 +218,7 @@ TypeScript 的编译器选项是第一道防线。
 
 - **禁止 `as any`**：生产源码中不允许出现。对外部数据使用 `unknown` + 类型守卫或 Zod `safeParse`；对确实无法推断的场景使用 `as unknown as SpecificType` 双重断言并附注释说明原因
 - **Zod 作为边界校验**：所有外部输入（HTTP body、WS payload、环境变量、文件内容）必须经过 Zod schema 校验后才进入内部逻辑。不允许 `as T` 裸断言跨越信任边界
-- **共享类型**：跨包类型定义放在 `packages/shared-types/src-ts/index.ts`，通过 Zod schema 派生 TypeScript 类型。Server 和 Web 各自派生自己的内部类型，只在边界使用共享类型
+- **共享类型**：跨包类型定义放在 `packages/shared-types/src/index.ts`，通过 Zod schema 派生 TypeScript 类型。Server 和 Web 各自派生自己的内部类型，只在边界使用共享类型
 - **泛型使用**：泛型应该约束类型关系，而非绕过类型检查。如果泛型参数只出现一次且不需要约束关系，考虑是否真的需要泛型
 
 ### 2.3 模块系统
@@ -601,12 +604,12 @@ third_party/
 | 层次 | 机制 | 位置 |
 |------|------|------|
 | 传输 | HTTPS + WSS（生产环境 Nginx 终止 TLS） | `infra/docker/web/nginx.conf` |
-| 认证 | Better Auth (email/password + session, 12h 过期) | `server/src/security/authService.ts` |
-| 授权 | Casbin RBAC (workspace 级隔离, deny-by-default) | `server/src/security/authorizationService.ts` |
+| 认证 | Better Auth (email/password + session, 12h 过期) | `apps/server/src/security/authService.ts` |
+| 授权 | Casbin RBAC (workspace 级隔离, deny-by-default) | `apps/server/src/security/authorizationService.ts` |
 | CSRF | 自定义 header `x-geoforge-csrf`（HMAC 派生的会话级令牌） | HTTP + WS 消息级 |
-| HTTP 限速 | 认证端点 + API 端点双级限速 | `server/src/security/httpRateLimit.ts` |
-| WS 限速 | 按消息类型 per-connection | `server/src/security/rateLimiter.ts` |
-| WS 认证 | Origin 检查 + Session 验证（在 HTTP upgrade 阶段完成） | `server/src/ws/security.ts` |
+| HTTP 限速 | 认证端点 + API 端点双级限速 | `apps/server/src/security/httpRateLimit.ts` |
+| WS 限速 | 按消息类型 per-connection | `apps/server/src/security/rateLimiter.ts` |
+| WS 认证 | Origin 检查 + Session 验证（在 HTTP upgrade 阶段完成） | `apps/server/src/ws/security.ts` |
 | WS 授权 | 每条命令 Casbin 策略检查 | `authorizeWsMessage` 映射 |
 | Worker 认证 | HMAC-SHA256 签名协议（60s TTL + nonce 防重放 + bodyHash 防篡改） | `workerAuth.ts` + `sidecar.py` |
 | Worker 沙箱 | 路径遍历防护 + 空字节检测 + 临时目录隔离 | `sidecar.py` |
@@ -663,9 +666,13 @@ third_party/
 - `concurrently` 只作为跨平台命令启动、输出事件和进程树终止的执行适配器，不拥有依赖拓扑、重启预算、健康、指标、日志、IPC 或运维权限规则
 - 可操作的服务 ID、命令、工作目录、端口、健康检查与环境变量范围必须来自编译期固定目录；IPC 和界面不得接收任意 Shell 命令、任意路径或任意环境变量
 - CPU 与内存按完整后代进程树汇总；容器资源按固定 Compose 项目的实际容器汇总。采集失败必须显示“未知”及原因，不得用零值冒充成功采样
-- 本机 TUI 是服务器操作系统 ACL 保护下的人工最高应用管理入口。它不得注册为 Agent Tool、Automation 动作、HTTP/WS 远程控制面或网页终端，也不得提供任意 Shell
+- 本机运维 TUI 与本机 Agent CLI 是服务器操作系统 ACL 保护下的人工最高应用管理入口。它们不得注册为 Agent Tool、Automation 动作、HTTP/WS 远程控制面或网页终端，也不得提供任意 Shell
 - TUI 的退出与监督器关闭是不同动作：普通分离不得停止服务；停止全部必须使用独立危险操作并明确确认
-- 本机账户管理以受操作系统保护的根密钥为授权根；认证账户写入必须通过临时 Better Auth 服务主体和官方 Admin API，平台角色仍通过事务化 RBAC 仓储修改。服务主体不得公开登录、建立平台投影、出现在普通账户列表或成为操作目标
+- 本机账户管理以受操作系统保护的根密钥为授权根；认证账户写入必须通过临时 Better Auth Console 服务主体和官方 Admin API，平台角色仍通过事务化 RBAC 仓储修改。Console 主体不得公开登录、建立平台投影、出现在普通账户列表或成为操作目标
+- 本机 Agent 使用独立 Better Auth 服务主体：认证角色保持普通用户，平台投影为 `platform_admin`；公共登录、普通 HTTP 认证和非 loopback WebSocket 必须拒绝该身份。每次启动应撤销旧会话、签发进程内短期会话，退出后立即登出；不得构造伪造 `AuthContext` 或在 CLI 内启动第二套 Agent Runner
+- 本机 Agent 只通过主 API 已注册的 WS 命令使用 canonical Run/RunState/审批/审计事实源；断线只能重新订阅，不得重放未确认写操作。CLI 目录按 application、transport、cli、ui 职责组织，不得把协议、状态机与 Ink 组件重新混入单文件
+- 开发者文件工具必须有不可由 Agent 参数覆盖的敏感路径拒绝策略，至少覆盖 `.env*`、私钥、令牌/密钥文件和整个运维密钥目录；通配与全文搜索必须应用相同拒绝范围
+- 公共工作区成员接口只能授予工作区角色，不得授予 `platform_admin`；平台管理员关系只能经过受保护的独立管理边界
 - 数据库故障不得拖垮进程、日志和主机指标控制面；账户与数据库审计页面应独立暴露真实不可用原因
 
 ---
@@ -684,10 +691,10 @@ third_party/
 
 | 模块 | 要求 |
 |------|------|
-| `server/src/agent/` | 每个 public 方法至少一个测试 |
-| `server/src/tools/*/` | 每个工具一个契约测试（合法参数→成功；非法参数→清晰错误） |
-| `server/src/ws/` | 每个命令类型一个 happy path 测试 + 一个 auth 失败测试 |
-| `server/src/routes/` | 每个端点一个 HTTP 状态码测试 |
+| `apps/server/src/agent/` | 每个 public 方法至少一个测试 |
+| `apps/server/src/tools/*/` | 每个工具一个契约测试（合法参数→成功；非法参数→清晰错误） |
+| `apps/server/src/ws/` | 每个命令类型一个 happy path 测试 + 一个 auth 失败测试 |
+| `apps/server/src/routes/` | 每个端点一个 HTTP 状态码测试 |
 | `packages/gis-meteorology/` | 每个 public 函数一个 pytest |
 | `apps/worker/` | 认证失败、路径遍历拒绝、超时处理各一个测试 |
 | `apps/web/src/` | 每个数据模型/状态 Hook 一个测试；关键 UI 组件一个渲染测试 |
@@ -695,7 +702,7 @@ third_party/
 
 ### 10.3 架构守卫测试
 
-`server/src/architecture.test.ts` 是自动化架构约束。当本文件新增禁止模式时，同步更新 `architecture.test.ts`：
+`apps/server/src/architecture.test.ts` 是自动化架构约束。当本文件新增禁止模式时，同步更新 `architecture.test.ts`：
 
 - 禁止的 import 模式（跨层反向依赖）
 - 禁止的代码模式（`as any`、`finalResponse`、`subscribe_messages` 等已废弃的 API）
@@ -703,7 +710,7 @@ third_party/
 - PostgreSQL conversation repository 的顺序、一致性、事务回滚与重放验证
 - 禁止 Session/Thread/Run/Item/Event/Value 回流到 JSONL 在线事实源
 - 禁止 `PostgresPlatformStore` 重新拥有所有资源写路径或直接维护 session/thread/run Map
-- 禁止 `server/src/ws/handler.ts` 出现新增大型 command switch；WS 命令必须通过 registry 注册
+- 禁止 `apps/server/src/ws/handler.ts` 出现新增大型 command switch；WS 命令必须通过 registry 注册
 - 禁止普通 Store CRUD 使用裸 `db.execute(sql...)`，除非文件位于 PostGIS/DDL/health 明确例外列表
 - 禁止生产源码新增模块级可变 singleton
 - 禁止前端组件直接 `new WebSocket()` 或绕过统一 transport

@@ -8,27 +8,16 @@
 //   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
-import { execFile } from 'node:child_process'
 import path from 'node:path'
-import { promisify } from 'node:util'
 
 import type {
   OperationsContainerSnapshot,
   OperationsMetric,
-  OperationsProfile,
   OperationsServiceId,
 } from '@geo-agent-platform/shared-types/operations'
 import si from 'systeminformation'
-import { z } from 'zod'
 
-const execFileAsync = promisify(execFile)
-
-const composeProcessSchema = z.object({
-  ID: z.string().min(1),
-  Name: z.string().min(1),
-  Service: z.string().min(1),
-  State: z.string().min(1),
-}).passthrough()
+import { listComposeProcesses } from './dockerComposeProject.js'
 
 export interface ProcessTreeMetrics {
   cpuPercent: OperationsMetric
@@ -85,25 +74,11 @@ export async function collectProcessTreeMetrics(
 
 export async function collectDockerMetrics(input: {
   projectRoot: string
-  profile: OperationsProfile
+  profile: 'development' | 'production'
   environment: NodeJS.ProcessEnv
 }): Promise<{ containers: OperationsContainerSnapshot[]; total: ProcessTreeMetrics }> {
-  const composeFile = path.join(
-    input.projectRoot,
-    'infra',
-    'compose',
-    input.profile === 'production' ? 'docker-compose.prod.yml' : 'docker-compose.dev.yml',
-  )
   try {
-    const { stdout } = await execFileAsync('docker', ['compose', '-f', composeFile, 'ps', '--format', 'json'], {
-      cwd: input.projectRoot,
-      env: input.environment,
-      encoding: 'utf8',
-      timeout: 10_000,
-      maxBuffer: 2 * 1024 * 1024,
-      windowsHide: true,
-    })
-    const rows = parseComposeProcesses(stdout)
+    const rows = await listComposeProcesses(input)
     if (!rows.length) {
       return { containers: [], total: unavailableProcessMetrics('Compose 项目当前没有容器。') }
     }
@@ -192,17 +167,6 @@ function descendants(rootPid: number, byParent: ReadonlyMap<number, readonly num
     pending.push(...(byParent.get(pid) ?? []))
   }
   return result
-}
-
-function parseComposeProcesses(value: string): z.infer<typeof composeProcessSchema>[] {
-  const trimmed = value.trim()
-  if (!trimmed) return []
-  try {
-    const parsed: unknown = JSON.parse(trimmed)
-    return z.array(composeProcessSchema).parse(Array.isArray(parsed) ? parsed : [parsed])
-  } catch {
-    return trimmed.split(/\r?\n/u).filter(Boolean).map(line => composeProcessSchema.parse(JSON.parse(line)))
-  }
 }
 
 function safeReason(error: unknown): string {

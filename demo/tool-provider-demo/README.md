@@ -80,7 +80,7 @@ artifact metadata 可声明预览角色和下载角色：
 1. 复制目录到正式工具位置，例如：
 
 ```text
-server/src/tools/my_domain/
+apps/server/src/tools/my_domain/
 ```
 
 2. 修改 Provider ID、名称、工具名和领域服务：
@@ -93,7 +93,7 @@ export const demoProvider: ToolProvider = {
 }
 ```
 
-3. 在 `server/src/framework/loader.ts` 的内置 provider map 中显式加入新 Provider。
+3. 在 `apps/server/src/framework/loader.ts` 的内置 provider map 中显式加入新 Provider。
 
 4. 在 `.env` 或启动脚本中加入 allowlist：
 
@@ -121,7 +121,7 @@ npm test
 正式工具合并前至少还要运行：
 
 ```bash
-npm run test --workspace server
+npm run test --workspace geo-agent-server
 npm run lint:web
 npm run build:web
 ```
@@ -138,4 +138,4 @@ npm run build:web
 - 第三方源码快照应放在工具目录的 `source/original/`，运行包装放在旁路 adapter/service 中。
 - 工具管理页能看到 Provider 元数据和风险标识。
 
-更多规则见 `docs/tool-integration-standard.md`。
+更多规则见 `docs/standards/tool-integration-standard.md`。

@@ -17,8 +17,8 @@ apps/api/.env
 *.egg-info/
 runtime/*
 !runtime/.gitkeep
-server/runtime/*
-!server/runtime/.gitkeep
+apps/server/runtime/*
+!apps/server/runtime/.gitkeep
 output/
 .playwright-cli/
 .claude/

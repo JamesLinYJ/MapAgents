@@ -13,7 +13,7 @@
 // 这里演示 valueRef 输出、valueRef 消费、artifact 写入和 provenance 记录，
 // 复制为正式工具时应保留这些边界。
 
-import type { ToolDef, ToolProvider, ValueRef } from '../../../server/src/framework/types.js'
+import type { ToolDef, ToolProvider, ValueRef } from '../../../apps/server/src/framework/types.js'
 import {
   collectObservationSchema,
   manifest,

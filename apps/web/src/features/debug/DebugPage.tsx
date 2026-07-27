@@ -413,8 +413,8 @@ export function DebugPage({
                   <p>{latestRuns.length} 条运行记录</p>
                 </div>
                 <div className="inventory-card">
-                  <span>会话事实源</span>
-                  <strong>{conversationPath ? '分片文件' : '--'}</strong>
+                  <span>运行载荷</span>
+                  <strong>{conversationPath ? '诊断分片' : '--'}</strong>
                   <p>{conversationPath ? compactPath(conversationPath) : compactPath(systemComponents?.payloadStoreRoot)}</p>
                 </div>
                 <div className="inventory-card">

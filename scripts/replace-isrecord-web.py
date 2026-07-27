@@ -1,7 +1,8 @@
 import os, re
+from pathlib import Path
 
-ROOT = r'C:\Projects\Newmap\apps\web\src'
-GUARDS = os.path.join(ROOT, 'shared', 'utils', 'guards.ts')
+ROOT = Path(__file__).resolve().parents[1] / 'apps' / 'web' / 'src'
+GUARDS = ROOT / 'shared' / 'utils' / 'guards.ts'
 FILES = [
     'features/conversation/items.ts',
     'features/conversation/ConversationEntry.tsx',
@@ -17,7 +18,7 @@ PATTERN = r'(?:export )?function isRecord\(value: unknown\): value is Record<str
 
 count = 0
 for f in FILES:
-    path = os.path.join(ROOT, f)
+    path = ROOT / f
     if not os.path.exists(path):
         print(f'SKIP (not found): {f}')
         continue

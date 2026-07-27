@@ -6,6 +6,10 @@
 //
 //   日期:       2026年07月22日
 //   作者:       OpenAI Codex
+//
+//   维护记录 (2026-07-27):
+//     作者: OpenAI Codex
+//     说明: 固定 Compose 归属校验允许安全接管 Docker 自动恢复的本项目容器。
 // --------------------------------------------------------------------------
 
 import { execFile } from 'node:child_process'
@@ -41,6 +45,12 @@ import {
   transitiveDependents,
   type ServiceDefinition,
 } from './catalog.js'
+import {
+  composeFileFor,
+  listComposeProcesses,
+  verifyComposePortOwnership,
+  type ComposePort,
+} from './dockerComposeProject.js'
 import { environmentForConcurrently, environmentForService } from './environment.js'
 import { LineDecoder, OperationsLogBuffer } from './logBuffer.js'
 import {
@@ -639,15 +649,48 @@ export class OperationsSupervisor {
   }
 
   private async assertPortsAvailable(record: ManagedService): Promise<void> {
+    const occupiedPorts: ComposePort[] = []
     for (const name of record.definition.portEnvironments[this.options.profile]) {
       const port = requirePort(this.options.environment, name)
       if (!await isPortAvailable(port)) {
-        record.state = 'conflict'
-        record.healthMessage = `${name} 端口 ${port} 已被非受监督进程占用。`
-        this.emitSnapshot()
-        throw new Error(record.healthMessage)
+        occupiedPorts.push({ environmentName: name, port })
       }
     }
+    if (!occupiedPorts.length) return
+
+    if (record.definition.serviceId === 'infra') {
+      try {
+        const environment = environmentForService('infra', this.options.environment, {
+          GEOFORGE_ROOT: this.options.paths.projectRoot,
+          RUNTIME_ROOT: this.options.paths.runtimeRoot,
+        })
+        const ownership = verifyComposePortOwnership({
+          composeFile: composeFileFor(this.options.paths.projectRoot, this.options.profile),
+          occupiedPorts,
+          processes: await listComposeProcesses({
+            projectRoot: this.options.paths.projectRoot,
+            profile: this.options.profile,
+            environment,
+          }),
+        })
+        if (ownership.owned) {
+          this.appendSupervisorLog('info', `${ownership.message}监督器将通过固定启动命令重新接管。`, 'infra')
+          return
+        }
+        record.healthMessage = ownership.message
+      } catch (error) {
+        record.healthMessage = `无法验证基础设施端口归属：${safeMessage(error)}`
+      }
+    } else {
+      const first = occupiedPorts[0]
+      record.healthMessage = first
+        ? `${first.environmentName} 端口 ${first.port} 已被非受监督进程占用。`
+        : '服务端口已被非受监督进程占用。'
+    }
+
+    record.state = 'conflict'
+    this.emitSnapshot()
+    throw new Error(record.healthMessage)
   }
 
   private async collectMetrics(): Promise<void> {

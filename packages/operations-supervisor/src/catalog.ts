@@ -124,12 +124,12 @@ export const SERVICE_CATALOG: Readonly<Record<OperationsServiceId, ServiceDefini
     dependencies: ['infra', 'worker'],
     command: {
       development: {
-        windows: 'npm run dev:supervised --workspace server',
-        linux: 'npm run dev:supervised --workspace server',
+        windows: 'npm run dev:supervised --workspace geo-agent-server',
+        linux: 'npm run dev:supervised --workspace geo-agent-server',
       },
       production: {
-        windows: 'npm run start --workspace server',
-        linux: 'npm run start --workspace server',
+        windows: 'npm run start --workspace geo-agent-server',
+        linux: 'npm run start --workspace geo-agent-server',
       },
     },
     health: {
@@ -153,8 +153,8 @@ export const SERVICE_CATALOG: Readonly<Record<OperationsServiceId, ServiceDefini
         linux: 'npm run dev --workspace apps/web',
       },
       production: {
-        windows: 'npm run start:web-static --workspace server',
-        linux: 'npm run start:web-static --workspace server',
+        windows: 'npm run start:web-static --workspace geo-agent-server',
+        linux: 'npm run start:web-static --workspace geo-agent-server',
       },
     },
     health: {

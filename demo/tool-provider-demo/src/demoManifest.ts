@@ -11,7 +11,7 @@
 // Manifest 是工具公开契约。UI、Agent 和 runtime descriptor 都从这里获得
 // 工具名称、风险属性和参数 schema。
 
-import type { ToolManifest } from '../../../server/src/framework/types.js'
+import type { ToolManifest } from '../../../apps/server/src/framework/types.js'
 
 export const collectObservationSchema = {
   type: 'object',

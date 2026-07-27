@@ -9,7 +9,8 @@
 -- --------------------------------------------------------------------------
 --
 -- 显式清空平台运行数据。API 启动不会自动执行本脚本。
--- 文件会话位于 runtime/conversations；文件清理由 npm run reset:conversations 显式执行。
+-- PostgreSQL 是结构化平台事实源；运行时对象与诊断载荷由
+-- npm run reset:conversations 在同一次显式重置中清理。
 
 DROP TABLE IF EXISTS platform_context_entries CASCADE;
 DROP TABLE IF EXISTS platform_thread_context CASCADE;

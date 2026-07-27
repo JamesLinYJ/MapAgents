@@ -120,7 +120,9 @@ async function protectWindowsSecret(filePath: string): Promise<void> {
   // icacls 只重建 DACL，普通本机所有者可安全、幂等地执行。
   await execFileAsync('icacls', [filePath, '/reset'], options)
   await execFileAsync('icacls', [filePath, '/inheritance:r'], options)
-  await execFileAsync('icacls', [filePath, '/grant:r', `${identity}:(R,W)`], options)
+  // Modify 仍只授予当前主体，同时保留密钥轮换与卸载所需的删除权。
+  // 仅授予 R/W 会在移除继承后让 Windows 无法删除该文件。
+  await execFileAsync('icacls', [filePath, '/grant:r', `${identity}:(M)`], options)
 }
 
 async function readWindowsAcl(filePath: string): Promise<z.infer<typeof windowsAclSchema>> {

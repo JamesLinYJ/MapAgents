@@ -15,7 +15,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('default', 'start', 'stop', 'restart', 'status', 'logs', 'console', 'shutdown')]
+    [ValidateSet('default', 'start', 'stop', 'restart', 'status', 'logs', 'console', 'agent', 'shutdown')]
     [string]$Action = 'default',
 
     [Parameter(Position = 1)]
@@ -29,7 +29,17 @@ param(
     [switch]$KeepPostgis,
     [switch]$FollowLogs,
     [switch]$Json,
-    [switch]$Check
+    [switch]$Check,
+
+    [string]$AgentPrompt,
+    [ValidateSet('auto', 'plan')]
+    [string]$AgentMode = 'auto',
+    [string]$AgentProvider,
+    [string]$AgentModel,
+    [string]$AgentThread,
+    [ValidateRange(5, 3600)]
+    [int]$AgentTimeout = 600,
+    [switch]$NoReasoning
 )
 
 $ErrorActionPreference = 'Stop'
@@ -112,13 +122,30 @@ function Ensure-Supervisor {
 
 function Open-LocalConsole {
     Ensure-Supervisor
-    $Arguments = @('run', 'console', '--workspace', 'server')
+    $Arguments = @('run', 'console', '--workspace', 'geo-agent-server')
     if ($Check) { $Arguments += @('--', '--check') }
     & npm @Arguments
     if ($LASTEXITCODE -ne 0) { throw "GeoForge 本地运维台异常退出（exit $LASTEXITCODE）。" }
 }
 
-if ($Action -in @('default', 'start', 'restart', 'console')) { Invoke-GeoForgeBuild }
+function Open-AgentConsole {
+    Ensure-Supervisor
+    Invoke-Supervisor start api
+    $Arguments = @('run', 'agent', '--workspace', 'geo-agent-server', '--')
+    if ($Check) { $Arguments += '--check' }
+    if ($Json) { $Arguments += '--json' }
+    if ($AgentPrompt) { $Arguments += @('--prompt', $AgentPrompt) }
+    if ($AgentMode) { $Arguments += @('--mode', $AgentMode) }
+    if ($AgentProvider) { $Arguments += @('--provider', $AgentProvider) }
+    if ($AgentModel) { $Arguments += @('--model', $AgentModel) }
+    if ($AgentThread) { $Arguments += @('--thread', $AgentThread) }
+    if ($AgentTimeout) { $Arguments += @('--timeout', [string]$AgentTimeout) }
+    if ($NoReasoning) { $Arguments += '--no-reasoning' }
+    & npm @Arguments
+    if ($LASTEXITCODE -ne 0) { throw "GeoForge 本机 Agent 异常退出（exit $LASTEXITCODE）。" }
+}
+
+if ($Action -in @('default', 'start', 'restart', 'console', 'agent')) { Invoke-GeoForgeBuild }
 
 switch ($Action) {
     'default' {
@@ -158,6 +185,7 @@ switch ($Action) {
         Invoke-Supervisor @Arguments
     }
     'console' { Open-LocalConsole }
+    'agent' { Open-AgentConsole }
     'shutdown' {
         if (-not (Test-Supervisor)) { Write-Host 'GeoForge 监督器未运行。' -ForegroundColor DarkGray; break }
         $Arguments = @('shutdown')

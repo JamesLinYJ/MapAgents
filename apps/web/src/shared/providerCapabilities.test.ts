@@ -20,7 +20,8 @@ const deepSeekProvider: ModelProviderDescriptor = {
   provider: 'deepseek',
   displayName: 'DeepSeek',
   configured: true,
-  defaultModel: 'deepseek-chat',
+  defaultModel: 'deepseek-v4-flash',
+  availableModels: ['deepseek-v4-flash', 'deepseek-v4-pro'],
   capabilities: ['agents_sdk', 'chat_completions', 'tool_calls'],
   contextWindowTokens: 128000,
   agentRuntime: {

@@ -15,8 +15,8 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ToolContext, ValueRef } from '../../../server/src/framework/types.js'
-import { validateToolProvider } from '../../../server/src/framework/validation.js'
+import type { ToolContext, ValueRef } from '../../../apps/server/src/framework/types.js'
+import { validateToolProvider } from '../../../apps/server/src/framework/validation.js'
 import demoProvider from '../src/index.js'
 
 describe('demo ToolProvider', () => {

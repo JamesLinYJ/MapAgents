@@ -15,7 +15,7 @@
 
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import type { ToolArtifact, ValueRef } from '../../../server/src/framework/types.js'
+import type { ToolArtifact, ValueRef } from '../../../apps/server/src/framework/types.js'
 
 export interface DemoObservation {
   stationName: string
