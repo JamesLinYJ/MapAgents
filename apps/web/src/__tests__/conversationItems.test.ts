@@ -13,7 +13,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { ConversationItem } from '@geo-agent-platform/shared-types'
-import { deriveEntriesFromItems, pickConversationHeadline } from '../features/conversation/items'
+import { deriveEntriesFromItems, pickConversationHeadline } from '@geo-agent-platform/conversation-presentation'
 
 describe('deriveEntriesFromItems', () => {
   it('按 item 顺序渲染 user、reasoning 和 assistant message', () => {

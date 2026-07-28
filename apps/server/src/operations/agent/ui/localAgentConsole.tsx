@@ -6,6 +6,10 @@
 //
 //   日期:       2026年07月27日
 //   作者:       OpenAI Codex
+//
+//   维护记录 (2026-07-27):
+//     作者: OpenAI Codex
+//     说明: 增加分层品牌色、状态徽标和仅在活动期间运行的思考动画。
 // --------------------------------------------------------------------------
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -20,6 +24,11 @@ import {
   type LocalAgentSession,
   type LocalAgentSessionSnapshot,
 } from '../application/localAgentSession.js'
+import {
+  AgentActivityIndicator,
+  describeAgentActivity,
+  terminalMotionEnabled,
+} from './localAgentActivity.js'
 import {
   buildConversationLines,
   runPresentation,
@@ -63,7 +72,12 @@ export async function runLocalAgentConsole(
   const mouse = createTerminalMouseController(process.stdin, process.stdout, { trackMotion: false })
   const instance = render(
     <ThemeProvider theme={geoForgeConsoleTheme}>
-      <LocalAgentConsoleApp session={session} identity={identity} mouse={mouse} />
+      <LocalAgentConsoleApp
+        session={session}
+        identity={identity}
+        mouse={mouse}
+        animationsEnabled={terminalMotionEnabled(process.env)}
+      />
     </ThemeProvider>,
     {
       alternateScreen: true,
@@ -84,10 +98,12 @@ export function LocalAgentConsoleApp({
   session,
   identity,
   mouse,
+  animationsEnabled = false,
 }: {
   session: LocalAgentConsoleSession
   identity: LocalAgentConsoleIdentity
   mouse?: TerminalMouseSource
+  animationsEnabled?: boolean
 }) {
   const { exit } = useApp()
   const { columns, rows } = useWindowSize()
@@ -384,6 +400,7 @@ export function LocalAgentConsoleApp({
 
   const wide = columns >= 140 && rows >= 32
   const compact = columns < 100
+  const activity = describeAgentActivity(snapshot, busy)
   const decisionRows = decision ? Math.min(7, 3 + decision.options.length) : 0
   const contentRows = Math.max(4, rows - (compact ? 8 : 10) - decisionRows)
   const conversationWidth = wide ? columns - 46 : columns - 4
@@ -405,15 +422,24 @@ export function LocalAgentConsoleApp({
                 flexGrow={1}
                 minWidth={0}
                 borderStyle="round"
-                borderColor={consolePalette.border}
+                borderColor={activity ? consolePalette.borderStrong : consolePalette.border}
+                backgroundColor={consolePalette.panel}
                 paddingX={1}
                 onWheel={direction => setScrollOffset(offset =>
                   Math.max(0, Math.min(maximumOffset, offset + (direction < 0 ? 3 : -3))))}
               >
                 <Box justifyContent="space-between">
-                  <Text bold color={consolePalette.focus}>对话</Text>
+                  {activity
+                    ? <AgentActivityIndicator
+                        activity={activity}
+                        animationsEnabled={animationsEnabled}
+                        compact={compact}
+                      />
+                    : <Text bold color={consolePalette.focus}>
+                        <Text color={consolePalette.accent}>◆</Text> 智能体时间线
+                      </Text>}
                   <Text color={consolePalette.muted}>
-                    {safeOffset ? `已上移 ${safeOffset} 行` : '跟随最新'} · 滚轮/PgUp/PgDn
+                    {safeOffset ? `↑ ${safeOffset} 行` : '● 跟随最新'}{compact ? '' : ' · 滚轮/PgUp/PgDn'}
                   </Text>
                 </Box>
                 {visibleLines.map(line => (
@@ -424,7 +450,7 @@ export function LocalAgentConsoleApp({
                     {...(line.user ? { backgroundColor: consolePalette.panelRaised } : {})}
                     wrap="truncate-end"
                   >
-                    {line.text}
+                    {line.rendered ?? line.text}
                   </Text>
                 ))}
               </MouseRegion>
@@ -472,18 +498,57 @@ function AgentHeader({
 }) {
   const run = runPresentation(snapshot.run?.status)
   const online = snapshot.connection === 'online'
+  const runColor = lineColor(run.tone)
   return (
-    <Box flexShrink={0} borderStyle="round" borderColor={consolePalette.border} paddingX={1} flexDirection="column">
+    <Box
+      flexShrink={0}
+      borderStyle="double"
+      borderColor={online ? consolePalette.focus : consolePalette.warning}
+      backgroundColor={consolePalette.panelSoft}
+      paddingX={1}
+      flexDirection="column"
+    >
       <Box justifyContent="space-between">
-        <Text bold color={consolePalette.focus}>◈ GeoForge Agent <Text color={consolePalette.muted}>v{identity.version}</Text></Text>
-        <Text color={online ? consolePalette.healthy : consolePalette.warning}>
-          {online ? '● 本机根授权' : '◐ 正在重连'} · {run.symbol} {run.label}
+        <Box>
+          <Text bold color={consolePalette.canvas} backgroundColor={consolePalette.focus}> GEOFORGE </Text>
+          <Text bold color={consolePalette.accent}> 智能体终端 </Text>
+          <Text color={consolePalette.muted}>v{identity.version}</Text>
+        </Box>
+        <Box gap={1}>
+          <Text
+            bold
+            color={consolePalette.canvas}
+            backgroundColor={online ? consolePalette.healthy : consolePalette.warning}
+          >
+            {online ? ' ● 在线 ' : ' ◐ 重连 '}
+          </Text>
+          <Text bold color={consolePalette.canvas} backgroundColor={runColor}>
+            {' '}{run.symbol} {run.label}{' '}
+          </Text>
+        </Box>
+      </Box>
+      <Box minWidth={0}>
+        <Text bold color={consolePalette.info}>{snapshot.provider?.displayName ?? '等待提供商'}</Text>
+        <Text color={consolePalette.text}> / {snapshot.model ?? '等待模型'} </Text>
+        <Text
+          bold
+          color={consolePalette.canvas}
+          backgroundColor={snapshot.executionMode === 'plan' ? consolePalette.accent : consolePalette.info}
+        >
+          {' '}{snapshot.executionMode === 'plan' ? '计划' : '自动'}{' '}
+        </Text>
+        <Text> </Text>
+        <Text
+          bold
+          color={consolePalette.canvas}
+          backgroundColor={snapshot.reasoning ? consolePalette.reasoning : consolePalette.muted}
+        >
+          {' '}{snapshot.reasoning ? '思考开启' : '思考关闭'}{' '}
+        </Text>
+        <Text wrap="truncate-end" color={consolePalette.muted}>
+          {' · '}{compact ? identity.projectRoot : `${identity.osUser}@${identity.hostname} · ${identity.projectRoot}`}
         </Text>
       </Box>
-      <Text wrap="truncate-end" color={consolePalette.muted}>
-        {snapshot.provider?.displayName ?? '等待提供商'} / {snapshot.model ?? '等待模型'} · {snapshot.executionMode === 'plan' ? '计划模式' : '自动模式'}
-        {' · '}{snapshot.reasoning ? '思考开启' : '思考关闭'} · {compact ? identity.projectRoot : `${identity.osUser}@${identity.hostname} · ${identity.projectRoot}`}
-      </Text>
     </Box>
   )
 }
@@ -493,17 +558,36 @@ function AgentInspector({ snapshot }: { snapshot: LocalAgentSessionSnapshot }) {
   const workflow = run?.state.agentWorkflow
   const tools = snapshot.items.filter(item => item.itemType === 'function_call')
   const completedTools = snapshot.items.filter(item => item.itemType === 'function_call_output' && !item.isError)
+  const presentation = runPresentation(run?.status)
   return (
-    <Box width={44} flexShrink={0} flexDirection="column" borderStyle="round" borderColor={consolePalette.border} paddingX={1}>
-      <Text bold color={consolePalette.focus}>运行检查器</Text>
-      <Text color={runPresentation(run?.status).tone === 'danger' ? consolePalette.danger : consolePalette.text}>
-        {runPresentation(run?.status).symbol} {runPresentation(run?.status).label}
+    <Box
+      width={44}
+      flexShrink={0}
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={consolePalette.accent}
+      backgroundColor={consolePalette.panelSoft}
+      paddingX={1}
+    >
+      <Text bold color={consolePalette.canvas} backgroundColor={consolePalette.accent}> 运行检查器 </Text>
+      <Text bold color={lineColor(presentation.tone)}>
+        {presentation.symbol} {presentation.label}
       </Text>
       <Text color={consolePalette.muted}>运行 {shortId(run?.id)} · 线程 {shortId(snapshot.threadId)}</Text>
-      <Text>工具 {completedTools.length}/{tools.length} · 子智能体 {run?.state.subAgents.length ?? 0}</Text>
-      <Text>产物 {run?.state.artifacts.length ?? 0} · 待办 {run?.state.todos.filter(todo => todo.status !== 'completed').length ?? 0}</Text>
+      <Text>
+        <Text color={consolePalette.healthy}>工具</Text> <Text bold>{completedTools.length}/{tools.length}</Text>
+        <Text color={consolePalette.muted}>  ·  </Text>
+        <Text color={consolePalette.info}>子智能体</Text> <Text bold>{run?.state.subAgents.length ?? 0}</Text>
+      </Text>
+      <Text>
+        <Text color={consolePalette.accent}>产物</Text> <Text bold>{run?.state.artifacts.length ?? 0}</Text>
+        <Text color={consolePalette.muted}>  ·  </Text>
+        <Text color={consolePalette.warning}>待办</Text> <Text bold>{run?.state.todos.filter(todo => todo.status !== 'completed').length ?? 0}</Text>
+      </Text>
       <Box marginTop={1} flexDirection="column">
-        <Text bold color={consolePalette.focus}>{workflow ? `计划 ${workflow.steps.filter(step => step.status === 'completed').length}/${workflow.steps.length}` : '计划'}</Text>
+        <Text bold color={consolePalette.info}>
+          ─ 计划 {workflow ? `${workflow.steps.filter(step => step.status === 'completed').length}/${workflow.steps.length}` : ''}
+        </Text>
         {(workflow?.steps ?? []).slice(0, 10).map(step => (
           <Text key={step.stepId} color={step.status === 'failed'
             ? consolePalette.danger
@@ -514,7 +598,7 @@ function AgentInspector({ snapshot }: { snapshot: LocalAgentSessionSnapshot }) {
         {!workflow && <Text color={consolePalette.muted}>本次运行尚未生成工作流。</Text>}
       </Box>
       <Box marginTop={1} flexDirection="column">
-        <Text bold color={consolePalette.focus}>智能体</Text>
+        <Text bold color={consolePalette.reasoning}>─ 智能体</Text>
         {(run?.state.subAgents ?? []).slice(0, 6).map(agent => (
           <Text key={agent.agentId} color={agent.status === 'failed' ? consolePalette.danger : consolePalette.muted}>
             {agent.status === 'running' ? '↗' : agent.status === 'completed' ? '✓' : '○'} {agent.name}
@@ -598,14 +682,21 @@ function AgentComposer({
       height={4}
       borderStyle="round"
       borderColor={busy ? consolePalette.warning : consolePalette.focus}
+      backgroundColor={consolePalette.panelSoft}
       paddingX={1}
       onClick={onFocusLatest}
       priority={20}
     >
       <Box flexDirection="column" width="100%">
-        <Text color={consolePalette.muted}>{busy ? '◐ 正在提交…' : '›'} {value ? '' : placeholder}</Text>
+        <Text>
+          <Text bold color={consolePalette.canvas} backgroundColor={busy ? consolePalette.warning : consolePalette.focus}>
+            {busy ? ' 提交中 ' : ' 输入 '}
+          </Text>
+          <Text color={consolePalette.muted}> {value ? `${codePoints(value).length}/${MAX_INPUT_LENGTH}` : placeholder}</Text>
+        </Text>
         <Text wrap="wrap" color={consolePalette.text}>
-          {visible.before}<Text inverse>{busy ? ' ' : visible.cursor}</Text>{visible.after}
+          <Text color={consolePalette.info}>› </Text>
+          {visible.before}<Text inverse color={consolePalette.canvas} backgroundColor={consolePalette.focus}>{busy ? ' ' : visible.cursor}</Text>{visible.after}
         </Text>
       </Box>
     </MouseRegion>
@@ -628,20 +719,49 @@ function AgentFooter({
   onHelp: () => void
 }) {
   return (
-    <Box flexShrink={0} borderStyle="single" borderColor={consolePalette.border} paddingX={1} flexDirection="column">
+    <Box
+      flexShrink={0}
+      borderStyle="single"
+      borderColor={consolePalette.borderStrong}
+      backgroundColor={consolePalette.panel}
+      paddingX={1}
+      flexDirection="column"
+    >
       <Box>
         <MouseRegion onClick={onMode} priority={30}>
-          {state => <Text bold color={state.hovered ? consolePalette.focus : consolePalette.text}>
-            [{snapshot.executionMode === 'auto' ? '自动' : '计划'}]
+          {state => <Text
+            bold
+            color={consolePalette.canvas}
+            backgroundColor={state.hovered
+              ? consolePalette.focus
+              : snapshot.executionMode === 'auto' ? consolePalette.info : consolePalette.accent}
+          >
+            {' '}{snapshot.executionMode === 'auto' ? '自动' : '计划'}{' '}
           </Text>}
         </MouseRegion>
-        <Text color={consolePalette.muted}> · Enter 发送 · Ctrl+J 换行 · Ctrl+C 取消/分离 · </Text>
-        <MouseRegion onClick={onNew} priority={30}><Text color={consolePalette.focus}>[新对话]</Text></MouseRegion>
+        <Text color={consolePalette.muted}>  Enter 发送  Ctrl+J 换行  Ctrl+C 取消/分离  </Text>
+        <MouseRegion onClick={onNew} priority={30}>
+          {state => <Text
+            bold
+            color={state.hovered ? consolePalette.canvas : consolePalette.focus}
+            {...(state.hovered ? { backgroundColor: consolePalette.focus } : {})}
+          > 新对话 </Text>}
+        </MouseRegion>
         <Text> </Text>
-        <MouseRegion onClick={onHelp} priority={30}><Text color={consolePalette.focus}>[? 帮助]</Text></MouseRegion>
+        <MouseRegion onClick={onHelp} priority={30}>
+          {state => <Text
+            bold
+            color={state.hovered ? consolePalette.canvas : consolePalette.accent}
+            {...(state.hovered ? { backgroundColor: consolePalette.accent } : {})}
+          > ? 帮助 </Text>}
+        </MouseRegion>
       </Box>
-      <Text wrap="truncate-end" color={snapshot.error ? consolePalette.danger : consolePalette.muted}>
-        {feedback} · {snapshot.connectionMessage} · 鼠标{mouseEnabled ? '可用' : '不可用'}
+      <Text wrap="truncate-end">
+        <Text color={snapshot.error ? consolePalette.danger : consolePalette.text}>{feedback}</Text>
+        <Text color={consolePalette.muted}> · {snapshot.connectionMessage} · </Text>
+        <Text color={mouseEnabled ? consolePalette.healthy : consolePalette.muted}>
+          鼠标{mouseEnabled ? '可用' : '不可用'}
+        </Text>
       </Text>
     </Box>
   )
@@ -649,10 +769,17 @@ function AgentFooter({
 
 function HelpView({ onClose }: { onClose: () => void }) {
   return (
-    <Box flexGrow={1} borderStyle="round" borderColor={consolePalette.focus} paddingX={2} flexDirection="column">
+    <Box
+      flexGrow={1}
+      borderStyle="double"
+      borderColor={consolePalette.accent}
+      backgroundColor={consolePalette.panel}
+      paddingX={2}
+      flexDirection="column"
+    >
       <Box justifyContent="space-between">
-        <Text bold color={consolePalette.focus}>GeoForge Agent 快捷键与命令</Text>
-        <MouseRegion onClick={onClose} priority={50}><Text color={consolePalette.focus}>[关闭]</Text></MouseRegion>
+        <Text bold color={consolePalette.canvas} backgroundColor={consolePalette.accent}> 快捷键与命令 </Text>
+        <MouseRegion onClick={onClose} priority={50}><Text bold color={consolePalette.focus}> 关闭 </Text></MouseRegion>
       </Box>
       <Text>Enter 发送 · Ctrl+J 换行 · ↑↓ 历史/决策 · PgUp/PgDn 或滚轮浏览</Text>
       <Text>Ctrl+C：运行中取消；有输入时清空；空闲连续两次分离 · Ctrl+D 空输入分离</Text>
@@ -696,6 +823,9 @@ function pendingDecision(snapshot: LocalAgentSessionSnapshot): DecisionRequest |
 
 function lineColor(tone: AgentLineTone): string {
   if (tone === 'focus') return consolePalette.focus
+  if (tone === 'info') return consolePalette.info
+  if (tone === 'accent') return consolePalette.accent
+  if (tone === 'reasoning') return consolePalette.reasoning
   if (tone === 'healthy') return consolePalette.healthy
   if (tone === 'warning') return consolePalette.warning
   if (tone === 'danger') return consolePalette.danger

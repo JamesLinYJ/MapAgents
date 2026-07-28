@@ -169,6 +169,7 @@ GeoForge 按能力平面划分，而不是按技术名词随意分层：
 - **`apps/web/src/api/`**：传输层（HTTP + WebSocket），不含业务逻辑
 - **Worker 工具契约**：Worker 内部 API 以 Python Pydantic request/response model 为事实源，`/tools/catalog` 由 `model_json_schema()` 自动生成；Node 只消费 catalog 并校验出站参数，不维护第二份手写 Worker schema
 - **`packages/gis-meteorology/`**：科学计算领域逻辑。不含 Web 框架代码
+- **`packages/conversation-presentation/`**：浏览器 Chat 与本机 Agent CLI 共用的 ConversationItem 展示投影。负责消息分类、工具调用/结果配对、公开工具名称和结果摘要；不得包含 DOM、Ink、网络请求或运行状态写入。各客户端只保留自己的最终渲染器
 - **`apps/worker/`**：Python Web 层——仅路由和中间件。领域逻辑委托给 `gis_meteorology`
 
 ### 1.4 注释规范

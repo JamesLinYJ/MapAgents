@@ -34,7 +34,7 @@ import type {
 } from '@geo-agent-platform/shared-types'
 
 import { apiBaseUrl } from '../../api/client'
-import { deriveEntriesFromItems, pickConversationHeadline } from '../conversation/items'
+import { deriveEntriesFromItems, pickConversationHeadline } from '@geo-agent-platform/conversation-presentation'
 import { buildFadeUpMotion, buildListItemVariants, buildListVariants, buildPressMotion } from '../../shared/motion'
 import {
   agentRuntimeCapabilitySummary,

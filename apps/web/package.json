@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@dagrejs/dagre": "^1.1.8",
+    "@geo-agent-platform/conversation-presentation": "file:../../packages/conversation-presentation",
     "@geo-agent-platform/shared-types": "file:../../packages/shared-types",
     "@hookform/resolvers": "^5.4.0",
     "@radix-ui/react-accordion": "^1.2.16",

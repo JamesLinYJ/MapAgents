@@ -28,7 +28,7 @@ import type {
 import { apiBaseUrl } from '../../api/client'
 import type { LayerPanelView, LayerTreeNode, LayerVisibilityFilter } from '../layers/useLayerManager'
 import { LayerPanel } from '../layers/LayerManagerPanel'
-import { pickConversationHeadline } from '../conversation/items'
+import { pickConversationHeadline } from '@geo-agent-platform/conversation-presentation'
 import { buildDetailSummaryFacts } from './detailSummaryModel'
 import { DetailSummaryPanel } from './DetailSummaryPanel'
 import { DetailLayerOverviewPanel, type DetailMapLayer } from './DetailLayerOverviewPanel'

@@ -11,6 +11,14 @@
 #   维护记录 (2026-07-22):
 #     作者: OpenAI Codex
 #     说明: 进程事实源迁移到 TypeScript 监督后台；无参数进入中文本地运维台。
+#
+#   维护记录 (2026-07-27):
+#     作者: OpenAI Codex
+#     说明: 开发入口在启动 API 或 Agent CLI 前构建跨端对话展示包。
+#
+#   维护记录 (2026-07-27):
+#     作者: OpenAI Codex
+#     说明: 运行中的 Web 开发服务改用原位增量构建，避免清空 dist 触发模块加载失败。
 # --------------------------------------------------------------------------
 set -euo pipefail
 
@@ -62,8 +70,9 @@ OPS_ROOT="$RUNTIME_ROOT/ops"
 LAUNCH_LOG="$OPS_ROOT/supervisor-launch.log"
 
 build_supervisor() {
-  npm run build --workspace @geo-agent-platform/shared-types
-  npm run build --workspace @geo-agent-platform/operations-supervisor
+  npm run build:dev --workspace @geo-agent-platform/shared-types
+  npm run build:dev --workspace @geo-agent-platform/conversation-presentation
+  npm run build:dev --workspace @geo-agent-platform/operations-supervisor
 }
 
 supervisor() { node "$SUPERVISOR_CLI" "$@" --root "$ROOT" --profile development; }

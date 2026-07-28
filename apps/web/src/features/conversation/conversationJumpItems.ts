@@ -8,7 +8,7 @@
 //   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
-import type { ConversationEntry } from './items'
+import type { ConversationEntry } from '@geo-agent-platform/conversation-presentation'
 
 export interface ConversationJumpItem {
   id: string

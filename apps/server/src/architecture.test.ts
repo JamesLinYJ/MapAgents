@@ -11,6 +11,10 @@
 //     作者: OpenAI Codex
 //     说明: 核心应用统一归入 apps，共享契约源码统一归入 src，
 //           并增加旧目录与过时事实源不得回流的结构守卫。
+//
+//   维护记录 (2026-07-27):
+//     作者: OpenAI Codex
+//     说明: 增加 Web Chat 与本机 Agent CLI 共用只读对话展示投影的结构守卫。
 // --------------------------------------------------------------------------
 
 import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises'
@@ -33,6 +37,7 @@ describe('platform architecture', () => {
 
     expect(rootPackage.workspaces).toContain('apps/server')
     expect(rootPackage.workspaces).toContain('apps/web')
+    expect(rootPackage.workspaces).toContain('packages/conversation-presentation')
     expect(rootPackage.workspaces).not.toContain('server')
 
     for (const application of ['server', 'web', 'worker']) {
@@ -41,6 +46,7 @@ describe('platform architecture', () => {
     await expect(stat(path.join(repositoryRoot, 'server'))).rejects.toMatchObject({ code: 'ENOENT' })
 
     await expect(stat(path.join(repositoryRoot, 'packages/shared-types/src'))).resolves.toBeDefined()
+    await expect(stat(path.join(repositoryRoot, 'packages/conversation-presentation/src'))).resolves.toBeDefined()
     await expect(stat(path.join(repositoryRoot, 'packages/shared-types/src-ts')))
       .rejects.toMatchObject({ code: 'ENOENT' })
 
@@ -247,6 +253,46 @@ describe('platform architecture', () => {
     for (const file of supervisorFiles) {
       expect((await readFile(file, 'utf8')).includes('operations/agent'), file).toBe(false)
     }
+  })
+
+  it('keeps Web Chat and the local Agent CLI on one read-only conversation projection', async () => {
+    const repositoryRoot = path.resolve(process.cwd(), '..', '..')
+    const presentationRoot = path.join(repositoryRoot, 'packages/conversation-presentation')
+    const presentationSource = await readFile(
+      path.join(presentationRoot, 'src/presentation.ts'),
+      'utf8',
+    )
+    const serverViewSource = await readFile(
+      path.join(repositoryRoot, 'apps/server/src/operations/agent/ui/localAgentView.ts'),
+      'utf8',
+    )
+    const webConversationSource = await readFile(
+      path.join(repositoryRoot, 'apps/web/src/features/conversation/useConversation.ts'),
+      'utf8',
+    )
+    const windowsDevSource = await readFile(path.join(repositoryRoot, 'dev.ps1'), 'utf8')
+    const linuxDevSource = await readFile(path.join(repositoryRoot, 'dev.sh'), 'utf8')
+
+    expect(presentationSource.includes('deriveEntriesFromItems')).toBe(true)
+    expect(presentationSource.includes('displayIdentifier')).toBe(true)
+    expect(presentationSource.includes("from 'react'")).toBe(false)
+    expect(presentationSource.includes("from 'ink'")).toBe(false)
+    expect(serverViewSource.includes("from '@geo-agent-platform/conversation-presentation'")).toBe(true)
+    expect(webConversationSource.includes("from '@geo-agent-platform/conversation-presentation'")).toBe(true)
+    expect(windowsDevSource.includes("build:dev --workspace '@geo-agent-platform/conversation-presentation'")).toBe(true)
+    expect(linuxDevSource.includes('build:dev --workspace @geo-agent-platform/conversation-presentation')).toBe(true)
+    for (const packageName of ['shared-types', 'conversation-presentation', 'operations-supervisor']) {
+      const packageJson = JSON.parse(await readFile(
+        path.join(repositoryRoot, 'packages', packageName, 'package.json'),
+        'utf8',
+      )) as { scripts?: Record<string, string> }
+      expect(packageJson.scripts?.['build:dev']).toBeTruthy()
+      expect(packageJson.scripts?.['build:dev']?.includes('rmSync')).toBe(false)
+    }
+    await expect(stat(path.join(
+      repositoryRoot,
+      'apps/web/src/features/conversation/items.ts',
+    ))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('keeps PlatformPersistenceFacade as a resource facade instead of a writer god object', async () => {

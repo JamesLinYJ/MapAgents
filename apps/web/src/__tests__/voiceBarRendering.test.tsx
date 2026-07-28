@@ -11,7 +11,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { ConversationEntryView } from '../features/conversation/ConversationEntry'
-import type { ConversationEntry } from '../features/conversation/items'
+import type { ConversationEntry } from '@geo-agent-platform/conversation-presentation'
 
 describe('voice bar rendering', () => {
   it('renders Azure text_to_speech audio artifacts as a playable voice bar', () => {

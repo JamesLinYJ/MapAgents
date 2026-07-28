@@ -11,6 +11,7 @@ apps/
   worker/       FastAPI 科学计算边界
 packages/
   shared-types/ 跨进程 Zod 契约
+  conversation-presentation/ 浏览器与 CLI 共用的只读对话展示投影
   gis-meteorology/  地理与气象领域算法
   operations-supervisor/ TypeScript 进程监督器
 infra/          PostgreSQL/PostGIS migration、种子与 Compose
@@ -69,6 +70,7 @@ flowchart LR
 3. GeoForge 负责工作流、权限、工具注册、`valueRef`、数据库事实、审计与分层记忆。
 4. DeepSeek 使用专属 OpenAI-compatible Chat Completions Model 适配器；Provider descriptor 限定可选模型和真实能力。
 5. ToolProvider 经过 manifest/schema 一致性校验后才可注册。Python 工具契约以 Pydantic catalog 为事实源。
+6. Web Chat 与本机 Agent CLI 都从 `packages/conversation-presentation` 获取消息分类、工具调用配对和公开展示标识；DOM Markdown 与终端 Markdown 只是两个最终渲染目标，不得各自重建业务投影。
 
 ### 科学计算
 

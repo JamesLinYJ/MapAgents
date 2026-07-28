@@ -14,6 +14,7 @@ import { stripVTControlCharacters } from 'node:util'
 import {
   analysisRunSchema,
   conversationItemSchema,
+  workspaceBootstrapSnapshotSchema,
   type AgentExecutionMode,
   type AnalysisRun,
   type DecisionRequest,
@@ -36,7 +37,7 @@ afterEach(() => cleanup())
 
 describe('LocalAgentConsoleApp', () => {
   it.each([
-    [80, 'GeoForge Agent'],
+    [80, 'GEOFORGE'],
     [100, '输入消息'],
     [140, '运行检查器'],
     [180, '本次运行尚未生成工作流'],
@@ -107,6 +108,111 @@ describe('LocalAgentConsoleApp', () => {
     })
   })
 
+  it('shows a labelled reasoning activity even when motion is reduced', async () => {
+    const value = snapshot(run('running'))
+    value.items = [
+      conversationItemSchema.parse({
+        itemId: 'reasoning_active',
+        itemType: 'reasoning',
+        runId: 'run_1',
+        threadId: 'thread_1',
+        body: '正在核验杭州逐小时降水。',
+        status: 'running',
+        timestamp: '2026-07-27T00:00:01.000Z',
+      }),
+    ]
+    const instance = renderConsole(new TestSession(value))
+    resize(instance.stdout, 100, 30)
+
+    await vi.waitFor(() => {
+      const frame = stripVTControlCharacters(instance.lastFrame() ?? '')
+      expect(frame).toContain('◐ 正在推理')
+      expect(frame).toContain('正在核验杭州逐小时降水')
+      assertFrameFits(instance.lastFrame(), 100, 30)
+    })
+  })
+
+  it('renders assistant Markdown through the terminal renderer at supported widths', async () => {
+    const value = snapshot(run('completed'))
+    value.items = [
+      conversationItemSchema.parse({
+        itemId: 'answer_markdown',
+        itemType: 'message',
+        runId: 'run_1',
+        threadId: 'thread_1',
+        role: 'assistant',
+        body: [
+          '# 杭州降水结论',
+          '',
+          '- **今天**：有阵雨',
+          '- **明天**：降水减弱',
+          '',
+          '| 时段 | 风险 |',
+          '| --- | --- |',
+          '| 午后 | 中等 |',
+          '',
+          '```text',
+          '数据已核验',
+          '```',
+        ].join('\n'),
+        status: 'completed',
+        timestamp: '2026-07-27T00:00:02.000Z',
+      }),
+    ]
+    const instance = renderConsole(new TestSession(value))
+    resize(instance.stdout, 100, 40)
+
+    await vi.waitFor(() => {
+      const frame = stripVTControlCharacters(instance.lastFrame() ?? '')
+      expect(frame).toContain('杭州降水结论')
+      expect(frame).toContain('今天：有阵雨')
+      expect(frame).toContain('时段')
+      expect(frame).toContain('数据已核验')
+      expect(frame).not.toContain('**今天**')
+      expect(frame).not.toContain('```text')
+      assertFrameFits(instance.lastFrame(), 100, 40)
+    })
+  })
+
+  it('shows the registered tool label, identifier, input and output explicitly', async () => {
+    const value = snapshot(run('completed'))
+    value.bootstrap = bootstrapWithWeatherTool()
+    value.items = [
+      conversationItemSchema.parse({
+        itemId: 'tool_output',
+        itemType: 'function_call_output',
+        runId: 'run_1',
+        threadId: 'thread_1',
+        callId: 'call_weather',
+        output: '{"summary":"杭州午后有阵雨。"}',
+        status: 'completed',
+        timestamp: '2026-07-27T00:00:02.000Z',
+      }),
+      conversationItemSchema.parse({
+        itemId: 'tool_call',
+        itemType: 'function_call',
+        runId: 'run_1',
+        threadId: 'thread_1',
+        callId: 'call_weather',
+        name: 'query_public_weather',
+        arguments: '{"location":"杭州"}',
+        status: 'completed',
+        timestamp: '2026-07-27T00:00:01.000Z',
+      }),
+    ]
+    const instance = renderConsole(new TestSession(value))
+    resize(instance.stdout, 100, 34)
+
+    await vi.waitFor(() => {
+      const frame = stripVTControlCharacters(instance.lastFrame() ?? '')
+      expect(frame).toContain('已调用工具 · 查询公开天气 [query_public_weather]')
+      expect(frame).toContain('输入')
+      expect(frame).toContain('{"location":"杭州"}')
+      expect(frame).toContain('输出')
+      expect(frame).toContain('杭州午后有阵雨。')
+    })
+  })
+
   it('defaults approval decisions to rejection and requires double confirmation to approve', async () => {
     const decision = approvalDecision()
     const value = snapshot(run('waiting_approval', [decision]))
@@ -148,7 +254,7 @@ describe('LocalAgentConsoleApp', () => {
     mouse.click(3, 28)
 
     await vi.waitFor(() => expect(session.setExecutionMode).toHaveBeenCalledWith('plan'))
-    await vi.waitFor(() => expect(instance.lastFrame()).toContain('[计划]'))
+    await vi.waitFor(() => expect(instance.lastFrame()).toContain('计划   Enter 发送'))
   })
 })
 
@@ -259,6 +365,56 @@ function snapshot(currentRun: AnalysisRun | null = null): LocalAgentSessionSnaps
     events: [],
     error: null,
   }
+}
+
+function bootstrapWithWeatherTool() {
+  return workspaceBootstrapSnapshotSchema.parse({
+    auth: {
+      user: {
+        userId: 'platform_local_agent',
+        subject: 'auth_local_agent',
+        email: 'agent@local-agent.geoforge.invalid',
+        displayName: 'GeoForge Local Agent',
+        status: 'active',
+        lastLoginAt: null,
+        createdAt: '2026-07-27T00:00:00.000Z',
+        updatedAt: '2026-07-27T00:00:00.000Z',
+      },
+      defaultWorkspace: null,
+      memberships: [],
+      platformRoles: ['platform_admin'],
+      csrfToken: 'csrf',
+      permissions: [],
+    },
+    session: {
+      id: 'session_1',
+      workspaceId: 'workspace_1',
+      createdByUserId: 'platform_local_agent',
+      visibility: 'private',
+      createdAt: '2026-07-27T00:00:00.000Z',
+      status: 'active',
+      shareToken: 'not-public',
+    },
+    threads: [],
+    providers: [],
+    tools: [{
+      name: 'query_public_weather',
+      label: '查询公开天气',
+      description: '查询公开天气资料。',
+      group: 'weather',
+      toolKind: 'registry',
+      providerId: 'public-weather',
+      language: 'typescript',
+      isReadOnly: true,
+      isDestructive: false,
+      parallelSafe: true,
+      available: true,
+      tags: ['weather'],
+      parameters: [],
+      error: null,
+      meta: {},
+    }],
+  })
 }
 
 function run(status: AnalysisRun['status'], decisions: DecisionRequest[] = []): AnalysisRun {

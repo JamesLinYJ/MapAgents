@@ -40,12 +40,18 @@ Linux/macOS：
 
 界面采用高信息密度中文布局：
 
+- 顶部使用 GeoForge 深蓝灰主题、青色主焦点、蓝色模型、紫色思考、绿色成功、琥珀色等待和红色失败；状态始终同时显示符号与中文标签，不只依赖颜色；
 - 顶部显示服务端实际 Provider、模型、执行模式、本机授权和连接状态；
-- 中央持续投影用户消息、思考、工具调用、工具结果、错误和最终回答；
+- 中央持续投影用户消息、思考、工具调用、工具结果、错误和最终回答；已注册工具会明确显示中文名称、公开标识、输入摘要与输出摘要；
+- Agent 运行、思考、组织回答、调用工具或子智能体协作时，使用 `@inkjs/ui` 的单一活动指示器展示当前真实阶段和持续时间；完成、等待审批或空闲后立即停止动画；
+- 助手正文和思考使用 `markdansi` 渲染 GitHub Flavored Markdown，支持标题、强调、链接、列表、引用、表格、任务列表和代码框，并按当前终端宽度重新排版；
 - 终端宽度达到 140 列时，右侧同时显示工作流步骤、子智能体、工具与 Artifact 摘要；
 - 底部是多行编辑器，支持中文、粘贴、左右移动、Home/End、Backspace/Delete、`Ctrl+J` 换行和历史召回；
 - 鼠标可单击模式、新对话、帮助和审批选项，滚轮浏览对话；鼠标移动追踪保持关闭，终端原生文本选择仍可使用；
 - 小于 `80×24` 时停止绘制业务区，只显示稳定尺寸提示。
+
+需要稳定截图、无动画录制或对动态效果敏感时，可设置
+`GEOFORGE_REDUCED_MOTION=1`。`CI=true` 与 `TERM=dumb` 也会自动使用带中文标签的静态状态符号；`NO_COLOR` 终端仍保留全部文字和状态语义。
 
 普通字母不会被当作全局快捷键。`q`、`S`、`R` 和 `?` 都可正常输入；只有输入区为空时，`?` 会打开帮助。
 
@@ -93,6 +99,8 @@ apps/server/src/operations/agent/
   transport/     # 受约束的 WebSocket JSONL 客户端
   cli/           # 参数、一次性输出与进程入口
   ui/            # Ink 中文界面和 ConversationItem 呈现
+packages/conversation-presentation/
+  src/           # Web Chat 与 CLI 共用的消息分类、工具配对和公开展示投影
 ```
 
-主 API 的 Agent SDK Runner 仍位于 `apps/server/src/agent/`。本机 CLI 不导入 `@openai/agents`，不创建应用容器，也不争抢数据库单实例锁。
+主 API 的 Agent SDK Runner 仍位于 `apps/server/src/agent/`。本机 CLI 不导入 `@openai/agents`，不创建应用容器，也不争抢数据库单实例锁。Web 与 CLI 共用业务展示投影，但保留 DOM Markdown 与终端 Markdown 两个最终渲染器。

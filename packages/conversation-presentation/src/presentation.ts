@@ -1,20 +1,18 @@
 // +-------------------------------------------------------------------------
 //
-//   地理智能平台 - ConversationItem 对话投影
+//   地理智能平台 - ConversationItem 跨端展示投影
 //
-//   文件:       items.ts
+//   文件:       presentation.ts
 //
 //   日期:       2026年06月04日
 //   作者:       JamesLinYJ
+//
+//   维护记录 (2026-07-27):
+//     作者: OpenAI Codex
+//     说明: 从 Web 展示层抽取为浏览器与本机 Agent CLI 共用的纯投影边界。
 // --------------------------------------------------------------------------
 
-// 模块职责
-//
-// ConversationItem 是聊天 UI 的唯一事实源。本文件只把 item 投影为可渲染
-// 条目，不读取 RunEvent，也不从诊断事件里补造用户可见回答。
-
 import type { ConversationItem, ToolDescriptor } from '@geo-agent-platform/shared-types'
-import { isRecord } from '../../shared/utils/guards'
 
 export type LedgerEntryStatus = 'idle' | 'running' | 'completed' | 'failed' | 'blocked'
 export type ConversationEntryKind = 'message' | 'command_batch' | 'approval' | 'artifact' | 'error' | 'system'
@@ -26,6 +24,7 @@ export interface ConversationCommand {
   body: string
   commandText?: string | null
   toolName?: string | null
+  displayIdentifier?: string | null
   details?: Record<string, unknown> | null
 }
 
@@ -46,20 +45,30 @@ export interface ConversationEntry {
   details?: Record<string, unknown> | null
 }
 
+/**
+ * ConversationItem 是两种聊天界面的唯一输入。这里负责消息分类、工具配对、
+ * 用户可见名称与结果摘要；DOM 与终端只能决定布局和最终 Markdown 样式。
+ */
 export function deriveEntriesFromItems(
   items: ReadonlyArray<ConversationItem>,
   _runStatus?: string,
   tools: ReadonlyArray<ToolDescriptor> = [],
 ): ConversationEntry[] {
-  const toolLabels = new Map(tools.map((tool) => [tool.name, tool.label]))
+  const toolLabels = new Map(tools.map(tool => [tool.name, tool.label]))
   const entries: ConversationEntry[] = []
   const toolCalls = new Map<string, ConversationItem>()
+  const toolOutputs = new Map<string, ConversationItem>()
+
+  for (const item of items) {
+    if (item.itemType === 'function_call' && item.callId) toolCalls.set(item.callId, item)
+    if (item.itemType === 'function_call_output' && item.callId) toolOutputs.set(item.callId, item)
+  }
 
   for (const item of items) {
     if (item.itemType === 'message') {
       const body = itemText(item).trim()
       if (!body) continue
-      const isAssistantCommentary = item.role === 'assistant' && item.metadata?.messageKind === 'commentary'
+      const isAssistantCommentary = item.role === 'assistant' && item.metadata.messageKind === 'commentary'
       entries.push({
         id: item.itemId,
         kind: 'message',
@@ -69,7 +78,7 @@ export function deriveEntriesFromItems(
         body,
         status: itemStatus(item),
         badge: isAssistantCommentary ? 'commentary' : null,
-        details: item.metadata ?? null,
+        details: item.metadata,
       })
       continue
     }
@@ -92,8 +101,7 @@ export function deriveEntriesFromItems(
 
     if (item.itemType === 'function_call') {
       if (!item.callId) continue
-      toolCalls.set(item.callId, item)
-      upsertToolEntry(entries, buildToolEntry(item, undefined, toolLabels))
+      upsertToolEntry(entries, buildToolEntry(item, toolOutputs.get(item.callId), toolLabels))
       continue
     }
 
@@ -111,7 +119,7 @@ export function deriveEntriesFromItems(
         title: '运行出错',
         body: itemText(item) || '运行失败。',
         status: 'failed',
-        details: item.metadata ?? null,
+        details: item.metadata,
       })
       continue
     }
@@ -125,9 +133,13 @@ export function deriveEntriesFromItems(
   return entries
 }
 
-export function pickConversationHeadline(items: ReadonlyArray<ConversationItem>, runStatus?: string) {
+export function pickConversationHeadline(items: ReadonlyArray<ConversationItem>, runStatus?: string): {
+  title: string
+  body: string
+} {
   const entries = deriveEntriesFromItems(items, runStatus)
-  const latest = [...entries].reverse().find((entry) => entry.kind === 'message' || entry.kind === 'command_batch' || entry.kind === 'error')
+  const latest = [...entries].reverse()
+    .find(entry => entry.kind === 'message' || entry.kind === 'command_batch' || entry.kind === 'error')
   if (!latest) {
     return {
       title: runStatus === 'running' ? '运行中' : '等待输入',
@@ -145,7 +157,8 @@ function buildToolEntry(
   const callId = output?.callId ?? call?.callId ?? 'unknown'
   const toolName = call?.name ?? output?.name ?? 'unknown_tool'
   const persistedLabel = toolDisplayLabel(call?.metadata) ?? toolDisplayLabel(output?.metadata)
-  const title = persistedLabel ?? toolLabels.get(toolName) ?? '工具调用'
+  const registeredLabel = toolLabels.get(toolName)
+  const title = persistedLabel ?? registeredLabel ?? '工具调用'
   const args = safeJsonParse(call?.arguments ?? '')
   const outputText = output?.output ?? output?.body ?? ''
   const status = output ? itemStatus(output) : itemStatus(call)
@@ -161,6 +174,7 @@ function buildToolEntry(
   const artifactId = typeof metadata.artifactId === 'string'
     ? metadata.artifactId
     : typeof artifacts[0]?.artifactId === 'string' ? artifacts[0].artifactId : null
+  const displayIdentifier = registeredLabel ? toolName : null
 
   return {
     id: `tool:${callId}`,
@@ -175,6 +189,7 @@ function buildToolEntry(
       status,
       body,
       toolName,
+      displayIdentifier,
       commandText: call?.arguments ?? '',
       details: {
         args,
@@ -197,13 +212,9 @@ function toolDisplayLabel(metadata: Record<string, unknown> | null | undefined):
 }
 
 function buildTerminalEntry(item: ConversationItem): ConversationEntry | undefined {
-  const resultType = String(item.metadata?.resultType ?? '')
-  if (!resultType || resultType === 'success' || resultType === 'completed') {
-    return undefined
-  }
-  if (resultType === 'waiting_approval') {
-    return buildApprovalEntry(item)
-  }
+  const resultType = String(item.metadata.resultType ?? '')
+  if (!resultType || resultType === 'success' || resultType === 'completed') return undefined
+  if (resultType === 'waiting_approval') return buildApprovalEntry(item)
   const isFailure = resultType === 'failed'
   const body = itemText(item) || (isFailure ? terminalFailureMessage(item.metadata) : '运行已暂停，等待下一步。')
   return {
@@ -213,12 +224,12 @@ function buildTerminalEntry(item: ConversationItem): ConversationEntry | undefin
     title: formatResultTitle(resultType),
     body,
     status: isFailure ? 'failed' : 'blocked',
-    details: item.metadata ?? null,
+    details: item.metadata,
   }
 }
 
 function buildApprovalEntry(item: ConversationItem): ConversationEntry {
-  const metadata = item.metadata ?? {}
+  const metadata = item.metadata
   const approvalId = typeof metadata.approvalId === 'string' && metadata.approvalId.trim()
     ? metadata.approvalId.trim()
     : null
@@ -255,19 +266,13 @@ interface JsonParseResult {
 
 function readableToolOutput(toolName: string, outputParse: JsonParseResult, rawOutput: string, isError: boolean): string {
   const textOutput = rawOutput.trim()
-  if (!outputParse.ok) {
-    return textOutput || (isError ? '工具执行失败。' : '工具执行完成。')
-  }
+  if (!outputParse.ok) return textOutput || (isError ? '工具执行失败。' : '工具执行完成。')
 
   const parsedOutput = outputParse.value
   const nowcastAnswer = nowcastAnswerText(toolName, parsedOutput)
   if (nowcastAnswer) return nowcastAnswer
-  if (typeof parsedOutput === 'string' && parsedOutput.trim()) {
-    return parsedOutput.trim()
-  }
-  if (!isRecord(parsedOutput)) {
-    return isError ? '工具执行失败。' : '工具执行完成。'
-  }
+  if (typeof parsedOutput === 'string' && parsedOutput.trim()) return parsedOutput.trim()
+  if (!isRecord(parsedOutput)) return isError ? '工具执行失败。' : '工具执行完成。'
 
   const payload = isRecord(parsedOutput.payload) ? parsedOutput.payload : null
   const payloadText = payload
@@ -275,22 +280,13 @@ function readableToolOutput(toolName: string, outputParse: JsonParseResult, rawO
     : ''
   if (payloadText) return payloadText
 
-  const directText = firstString(
-    parsedOutput.answer,
-    parsedOutput.summary,
-    parsedOutput.text,
-  )
+  const directText = firstString(parsedOutput.answer, parsedOutput.summary, parsedOutput.text)
   if (directText) return directText
-
-  if (isError) {
-    return firstString(parsedOutput.error, parsedOutput.detail) || '工具执行失败。'
-  }
+  if (isError) return firstString(parsedOutput.error, parsedOutput.detail) || '工具执行失败。'
 
   const artifacts = Array.isArray(parsedOutput.artifacts) ? parsedOutput.artifacts : []
-  if (artifacts.length > 0) {
-    return `工具执行完成，生成了 ${artifacts.length} 个结果。`
-  }
-  return isError ? '工具执行失败。' : '工具执行完成。'
+  if (artifacts.length > 0) return `工具执行完成，生成了 ${artifacts.length} 个结果。`
+  return '工具执行完成。'
 }
 
 function firstString(...values: unknown[]): string {
@@ -300,9 +296,9 @@ function firstString(...values: unknown[]): string {
   return ''
 }
 
-function terminalFailureMessage(metadata: Record<string, unknown> | null | undefined): string {
-  const message = typeof metadata?.message === 'string' ? metadata.message.trim() : ''
-  const firstError = Array.isArray(metadata?.errors)
+function terminalFailureMessage(metadata: Record<string, unknown>): string {
+  const message = typeof metadata.message === 'string' ? metadata.message.trim() : ''
+  const firstError = Array.isArray(metadata.errors)
     ? metadata.errors.find((error): error is string => typeof error === 'string' && Boolean(error.trim()))?.trim() ?? ''
     : ''
   const detail = message || firstError
@@ -313,16 +309,13 @@ function terminalFailureMessage(metadata: Record<string, unknown> | null | undef
   return detail
 }
 
-function upsertToolEntry(entries: ConversationEntry[], entry: ConversationEntry) {
-  const index = entries.findIndex((candidate) => candidate.id === entry.id)
-  if (index >= 0) {
-    entries[index] = entry
-  } else {
-    entries.push(entry)
-  }
+function upsertToolEntry(entries: ConversationEntry[], entry: ConversationEntry): void {
+  const index = entries.findIndex(candidate => candidate.id === entry.id)
+  if (index >= 0) entries[index] = entry
+  else entries.push(entry)
 }
 
-function itemText(item: ConversationItem | undefined) {
+function itemText(item: ConversationItem | undefined): string {
   return item?.body ?? item?.output ?? ''
 }
 
@@ -334,7 +327,7 @@ function itemStatus(item?: ConversationItem): LedgerEntryStatus {
   return 'completed'
 }
 
-function formatResultTitle(resultType: string) {
+function formatResultTitle(resultType: string): string {
   if (resultType === 'failed') return '运行出错'
   if (resultType === 'waiting_approval') return '等待审批'
   if (resultType === 'waiting_clarification' || resultType === 'clarification_needed') return '需要澄清'
@@ -342,21 +335,24 @@ function formatResultTitle(resultType: string) {
   return '运行状态'
 }
 
-function safeJsonParse(s: string): unknown {
-  if (!s.trim()) return {}
+function safeJsonParse(value: string): unknown {
+  if (!value.trim()) return {}
   try {
-    return JSON.parse(s)
+    return JSON.parse(value)
   } catch {
     return {}
   }
 }
 
-function parseJsonOutput(s: string): JsonParseResult {
-  if (!s.trim()) return { ok: false, value: {} }
+function parseJsonOutput(value: string): JsonParseResult {
+  if (!value.trim()) return { ok: false, value: {} }
   try {
-    return { ok: true, value: JSON.parse(s) }
+    return { ok: true, value: JSON.parse(value) }
   } catch {
     return { ok: false, value: {} }
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}

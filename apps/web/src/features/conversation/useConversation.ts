@@ -16,7 +16,7 @@ import type {
   DecisionRequest,
   ToolDescriptor,
 } from '@geo-agent-platform/shared-types'
-import { deriveEntriesFromItems } from './items'
+import { deriveEntriesFromItems } from '@geo-agent-platform/conversation-presentation'
 import { formatRunStatus } from '../../shared/utils/statusLabels'
 
 // 聊天 UI 的事实入口是 ConversationItem[]。

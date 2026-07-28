@@ -20,7 +20,7 @@ import { Markdown } from '../../shared/components/Markdown'
 import { VoiceBar } from './VoiceBar'
 import { ToolMiniAppResult } from '../tools/ToolMiniApp'
 import { miniAppKindForTool } from '../tools/toolMiniAppModel'
-import type { ConversationCommand, ConversationEntry } from './items'
+import type { ConversationCommand, ConversationEntry } from '@geo-agent-platform/conversation-presentation'
 
 interface ConversationEntryViewProps {
   entry: ConversationEntry
@@ -371,7 +371,10 @@ function ToolCommandCard({
           {isRunning ? <LoaderCircle size={13} /> : <CheckCircle2 size={13} />}
         </span>
         <span className="cc-tool-row-title">{formatToolKindLabel(command)}</span>
-        <span className="cc-tool-row-subtitle">{formatToolActionLabel(command)}</span>
+        <span className="cc-tool-row-subtitle">
+          {formatToolActionLabel(command)}
+          {command.displayIdentifier ? ` · ${command.displayIdentifier}` : ''}
+        </span>
         {miniAppKind ? <span className="cc-tool-row-mini-entry">小工具页面</span> : null}
         {hasDetails && <ChevronDown size={14} className={`cc-chevron ml-auto ${expanded ? 'cc-chevron--open' : ''}`} />}
       </button>
@@ -485,9 +488,10 @@ function formatCommandBatchTitle(entry: ConversationEntry) {
 }
 
 function formatCommandStatus(status: string) {
-  if (status === 'running') return '执行中'
-  if (status === 'failed') return '失败'
-  return '完成'
+  if (status === 'running') return '正在调用'
+  if (status === 'failed') return '调用失败'
+  if (status === 'blocked') return '等待批准'
+  return '已调用'
 }
 
 function formatToolKindLabel(command: ConversationCommand) {

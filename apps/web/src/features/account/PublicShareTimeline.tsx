@@ -11,7 +11,7 @@
 import { useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { Markdown } from '../../shared/components/Markdown'
-import type { ConversationEntry } from '../conversation/items'
+import type { ConversationEntry } from '@geo-agent-platform/conversation-presentation'
 
 interface PublicShareTimelineProps {
   entries: ConversationEntry[]

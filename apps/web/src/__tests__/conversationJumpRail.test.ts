@@ -14,7 +14,7 @@ import {
   conversationJumpAnchorId,
 } from '../features/conversation/conversationJumpItems'
 import { conversationJumpRailReducer } from '../features/conversation/conversationJumpRailState'
-import type { ConversationEntry } from '../features/conversation/items'
+import type { ConversationEntry } from '@geo-agent-platform/conversation-presentation'
 
 describe('buildConversationJumpItems', () => {
   it('derives jump items only from user messages', () => {
