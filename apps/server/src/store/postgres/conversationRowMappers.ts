@@ -63,7 +63,6 @@ export function mapSessionRow(row: typeof platformSessions.$inferSelect): Sessio
     visibility: row.visibility,
     createdAt: row.createdAt.toISOString(),
     status: row.status,
-    shareToken: row.shareToken,
     latestThreadId: row.latestThreadId,
     latestRunId: row.latestRunId,
     latestUploadedLayerKey: row.latestUploadedLayerKey,

@@ -281,7 +281,8 @@
             "description": "必须使用当前 run 中已存在的 valueRef ID",
             "x-source": "value_ref",
             "x-value-ref-kinds": [
-              "meteorological_file"
+              "meteorological_file",
+              "meteorological_dataset"
             ]
           },
           "dataset_id": {
@@ -315,7 +316,10 @@
             "type": "string",
             "title": "数据集引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_dataset"
+            ]
           }
         },
         "required": [
@@ -340,31 +344,46 @@
             "type": "string",
             "title": "数据集引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_dataset"
+            ]
           },
           "variable_ref": {
             "type": "string",
             "title": "变量引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_variable"
+            ]
           },
           "time_index_ref": {
             "type": "string",
             "title": "时间索引引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_time_index"
+            ]
           },
           "level_index_ref": {
             "type": "string",
             "title": "层级索引引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_level_index"
+            ]
           },
           "bbox_ref": {
             "type": "string",
             "title": "范围引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "bbox"
+            ]
           }
         },
         "required": [
@@ -390,31 +409,46 @@
             "type": "string",
             "title": "数据集引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_dataset"
+            ]
           },
           "variable_ref": {
             "type": "string",
             "title": "变量引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_variable"
+            ]
           },
           "time_index_ref": {
             "type": "string",
             "title": "时间索引引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_time_index"
+            ]
           },
           "level_index_ref": {
             "type": "string",
             "title": "层级索引引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_level_index"
+            ]
           },
           "bbox_ref": {
             "type": "string",
             "title": "范围引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "bbox"
+            ]
           }
         },
         "required": [
@@ -440,37 +474,55 @@
             "type": "string",
             "title": "数据集引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_dataset"
+            ]
           },
           "variable_ref": {
             "type": "string",
             "title": "变量引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_variable"
+            ]
           },
           "threshold_ref": {
             "type": "string",
             "title": "阈值引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_threshold"
+            ]
           },
           "time_index_ref": {
             "type": "string",
             "title": "时间索引引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_time_index"
+            ]
           },
           "level_index_ref": {
             "type": "string",
             "title": "层级索引引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_level_index"
+            ]
           },
           "bbox_ref": {
             "type": "string",
             "title": "范围引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "bbox"
+            ]
           },
           "operator": {
             "type": "string",
@@ -502,37 +554,55 @@
             "type": "string",
             "title": "数据集引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_dataset"
+            ]
           },
           "variable_ref": {
             "type": "string",
             "title": "变量引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_variable"
+            ]
           },
           "levels_ref": {
             "type": "string",
             "title": "等值线层级引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_contour_levels"
+            ]
           },
           "time_index_ref": {
             "type": "string",
             "title": "时间索引引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_time_index"
+            ]
           },
           "level_index_ref": {
             "type": "string",
             "title": "层级索引引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_level_index"
+            ]
           },
           "bbox_ref": {
             "type": "string",
             "title": "范围引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "bbox"
+            ]
           }
         },
         "required": [
@@ -559,13 +629,19 @@
             "type": "string",
             "title": "数据集引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_dataset"
+            ]
           },
           "interpretation_ref": {
             "type": "string",
             "title": "模型解读引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_interpretation"
+            ]
           }
         },
         "required": [
@@ -910,13 +986,19 @@
             "type": "string",
             "title": "文件集合引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_file_collection"
+            ]
           },
           "variable_ref": {
             "type": "string",
             "title": "变量引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_variable"
+            ]
           },
           "horizon_minutes": {
             "type": "integer",
@@ -949,7 +1031,10 @@
             "type": "string",
             "title": "短时临近预报序列引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "nowcast_sequence"
+            ]
           }
         },
         "required": [
@@ -1023,19 +1108,32 @@
             "type": "string",
             "title": "短时临近预报序列引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "nowcast_sequence"
+            ]
           },
           "variable_ref": {
             "type": "string",
             "title": "变量引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_variable"
+            ]
           },
           "scope_ref": {
             "type": "string",
             "title": "区划或地点范围引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "nowcast_area",
+              "nowcast_coordinate",
+              "feature_collection",
+              "layer",
+              "place_candidate"
+            ]
           }
         },
         "required": [
@@ -1061,7 +1159,10 @@
             "type": "string",
             "title": "短时临近预报（短临）分析引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "nowcast_analysis"
+            ]
           },
           "question": {
             "type": "string",
@@ -1093,7 +1194,10 @@
             "type": "string",
             "title": "短时临近预报（短临）分析引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "nowcast_analysis"
+            ]
           }
         },
         "required": [
@@ -1119,7 +1223,10 @@
             "type": "string",
             "title": "短时临近预报（短临）地图候选引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
-            "x-source": "value_ref"
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "nowcast_map_candidate"
+            ]
           }
         },
         "required": [

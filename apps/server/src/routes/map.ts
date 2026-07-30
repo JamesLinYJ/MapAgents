@@ -1,13 +1,10 @@
-import { readFile } from 'node:fs/promises'
-import path from 'node:path'
 import { Hono } from 'hono'
 import { z } from 'zod'
-import type { AgentThreadRecord, MapLayerManifest, SessionRecord } from '../schemas/types.js'
+import type { MapLayerManifest } from '../schemas/types.js'
 import { mapFeaturePageSchema, mapLayerManifestSchema, mapSceneSchema, mapTileJsonSchema } from '../schemas/types.js'
 import {
   AUTHENTICATED_TILE_CACHE_CONTROL,
   buildTileJson,
-  SHARED_TILE_CACHE_CONTROL,
 } from '../map/mapTileDescriptor.js'
 import { MapTileGateway } from '../map/mapTileGateway.js'
 import type { SecurityServices } from '../security/routes.js'
@@ -40,19 +37,12 @@ const BASEMAPS = [
   },
 ]
 
-export interface PublicShareMapStore {
-  getSessionByShareToken(shareToken: string): SessionRecord | null
-  listThreadsForSession(sessionId: string): AgentThreadRecord[]
-}
-
 export function mapRoutes(deps: {
   mapStore: MapStore
   tileGateway: MapTileGateway
   security: SecurityServices
-  publicShareStore: PublicShareMapStore
-  runtimeRoot: string
 }) {
-  const { mapStore, tileGateway, security, publicShareStore, runtimeRoot } = deps
+  const { mapStore, tileGateway, security } = deps
   const app = new Hono()
 
   app.get('/api/v1/map/basemaps', c => c.json(BASEMAPS))
@@ -114,53 +104,6 @@ export function mapRoutes(deps: {
     })
   })
 
-  app.get('/api/share/:shareId/map/scenes/:threadId', async c => {
-    const shareId = parseId(c.req.param('shareId'), 'shareId')
-    const threadId = parseId(c.req.param('threadId'), 'threadId')
-    requireSharedThread(publicShareStore, shareId, threadId)
-    const scene = await mapStore.getScene(threadId)
-    if (!scene) return c.json({ detail: '分享对话尚无地图场景。' }, 404)
-    const layers = await mapStore.listSceneManifests(threadId)
-    return c.json({ scene, layers: layers.map(layer => publicManifest(layer, shareId)) })
-  })
-
-  app.get('/api/share/:shareId/map/layers/:mapLayerId/manifest', async c => {
-    const shareId = parseId(c.req.param('shareId'), 'shareId')
-    const mapLayerId = parseId(c.req.param('mapLayerId'), 'mapLayerId')
-    const manifest = await requireSharedLayer(publicShareStore, mapStore, shareId, mapLayerId)
-    return c.json(publicManifest(manifest, shareId))
-  })
-
-  app.get('/api/share/:shareId/map/layers/:mapLayerId/data', async c => {
-    const shareId = parseId(c.req.param('shareId'), 'shareId')
-    const mapLayerId = parseId(c.req.param('mapLayerId'), 'mapLayerId')
-    const manifest = await requireSharedLayer(publicShareStore, mapStore, shareId, mapLayerId)
-    const spec = await mapStore.getTileExecutionSpec(mapLayerId)
-    if (!spec?.artifactRelativePath) return c.json({ detail: '分享图层没有可读取的数据文件。' }, 404)
-    const bytes = await readFile(resolveRuntimePath(runtimeRoot, spec.artifactRelativePath))
-    return new Response(bytes, { headers: { 'Content-Type': contentTypeForSource(manifest) } })
-  })
-
-  app.get('/api/share/:shareId/map/layers/:mapLayerId/tilejson', async c => {
-    const shareId = parseId(c.req.param('shareId'), 'shareId')
-    const mapLayerId = parseId(c.req.param('mapLayerId'), 'mapLayerId')
-    const manifest = await requireSharedLayer(publicShareStore, mapStore, shareId, mapLayerId)
-    if (!isTileSource(manifest)) return c.json({ detail: '当前分享图层不是瓦片数据源。' }, 409)
-    return c.json(buildTileJson(manifest, `/api/share/${shareId}/map/layers/${mapLayerId}/tiles/{z}/{x}/{y}`))
-  })
-
-  app.get('/api/share/:shareId/map/layers/:mapLayerId/tiles/:z/:x/:y', async c => {
-    const shareId = parseId(c.req.param('shareId'), 'shareId')
-    const params = tileParamsSchema.parse(c.req.param())
-    await requireSharedLayer(publicShareStore, mapStore, shareId, params.mapLayerId)
-    const spec = await mapStore.getTileExecutionSpec(params.mapLayerId)
-    if (!spec) return c.json({ detail: '分享图层不存在。' }, 404)
-    return tileResponse(
-      await tileGateway.fetchTile(spec, params.z, params.x, params.y, c.req.raw.signal),
-      SHARED_TILE_CACHE_CONTROL,
-    )
-  })
-
   return app
 }
 
@@ -196,46 +139,6 @@ async function authorizeLayer(
   await security.authorization.assertResourceWorkspace(auth, 'layer', action, scope)
 }
 
-function requireSharedThread(store: PublicShareMapStore, shareId: string, threadId: string): void {
-  const session = store.getSessionByShareToken(shareId)
-  if (!session || session.status !== 'active') throw new Error('分享不存在或已失效。')
-  if (!store.listThreadsForSession(session.id).some(thread => thread.id === threadId)) {
-    throw new Error('分享中不存在这条对话。')
-  }
-}
-
-async function requireSharedLayer(
-  store: PublicShareMapStore,
-  mapStore: MapStore,
-  shareId: string,
-  mapLayerId: string,
-): Promise<MapLayerManifest> {
-  const manifest = await mapStore.getManifest(mapLayerId)
-  if (!manifest) throw new Error('分享图层不存在。')
-  const session = store.getSessionByShareToken(shareId)
-  if (!session || session.status !== 'active') throw new Error('分享不存在或已失效。')
-  const threads = store.listThreadsForSession(session.id)
-  let shared = false
-  for (const thread of threads) {
-    if (await mapStore.isLayerInThreadScene(thread.id, mapLayerId)) {
-      shared = true
-      break
-    }
-  }
-  if (!shared) throw new Error('分享中不存在这个地图图层。')
-  return manifest
-}
-
-function publicManifest(manifest: MapLayerManifest, shareId: string): MapLayerManifest {
-  const prefix = `/api/share/${shareId}/map/layers/${manifest.mapLayerId}`
-  const source = manifest.source.kind === 'geojson'
-    ? { ...manifest.source, url: `${prefix}/data` }
-    : manifest.source.kind === 'raster_image'
-      ? { ...manifest.source, url: `${prefix}/data` }
-      : { ...manifest.source, tileJsonUrl: `${prefix}/tilejson` }
-  return mapLayerManifestSchema.parse({ ...manifest, source })
-}
-
 function isTileSource(manifest: MapLayerManifest): boolean {
   return ['vector_tiles', 'raster_tiles', 'raster_dem'].includes(manifest.source.kind)
 }
@@ -256,17 +159,4 @@ function parseId(value: unknown, label: string): string {
   const parsed = idSchema.safeParse(value)
   if (!parsed.success) throw new Error(`${label} 无效`)
   return parsed.data
-}
-
-function resolveRuntimePath(runtimeRoot: string, relativePath: string): string {
-  const root = path.resolve(runtimeRoot)
-  const target = path.resolve(root, relativePath)
-  if (target !== root && !target.startsWith(root + path.sep)) throw new Error('分享图层路径越出 runtime 根目录')
-  return target
-}
-
-function contentTypeForSource(manifest: MapLayerManifest): string {
-  if (manifest.source.kind === 'geojson') return 'application/geo+json'
-  if (manifest.source.kind === 'raster_image') return 'image/png'
-  return 'application/octet-stream'
 }

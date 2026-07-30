@@ -25,7 +25,6 @@ describe('BetterAuthService local admin boundary', () => {
         DATABASE_URL: 'postgresql://example.invalid/test',
         RUNTIME_ROOT: './runtime',
         APP_BASE_URL: 'http://127.0.0.1:8000',
-        WEB_BASE_URL: 'http://127.0.0.1:5173',
         BETTER_AUTH_URL: 'http://127.0.0.1:8000',
         BETTER_AUTH_SECRET: 'test-only-better-auth-secret-change-before-production',
         ENABLED_TOOL_PROVIDERS: 'geo-platform-plan',
@@ -74,6 +73,14 @@ describe('BetterAuthService local admin boundary', () => {
       detail: '该保留身份不能通过公共认证入口使用。',
     })
   })
+
+  it('trusts the exact Better Auth Electron scheme without weakening origin checks', () => {
+    const service = createService()
+
+    expect(service.isTrustedOrigin('com.geoforge.desktop:/')).toBe(true)
+    expect(service.isTrustedOrigin('com.geoforge.desktop.evil:/')).toBe(false)
+    expect(service.isTrustedOrigin('https://com.geoforge.desktop')).toBe(false)
+  })
 })
 
 function createService(): BetterAuthService {
@@ -85,7 +92,6 @@ function createService(): BetterAuthService {
       DATABASE_URL: 'postgresql://example.invalid/test',
       RUNTIME_ROOT: './runtime',
       APP_BASE_URL: 'http://127.0.0.1:8000',
-      WEB_BASE_URL: 'http://127.0.0.1:5173',
       BETTER_AUTH_URL: 'http://127.0.0.1:8000',
       BETTER_AUTH_SECRET: 'test-only-better-auth-secret-change-before-production',
       ENABLED_TOOL_PROVIDERS: 'geo-platform-plan',

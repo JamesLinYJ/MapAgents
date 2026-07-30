@@ -17,6 +17,11 @@ import { WebSocket } from 'ws'
 
 import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import { push } from './protocol.js'
+import {
+  projectConversationItemForTransport,
+  projectRunEventForTransport,
+  projectRunSnapshotForTransport,
+} from './runTransportProjection.js'
 
 export function subscribeToRun(
   ws: WebSocket,
@@ -26,8 +31,14 @@ export function subscribeToRun(
 ): void {
   store.getRun(runId)
   if (subscriptions.has(runId)) return
-  const unsubscribeItem = store.itemBus.subscribe(runId, item => sendWs(ws, push('run.item', item)))
-  const unsubscribeEvent = store.eventBus.subscribe(runId, event => sendWs(ws, push('run.event', event)))
+  const unsubscribeItem = store.itemBus.subscribe(
+    runId,
+    item => sendWs(ws, push('run.item', projectConversationItemForTransport(item))),
+  )
+  const unsubscribeEvent = store.eventBus.subscribe(
+    runId,
+    event => sendWs(ws, push('run.event', projectRunEventForTransport(event))),
+  )
   const unsubscribeRun = store.runBus.subscribe(runId, () => void sendRunSnapshot(ws, runId, store))
   subscriptions.set(runId, () => {
     unsubscribeItem()
@@ -61,7 +72,7 @@ export function subscribeToThread(
 
 export async function snapshotRun(runId: string, store: PlatformPersistenceFacade) {
   const [items, events] = await Promise.all([store.listItems(runId), store.listEvents(runId)])
-  return { run: store.getRun(runId), items, events }
+  return projectRunSnapshotForTransport({ run: store.getRun(runId), items, events })
 }
 
 export async function sendRunSnapshot(ws: WebSocket, runId: string, store: PlatformPersistenceFacade): Promise<void> {

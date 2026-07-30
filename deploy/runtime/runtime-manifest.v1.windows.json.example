@@ -1,0 +1,9 @@
+{
+  "kind": "geoforge.desktop-runtime",
+  "schemaVersion": 1,
+  "projectRoot": "C:\\Program Files\\GeoForge\\services\\0.1.0",
+  "runtimeRoot": "C:\\ProgramData\\GeoForge\\runtime",
+  "apiBaseUrl": "http://127.0.0.1:8000",
+  "supervisorTokenFile": "C:\\ProgramData\\GeoForge\\runtime\\secrets\\supervisor.token",
+  "allowedEnvironmentOverrides": []
+}

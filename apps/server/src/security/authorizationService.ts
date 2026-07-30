@@ -101,14 +101,22 @@ export class AuthorizationService {
     outcome: 'allowed' | 'denied' | 'error',
     metadata: Record<string, unknown> = {},
   ): Promise<void> {
+    const requestedWorkspaceId = scope.workspaceId ?? null
+    const boundWorkspaceId = requestedWorkspaceId && auth?.roles.some(
+      binding => binding.workspaceId === requestedWorkspaceId,
+    )
+      ? requestedWorkspaceId
+      : null
     await this.auditStore.recordEvent({
       actorUserId: auth?.userId ?? null,
-      workspaceId: scope.workspaceId ?? null,
+      workspaceId: boundWorkspaceId,
       action,
       objectType: object,
       objectId: scope.resourceId ?? null,
       outcome,
-      metadata,
+      metadata: requestedWorkspaceId && !boundWorkspaceId
+        ? { ...metadata, requestedWorkspaceId }
+        : metadata,
     })
   }
 

@@ -9,35 +9,9 @@
 // --------------------------------------------------------------------------
 
 import { z } from 'zod'
+import { wsControlCommandSchema } from '@geo-agent-platform/shared-types'
 
-export const clientMsgType = z.enum([
-  'workspace:bootstrap',
-  'session:get-default', 'session:get',
-  'thread:list', 'thread:get', 'thread:create', 'thread:update', 'thread:delete',
-  'thread:history', 'thread:fork', 'thread:compact', 'thread:context',
-  'thread:subscribe', 'thread:unsubscribe',
-  'thread:memory:get', 'thread:memory:update', 'thread:memory:rebuild',
-  'thread:trash:list', 'thread:trash:restore', 'thread:trash:purge',
-  'run:list', 'run:start', 'run:get', 'run:cancel', 'run:resume', 'run:steer', 'run:respond-decision', 'run:subscribe', 'run:unsubscribe',
-  'tool:list', 'tool:run',
-  'tool-catalog:list', 'tool-catalog:upsert', 'tool-catalog:delete',
-  'runtime-config:get', 'runtime-config:update',
-  'provider:list', 'system:get',
-  'usage:summary',
-  'speech:authorization',
-  'memory:list', 'memory:read', 'memory:write', 'memory:delete', 'memory:search',
-  'memory:extract', 'memory:dream',
-  'memory:session:get', 'memory:session:rebuild',
-  'memory:instructions:list',
-  'file:list', 'file:delete',
-  'layer:list', 'layer:update', 'layer:delete',
-  'map-scene:update',
-  'automation:list', 'automation:validate', 'automation:create', 'automation:update',
-  'automation:publish', 'automation:disable', 'automation:history',
-  'automation:start', 'automation:cancel', 'automation:run:get', 'automation:respond-approval',
-  'scheduled-task:list', 'scheduled-task:create', 'scheduled-task:update', 'scheduled-task:delete',
-  'background-task:list', 'background-task:promote', 'background-task:cancel',
-])
+export const clientMsgType = wsControlCommandSchema
 
 export const clientMsgSchema = z.object({
   type: clientMsgType,

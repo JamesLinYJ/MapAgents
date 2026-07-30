@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { deflateSync } from 'node:zlib'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const OUTPUT = path.join(ROOT, 'apps/web/src/assets/liquid-glass')
+const OUTPUT = path.join(ROOT, 'apps/desktop/src/renderer/assets/liquid-glass')
 const SPECS = {
   panel: { width: 180, height: 120, radius: 13, edge: 19, depth: 0.072, ripple: 0.0018 },
   strong: { width: 210, height: 140, radius: 16, edge: 26, depth: 0.105, ripple: 0.0026 },

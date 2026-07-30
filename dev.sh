@@ -16,14 +16,15 @@
 #     作者: OpenAI Codex
 #     说明: 开发入口在启动 API 或 Agent CLI 前构建跨端对话展示包。
 #
-#   维护记录 (2026-07-27):
+#   维护记录 (2026-07-29):
 #     作者: OpenAI Codex
-#     说明: 运行中的 Web 开发服务改用原位增量构建，避免清空 dist 触发模块加载失败。
+#     说明: 桌面入口启动三个后台服务后运行 Electron；浏览器工作台不再受监督。
 # --------------------------------------------------------------------------
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
+node "$ROOT/scripts/require-node24.mjs"
 
 load_dotenv() {
   local file="$1" line key value
@@ -45,23 +46,20 @@ export NODE_ENV="${NODE_ENV:-development}"
 export GEOFORGE_ROOT="$ROOT"
 export RUNTIME_ROOT="${RUNTIME_ROOT:-$ROOT/runtime}"
 export POSTGIS_PORT="${POSTGIS_PORT:-55432}"
-export MARTIN_PORT="${MARTIN_PORT:-3000}"
-export TITILER_PORT="${TITILER_PORT:-8001}"
 export WORKER_PORT="${WORKER_PORT:-8012}"
 export API_PORT="${API_PORT:-8000}"
-export WEB_DEV_PORT="${WEB_DEV_PORT:-5173}"
-export WEB_STATIC_PORT="${WEB_STATIC_PORT:-4173}"
 export WORKER_PYTHON="${WORKER_PYTHON:-python3}"
 export API_HOST=127.0.0.1
-export WEB_DEV_HOST=127.0.0.1
 export DATABASE_URL="${DATABASE_URL:-postgresql://geo_agent:geo_agent@127.0.0.1:$POSTGIS_PORT/geo_agent}"
 export WORKER_URL="${WORKER_URL:-http://127.0.0.1:$WORKER_PORT}"
-export MARTIN_INTERNAL_URL="${MARTIN_INTERNAL_URL:-http://127.0.0.1:$MARTIN_PORT}"
-export TITILER_INTERNAL_URL="${TITILER_INTERNAL_URL:-http://127.0.0.1:$TITILER_PORT}"
 export APP_BASE_URL="${APP_BASE_URL:-http://127.0.0.1:$API_PORT}"
-export WEB_BASE_URL="${WEB_BASE_URL:-http://127.0.0.1:$WEB_DEV_PORT}"
 export BETTER_AUTH_URL="${BETTER_AUTH_URL:-$APP_BASE_URL}"
-export TRUSTED_ORIGINS="${TRUSTED_ORIGINS:-$WEB_BASE_URL,http://localhost:$WEB_DEV_PORT}"
+export TRUSTED_ORIGINS="${TRUSTED_ORIGINS:-geoforge://app,com.geoforge.desktop://auth/callback}"
+export BOOTSTRAP_ADMIN_EMAIL="${BOOTSTRAP_ADMIN_EMAIL:-admin@example.com}"
+# 本机演示默认隐藏登录表单；认证和权限校验仍由 Better Auth 与服务端 RBAC 完成。
+export GEOFORGE_DESKTOP_AUTO_AUTH="${GEOFORGE_DESKTOP_AUTO_AUTH:-true}"
+export GEOFORGE_DESKTOP_AUTO_AUTH_EMAIL="${GEOFORGE_DESKTOP_AUTO_AUTH_EMAIL:-$BOOTSTRAP_ADMIN_EMAIL}"
+export GEOFORGE_DESKTOP_AUTO_AUTH_NAME="${GEOFORGE_DESKTOP_AUTO_AUTH_NAME:-GeoForge 本机演示管理员}"
 export GEOFORGE_SUPERVISOR_TOKEN_FILE="${GEOFORGE_SUPERVISOR_TOKEN_FILE:-$RUNTIME_ROOT/ops/supervisor.token}"
 export GEOFORGE_LOCAL_ROOT_SECRET_FILE="${GEOFORGE_LOCAL_ROOT_SECRET_FILE:-$RUNTIME_ROOT/ops/local-root.secret}"
 
@@ -98,6 +96,12 @@ start_supervisor() {
   return 1
 }
 
+start_supervisor_background() {
+  supervisor_live && return 0
+  mkdir -p "$OPS_ROOT"
+  nohup node "$SUPERVISOR_CLI" daemon --root "$ROOT" --profile development >>"$LAUNCH_LOG" 2>&1 &
+}
+
 ensure_supervisor() {
   [[ -f "$SUPERVISOR_CLI" ]] || build_supervisor
   start_supervisor
@@ -106,7 +110,7 @@ ensure_supervisor() {
 ACTION="${1:-default}"
 [[ $# -gt 0 ]] && shift
 SERVICE=all
-if [[ $# -gt 0 && "$1" =~ ^(all|infra|worker|api|web)$ ]]; then SERVICE="$1"; shift; fi
+if [[ $# -gt 0 && "$1" =~ ^(all|infra|worker|api)$ ]]; then SERVICE="$1"; shift; fi
 
 case "$ACTION" in
   default)
@@ -134,9 +138,14 @@ case "$ACTION" in
     ensure_supervisor
     supervisor start api
     npm run agent --workspace geo-agent-server -- "$@" ;;
+  desktop)
+    build_supervisor
+    # Renderer 立即启动；Supervisor 和后台服务由桌面状态监视器旁路恢复。
+    start_supervisor_background
+    npm run dev --workspace @geo-agent-platform/desktop -- "$@" ;;
   shutdown)
     supervisor_live && supervisor shutdown "$@" || echo 'GeoForge 监督器未运行。' ;;
   *)
-    echo '用法：./dev.sh [start|stop|restart|status|logs|console|agent|shutdown] [all|infra|worker|api|web] [--json]' >&2
+    echo '用法：./dev.sh [start|stop|restart|status|logs|console|agent|desktop|shutdown] [all|infra|worker|api] [--json]' >&2
     exit 2 ;;
 esac

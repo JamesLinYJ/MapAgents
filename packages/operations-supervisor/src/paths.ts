@@ -39,6 +39,7 @@ export interface OperationsPaths {
   rootSecretFile: string
   lockTarget: string
   leaseFile: string
+  systemLogFile: string
 }
 
 export async function resolveOperationsPaths(input: {
@@ -66,6 +67,7 @@ export async function resolveOperationsPaths(input: {
     rootSecretFile: path.resolve(input.rootSecretFile ?? path.join(operationsRoot, 'local-root.secret')),
     lockTarget: path.join(operationsRoot, `supervisor-${workspaceId}.lock-target`),
     leaseFile: path.join(operationsRoot, `supervisor-${workspaceId}.leases.json`),
+    systemLogFile: path.join(operationsRoot, `supervisor-${workspaceId}.jsonl`),
   }
 }
 

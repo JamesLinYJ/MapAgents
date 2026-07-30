@@ -7,44 +7,81 @@
 //   作者:       OpenAI Codex
 // --------------------------------------------------------------------------
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { parseEnv } from '../framework/env.js'
+import { describe, expect, it, vi } from 'vitest'
+
 import { mapLayerManifestSchema } from '../schemas/types.js'
 import { MapTileGateway } from './mapTileGateway.js'
+import type { MapTileResponse, RasterTileSource, VectorTileSource } from './mapTileSource.js'
 
 describe('MapTileGateway', () => {
-  afterEach(() => vi.unstubAllGlobals())
+  it('routes an authorized vector layer to the PostGIS source', async () => {
+    const sources = sourceDoubles()
+    const gateway = new MapTileGateway(sources.vector, sources.raster)
+    const spec = { manifest: manifest('vector_tiles'), artifactRelativePath: null }
 
-  it('passes the authorized layer id as a Martin function query field', async () => {
-    const fetchMock = vi.fn(async () => tileResponse('application/x-protobuf'))
-    vi.stubGlobal('fetch', fetchMock)
-    const gateway = new MapTileGateway(env())
+    await gateway.fetchTile(spec, 4, 12, 7)
 
-    await gateway.fetchTile({ manifest: manifest('vector_tiles'), artifactRelativePath: null }, 4, 12, 7)
-
-    const url = new URL(String(fetchMock.mock.calls[0]?.[0]))
-    expect(url.pathname).toBe('/geoforge_layer_tiles/4/12/7')
-    expect(url.searchParams.get('mapLayerId')).toBe('map_layer_1')
-    expect(url.searchParams.has('query')).toBe(false)
+    expect(sources.vector.fetchTile).toHaveBeenCalledWith(spec, 4, 12, 7, undefined)
+    expect(sources.raster.renderTile).not.toHaveBeenCalled()
   })
 
-  it('requests a registered COG through TiTiler with the manifest range and colormap', async () => {
-    const fetchMock = vi.fn(async () => tileResponse('image/png'))
-    vi.stubGlobal('fetch', fetchMock)
-    const gateway = new MapTileGateway(env())
+  it('routes a registered GeoTIFF layer to the local TypeScript renderer', async () => {
+    const sources = sourceDoubles()
+    const gateway = new MapTileGateway(sources.vector, sources.raster)
+    const spec = {
+      manifest: manifest('raster_tiles'),
+      artifactRelativePath: 'artifacts/run_1/rain.tif',
+    }
 
-    await gateway.fetchTile({ manifest: manifest('raster_tiles'), artifactRelativePath: 'artifacts/run_1/rain.tif' }, 5, 25, 13)
+    await gateway.fetchTile(spec, 5, 25, 13)
 
-    const url = new URL(String(fetchMock.mock.calls[0]?.[0]))
-    expect(url.pathname).toBe('/cog/tiles/WebMercatorQuad/5/25/13.png')
-    expect(url.searchParams.get('url')).toBe('file:///data/artifacts/run_1/rain.tif')
-    expect(url.searchParams.get('rescale')).toBe('0,50')
-    const colormap = JSON.parse(url.searchParams.get('colormap') ?? '{}') as Record<string, number[]>
-    expect(Object.keys(colormap)).toHaveLength(256)
-    expect(colormap['0']?.[3]).toBe(0)
-    expect(colormap['255']?.[3]).toBe(255)
+    expect(sources.raster.renderTile).toHaveBeenCalledWith(spec, 5, 25, 13, undefined)
+    expect(sources.vector.fetchTile).not.toHaveBeenCalled()
+  })
+
+  it('rejects out-of-range XYZ coordinates before invoking either source', async () => {
+    const sources = sourceDoubles()
+    const gateway = new MapTileGateway(sources.vector, sources.raster)
+
+    await expect(gateway.fetchTile(
+      { manifest: manifest('vector_tiles'), artifactRelativePath: null },
+      2,
+      4,
+      0,
+    )).rejects.toThrow('超出当前层级范围')
+
+    expect(sources.vector.fetchTile).not.toHaveBeenCalled()
+    expect(sources.raster.renderTile).not.toHaveBeenCalled()
+  })
+
+  it('closes the owned raster renderer', async () => {
+    const sources = sourceDoubles()
+    const gateway = new MapTileGateway(sources.vector, sources.raster)
+
+    await gateway.close()
+
+    expect(sources.raster.close).toHaveBeenCalledOnce()
   })
 })
+
+function sourceDoubles(): {
+  vector: VectorTileSource
+  raster: RasterTileSource
+} {
+  const response: MapTileResponse = {
+    body: new Uint8Array([1, 2, 3]).buffer,
+    contentType: 'application/octet-stream',
+    cacheControl: 'private, max-age=60',
+    etag: null,
+  }
+  return {
+    vector: { fetchTile: vi.fn(async () => response) },
+    raster: {
+      renderTile: vi.fn(async () => response),
+      close: vi.fn(async () => undefined),
+    },
+  }
+}
 
 function manifest(sourceKind: 'vector_tiles' | 'raster_tiles') {
   return mapLayerManifestSchema.parse({
@@ -69,19 +106,4 @@ function manifest(sourceKind: 'vector_tiles' | 'raster_tiles') {
     capabilities: { query: true, labels: false, style: true, temporal: false, opacity: true, download: true },
     dataVersion: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   })
-}
-
-function env() {
-  return parseEnv({
-    API_PORT: '0', API_HOST: '127.0.0.1',
-    DATABASE_URL: 'postgres://user:password@127.0.0.1:5432/geoforge_test',
-    RUNTIME_ROOT: 'runtime-test', APP_BASE_URL: 'http://127.0.0.1:8000',
-    BETTER_AUTH_URL: 'http://127.0.0.1:8000', BETTER_AUTH_SECRET: 'test-secret-test-secret-test-secret-1234',
-    ENABLED_TOOL_PROVIDERS: 'geo-platform-spatial',
-    MARTIN_INTERNAL_URL: 'http://martin.internal:3000', TITILER_INTERNAL_URL: 'http://titiler.internal:8000',
-  })
-}
-
-function tileResponse(contentType: string): Response {
-  return new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { 'Content-Type': contentType } })
 }

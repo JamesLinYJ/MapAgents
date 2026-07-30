@@ -2,9 +2,12 @@
   "name": "geo-agent-platform",
   "private": true,
   "version": "0.1.0",
+  "engines": {
+    "node": ">=24 <25"
+  },
   "workspaces": [
     "apps/server",
-    "apps/web",
+    "apps/desktop",
     "packages/shared-types",
     "packages/conversation-presentation",
     "packages/operations-supervisor"
@@ -18,25 +21,27 @@
     "console:windows": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./dev.ps1 console",
     "agent": "bash ./dev.sh agent",
     "agent:windows": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./dev.ps1 agent",
+    "desktop": "bash ./dev.sh desktop",
+    "desktop:windows": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./dev.ps1 desktop",
     "dev:server": "npm run dev --workspace geo-agent-server",
-    "dev:web": "npm run dev --workspace apps/web",
+    "dev:desktop": "npm run dev --workspace @geo-agent-platform/desktop",
     "dev:worker": "python -m uvicorn worker_app.sidecar:app --app-dir apps/worker/src --host 127.0.0.1 --port 8012 --reload",
-    "build": "npm run build --workspace @geo-agent-platform/shared-types && npm run build --workspace @geo-agent-platform/conversation-presentation && npm run build --workspace @geo-agent-platform/operations-supervisor && npm run build --workspace geo-agent-server && npm run build --workspace apps/web",
+    "build": "npm run build --workspace @geo-agent-platform/shared-types && npm run build --workspace @geo-agent-platform/conversation-presentation && npm run build --workspace @geo-agent-platform/operations-supervisor && npm run build --workspace geo-agent-server && npm run build --workspace @geo-agent-platform/desktop",
     "build:presentation": "npm run build --workspace @geo-agent-platform/conversation-presentation",
     "build:supervisor": "npm run build --workspace @geo-agent-platform/operations-supervisor",
     "build:server": "npm run build --workspace geo-agent-server",
-    "build:web": "npm run build --workspace apps/web",
-    "test": "npm run build --workspace @geo-agent-platform/shared-types && npm run test --workspace @geo-agent-platform/conversation-presentation && npm run test --workspace @geo-agent-platform/operations-supervisor && npm run test --workspace geo-agent-server && npm run test --workspace apps/web",
+    "build:desktop": "npm run build --workspace @geo-agent-platform/shared-types && npm run build --workspace @geo-agent-platform/conversation-presentation && npm run build --workspace @geo-agent-platform/operations-supervisor && npm run build --workspace @geo-agent-platform/desktop",
+    "test": "npm run build --workspace @geo-agent-platform/shared-types && npm run test --workspace @geo-agent-platform/conversation-presentation && npm run test --workspace @geo-agent-platform/operations-supervisor && npm run test --workspace geo-agent-server && npm run test --workspace @geo-agent-platform/desktop",
     "test:presentation": "npm run test --workspace @geo-agent-platform/conversation-presentation",
     "test:supervisor": "npm run test --workspace @geo-agent-platform/operations-supervisor",
     "test:server": "npm run test --workspace geo-agent-server",
-    "test:web": "npm run test --workspace apps/web",
-    "test:e2e": "playwright test",
-    "test:e2e:headed": "playwright test --headed",
-    "lint:web": "npm run lint --workspace apps/web",
+    "test:desktop": "npm run test --workspace @geo-agent-platform/desktop",
+    "test:e2e": "npm run build --workspace @geo-agent-platform/shared-types && npm run build --workspace @geo-agent-platform/conversation-presentation && npm run build --workspace @geo-agent-platform/operations-supervisor && npm run build --workspace @geo-agent-platform/desktop && playwright test",
+    "test:e2e:headed": "npm run test:e2e -- --headed",
+    "lint:desktop": "npm run lint --workspace @geo-agent-platform/desktop",
     "lint:terminology": "node scripts/check-meteorology-terminology.mjs",
     "generate:glass": "node scripts/generate-liquid-glass-maps.mjs",
-    "check:bundle": "node scripts/check-web-bundle-budget.mjs",
+    "check:bundle": "node scripts/check-desktop-bundle-budget.mjs",
     "reset:conversations": "node scripts/reset-conversation-store.mjs --confirm"
   },
   "dependencies": {
@@ -44,6 +49,16 @@
     "openai": "6.48.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.60.0"
+    "@playwright/test": "^1.60.0",
+    "vite": "7.3.6"
+  },
+  "overrides": {
+    "zod": "4.3.6"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.0": true,
+    "electron@43.2.0": true,
+    "electron-winstaller@5.4.4": true
   }
 }

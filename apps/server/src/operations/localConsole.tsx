@@ -28,7 +28,7 @@ import { consolePalette, geoForgeConsoleTheme } from './localConsoleTheme.js'
 import type { LocalConsoleDataPlane, LocalConsoleOptions, LocalConsoleTab } from './localConsoleTypes.js'
 import { createTerminalMouseController, type TerminalMouseSource } from './terminalMouse.js'
 
-const ALL_SERVICES: OperationsServiceId[] = ['infra', 'worker', 'api', 'web']
+const ALL_SERVICES: OperationsServiceId[] = ['infra', 'worker', 'api']
 const TAB_ORDER: LocalConsoleTab[] = ['services', 'logs', 'accounts', 'audit']
 const LOG_LEVELS = ['all', 'error', 'warn', 'info', 'debug', 'unknown'] as const
 type LogLevelFilter = (typeof LOG_LEVELS)[number]
@@ -173,12 +173,23 @@ export function LocalConsoleApp({ options, mouse }: { options: LocalConsoleOptio
         })
         const [initialSnapshot, initialLogs] = await Promise.all([
           next.status(),
-          next.logs(ALL_SERVICES, 300),
+          next.logs(ALL_SERVICES, 300, { includeSupervisor: true }),
         ])
         if (cancelled || activeClient !== next) return
         setSnapshot(initialSnapshot)
         setLogs(initialLogs)
-        await next.subscribe({ metrics: true, logs: true })
+        await next.subscribe({
+          metrics: true,
+          logs: true,
+          logFilter: {
+            services: ALL_SERVICES,
+            levels: [],
+            streams: [],
+            search: '',
+            includeSupervisor: true,
+            afterSequence: null,
+          },
+        })
       } catch (error) {
         if (cancelled) return
         setConnection(`无法连接：${safeMessage(error)}；2 秒后重试`)
@@ -777,14 +788,11 @@ function ServiceInspectorBody({ service, compact = false }: { service: Operation
           {!compact && <Text wrap="truncate-end">启动：{service.startedAt ? shortDate(service.startedAt) : '—'} · 退出码：{service.lastExitCode ?? '—'}</Text>}
           <Text wrap="truncate-end" color={tone(service.state === 'healthy' ? consolePalette.healthy : consolePalette.warning)}>探针：{service.healthMessage}</Text>
           <Text wrap="truncate-end">依赖阻塞：{service.blockedBy.length ? service.blockedBy.join('、') : '无'}</Text>
-          <Text wrap="truncate-end">容器：{service.containers.length ? `${service.containers.length} 个实际容器` : '无'}</Text>
-          {service.containers.slice(0, compact ? 2 : 4).map(container => (
-            <Text key={container.containerId} wrap="truncate-end" color={tone(consolePalette.muted)}>
-              {container.state === 'running' ? '●' : '○'} {container.serviceName} · {formatMetric(container.cpuPercent.value, '% 核心')} · {formatBytes(container.memoryBytes.value)} · {formatMetric(container.processCount.value, ' 进程')}
-            </Text>
-          ))}
+          {service.serviceId === 'infra'
+            ? <Text wrap="truncate-end">组件：原生 PostgreSQL/PostGIS</Text>
+            : null}
         </>
-      : <Text color={tone(consolePalette.muted)}>选择服务后显示探针与容器摘要。</Text>}
+      : <Text color={tone(consolePalette.muted)}>选择服务后显示探针与进程摘要。</Text>}
   </>
 }
 
@@ -843,9 +851,17 @@ function LogLines({ entries, wrap }: { entries: OperationsLogEntry[]; wrap: bool
   if (!entries.length) return <Text color={tone(consolePalette.muted)}>暂无符合筛选条件的日志。</Text>
   return <>{entries.map(entry => (
     <Text key={entry.sequence} wrap={wrap ? 'wrap' : 'truncate-end'} color={tone(logColor(entry.level))}>
-      {shortTime(entry.createdAt)} [{entry.serviceId ?? '监督'}] {entry.stream === 'stderr' ? '!' : '·'} {entry.message}
+      {shortTime(entry.createdAt)} [{logSource(entry)}] {entry.stream === 'stderr' ? '!' : '·'} {entry.message}
     </Text>
   ))}</>
+}
+
+function logSource(entry: OperationsLogEntry): string {
+  return [
+    entry.serviceId ?? '监督',
+    entry.component,
+    entry.processId ? `PID ${entry.processId}` : null,
+  ].filter(Boolean).join('/')
 }
 
 function AccountsView(input: {

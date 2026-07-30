@@ -17,6 +17,7 @@ import {
   operationsClientHelloSchema,
   operationsRequestSchema,
   type OperationsEvent,
+  type OperationsLogFilter,
   type OperationsLogEntry,
   type OperationsRequest,
   type OperationsResponse,
@@ -26,6 +27,7 @@ import type { Logger } from 'pino'
 import { z } from 'zod'
 
 import { encodeJsonlFrame, FrameTooLargeError, JsonlFrameDecoder, OPERATIONS_MAX_FRAME_BYTES } from './jsonl.js'
+import { matchesOperationsLogFilter } from './logBuffer.js'
 import { OperationsSupervisor, type SupervisorActor } from './supervisor.js'
 
 const requestIdentitySchema = z.object({ requestId: z.string().uuid() }).passthrough()
@@ -37,6 +39,7 @@ interface ClientState {
   handshaken: boolean
   metrics: boolean
   logs: boolean
+  logFilter: OperationsLogFilter
   queue: Promise<void>
   handshakeTimer: NodeJS.Timeout
   disposeSnapshot: (() => void) | null
@@ -94,6 +97,7 @@ export class OperationsIpcServer {
       handshaken: false,
       metrics: false,
       logs: false,
+      logFilter: defaultLogFilter(),
       queue: Promise.resolve(),
       handshakeTimer: setTimeout(() => {
         this.rejectHandshake(state, 'invalid_handshake', '连接未在期限内完成握手。')
@@ -184,7 +188,9 @@ export class OperationsIpcServer {
       if (state.metrics) this.writeEvent(state, { kind: 'event', event: 'snapshot', snapshot })
     })
     state.disposeLog = this.options.supervisor.onLog(entry => {
-      if (state.logs) this.writeEvent(state, { kind: 'event', event: 'log', entry })
+      if (state.logs && matchesOperationsLogFilter(entry, state.logFilter)) {
+        this.writeEvent(state, { kind: 'event', event: 'log', entry })
+      }
     })
     state.disposeOperation = this.options.supervisor.onOperation(operation => {
       this.writeEvent(state, { kind: 'event', event: 'operation', operation })
@@ -200,6 +206,7 @@ export class OperationsIpcServer {
       if (state.metrics !== request.metrics) this.options.supervisor.setMetricsSubscriber(request.metrics)
       state.metrics = request.metrics
       state.logs = request.logs
+      state.logFilter = request.logFilter ?? defaultLogFilter()
       this.respond(state, request.requestId, { type: 'subscribed' })
       if (state.metrics) this.writeEvent(state, {
         kind: 'event',
@@ -211,7 +218,7 @@ export class OperationsIpcServer {
     if (request.action === 'logs') {
       const entries = fitLogEntries(
         request.requestId,
-        this.options.supervisor.tailLogs(request.services, request.tail),
+        this.options.supervisor.queryLogs(request.query),
       )
       this.respond(state, request.requestId, { type: 'logs', entries })
       return
@@ -317,6 +324,17 @@ export class OperationsIpcServer {
     state.disposeLog?.()
     state.disposeOperation?.()
     if (destroy && !state.socket.destroyed) state.socket.destroy()
+  }
+}
+
+function defaultLogFilter(): OperationsLogFilter {
+  return {
+    services: ['infra', 'worker', 'api'],
+    levels: [],
+    streams: [],
+    search: '',
+    includeSupervisor: false,
+    afterSequence: null,
   }
 }
 

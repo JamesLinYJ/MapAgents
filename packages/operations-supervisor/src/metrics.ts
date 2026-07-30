@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 主机、进程树与容器指标
+//   GeoForge 地理智能平台 - 主机与原生进程树指标
 //
 //   文件:       metrics.ts
 //
@@ -11,13 +11,10 @@
 import path from 'node:path'
 
 import type {
-  OperationsContainerSnapshot,
   OperationsMetric,
   OperationsServiceId,
 } from '@geo-agent-platform/shared-types/operations'
 import si from 'systeminformation'
-
-import { listComposeProcesses } from './dockerComposeProject.js'
 
 export interface ProcessTreeMetrics {
   cpuPercent: OperationsMetric
@@ -69,46 +66,6 @@ export async function collectProcessTreeMetrics(
   } catch (error) {
     const message = `进程指标采集失败：${safeReason(error)}`
     return new Map([...roots.keys()].map(serviceId => [serviceId, unavailableProcessMetrics(message)]))
-  }
-}
-
-export async function collectDockerMetrics(input: {
-  projectRoot: string
-  profile: 'development' | 'production'
-  environment: NodeJS.ProcessEnv
-}): Promise<{ containers: OperationsContainerSnapshot[]; total: ProcessTreeMetrics }> {
-  try {
-    const rows = await listComposeProcesses(input)
-    if (!rows.length) {
-      return { containers: [], total: unavailableProcessMetrics('Compose 项目当前没有容器。') }
-    }
-    const stats = await si.dockerContainerStats(rows.map(row => row.ID).join(','))
-    const statsById = new Map(stats.map(item => [item.id, item]))
-    const containers = rows.map(row => {
-      const item = statsById.get(row.ID) ?? [...statsById.entries()]
-        .find(([id]) => id.startsWith(row.ID) || row.ID.startsWith(id))?.[1]
-      return {
-        containerId: row.ID,
-        serviceName: row.Service,
-        name: row.Name,
-        state: row.State,
-        cpuPercent: item ? available(item.cpuPercent) : unavailable('Docker 未返回该容器的 CPU 指标。'),
-        memoryBytes: item ? available(item.memUsage) : unavailable('Docker 未返回该容器的内存指标。'),
-        processCount: item ? available(item.pids) : unavailable('Docker 未返回该容器的进程数。'),
-      } satisfies OperationsContainerSnapshot
-    })
-    const complete = containers.every(container => container.cpuPercent.value !== null && container.memoryBytes.value !== null)
-    return {
-      containers,
-      total: complete
-        ? {
-            cpuPercent: available(containers.reduce((sum, item) => sum + (item.cpuPercent.value ?? 0), 0)),
-            memoryBytes: available(containers.reduce((sum, item) => sum + (item.memoryBytes.value ?? 0), 0)),
-          }
-        : unavailableProcessMetrics('部分 Docker 容器指标不可用。'),
-    }
-  } catch (error) {
-    return { containers: [], total: unavailableProcessMetrics(`Docker 指标采集失败：${safeReason(error)}`) }
   }
 }
 

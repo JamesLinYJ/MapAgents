@@ -22,7 +22,11 @@ if (-not $ConfiguredPython) {
 }
 
 $PythonCommand = if (Test-Path -LiteralPath $ConfiguredPython -PathType Leaf) {
-    [IO.Path]::GetFullPath($ConfiguredPython, $Root)
+    if ([IO.Path]::IsPathRooted($ConfiguredPython)) {
+        [IO.Path]::GetFullPath($ConfiguredPython)
+    } else {
+        [IO.Path]::GetFullPath((Join-Path $Root $ConfiguredPython))
+    }
 } else {
     $Resolved = Get-Command $ConfiguredPython -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $Resolved) {

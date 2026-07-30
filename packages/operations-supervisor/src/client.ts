@@ -20,6 +20,7 @@ import {
   operationsServerHandshakeSchema,
   type OperationsEvent,
   type OperationsLogEntry,
+  type OperationsLogFilter,
   type OperationsOperationResult,
   type OperationsRequest,
   type OperationsResponse,
@@ -52,6 +53,14 @@ type OperationsClientOperationInput = {
   target: OperationsServiceId | 'all'
   operationId?: string
   keepInfra?: boolean
+}
+
+export interface OperationsLogQueryOptions {
+  levels?: OperationsLogEntry['level'][]
+  streams?: OperationsLogEntry['stream'][]
+  search?: string
+  includeSupervisor?: boolean
+  afterSequence?: number | null
 }
 
 export class OperationsClient extends EventEmitter {
@@ -140,24 +149,40 @@ export class OperationsClient extends EventEmitter {
     return response.snapshot
   }
 
-  async subscribe(input: { metrics: boolean; logs: boolean }): Promise<void> {
+  async subscribe(input: {
+    metrics: boolean
+    logs: boolean
+    logFilter?: OperationsLogFilter
+  }): Promise<void> {
     const response = await this.send({
       kind: 'request',
       requestId: randomUUID(),
       action: 'subscribe',
       metrics: input.metrics,
       logs: input.logs,
+      ...(input.logFilter ? { logFilter: input.logFilter } : {}),
     })
     if (response.type !== 'subscribed') throw new Error('监督器订阅响应类型不正确。')
   }
 
-  async logs(services: readonly OperationsServiceId[], tail: number): Promise<OperationsLogEntry[]> {
+  async logs(
+    services: readonly OperationsServiceId[],
+    tail: number,
+    options: OperationsLogQueryOptions = {},
+  ): Promise<OperationsLogEntry[]> {
     const response = await this.send({
       kind: 'request',
       requestId: randomUUID(),
       action: 'logs',
-      services: [...services],
-      tail,
+      query: {
+        services: [...services],
+        levels: options.levels ?? [],
+        streams: options.streams ?? [],
+        search: options.search ?? '',
+        includeSupervisor: options.includeSupervisor ?? false,
+        afterSequence: options.afterSequence ?? null,
+        tail,
+      },
     })
     if (response.type !== 'logs') throw new Error('监督器日志响应类型不正确。')
     return response.entries

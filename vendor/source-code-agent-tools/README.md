@@ -15,7 +15,7 @@
 ## 边界
 
 - `src/tools/`、`src/Tool.ts`、`src/tools.ts` 是原始工具接口和工具实现快照。
-- 这里的文件不参与 GeoForge `server` 或 `apps/web` 编译。
+- 这里的文件不参与 GeoForge `server` 或 `apps/desktop` 编译。
 - 后续运行态必须通过 GeoForge 自己的 `ToolProvider`、`ToolRegistry`、Agents SDK bridge、approval、artifact 和 valueRef 链路适配。
 - 可以基于这些文件改写迁移版，但不要把此目录当作运行时入口。
 

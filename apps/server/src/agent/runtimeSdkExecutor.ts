@@ -90,7 +90,7 @@ export class RuntimeSdkExecutor {
             context: new RunContext(assembly.context),
             session: assembly.session,
             sessionInputCallback: combineSessionInput,
-            sandbox: assembly.sandbox,
+            ...(assembly.sandbox ? { sandbox: assembly.sandbox } : {}),
             maxTurns: options.runtimeConfig.maxTurns,
             signal,
             callModelInputFilter: async ({ modelData }) => {
@@ -158,21 +158,10 @@ export class RuntimeSdkExecutor {
         }
 
         const delivery = parseSupervisorDelivery(stream.finalOutput)
-        const activeTranscript = await store.activeTranscript(assembly.threadId)
-        const successfulToolNames = new Set(activeTranscript.flatMap(entry => (
-          entry.runId === options.runId
-          && entry.kind === 'tool_result'
-          && entry.payload.ledgerStatus === 'completed'
-          && typeof entry.payload.name === 'string'
-            ? [entry.payload.name]
-            : []
-        )))
         const terminalDecision = options.executionMode === 'plan'
           ? { accepted: true as const }
           : evaluateTerminalDelivery({
-              query: options.query,
               delivery,
-              successfulToolNames,
             })
         if (!terminalDecision.accepted) {
           if (terminalRepairAttempts >= 2) {

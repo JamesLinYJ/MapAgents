@@ -167,10 +167,6 @@ export class PlatformPersistenceFacade {
     return this.sessionStore.get(sessionId)
   }
 
-  getSessionByShareToken(shareToken: string): SessionRecord | null {
-    return this.sessionStore.getByShareToken(shareToken)
-  }
-
   async updateSession(sessionId: string, fields: Partial<SessionRecord>): Promise<SessionRecord> {
     return this.sessionStore.update(sessionId, fields)
   }

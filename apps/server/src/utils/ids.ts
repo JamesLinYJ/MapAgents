@@ -16,7 +16,3 @@ export function makeId(prefix: string) {
 export function nowUtc() {
   return new Date().toISOString()
 }
-
-export function makeShareToken() {
-  return randomUUID()
-}

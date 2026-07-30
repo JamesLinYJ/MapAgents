@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/geoforge.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="中文优先的空间智能工作台，支持自然语言空间分析、地图可视化与气象数据处理。"
+    />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: geoforge-resource:; font-src 'self' data:; connect-src 'self' geoforge-resource: https://*.stt.speech.microsoft.com wss://*.stt.speech.microsoft.com; media-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>GeoForge 地理智能工作台</title>
+  </head>
+  <body>
+    <div id="root">
+      <div class="desktop-boot" aria-label="正在加载 GeoForge 地理智能工作台">
+        <header class="desktop-boot__bar">
+          <strong>GeoForge</strong><span>地理智能工作台</span><i>正在连接本机服务</i>
+        </header>
+        <aside class="desktop-boot__side">
+          <strong>内容</strong><span>图层</span><span>数据源</span><span>地图场景</span>
+        </aside>
+        <main class="desktop-boot__main">
+          <section class="desktop-boot__map"><b>地图</b><span>正在恢复工作区</span></section>
+          <section class="desktop-boot__panel"><b>智能对话</b><span>正在恢复会话</span></section>
+        </main>
+      </div>
+    </div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

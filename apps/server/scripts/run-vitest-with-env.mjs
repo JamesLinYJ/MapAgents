@@ -14,13 +14,12 @@ import { fileURLToPath } from 'node:url'
 
 const defaults = {
   APP_BASE_URL: 'http://127.0.0.1:8000',
-  WEB_BASE_URL: 'http://127.0.0.1:5173',
   BETTER_AUTH_SECRET: 'test-only-better-auth-secret-change-before-production',
   BETTER_AUTH_ALLOW_SIGN_UP: 'true',
   BETTER_AUTH_REQUIRE_EMAIL_VERIFICATION: 'false',
   BETTER_AUTH_MIN_PASSWORD_LENGTH: '12',
   CSRF_HEADER_NAME: 'x-geoforge-csrf',
-  TRUSTED_ORIGINS: 'http://127.0.0.1:5173,http://localhost:5173',
+  TRUSTED_ORIGINS: 'geoforge://app,com.geoforge.desktop://auth/callback',
   WORKER_SHARED_SECRET: 'test-only-worker-shared-secret-change-before-production',
 }
 

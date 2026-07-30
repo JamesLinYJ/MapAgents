@@ -245,6 +245,15 @@ export const artifactDisplaySchema = z.object({
   }
 })
 
+export const artifactHttpMetadataSchema = z.object({
+  artifactId: z.string().trim().min(1),
+  artifactType: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+  uri: z.string().trim().min(1),
+  display: artifactDisplaySchema,
+  metadata: z.record(z.string(), z.unknown()).prefault({}),
+}).strict()
+
 export const mapLayerManifestSchema = mapLayerDraftSchema.extend({
   mapLayerId: z.string().trim().min(1),
   ownershipScope: z.enum(['system', 'workspace', 'thread']),
@@ -342,6 +351,7 @@ export type MapTemporal = z.infer<typeof mapTemporalSchema>
 export type MapLayerCapabilities = z.infer<typeof mapLayerCapabilitiesSchema>
 export type MapLayerDraft = z.infer<typeof mapLayerDraftSchema>
 export type ArtifactDisplay = z.infer<typeof artifactDisplaySchema>
+export type ArtifactHttpMetadata = z.infer<typeof artifactHttpMetadataSchema>
 export type MapLayerManifest = z.infer<typeof mapLayerManifestSchema>
 export type MapLayerLabel = z.infer<typeof mapLayerLabelSchema>
 export type MapSceneLayer = z.infer<typeof mapSceneLayerSchema>

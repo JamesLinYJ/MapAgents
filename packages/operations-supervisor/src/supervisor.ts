@@ -7,9 +7,9 @@
 //   日期:       2026年07月22日
 //   作者:       OpenAI Codex
 //
-//   维护记录 (2026-07-27):
+//   维护记录 (2026-07-29):
 //     作者: OpenAI Codex
-//     说明: 固定 Compose 归属校验允许安全接管 Docker 自动恢复的本项目容器。
+//     说明: 基础设施改为 Supervisor 直接拥有的原生进程树，端口不再接管外部进程。
 // --------------------------------------------------------------------------
 
 import { execFile } from 'node:child_process'
@@ -23,13 +23,14 @@ import { promisify } from 'node:util'
 
 import type {
   OperationsLogEntry,
+  OperationsLogQuery,
   OperationsOperationResult,
   OperationsProfile,
   OperationsServiceId,
-  OperationsServiceSnapshot,
   OperationsServiceState,
   OperationsSnapshot,
 } from '@geo-agent-platform/shared-types/operations'
+import { operationsServiceIdSchema } from '@geo-agent-platform/shared-types/operations'
 import concurrently, { type CloseEvent, Command } from 'concurrently'
 import type { Logger } from 'pino'
 import si from 'systeminformation'
@@ -45,16 +46,9 @@ import {
   transitiveDependents,
   type ServiceDefinition,
 } from './catalog.js'
-import {
-  composeFileFor,
-  listComposeProcesses,
-  verifyComposePortOwnership,
-  type ComposePort,
-} from './dockerComposeProject.js'
 import { environmentForConcurrently, environmentForService } from './environment.js'
 import { LineDecoder, OperationsLogBuffer } from './logBuffer.js'
 import {
-  collectDockerMetrics,
   collectHostMetrics,
   collectProcessTreeMetrics,
   unavailable,
@@ -66,7 +60,7 @@ const execFileAsync = promisify(execFile)
 const noopOutput = new Writable({ write(_chunk, _encoding, callback) { callback() } })
 
 const leaseSchema = z.object({
-  serviceId: z.enum(['infra', 'worker', 'api', 'web']),
+  serviceId: operationsServiceIdSchema,
   pid: z.number().int().positive(),
   marker: z.string().min(16),
   commandHash: z.string().length(64),
@@ -80,6 +74,9 @@ interface ManagedService {
   state: OperationsServiceState
   healthMessage: string
   command: Command | null
+  commandGeneration: number
+  startPromise: Promise<void> | null
+  conflictKind: 'port' | 'unverified_lease' | null
   desiredRunning: boolean
   stopping: boolean
   startedAt: Date | null
@@ -91,7 +88,6 @@ interface ManagedService {
   healthProbeInFlight: boolean
   restartTimer: NodeJS.Timeout | null
   metrics: ProcessTreeMetrics
-  containers: OperationsServiceSnapshot['containers']
 }
 
 export interface SupervisorActor {
@@ -135,6 +131,9 @@ export class OperationsSupervisor {
         state: 'stopped',
         healthMessage: '未启动',
         command: null,
+        commandGeneration: 0,
+        startPromise: null,
+        conflictKind: null,
         desiredRunning: false,
         stopping: false,
         startedAt: null,
@@ -146,7 +145,6 @@ export class OperationsSupervisor {
         healthProbeInFlight: false,
         restartTimer: null,
         metrics: { cpuPercent: unavailable('服务没有运行进程。'), memoryBytes: unavailable('服务没有运行进程。') },
-        containers: [],
       })
     }
   }
@@ -227,7 +225,6 @@ export class OperationsSupervisor {
           restartCount: record.restartCount,
           lastExitCode: record.lastExitCode,
           blockedBy,
-          containers: record.containers,
         }
       }),
     }
@@ -235,6 +232,10 @@ export class OperationsSupervisor {
 
   tailLogs(services: readonly OperationsServiceId[], tail: number): OperationsLogEntry[] {
     return this.options.logBuffer.tail(services, tail)
+  }
+
+  queryLogs(query: OperationsLogQuery): OperationsLogEntry[] {
+    return this.options.logBuffer.query(query)
   }
 
   operationResult(operationId: string): OperationsOperationResult | null {
@@ -278,13 +279,18 @@ export class OperationsSupervisor {
       }
       this.operationResults.set(result.operationId, result)
       this.events.emit('operation', result)
-      this.options.logger.info({
-        operationId: result.operationId,
-        action: result.action,
-        target: result.target,
-        outcome: result.outcome,
-        actor: input.actor,
-      }, result.message)
+      this.appendSupervisorLog(
+        result.outcome === 'succeeded' ? 'info' : 'error',
+        `${operationActionLabel(result.action)} ${operationTargetLabel(result.target)}：${result.message}`,
+        result.target === 'all' ? null : result.target,
+        {
+          operationId: result.operationId,
+          action: result.action,
+          target: result.target,
+          outcome: result.outcome,
+          actor: input.actor,
+        },
+      )
       this.emitSnapshot()
       return result
     }
@@ -326,6 +332,7 @@ export class OperationsSupervisor {
       ) {
         const record = this.requireRecord(lease.serviceId)
         record.state = 'conflict'
+        record.conflictKind = 'unverified_lease'
         record.healthMessage = `旧租约 PID ${lease.pid} 的创建时间、命令或工作区标记无法验证，未执行清理。`
         continue
       }
@@ -383,10 +390,28 @@ export class OperationsSupervisor {
     for (const serviceId of restore) await this.startSingle(serviceId, false)
   }
 
-  private async startSingle(serviceId: OperationsServiceId, automatic: boolean): Promise<void> {
+  private startSingle(serviceId: OperationsServiceId, automatic: boolean): Promise<void> {
     const record = this.requireRecord(serviceId)
-    if (record.command && ['starting', 'healthy', 'degraded'].includes(record.state)) return
-    if (record.state === 'conflict') throw new Error(`${record.definition.displayName} 存在未解决的进程冲突。`)
+    if (record.startPromise) return record.startPromise
+    const startPromise = this.startSingleAttempt(record, automatic)
+    record.startPromise = startPromise
+    void startPromise.finally(() => {
+      if (record.startPromise === startPromise) record.startPromise = null
+    }).catch(() => undefined)
+    return startPromise
+  }
+
+  private async startSingleAttempt(record: ManagedService, automatic: boolean): Promise<void> {
+    const serviceId = record.definition.serviceId
+    if (record.command) {
+      if (['healthy', 'degraded'].includes(record.state)) return
+      throw new Error(`${record.definition.displayName} 当前处于“${record.healthMessage}”状态，不能重复启动。`)
+    }
+    if (record.state === 'conflict' && record.conflictKind !== 'port') {
+      throw new Error(`${record.definition.displayName} 存在未解决的进程冲突。`)
+    }
+    if (record.restartTimer) clearTimeout(record.restartTimer)
+    record.restartTimer = null
     for (const dependency of record.definition.dependencies) {
       if (this.requireRecord(dependency).state !== 'healthy') {
         record.state = 'waiting_dependency'
@@ -396,6 +421,7 @@ export class OperationsSupervisor {
       }
     }
     await this.assertPortsAvailable(record)
+    record.conflictKind = null
     record.desiredRunning = true
     record.stopping = false
     record.state = 'starting'
@@ -428,43 +454,64 @@ export class OperationsSupervisor {
     })
     const command = result.commands[0]
     if (!command) throw new Error(`未能创建 ${record.definition.displayName} 进程。`)
+    const generation = record.commandGeneration + 1
+    record.commandGeneration = generation
     record.command = command
     record.startedAt = new Date()
     record.lastExitCode = null
-    this.bindCommand(record, command)
+    this.bindCommand(record, command, generation)
     result.result.catch(() => undefined)
     await waitFor(() => Boolean(command.pid), 5_000, `${record.definition.displayName} 未产生 PID。`)
+    this.assertCurrentCommand(record, command, generation)
     await this.writeLeases()
+    this.assertCurrentCommand(record, command, generation)
     this.emitSnapshot()
     await sleep(record.definition.health.initialDelayMs)
-    await this.waitForHealthy(record, 90_000)
-    this.startHealthMonitor(record)
+    this.assertCurrentCommand(record, command, generation)
+    await this.waitForHealthy(record, command, generation, 90_000)
+    this.assertCurrentCommand(record, command, generation)
+    this.startHealthMonitor(record, command, generation)
   }
 
-  private bindCommand(record: ManagedService, command: Command): void {
+  private bindCommand(record: ManagedService, command: Command, generation: number): void {
     const stdout = new LineDecoder()
     const stderr = new LineDecoder()
-    command.stdout.subscribe(chunk => this.appendLines(record.definition.serviceId, 'stdout', stdout.push(chunk)))
-    command.stderr.subscribe(chunk => this.appendLines(record.definition.serviceId, 'stderr', stderr.push(chunk)))
+    command.stdout.subscribe(chunk => this.appendLines(
+      record.definition.serviceId,
+      'stdout',
+      stdout.push(chunk),
+      command.pid ?? null,
+    ))
+    command.stderr.subscribe(chunk => this.appendLines(
+      record.definition.serviceId,
+      'stderr',
+      stderr.push(chunk),
+      command.pid ?? null,
+    ))
     command.close.subscribe(event => {
-      this.appendLines(record.definition.serviceId, 'stdout', stdout.finish())
-      this.appendLines(record.definition.serviceId, 'stderr', stderr.finish())
-      void this.handleClose(record, event)
+      this.appendLines(record.definition.serviceId, 'stdout', stdout.finish(), command.pid ?? null)
+      this.appendLines(record.definition.serviceId, 'stderr', stderr.finish(), command.pid ?? null)
+      void this.handleClose(record, command, generation, event)
     })
     command.error.subscribe(error => {
       this.appendSupervisorLog('error', `${record.definition.displayName} 启动错误：${safeMessage(error)}`, record.definition.serviceId)
     })
   }
 
-  private async handleClose(record: ManagedService, event: CloseEvent): Promise<void> {
-    if (record.command && event.command.name !== record.command.name) return
+  private async handleClose(
+    record: ManagedService,
+    command: Command,
+    generation: number,
+    event: CloseEvent,
+  ): Promise<void> {
+    if (!this.isCurrentCommand(record, command, generation)) return
     if (record.healthTimer) clearInterval(record.healthTimer)
     record.healthTimer = null
     record.command = null
     record.lastExitCode = event.exitCode
     record.metrics = { cpuPercent: unavailable('服务没有运行进程。'), memoryBytes: unavailable('服务没有运行进程。') }
-    record.containers = []
     await this.writeLeases()
+    if (record.commandGeneration !== generation || record.command !== null) return
     if (record.stopping || !record.desiredRunning) {
       record.state = 'stopped'
       record.healthMessage = '已停止'
@@ -474,10 +521,10 @@ export class OperationsSupervisor {
       return
     }
     this.appendSupervisorLog('error', `${record.definition.displayName} 异常退出（${String(event.exitCode)}）。`, record.definition.serviceId)
-    this.scheduleRestart(record)
+    this.scheduleRestart(record, generation)
   }
 
-  private scheduleRestart(record: ManagedService): void {
+  private scheduleRestart(record: ManagedService, generation: number): void {
     const now = Date.now()
     record.failureTimes = record.failureTimes.filter(value => now - value < 10 * 60_000)
     record.failureTimes.push(now)
@@ -493,14 +540,27 @@ export class OperationsSupervisor {
     record.restartCount += 1
     record.state = 'restart_wait'
     record.healthMessage = `${Math.ceil(delay / 1_000)} 秒后自动重启`
-    record.restartTimer = setTimeout(() => {
+    const restartTimer = setTimeout(() => {
+      if (record.restartTimer !== restartTimer) return
       record.restartTimer = null
+      if (
+        record.commandGeneration !== generation
+        || record.command
+        || !record.desiredRunning
+        || record.stopping
+      ) return
       void this.startSingle(record.definition.serviceId, true).catch(error => {
+        if (record.commandGeneration !== generation || record.command) return
+        if (record.state === 'conflict') {
+          this.emitSnapshot()
+          return
+        }
         record.state = 'failed'
         record.healthMessage = safeMessage(error)
         this.emitSnapshot()
       })
     }, delay)
+    record.restartTimer = restartTimer
     record.restartTimer.unref()
     this.emitSnapshot()
   }
@@ -510,10 +570,18 @@ export class OperationsSupervisor {
     if (record.restartTimer) clearTimeout(record.restartTimer)
     record.restartTimer = null
     if (!record.command) {
-      // 基础设施日志跟随进程若先于容器退出，监督句柄可能已经消失；此时
-      // stop/shutdown 仍必须执行固定关闭钩子，不能把残留容器谎报为已停止。
-      if (record.definition.shutdown && record.state !== 'stopped' && record.state !== 'conflict') {
-        await this.runShutdownHook(record)
+      const shouldConfirmShutdown = record.state !== 'stopped' && record.state !== 'conflict'
+      if (record.definition.shutdown && shouldConfirmShutdown) {
+        await this.runShutdownHook(record).catch(error => {
+          this.appendSupervisorLog(
+            'warn',
+            `${record.definition.displayName} 的优雅关闭钩子失败，将继续核验固定端口：${safeMessage(error)}`,
+            serviceId,
+          )
+        })
+      }
+      if (shouldConfirmShutdown) {
+        await this.waitForPortsReleased(record, serviceId === 'infra' ? 40_000 : 10_000)
       }
       record.state = record.state === 'conflict' ? 'conflict' : 'stopped'
       record.healthMessage = record.state === 'conflict' ? record.healthMessage : '已停止'
@@ -524,28 +592,105 @@ export class OperationsSupervisor {
     record.healthMessage = '正在停止'
     this.emitSnapshot()
     const command = record.command
-    const closed = onceCommandClosed(command, serviceId === 'infra' ? 40_000 : 10_000)
-    await this.runShutdownHook(record)
-    if (Command.canKill(command)) command.kill('SIGTERM')
-    await closed.catch(async () => {
-      if (command.pid) await killProcessTree(command.pid, 'SIGKILL').catch(() => undefined)
+    await this.runShutdownHook(record).catch(error => {
+      this.appendSupervisorLog(
+        'warn',
+        `${record.definition.displayName} 的优雅关闭钩子失败，将终止完整受监督进程树：${safeMessage(error)}`,
+        serviceId,
+      )
     })
+
+    const closeTimeoutMs = serviceId === 'infra' ? 40_000 : 10_000
+    const closed = onceCommandClosed(command, closeTimeoutMs)
+    if (!command.exited) {
+      if (command.pid) {
+        await killProcessTree(command.pid, 'SIGTERM').catch(error => {
+          this.appendSupervisorLog(
+            'warn',
+            `${record.definition.displayName} 进程树的优雅终止失败，将尝试执行器终止：${safeMessage(error)}`,
+            serviceId,
+          )
+          if (Command.canKill(command)) command.kill('SIGTERM')
+        })
+      } else if (Command.canKill(command)) {
+        command.kill('SIGTERM')
+      }
+    }
+
+    let commandClosed = true
+    await closed.catch(async () => {
+      commandClosed = false
+      if (command.pid) {
+        await killProcessTree(command.pid, 'SIGKILL').catch(() => undefined)
+      } else if (Command.canKill(command)) {
+        command.kill('SIGKILL')
+      }
+      commandClosed = await onceCommandClosed(command, 5_000)
+        .then(() => true)
+        .catch(() => false)
+    })
+    if (!commandClosed) {
+      record.state = 'failed'
+      record.healthMessage = `${record.definition.displayName} 的受监督进程树未在关闭期限内退出。`
+      record.stopping = false
+      this.emitSnapshot()
+      throw new Error(record.healthMessage)
+    }
+
+    await this.waitForPortsReleased(record, serviceId === 'infra' ? 40_000 : 10_000)
     record.command = null
     record.state = 'stopped'
+    record.conflictKind = null
     record.healthMessage = '已停止'
     record.stopping = false
     record.startedAt = null
     record.metrics = { cpuPercent: unavailable('服务没有运行进程。'), memoryBytes: unavailable('服务没有运行进程。') }
-    record.containers = []
     await this.writeLeases()
     this.emitSnapshot()
   }
 
-  private async waitForHealthy(record: ManagedService, timeoutMs: number): Promise<void> {
+  /**
+   * concurrently 的包装进程退出不等于后代树已经消失。停止结果只有在该服务的
+   * 固定端口全部可重新绑定后才能成功，避免把 Windows 上的孤儿进程谎报为已停止。
+   */
+  private async waitForPortsReleased(record: ManagedService, timeoutMs: number): Promise<void> {
+    const ports = record.definition.portEnvironments[this.options.profile].map(environmentName => ({
+      environmentName,
+      port: requirePort(this.options.environment, environmentName),
+    }))
+    const deadline = Date.now() + timeoutMs
+    let occupied = ports
+    while (Date.now() < deadline) {
+      occupied = []
+      for (const entry of ports) {
+        if (!await isPortAvailable(entry.port)) occupied.push(entry)
+      }
+      if (!occupied.length) return
+      await sleep(100)
+    }
+
+    const detail = occupied
+      .map(entry => `${entry.environmentName}=${entry.port}`)
+      .join('、')
+    record.state = 'conflict'
+    record.conflictKind = 'port'
+    record.healthMessage = `${record.definition.displayName} 停止后端口仍未释放：${detail}`
+    record.stopping = false
+    this.emitSnapshot()
+    throw new Error(record.healthMessage)
+  }
+
+  private async waitForHealthy(
+    record: ManagedService,
+    command: Command,
+    generation: number,
+    timeoutMs: number,
+  ): Promise<void> {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
-      if (!record.command) throw new Error(`${record.definition.displayName} 在健康检查前退出。`)
+      this.assertCurrentCommand(record, command, generation)
       const result = await this.probe(record)
+      this.assertCurrentCommand(record, command, generation)
       if (result.ok) {
         record.state = 'healthy'
         record.healthMessage = result.message
@@ -558,25 +703,36 @@ export class OperationsSupervisor {
       await sleep(record.definition.health.periodMs)
     }
     record.healthMessage = '启动健康检查超时。'
-    if (record.command && Command.canKill(record.command)) record.command.kill('SIGTERM')
+    if (this.isCurrentCommand(record, command, generation) && Command.canKill(command)) command.kill('SIGTERM')
     throw new Error(`${record.definition.displayName} 未在 ${Math.ceil(timeoutMs / 1_000)} 秒内就绪。`)
   }
 
-  private startHealthMonitor(record: ManagedService): void {
+  private startHealthMonitor(record: ManagedService, command: Command, generation: number): void {
     if (record.healthTimer) clearInterval(record.healthTimer)
-    record.healthTimer = setInterval(() => void this.monitorHealth(record), record.definition.health.periodMs)
+    record.healthTimer = setInterval(
+      () => void this.monitorHealth(record, command, generation),
+      record.definition.health.periodMs,
+    )
     record.healthTimer.unref()
   }
 
-  private async monitorHealth(record: ManagedService): Promise<void> {
-    if (!record.command || record.stopping || record.healthProbeInFlight) return
-    const observedCommand = record.command
+  private async monitorHealth(
+    record: ManagedService,
+    observedCommand: Command | null = record.command,
+    observedGeneration: number = record.commandGeneration,
+  ): Promise<void> {
+    if (
+      !observedCommand
+      || !this.isCurrentCommand(record, observedCommand, observedGeneration)
+      || record.stopping
+      || record.healthProbeInFlight
+    ) return
     record.healthProbeInFlight = true
     try {
       const result = await this.probe(record)
       // probe 是异步边界。期间 close/stop 可以清空或替换命令句柄；旧探针
       // 不得再改写新状态，更不能把 null 传给 concurrently 的 canKill。
-      if (record.command !== observedCommand || record.stopping) return
+      if (!this.isCurrentCommand(record, observedCommand, observedGeneration) || record.stopping) return
       if (result.ok) {
         record.healthFailures = 0
         record.state = 'healthy'
@@ -649,48 +805,42 @@ export class OperationsSupervisor {
   }
 
   private async assertPortsAvailable(record: ManagedService): Promise<void> {
-    const occupiedPorts: ComposePort[] = []
+    const occupiedPorts: Array<{ environmentName: string; port: number }> = []
     for (const name of record.definition.portEnvironments[this.options.profile]) {
       const port = requirePort(this.options.environment, name)
       if (!await isPortAvailable(port)) {
         occupiedPorts.push({ environmentName: name, port })
       }
     }
-    if (!occupiedPorts.length) return
-
-    if (record.definition.serviceId === 'infra') {
-      try {
-        const environment = environmentForService('infra', this.options.environment, {
-          GEOFORGE_ROOT: this.options.paths.projectRoot,
-          RUNTIME_ROOT: this.options.paths.runtimeRoot,
-        })
-        const ownership = verifyComposePortOwnership({
-          composeFile: composeFileFor(this.options.paths.projectRoot, this.options.profile),
-          occupiedPorts,
-          processes: await listComposeProcesses({
-            projectRoot: this.options.paths.projectRoot,
-            profile: this.options.profile,
-            environment,
-          }),
-        })
-        if (ownership.owned) {
-          this.appendSupervisorLog('info', `${ownership.message}监督器将通过固定启动命令重新接管。`, 'infra')
-          return
-        }
-        record.healthMessage = ownership.message
-      } catch (error) {
-        record.healthMessage = `无法验证基础设施端口归属：${safeMessage(error)}`
+    if (!occupiedPorts.length) {
+      if (record.state === 'conflict' && record.conflictKind === 'port') {
+        record.state = 'stopped'
+        record.conflictKind = null
+        record.healthMessage = '端口占用已解除，可以重新启动。'
+        this.emitSnapshot()
       }
-    } else {
-      const first = occupiedPorts[0]
-      record.healthMessage = first
-        ? `${first.environmentName} 端口 ${first.port} 已被非受监督进程占用。`
-        : '服务端口已被非受监督进程占用。'
+      return
     }
 
+    const first = occupiedPorts[0]
+    record.healthMessage = first
+      ? `${first.environmentName} 端口 ${first.port} 已被非受监督进程占用。`
+      : '服务端口已被非受监督进程占用。'
+
     record.state = 'conflict'
+    record.conflictKind = 'port'
     this.emitSnapshot()
     throw new Error(record.healthMessage)
+  }
+
+  private isCurrentCommand(record: ManagedService, command: Command, generation: number): boolean {
+    return record.command === command && record.commandGeneration === generation
+  }
+
+  private assertCurrentCommand(record: ManagedService, command: Command, generation: number): void {
+    if (!this.isCurrentCommand(record, command, generation)) {
+      throw new Error(`${record.definition.displayName} 的启动已被新的进程代次取代。`)
+    }
   }
 
   private async collectMetrics(): Promise<void> {
@@ -698,17 +848,9 @@ export class OperationsSupervisor {
       serviceId,
       this.requireRecord(serviceId).command?.pid ?? null,
     ]))
-    const [host, processes, docker] = await Promise.all([
+    const [host, processes] = await Promise.all([
       collectHostMetrics(this.options.paths.runtimeRoot),
       collectProcessTreeMetrics(roots),
-      collectDockerMetrics({
-        projectRoot: this.options.paths.projectRoot,
-        profile: this.options.profile,
-        environment: environmentForService('infra', this.options.environment, {
-          GEOFORGE_ROOT: this.options.paths.projectRoot,
-          RUNTIME_ROOT: this.options.paths.runtimeRoot,
-        }),
-      }),
     ])
     this.hostMetrics = host
     for (const serviceId of SERVICE_ORDER) {
@@ -718,19 +860,30 @@ export class OperationsSupervisor {
         memoryBytes: unavailable('进程指标缺失。'),
       }
     }
-    const infra = this.requireRecord('infra')
-    infra.containers = docker.containers
-    if (infra.command) infra.metrics = docker.total
     this.emitSnapshot()
   }
 
-  private appendLines(serviceId: OperationsServiceId, stream: 'stdout' | 'stderr', lines: readonly string[]): void {
+  private appendLines(
+    serviceId: OperationsServiceId,
+    stream: 'stdout' | 'stderr',
+    lines: readonly string[],
+    processId: number | null,
+  ): void {
     for (const message of lines) {
-      const entry = this.options.logBuffer.append({ serviceId, stream, message })
+      const entry = this.options.logBuffer.append({ serviceId, stream, message, processId })
       this.events.emit('log', entry)
-      const output = `[${serviceId}] ${entry.message}`
-      if (stream === 'stderr') this.options.logger.error(output)
-      else this.options.logger.info(output)
+      const context = {
+        serviceId,
+        component: entry.component,
+        childProcessId: entry.processId,
+        stream,
+        sourceLevel: entry.level,
+        logSequence: entry.sequence,
+      }
+      if (entry.level === 'error') this.options.logger.error(context, entry.message)
+      else if (entry.level === 'warn') this.options.logger.warn(context, entry.message)
+      else if (entry.level === 'debug') this.options.logger.debug(context, entry.message)
+      else this.options.logger.info(context, entry.message)
     }
   }
 
@@ -738,10 +891,26 @@ export class OperationsSupervisor {
     level: 'info' | 'warn' | 'error',
     message: string,
     serviceId: OperationsServiceId | null = null,
+    context: Readonly<Record<string, unknown>> = {},
   ): void {
-    const entry = this.options.logBuffer.append({ serviceId, stream: 'supervisor', message })
+    const entry = this.options.logBuffer.append({
+      serviceId,
+      component: 'supervisor',
+      processId: process.pid,
+      stream: 'supervisor',
+      level,
+      message,
+    })
     this.events.emit('log', entry)
-    this.options.logger[level](message)
+    this.options.logger[level]({
+      ...context,
+      serviceId,
+      component: 'supervisor',
+      childProcessId: process.pid,
+      stream: 'supervisor',
+      sourceLevel: level,
+      logSequence: entry.sequence,
+    }, entry.message)
   }
 
   private emitSnapshot(): void {
@@ -870,4 +1039,17 @@ function killProcessTree(pid: number, signal: string): Promise<void> {
 
 function isMissing(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT'
+}
+
+function operationActionLabel(action: OperationsOperationResult['action']): string {
+  return ({
+    start: '启动',
+    stop: '停止',
+    restart: '重启',
+    shutdown: '关闭监督器',
+  })[action]
+}
+
+function operationTargetLabel(target: OperationsOperationResult['target']): string {
+  return target === 'all' ? '全部服务' : target
 }

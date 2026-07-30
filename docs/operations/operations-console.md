@@ -14,6 +14,8 @@ Windows：
 .\dev.ps1 restart infra       # 按依赖顺序重启原先运行的服务
 .\dev.ps1 status -Json
 .\dev.ps1 logs api -Tail 200 -FollowLogs
+.\dev.ps1 logs all -LogLevel error -IncludeSupervisor
+.\dev.ps1 logs all -LogSearch "数据库" -IncludeSupervisor
 .\dev.ps1 shutdown            # 停止全部并关闭监督器
 ```
 
@@ -25,6 +27,8 @@ Linux：
 ./dev.sh start api
 ./dev.sh status --json
 ./dev.sh logs api --tail 200 --follow
+./dev.sh logs all --level error --supervisor
+./dev.sh logs all --search 数据库 --supervisor
 ./dev.sh shutdown
 ```
 
@@ -47,13 +51,14 @@ Linux：
 
 ## 事实源与边界
 
-- `@geo-agent-platform/operations-supervisor` 保存四个固定服务的实时状态：`infra`、`worker`、`api`、`web`。
+- `@geo-agent-platform/operations-supervisor` 保存三个固定后台服务的实时状态：`infra`、`worker`、`api`。Electron 桌面窗口不进入监督状态机。
 - `concurrently` 只启动命令并提供输出与进程终止能力；依赖、健康、重启、指标、日志与 IPC 都由 GeoForge 监督器负责。
 - 客户端通过 Windows named pipe 或 Linux Unix socket 使用令牌认证的 JSONL 协议。首帧校验协议版本与令牌，单帧最大 64 KiB。
 - 写操作携带 `operationId` 并在监督器内串行执行。连接中断后可查询结果，客户端不会自动重放写请求。
-- Docker Desktop 自动恢复基础设施容器后，监督器只有在固定 Compose 文件标签、服务名、运行状态和全部占用端口同时匹配时才会重新接管；其余端口占用保持 `conflict` 并硬失败。
-- CPU 与内存汇总启动进程的完整后代树；基础设施指标来自固定 Compose 项目中的真实容器。无法采集时显示“未知”和原因。
-- 日志在进入内存缓冲、IPC 和结构化监督日志前统一脱敏；每个服务最多保留 10,000 行、8 MiB。
+- 原生 PostgreSQL/PostGIS 由固定目录与固定启动清单装配；外部端口占用保持 `conflict` 并硬失败，监督器不会把未知进程误认成自己的服务。矢量与栅格瓦片由 Node API 内的窄适配器负责，不再启动额外地图服务。
+- CPU 与内存汇总启动进程的完整后代树。无法采集时显示“未知”和原因。
+- 日志在进入内存缓冲、IPC 和结构化监督日志前统一脱敏；内存最多保留 10,000 行、8 MiB。Supervisor 将服务、组件、PID、输出流、级别和本机操作事件写入 `runtime/ops/supervisor-<workspace>.<日期>.<序号>.jsonl`，单文件 16 MiB、每日轮转并保留最近 7 个历史文件。
+- 桌面端可用 `Ctrl+Shift+L` 打开系统日志；该查看器只连接本机 Supervisor，因此平台 API 或数据库不可用时仍可筛选、暂停跟随和复制当前结果。CLI 与 TUI 使用同一日志事实源，禁止传入任意文件路径。
 
 ## 本机账户最高权限
 
@@ -72,20 +77,88 @@ Linux：
 
 ## 生产部署
 
-生产构建必须先执行：
+生产安装由两个独立事实源组成：WinSW/systemd 管理 `infra`、`worker`、`api` 三项后台服务，Electron 安装包只负责桌面交互。Desktop 不扫描源码树，也不从 Renderer 推导服务地址；打包版本固定读取受保护的 v1 runtime manifest。
 
-```text
+### 构建与版本目录
+
+在干净检出中先安装锁定依赖，再生成版本化服务目录和 Desktop 安装包：
+
+```bash
 npm ci
 npm run build
+npm run make --workspace @geo-agent-platform/desktop
 ```
 
-Linux 使用 [deploy/systemd/geoforge-supervisor.service](../../deploy/systemd/geoforge-supervisor.service)，替换 `@@GEOFORGE_ROOT@@` 后安装为 `geoforge-supervisor.service`。服务使用 `KillMode=control-group`，并由 `geoforge-ops` 组控制本机密钥访问。
+Desktop 的 Forge `package`/`make` 固定使用 `.node-version` 中的 Node.js `24.14.0`（支持范围 `>=24 <25`）；脚本会在其它主版本上硬失败，不能用运行时 monkey patch 绕过依赖兼容问题。`build:desktop` 以及 Desktop 自身的 `package`/`make` 会依次构建 `shared-types`、`conversation-presentation`、`operations-supervisor` 和 Desktop，因此不依赖仓库中残留的 `dist/`。Desktop 版本与平台版本均为 `0.1.0`。服务发布目录必须是不可变的版本目录，例如 Windows 的 `C:\Program Files\GeoForge\services\0.1.0` 或 Linux 的 `/opt/geoforge/releases/0.1.0`；升级先安装新目录和新清单，再切换服务，不覆盖正在运行的目录。
 
-Windows 使用固定版本并校验 SHA256 的 WinSW。复制 [deploy/env/supervisor.env.example](../../deploy/env/supervisor.env.example)，完成生产值与 ACL 后运行：
+Windows `make` 会从 Microsoft 固定 URL 获取 NuGet CLI `6.14.0`，验证仓库内固定的 SHA256 后写入忽略版本控制的 `.squirrel-vendor` 构建缓存。Squirrel 自带的旧 NuGet 只作为其它 vendor 文件来源，不参与 nupkg 打包；下载失败或哈希不符都会硬失败。
+
+普通 `package`/`make` 只用于本机验收：未配置证书时，打包目录、Squirrel nupkg 和 ZIP 都包含 `UNSIGNED-TEST-BUILD.txt`，安装器名为 `GeoForge-0.1.0-UNSIGNED-TEST-Setup.exe`，可解压测试包名以 `-UNSIGNED-TEST.zip` 结尾，均不得作为生产发布。ZIP maker 只生成 `win32/x64` 测试包。生产发布必须设置 `WINDOWS_CERTIFICATE_FILE`（绝对 PFX 路径）、`WINDOWS_CERTIFICATE_PASSWORD` 和可选的 HTTPS `WINDOWS_TIMESTAMP_SERVER`，再执行：
+
+```powershell
+npm run make:release --workspace @geo-agent-platform/desktop
+```
+
+该命令启用 Forge 与 Squirrel 的 Authenticode 签名，随后用 `Get-AuthenticodeSignature` 硬校验应用 EXE 和 `GeoForge-0.1.0-Setup.exe`；缺证书、签名失败、时间戳地址不安全或仍存在 `UNSIGNED TEST` 标记都会失败。
+
+生产主机还必须预先安装 Node.js、Python Worker 的虚拟环境与依赖，以及 PostgreSQL/PostGIS。构建成功不代表这些外部运行时已经安装。
+
+### Runtime manifest 契约
+
+v1 清单字段固定为 `kind`、`schemaVersion`、`projectRoot`、`runtimeRoot`、`apiBaseUrl`、`supervisorTokenFile` 和 `allowedEnvironmentOverrides`。四个路径/地址字段必须通过严格校验，Supervisor 令牌必须位于 `runtimeRoot` 内。未知字段、相对路径、网络路径、API 子路径、重复覆盖项和未知 schema 版本都会阻止 Desktop 启动。
+
+生产 Desktop 的固定清单位置为：
+
+- Windows：`C:\ProgramData\GeoForge\runtime-manifest.v1.json`
+- Linux：`/etc/geoforge/runtime-manifest.v1.json`
+
+参考 [Windows manifest](../../deploy/runtime/runtime-manifest.v1.windows.json.example) 和 [Linux manifest](../../deploy/runtime/runtime-manifest.v1.linux.json.example)。生产进程不会用 `APP_ENV=development` 绕过清单。`GEOFORGE_ROOT`、`RUNTIME_ROOT`、`APP_BASE_URL` 和 `GEOFORGE_SUPERVISOR_TOKEN_FILE` 只有出现在清单的 `allowedEnvironmentOverrides` 中时才能覆盖对应字段；设置了未授权变量会硬失败。默认应保持空列表。
+
+### Windows 安装
+
+先创建本机 `GeoForge Operators` 组，把 Desktop 使用者和专用非管理员服务账户加入该组。复制 [生产环境模板](../../deploy/env/supervisor.env.example) 到 `C:\ProgramData\GeoForge\supervisor.env`，至少确认 `GEOFORGE_ROOT`、`RUNTIME_ROOT`、`API_HOST`、`API_PORT`、`DATABASE_URL`、`WORKER_URL`、`APP_BASE_URL`、`BETTER_AUTH_URL`、两个生产密钥和 `ENABLED_TOOL_PROVIDERS` 均为真实生产值。
+
+以管理员 PowerShell 安装令牌和清单：
+
+```powershell
+.\scripts\install-desktop-runtime-manifest.ps1 `
+  -ProjectRoot 'C:\Program Files\GeoForge\services\0.1.0' `
+  -ServicePrincipal 'HOSTNAME\GeoForgeService' `
+  -RuntimeRoot 'C:\ProgramData\GeoForge\runtime' `
+  -ApiBaseUrl 'http://127.0.0.1:8000' `
+  -ServiceEnvironmentFile 'C:\ProgramData\GeoForge\supervisor.env' `
+  -OperatorsPrincipal 'GeoForge Operators'
+```
+
+脚本使用固定 `C:\ProgramData\GeoForge` 配置根，拒绝链接/reparse point 和越界路径，并为配置根、runtime 根、独立 `runtime\secrets` 目录以及文件分别关闭 ACL 继承。`SYSTEM` 与 Administrators 拥有完全控制；专用服务账户只在 runtime 数据目录拥有修改权，在清单、环境文件和令牌上只有读取权；`GeoForge Operators` 可读取清单和 Supervisor 令牌，但不能读取包含数据库及服务密钥的 `supervisor.env`。
+
+Supervisor 令牌默认每次安装都重新生成 256 位随机值，并通过临时文件原子替换。只有确认现存令牌来自可信安装时才可显式传入 `-PreserveExistingSupervisorToken`；脚本仍会拒绝链接和非 256 位 base64url 值。清单与 `supervisor.env` 中的 `GEOFORGE_ROOT`、`RUNTIME_ROOT`、`APP_BASE_URL`、`GEOFORGE_SUPERVISOR_TOKEN_FILE` 必须一致。
+
+随后用固定版本且校验 SHA256 的 WinSW 注册 Supervisor：
 
 ```powershell
 .\scripts\prepare-winsw-services.ps1 -SupervisorEnvironmentFile C:\ProgramData\GeoForge\supervisor.env
 .\scripts\install-winsw-service.ps1 -Service Supervisor -CredentialPrompt
 ```
 
-WinSW 服务名为 `GeoForgeSupervisor`。生产服务账户不得使用 LocalSystem、LocalService 或 NetworkService。
+WinSW 服务名为 `GeoForgeSupervisor`。生产服务账户不得使用 LocalSystem、LocalService 或 NetworkService。服务健康后再运行已通过签名校验的 `GeoForge-0.1.0-Setup.exe`；Squirrel 安装、升级和卸载事件会在获取单实例锁之前创建或删除快捷方式。无签名测试安装器仅可用于隔离测试主机。
+
+### Linux 安装
+
+先把已替换全部占位值的生产环境文件直接安装为 `root:root 0600`，再运行 Linux 安装器。安装器与 Windows 使用同一 v1 字段和受控覆盖白名单，默认轮换 Supervisor 令牌，并拒绝链接、hard link、路径越界、重复覆盖项及环境/清单不一致：
+
+```bash
+sudo install -d -o root -g geoforge-ops -m 0750 /etc/geoforge
+sudo install -o root -g root -m 0600 geoforge.env /etc/geoforge/geoforge.env
+sudo bash ./scripts/install-desktop-runtime-manifest.sh \
+  --project-root /opt/geoforge/releases/0.1.0 \
+  --service-user geoforge \
+  --operators-group geoforge-ops \
+  --runtime-root /var/lib/geoforge/runtime \
+  --api-base-url http://127.0.0.1:8000 \
+  --service-environment-file /etc/geoforge/geoforge.env
+```
+
+`geoforge.env` 必须保持 `root:root 0600`（systemd 在降权前读取），清单与令牌使用 `root:geoforge-ops 0640`，runtime 数据目录由服务账户拥有；三者不得是符号链接。只有确认现有 256 位 base64url 令牌可信时才可使用 `--preserve-existing-supervisor-token`。
+
+保证 `GEOFORGE_ROOT` 与替换后的 systemd `@@GEOFORGE_ROOT@@` 一致。安装 [systemd 模板](../../deploy/systemd/geoforge-supervisor.service) 后执行 daemon reload 和启动；模板显式把 `GEOFORGE_SUPERVISOR_TOKEN_FILE` 作为 `--token-file` 传给 Supervisor，并使用 `KillMode=control-group`。清单必须由 root 所有且不能允许 group/other 写入，否则 Desktop 硬失败。

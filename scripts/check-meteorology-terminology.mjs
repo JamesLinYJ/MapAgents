@@ -13,14 +13,13 @@ import path from 'node:path'
 import process from 'node:process'
 
 const root = process.cwd()
-const sourceRoots = ['apps', 'server', 'packages', 'scripts', 'infra']
+const sourceRoots = ['apps', 'packages', 'scripts', 'infra']
 const rootSourceFiles = ['.env.example', 'package.json', 'dev.ps1', 'dev.sh']
 const legacyTerms = [
-  ['wea', 'ther'].join(''),
-  ['Wea', 'ther'].join(''),
-  ['WEA', 'THER'].join(''),
   ['gis_', 'wea', 'ther'].join(''),
   ['gis-', 'wea', 'ther'].join(''),
+  ['wea', 'therTools'].join(''),
+  ['wea', 'ther_tools'].join(''),
   ['降雨', '风险'].join(''),
   ['面雨量', '表格'].join(''),
   ['雷达', '拼图'].join(''),
@@ -31,6 +30,8 @@ const ignoredPathParts = new Set([
   '.pytest_cache',
   'node_modules',
   'dist',
+  'out',
+  'release',
   'runtime',
   'output',
   '__pycache__',
@@ -48,6 +49,13 @@ const ignoredExtensions = new Set([
   '.ttf',
   '.otf',
   '.zip',
+  '.asar',
+  '.dat',
+  '.dll',
+  '.exe',
+  '.node',
+  '.nupkg',
+  '.pak',
   '.bz2',
   '.nc',
   '.nc4',

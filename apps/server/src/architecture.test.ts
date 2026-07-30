@@ -15,12 +15,20 @@
 //   维护记录 (2026-07-27):
 //     作者: OpenAI Codex
 //     说明: 增加 Web Chat 与本机 Agent CLI 共用只读对话展示投影的结构守卫。
+//
+//   维护记录 (2026-07-29):
+//     作者: OpenAI Codex
+//     说明: 增加浏览器工作台、匿名分享和容器地图旁车不得回流的守卫，
+//           并固定退役分享 URL 的 HTTP 404 行为。
 // --------------------------------------------------------------------------
 
 import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { Hono } from 'hono'
+import { cors } from 'hono/cors'
 import { describe, expect, it } from 'vitest'
+import { platformNotFoundHandler } from './app/httpNotFound.js'
 import type { ToolDef } from './framework/types.js'
 import type { ConversationItem } from './schemas/types.js'
 import { PlatformPersistenceFacade } from './store/platformPersistenceFacade.js'
@@ -36,11 +44,11 @@ describe('platform architecture', () => {
     ) as { workspaces?: string[] }
 
     expect(rootPackage.workspaces).toContain('apps/server')
-    expect(rootPackage.workspaces).toContain('apps/web')
+    expect(rootPackage.workspaces).toContain('apps/desktop')
     expect(rootPackage.workspaces).toContain('packages/conversation-presentation')
     expect(rootPackage.workspaces).not.toContain('server')
 
-    for (const application of ['server', 'web', 'worker']) {
+    for (const application of ['server', 'desktop', 'worker']) {
       await expect(stat(path.join(repositoryRoot, 'apps', application))).resolves.toBeDefined()
     }
     await expect(stat(path.join(repositoryRoot, 'server'))).rejects.toMatchObject({ code: 'ENOENT' })
@@ -137,7 +145,7 @@ describe('platform architecture', () => {
     const root = path.resolve(process.cwd(), '..', '..')
     const files = await collectSourceFiles([
       path.join(root, 'apps/server/src'),
-      path.join(root, 'apps/web/src'),
+      path.join(root, 'apps/desktop/src'),
       path.join(root, 'packages/shared-types/src'),
     ])
     const source = (await Promise.all(files.map((file) => readFile(file, 'utf8')))).join('\n')
@@ -164,7 +172,7 @@ describe('platform architecture', () => {
     const files = await collectProductionFiles([
       path.join(root, 'AGENTS.md'),
       path.join(root, 'apps/server/src'),
-      path.join(root, 'apps/web/src'),
+      path.join(root, 'apps/desktop/src'),
       path.join(root, 'apps/worker/src'),
       path.join(root, 'packages/shared-types/src'),
       path.join(root, 'packages/gis-meteorology/src/gis_meteorology'),
@@ -189,9 +197,165 @@ describe('platform architecture', () => {
 
     expect(source.includes("scripts\\dev-environment.ps1")).toBe(true)
     expect(environmentSource.includes("Set-GeoForgeValue 'API_HOST' '127.0.0.1'")).toBe(true)
-    expect(environmentSource.includes("Set-GeoForgeValue 'WEB_DEV_HOST' '127.0.0.1'")).toBe(true)
     expect(environmentSource.includes("Set-GeoForgeDefault 'API_HOST' '127.0.0.1'")).toBe(false)
-    expect(environmentSource.includes("Set-GeoForgeDefault 'WEB_DEV_HOST' '127.0.0.1'")).toBe(false)
+    expect(environmentSource.includes('WEB_DEV_HOST')).toBe(false)
+  })
+
+  it('keeps the retired browser, public-sharing, and container sidecars out of active runtime boundaries', async () => {
+    const repositoryRoot = path.resolve(process.cwd(), '..', '..')
+    const retiredPaths = [
+      path.join(repositoryRoot, 'apps', 'web'),
+      path.join(repositoryRoot, 'apps/server/src/webStaticRuntime.ts'),
+      path.join(repositoryRoot, 'apps/server/src/routes/share.ts'),
+      path.join(repositoryRoot, 'apps/server/src/routes/share.test.ts'),
+      path.join(repositoryRoot, 'infra/compose/docker-compose.dev.yml'),
+      path.join(repositoryRoot, 'infra/compose/docker-compose.prod.yml'),
+      path.join(repositoryRoot, 'infra/docker/web/nginx.conf'),
+      path.join(repositoryRoot, 'infra/martin/config.yaml'),
+      path.join(repositoryRoot, 'scripts/check-infra.ps1'),
+      path.join(repositoryRoot, 'scripts/check-infra.sh'),
+      path.join(repositoryRoot, 'scripts/check-infra-production.ps1'),
+      path.join(repositoryRoot, 'scripts/check-infra-production.sh'),
+      path.join(repositoryRoot, 'scripts/run-infra.ps1'),
+      path.join(repositoryRoot, 'scripts/run-infra.sh'),
+      path.join(repositoryRoot, 'scripts/run-infra-production.ps1'),
+      path.join(repositoryRoot, 'scripts/run-infra-production.sh'),
+      path.join(repositoryRoot, 'scripts/stop-infra.ps1'),
+      path.join(repositoryRoot, 'scripts/stop-infra.sh'),
+      path.join(repositoryRoot, 'scripts/stop-infra-production.ps1'),
+      path.join(repositoryRoot, 'scripts/stop-infra-production.sh'),
+      path.join(repositoryRoot, 'scripts/check-web-bundle-budget.mjs'),
+      path.join(repositoryRoot, 'scripts/replace-isrecord-web.py'),
+    ]
+    for (const retiredPath of retiredPaths) {
+      await expect(stat(retiredPath), retiredPath).rejects.toMatchObject({ code: 'ENOENT' })
+    }
+
+    const rootPackage = JSON.parse(
+      await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'),
+    ) as {
+      workspaces?: string[]
+      scripts?: Record<string, string>
+    }
+    expect(rootPackage.workspaces).not.toContain('apps/web')
+    for (const [name, command] of Object.entries(rootPackage.scripts ?? {})) {
+      expect(name.endsWith(':web'), name).toBe(false)
+      expect(command.includes('apps/web'), name).toBe(false)
+    }
+
+    const activeSourceFiles = await collectProductionFiles([
+      path.join(repositoryRoot, 'apps/server/src'),
+      path.join(repositoryRoot, 'apps/desktop/src'),
+      path.join(repositoryRoot, 'packages/shared-types/src'),
+    ])
+    const activeSource = (await Promise.all(
+      activeSourceFiles.map(file => readFile(file, 'utf8')),
+    )).join('\n')
+    const retiredSourceTokens = [
+      ['web', 'StaticRuntime'].join(''),
+      ['/api', 'share'].join('/'),
+      ['share', 'token'].join('_'),
+      ['share', 'Token'].join(''),
+    ]
+    for (const token of retiredSourceTokens) {
+      expect(activeSource.includes(token), token).toBe(false)
+    }
+
+    const baselineSource = await readFile(
+      path.join(repositoryRoot, 'infra/migrations/001_init_postgis.sql'),
+      'utf8',
+    )
+    const removalMigration = await readFile(
+      path.join(repositoryRoot, 'infra/migrations/005_remove_public_sharing.sql'),
+      'utf8',
+    )
+    expect(baselineSource.includes(['share', 'token'].join('_'))).toBe(false)
+    expect(removalMigration).toContain(`DROP COLUMN IF EXISTS ${['share', 'token'].join('_')}`)
+
+    const operationalSourceFiles = await collectProductionFiles([
+      path.join(repositoryRoot, 'packages/operations-supervisor/src'),
+      path.join(repositoryRoot, 'apps/server/src/framework'),
+      path.join(repositoryRoot, 'apps/server/src/map'),
+    ])
+    const runtimeEntryFiles: string[] = [
+      path.join(repositoryRoot, '.env.example'),
+      path.join(repositoryRoot, 'dev.ps1'),
+      path.join(repositoryRoot, 'dev.sh'),
+    ]
+    await collect(path.join(repositoryRoot, 'scripts'), runtimeEntryFiles)
+    await collect(path.join(repositoryRoot, 'deploy'), runtimeEntryFiles)
+    const runtimeEntryTextFiles = runtimeEntryFiles.filter(file => {
+      const normalized = file.replace(/\\/gu, '/')
+      if (normalized.includes('/__pycache__/')) return false
+      return /\.(?:c?js|example|json|mjs|ps1|py|service|sh|sql|template|ts|xml|ya?ml)$/u.test(file)
+    })
+    const operationalSource = [
+      ...await Promise.all(
+        operationalSourceFiles.map(file => readFile(file, 'utf8')),
+      ),
+      ...await Promise.all(runtimeEntryTextFiles.map(file => readFile(file, 'utf8'))),
+    ].join('\n')
+    const retiredRuntimePatterns = [
+      { name: 'Docker', pattern: /\bdocker\b/iu },
+      { name: 'Compose', pattern: /\bcompose\b/iu },
+      { name: 'Martin', pattern: /\bmartin\b/iu },
+      { name: 'TiTiler', pattern: /\btitiler\b/iu },
+      { name: 'PM2', pattern: /\bpm2\b/iu },
+      { name: 'process-compose', pattern: /\bprocess-compose\b/iu },
+      { name: 'xterm', pattern: /\bxterm\b/iu },
+      { name: 'node-pty', pattern: /\bnode-pty\b/iu },
+    ]
+    for (const retiredRuntime of retiredRuntimePatterns) {
+      expect(operationalSource, retiredRuntime.name).not.toMatch(retiredRuntime.pattern)
+    }
+
+    const lock = JSON.parse(
+      await readFile(path.join(repositoryRoot, 'package-lock.json'), 'utf8'),
+    ) as { packages?: Record<string, unknown> }
+    const installedPackages = Object.keys(lock.packages ?? {})
+    for (const retiredPackage of [
+      'node_modules/pm2',
+      'node_modules/node-pty',
+      'node_modules/@xterm/',
+      'node_modules/process-compose',
+      'node_modules/docker-compose',
+      'node_modules/dockerode',
+    ]) {
+      expect(
+        installedPackages.some(packagePath => (
+          packagePath === retiredPackage
+          || packagePath.startsWith(retiredPackage.endsWith('/') ? retiredPackage : `${retiredPackage}/`)
+        )),
+        retiredPackage,
+      ).toBe(false)
+    }
+  })
+
+  it('keeps retired public share URLs on the stable server 404 boundary', async () => {
+    const mainSource = await readFile(path.join(process.cwd(), 'src/main.ts'), 'utf8')
+    const app = new Hono()
+    app.all('/api/share', platformNotFoundHandler)
+    app.all('/api/share/*', platformNotFoundHandler)
+    app.use('*', cors())
+    app.notFound(platformNotFoundHandler)
+
+    expect(mainSource).toContain('app.notFound(platformNotFoundHandler)')
+    expect(mainSource.indexOf('app.all(`${retiredPublicShareRoot}/*`'))
+      .toBeLessThan(mainSource.indexOf("app.use('*', cors("))
+    const requests = [
+      { method: 'GET', path: '/api/share/retired-token' },
+      { method: 'GET', path: '/api/share/retired-token/history?before=entry_1' },
+      { method: 'POST', path: '/api/share/retired-token' },
+      { method: 'HEAD', path: '/api/share/retired-token' },
+      { method: 'OPTIONS', path: '/api/share/retired-token' },
+    ]
+    for (const request of requests) {
+      const response = await app.request(request.path, { method: request.method })
+      expect(response.status, `${request.method} ${request.path}`).toBe(404)
+      if (request.method !== 'HEAD') {
+        await expect(response.json()).resolves.toEqual({ detail: 'Not found' })
+      }
+    }
   })
 
   it('keeps remote browser terminal dependencies and runtimes removed', async () => {
@@ -255,7 +419,7 @@ describe('platform architecture', () => {
     }
   })
 
-  it('keeps Web Chat and the local Agent CLI on one read-only conversation projection', async () => {
+  it('keeps Desktop Chat and the local Agent CLI on one read-only conversation projection', async () => {
     const repositoryRoot = path.resolve(process.cwd(), '..', '..')
     const presentationRoot = path.join(repositoryRoot, 'packages/conversation-presentation')
     const presentationSource = await readFile(
@@ -266,8 +430,8 @@ describe('platform architecture', () => {
       path.join(repositoryRoot, 'apps/server/src/operations/agent/ui/localAgentView.ts'),
       'utf8',
     )
-    const webConversationSource = await readFile(
-      path.join(repositoryRoot, 'apps/web/src/features/conversation/useConversation.ts'),
+    const desktopConversationSource = await readFile(
+      path.join(repositoryRoot, 'apps/desktop/src/renderer/features/conversation/useConversation.ts'),
       'utf8',
     )
     const windowsDevSource = await readFile(path.join(repositoryRoot, 'dev.ps1'), 'utf8')
@@ -278,7 +442,7 @@ describe('platform architecture', () => {
     expect(presentationSource.includes("from 'react'")).toBe(false)
     expect(presentationSource.includes("from 'ink'")).toBe(false)
     expect(serverViewSource.includes("from '@geo-agent-platform/conversation-presentation'")).toBe(true)
-    expect(webConversationSource.includes("from '@geo-agent-platform/conversation-presentation'")).toBe(true)
+    expect(desktopConversationSource.includes("from '@geo-agent-platform/conversation-presentation'")).toBe(true)
     expect(windowsDevSource.includes("build:dev --workspace '@geo-agent-platform/conversation-presentation'")).toBe(true)
     expect(linuxDevSource.includes('build:dev --workspace @geo-agent-platform/conversation-presentation')).toBe(true)
     for (const packageName of ['shared-types', 'conversation-presentation', 'operations-supervisor']) {
@@ -291,7 +455,7 @@ describe('platform architecture', () => {
     }
     await expect(stat(path.join(
       repositoryRoot,
-      'apps/web/src/features/conversation/items.ts',
+      'apps/desktop/src/renderer/features/conversation/items.ts',
     ))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 

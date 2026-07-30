@@ -15,16 +15,16 @@ text { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsof
 <rect width="1600" height="1120" fill="#ffffff"/>
 <rect x="24" y="24" width="1552" height="1072" rx="32" fill="#f8fafc" stroke="#e2e8f0"/>
 <text x="60" y="70" font-size="24" fill="#0f172a" font-weight="800" text-anchor="start">地理智能平台完整架构图</text>
-<text x="60" y="98" font-size="13.5" fill="#475569" font-weight="400" text-anchor="start">React 工作台 + Node WebSocket 控制面 + Agent Runtime + 工具化气象链路 + PostgreSQL 结构化事实源</text>
+<text x="60" y="98" font-size="13.5" fill="#475569" font-weight="400" text-anchor="start">Electron GIS 工作台 + Node WebSocket 控制面 + Agent Runtime + 工具化气象链路 + PostgreSQL 结构化事实源</text>
 <rect x="1190" y="52" width="164" height="28" rx="14" fill="#fff7ed" stroke="#fed7aa" stroke-width="1"/>
-<text x="1272.0" y="70" font-size="11.5" fill="#9a3412" font-weight="600" text-anchor="middle">Docker 仅运行 PostGIS</text>
+<text x="1272.0" y="70" font-size="11.5" fill="#9a3412" font-weight="600" text-anchor="middle">原生 PostgreSQL/PostGIS</text>
 <rect x="1368" y="52" width="92" height="28" rx="14" fill="#ecfeff" stroke="#a5f3fc" stroke-width="1"/>
 <text x="1414.0" y="70" font-size="11.5" fill="#155e75" font-weight="600" text-anchor="middle">HTTP 仅数据面</text>
 <rect x="1490" y="52" width="84" height="28" rx="14" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
 <text x="1532.0" y="70" font-size="11.5" fill="#1d4ed8" font-weight="600" text-anchor="middle">/ws 控制主线</text>
 <rect x="54" y="130" width="330" height="390" rx="22" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.4" stroke-dasharray="8 6"/>
-<text x="74" y="160" font-size="16" fill="#0f172a" font-weight="700" text-anchor="start">用户与前端工作台</text>
-<text x="74" y="182" font-size="12" fill="#64748b" font-weight="400" text-anchor="start">apps/web: React + MapLibre + 液体玻璃 UI</text>
+<text x="74" y="160" font-size="16" fill="#0f172a" font-weight="700" text-anchor="start">用户与 Electron 桌面工作台</text>
+<text x="74" y="182" font-size="12" fill="#64748b" font-weight="400" text-anchor="start">apps/desktop: Electron + React + MapLibre GIS 工作台</text>
 <rect x="430" y="130" width="440" height="390" rx="22" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.4" stroke-dasharray="8 6"/>
 <text x="450" y="160" font-size="16" fill="#0f172a" font-weight="700" text-anchor="start">Node/TypeScript Server</text>
 <text x="450" y="182" font-size="12" fill="#64748b" font-weight="400" text-anchor="start">apps/server: Hono HTTP + /ws + 运行时编排</text>
@@ -40,8 +40,8 @@ text { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsof
 <rect x="84" y="185" width="270" height="92" rx="16" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" class="node"/>
 <rect x="98" y="199" width="34" height="34" rx="10" fill="#eff6ff" stroke="#cbd5e1" stroke-width="1.0"/>
 <text x="115" y="222" font-size="15" fill="#0f172a" font-weight="700" text-anchor="middle">UI</text>
-<text x="144" y="213" font-size="14" fill="#111827" font-weight="700" text-anchor="start">AppShell 页面装配</text>
-<text x="144" y="235" font-size="11.5" fill="#4b5563" font-weight="400" text-anchor="start">路由、页面容器、视觉工作台</text>
+<text x="144" y="213" font-size="14" fill="#111827" font-weight="700" text-anchor="start">AppShell 文档装配</text>
+<text x="144" y="235" font-size="11.5" fill="#4b5563" font-weight="400" text-anchor="start">桌面文档、布局容器、视觉工作台</text>
 <text x="144" y="251" font-size="11.5" fill="#4b5563" font-weight="400" text-anchor="start">不直接持有网络请求细节</text>
 <rect x="84" y="300" width="270" height="100" rx="16" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" class="node"/>
 <rect x="98" y="314" width="34" height="34" rx="10" fill="#f0fdfa" stroke="#cbd5e1" stroke-width="1.0"/>
@@ -169,8 +169,8 @@ text { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsof
 <rect x="1194" y="664" width="34" height="34" rx="10" fill="#ecfeff" stroke="#cbd5e1" stroke-width="1.0"/>
 <text x="1211" y="687" font-size="15" fill="#0f172a" font-weight="700" text-anchor="middle">DEV</text>
 <text x="1240" y="678" font-size="14" fill="#111827" font-weight="700" text-anchor="start">开发启动边界</text>
-<text x="1240" y="700" font-size="11.5" fill="#4b5563" font-weight="400" text-anchor="start">PostGIS: Docker</text>
-<text x="1240" y="716" font-size="11.5" fill="#4b5563" font-weight="400" text-anchor="start">Worker/API/Web: 宿主机进程</text>
+<text x="1240" y="700" font-size="11.5" fill="#4b5563" font-weight="400" text-anchor="start">PostGIS: 原生进程</text>
+<text x="1240" y="716" font-size="11.5" fill="#4b5563" font-weight="400" text-anchor="start">Worker/API: 宿主机进程；Desktop: Electron</text>
 <text x="1240" y="732" font-size="11.5" fill="#4b5563" font-weight="400" text-anchor="start">dev.ps1 / dev.sh 编排</text>
 <rect x="84" y="800" width="310" height="84" rx="16" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" class="node"/>
 <rect x="98" y="814" width="34" height="34" rx="10" fill="#ecfeff" stroke="#cbd5e1" stroke-width="1.0"/>
@@ -198,13 +198,13 @@ text { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsof
 <text x="1220" y="866" font-size="11.5" fill="#4b5563" font-weight="400" text-anchor="start">DebugPage 可见 provider 不可用原因</text>
 <line x1="354" y1="230" x2="460" y2="230" stroke="#2563eb" stroke-width="2.2" marker-end="url(#arrow-blue)"/>
 <rect x="374.0" y="207.0" width="66" height="23" rx="11" fill="#ffffff" stroke="#e5e7eb" stroke-width="0.8"/>
-<text x="407.0" y="223.0" font-size="11" fill="#374151" font-weight="600" text-anchor="middle">/ws 命令</text>
+<text x="407.0" y="223.0" font-size="11" fill="#374151" font-weight="600" text-anchor="middle">Main /ws 命令</text>
 <line x1="460" y1="252" x2="354" y2="252" stroke="#9333ea" stroke-width="1.8" stroke-dasharray="5 3" marker-end="url(#arrow-purple)"/>
 <rect x="376.0" y="229.0" width="62" height="23" rx="11" fill="#ffffff" stroke="#e5e7eb" stroke-width="0.8"/>
 <text x="407.0" y="245.0" font-size="11" fill="#374151" font-weight="600" text-anchor="middle">实时推送</text>
 <path d="M 354 350 L 390 350 L 390 230 L 664 230" fill="none" stroke="#16a34a" stroke-width="2.0" marker-end="url(#arrow-green)"/>
 <rect x="410.5" y="257.0" width="98" height="23" rx="11" fill="#ffffff" stroke="#e5e7eb" stroke-width="0.8"/>
-<text x="459.5" y="273.0" font-size="11" fill="#374151" font-weight="600" text-anchor="middle">HTTP 上传/下载</text>
+<text x="459.5" y="273.0" font-size="11" fill="#374151" font-weight="600" text-anchor="middle">Main HTTP 上传/下载</text>
 <path d="M 640 230 L 890 230 L 945 230" fill="none" stroke="#2563eb" stroke-width="2.0" marker-end="url(#arrow-blue)"/>
 <rect x="780.0" y="207.0" width="90" height="23" rx="11" fill="#ffffff" stroke="#e5e7eb" stroke-width="0.8"/>
 <text x="825.0" y="223.0" font-size="11" fill="#374151" font-weight="600" text-anchor="middle">run:start</text>
@@ -256,7 +256,7 @@ text { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsof
 <text x="812.0" y="562.0" font-size="11" fill="#374151" font-weight="600" text-anchor="middle">命令不走 HTTP</text>
 <line x1="1240" y1="750" x2="1018" y2="762" stroke="#ea580c" stroke-width="1.5" marker-end="url(#arrow-orange)"/>
 <rect x="1044.0" y="733.0" width="170" height="23" rx="11" fill="#ffffff" stroke="#e5e7eb" stroke-width="0.8"/>
-<text x="1129.0" y="749.0" font-size="11" fill="#374151" font-weight="600" text-anchor="middle">只有 PostGIS 在 Docker</text>
+<text x="1129.0" y="749.0" font-size="11" fill="#374151" font-weight="600" text-anchor="middle">无需容器运行时</text>
 <path d="M 1195 850 L 1500 850 L 1500 550 L 354 550 L 354 458" fill="none" stroke="#16a34a" stroke-width="2.0" marker-end="url(#arrow-green)"/>
 <rect x="863.6" y="626.6" width="74" height="23" rx="11" fill="#ffffff" stroke="#e5e7eb" stroke-width="0.8"/>
 <text x="900.6" y="642.6" font-size="11" fill="#374151" font-weight="600" text-anchor="middle">前端展示/下载</text>

@@ -130,8 +130,23 @@ async function workspaceRead(_payload: Record<string, unknown>, context: WsComma
 }
 
 async function workspaceBootstrapRead(payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {
-  await workspaceRead(payload, context, auth)
-  await context.dependencies.security.authorization.enforce(auth, 'tool', 'read', { workspaceId: auth.defaultWorkspaceId })
+  const requestedSessionId = optionalString(payload.sessionId)
+  if (requestedSessionId) {
+    const session = context.dependencies.store.getSession(requestedSessionId)
+    await context.dependencies.security.authorization.assertResourceWorkspace(auth, 'session', 'read', {
+      workspaceId: session.workspaceId,
+      createdByUserId: session.createdByUserId,
+      visibility: session.visibility,
+      resourceId: session.id,
+    })
+    await context.dependencies.security.authorization.enforce(auth, 'tool', 'read', {
+      workspaceId: session.workspaceId ?? auth.defaultWorkspaceId,
+    })
+    return
+  }
+  const workspaceId = optionalString(payload.workspaceId) ?? auth.defaultWorkspaceId
+  await context.dependencies.security.authorization.enforce(auth, 'workspace', 'read', { workspaceId })
+  await context.dependencies.security.authorization.enforce(auth, 'tool', 'read', { workspaceId })
 }
 
 function sessionRead(payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {

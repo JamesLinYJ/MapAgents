@@ -15,14 +15,9 @@ function Initialize-GeoForgeDevEnvironment {
     Import-GeoForgeDotEnv (Join-Path $ProjectRoot '.env')
     Set-GeoForgeDefault 'NODE_ENV' 'development'
     Set-GeoForgeDefault 'POSTGIS_PORT' '55432'
-    Set-GeoForgeDefault 'MARTIN_PORT' '3000'
-    Set-GeoForgeDefault 'TITILER_PORT' '8001'
     Set-GeoForgeValue 'API_HOST' '127.0.0.1'
     Set-GeoForgeDefault 'API_PORT' '8000'
     Set-GeoForgeDefault 'WORKER_PORT' '8012'
-    Set-GeoForgeValue 'WEB_DEV_HOST' '127.0.0.1'
-    Set-GeoForgeDefault 'WEB_DEV_PORT' '5173'
-    Set-GeoForgeDefault 'WEB_STATIC_PORT' '4173'
     Set-GeoForgeDefault 'RUNTIME_ROOT' (Join-Path $ProjectRoot 'runtime')
     Set-GeoForgeValue 'RUNTIME_ROOT' (Resolve-GeoForgePath -Path $env:RUNTIME_ROOT -BasePath $ProjectRoot)
     Set-GeoForgeDefault 'GEOFORGE_SUPERVISOR_TOKEN_FILE' (Join-Path $env:RUNTIME_ROOT 'ops\supervisor.token')
@@ -36,16 +31,16 @@ function Initialize-GeoForgeDevEnvironment {
     Set-GeoForgeDefault 'BETTER_AUTH_REQUIRE_EMAIL_VERIFICATION' 'false'
     Set-GeoForgeDefault 'BETTER_AUTH_MIN_PASSWORD_LENGTH' '12'
     Set-GeoForgeDefault 'CSRF_HEADER_NAME' 'x-geoforge-csrf'
+    Set-GeoForgeDefault 'BOOTSTRAP_ADMIN_EMAIL' 'admin@example.com'
+    # 本机演示默认跳过登录表单，但仍建立真实 Better Auth 会话并由服务端授予权限。
+    Set-GeoForgeDefault 'GEOFORGE_DESKTOP_AUTO_AUTH' 'true'
+    Set-GeoForgeDefault 'GEOFORGE_DESKTOP_AUTO_AUTH_EMAIL' $env:BOOTSTRAP_ADMIN_EMAIL
+    Set-GeoForgeDefault 'GEOFORGE_DESKTOP_AUTO_AUTH_NAME' 'GeoForge 本机演示管理员'
     Set-GeoForgeValue 'DATABASE_URL' "postgresql://geo_agent:geo_agent@127.0.0.1:$($env:POSTGIS_PORT)/geo_agent"
     Set-GeoForgeValue 'WORKER_URL' "http://127.0.0.1:$($env:WORKER_PORT)"
-    Set-GeoForgeValue 'MARTIN_INTERNAL_URL' "http://127.0.0.1:$($env:MARTIN_PORT)"
-    Set-GeoForgeValue 'TITILER_INTERNAL_URL' "http://127.0.0.1:$($env:TITILER_PORT)"
-    Set-GeoForgeValue 'API_PROXY_TARGET' "http://127.0.0.1:$($env:API_PORT)"
     Set-GeoForgeValue 'APP_BASE_URL' "http://127.0.0.1:$($env:API_PORT)"
-    Set-GeoForgeValue 'WEB_BASE_URL' "http://127.0.0.1:$($env:WEB_DEV_PORT)"
     Set-GeoForgeValue 'BETTER_AUTH_URL' $env:APP_BASE_URL
-    Set-GeoForgeValue 'VITE_API_BASE_URL' '/'
-    Set-GeoForgeValue 'TRUSTED_ORIGINS' "$($env:WEB_BASE_URL),http://localhost:$($env:WEB_DEV_PORT)"
+    Set-GeoForgeValue 'TRUSTED_ORIGINS' 'geoforge://app,com.geoforge.desktop://auth/callback'
     Set-GeoForgeValue 'GEOFORGE_ROOT' $ProjectRoot
     Set-GeoForgeDefault 'SEED_LAYERS_DIR' (Join-Path $ProjectRoot 'infra\seeds\layers')
     Set-GeoForgeValue 'SEED_LAYERS_DIR' (Resolve-GeoForgePath -Path $env:SEED_LAYERS_DIR -BasePath $ProjectRoot)
@@ -73,7 +68,13 @@ function Import-GeoForgeDotEnv {
 
 function Set-GeoForgeDefault { param([string]$Name, [string]$Value); if (-not [Environment]::GetEnvironmentVariable($Name, 'Process')) { Set-GeoForgeValue $Name $Value } }
 function Set-GeoForgeValue { param([string]$Name, [string]$Value); [Environment]::SetEnvironmentVariable($Name, $Value, 'Process') }
-function Resolve-GeoForgePath { param([string]$Path, [string]$BasePath); if (-not $Path) { throw '路径配置不能为空。' }; [IO.Path]::GetFullPath($Path, $BasePath) }
+function Resolve-GeoForgePath {
+    param([string]$Path, [string]$BasePath)
+    if (-not $Path) { throw '路径配置不能为空。' }
+    if ([IO.Path]::IsPathRooted($Path)) { return [IO.Path]::GetFullPath($Path) }
+    if (-not $BasePath) { throw '相对路径配置缺少基准目录。' }
+    return [IO.Path]::GetFullPath((Join-Path $BasePath $Path))
+}
 function Resolve-GeoForgePython {
     param([string]$ProjectRoot)
     $Configured = [Environment]::GetEnvironmentVariable('WORKER_PYTHON', 'Process')

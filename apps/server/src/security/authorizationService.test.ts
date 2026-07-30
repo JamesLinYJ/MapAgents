@@ -8,8 +8,12 @@
 //   作者:       JamesLinYJ
 // --------------------------------------------------------------------------
 
-import { describe, expect, it } from 'vitest'
-import { actionMatch } from './authorizationService.js'
+import { describe, expect, it, vi } from 'vitest'
+
+import type { Database } from '../db/connection.js'
+import type { AuditStore } from '../store/postgres/auditStore.js'
+import { actionMatch, AuthorizationService } from './authorizationService.js'
+import type { AuthContext } from './types.js'
 
 /**
  * 直接测试生产 actionMatch 函数的逻辑，
@@ -49,5 +53,55 @@ describe('Casbin actionMatch', () => {
   it('rejects superstring matches', () => {
     expect(actionMatch('read', 'reader')).toBe(false)
     expect(actionMatch('create', 'recreate')).toBe(false)
+  })
+})
+
+describe('AuthorizationService audit workspace boundary', () => {
+  it('does not write an untrusted requested workspace into the audit foreign key', async () => {
+    const recordEvent = vi.fn(async () => undefined)
+    const service = new AuthorizationService(
+      {} as Database,
+      { recordEvent } as unknown as AuditStore,
+    )
+
+    await service.audit(
+      {
+        userId: 'user_1',
+        roles: [{ role: 'viewer', workspaceId: 'workspace_owned' }],
+      } as AuthContext,
+      'workspace',
+      'read',
+      { workspaceId: 'workspace_unknown' },
+      'denied',
+    )
+
+    expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId: null,
+      metadata: { requestedWorkspaceId: 'workspace_unknown' },
+    }))
+  })
+
+  it('keeps a workspace foreign key when the actor has a binding to it', async () => {
+    const recordEvent = vi.fn(async () => undefined)
+    const service = new AuthorizationService(
+      {} as Database,
+      { recordEvent } as unknown as AuditStore,
+    )
+
+    await service.audit(
+      {
+        userId: 'user_1',
+        roles: [{ role: 'viewer', workspaceId: 'workspace_owned' }],
+      } as AuthContext,
+      'workspace',
+      'read',
+      { workspaceId: 'workspace_owned' },
+      'denied',
+    )
+
+    expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId: 'workspace_owned',
+      metadata: {},
+    }))
   })
 })

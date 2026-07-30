@@ -47,7 +47,11 @@ Set-Location -LiteralPath $Root
 $Executable = Join-Path $Root 'packages\operations-supervisor\dist\cli.js'
 $TokenFile = [Environment]::GetEnvironmentVariable('GEOFORGE_SUPERVISOR_TOKEN_FILE', 'Process')
 if (-not $TokenFile) { throw '监督服务环境缺少 GEOFORGE_SUPERVISOR_TOKEN_FILE。' }
-$TokenFile = [IO.Path]::GetFullPath($TokenFile, $Root)
+$TokenFile = if ([IO.Path]::IsPathRooted($TokenFile)) {
+    [IO.Path]::GetFullPath($TokenFile)
+} else {
+    [IO.Path]::GetFullPath((Join-Path $Root $TokenFile))
+}
 if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) { throw 'TypeScript 监督器构建产物不存在；请先完成生产构建。' }
 if (-not (Test-Path -LiteralPath $TokenFile -PathType Leaf)) { throw '监督令牌文件不存在。' }
 $Node = (Get-Command node.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source

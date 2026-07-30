@@ -62,7 +62,7 @@ describe('OperationsIpcServer', () => {
         interactive: false,
       })
       expect((await client.status()).services.map(service => service.serviceId))
-        .toEqual(['infra', 'worker', 'api', 'web'])
+        .toEqual(['infra', 'worker', 'api'])
       const operation = await client.shutdown()
       expect(operation).toMatchObject({ action: 'shutdown', outcome: 'succeeded' })
       await vi.waitFor(() => expect(shutdownRequested).toHaveBeenCalledOnce())

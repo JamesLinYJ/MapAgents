@@ -17,17 +17,21 @@ import { fileURLToPath } from 'node:url'
 
 import {
   operationsProfileSchema,
+  operationsLogLevelSchema,
+  operationsLogStreamSchema,
   operationsServiceIdSchema,
+  type OperationsLogEntry,
+  type OperationsLogFilter,
   type OperationsOperationResult,
   type OperationsProfile,
   type OperationsServiceId,
   type OperationsSnapshot,
 } from '@geo-agent-platform/shared-types/operations'
 import { config as loadDotEnv } from 'dotenv'
-import pino from 'pino'
 import lockfile from 'proper-lockfile'
 
 import { OperationsClient } from './client.js'
+import { resolveOperationsCliPathInput } from './cliRuntimePaths.js'
 import { secretValues } from './environment.js'
 import { OperationsIpcServer } from './ipcServer.js'
 import { OperationsLogBuffer } from './logBuffer.js'
@@ -38,6 +42,7 @@ import {
   type OperationsPaths,
 } from './paths.js'
 import { OperationsSupervisor } from './supervisor.js'
+import { createSupervisorLogger } from './systemLogger.js'
 
 const parsedArgs = parseArgs({
   allowPositionals: true,
@@ -51,6 +56,10 @@ const parsedArgs = parseArgs({
     json: { type: 'boolean', default: false },
     tail: { type: 'string', default: '80' },
     follow: { type: 'boolean', default: false },
+    level: { type: 'string' },
+    stream: { type: 'string' },
+    search: { type: 'string' },
+    supervisor: { type: 'boolean', default: false },
     'keep-infra': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   },
@@ -61,17 +70,27 @@ async function main(): Promise<void> {
     printHelp()
     return
   }
-  const projectRoot = path.resolve(parsedArgs.values.root ?? defaultProjectRoot())
+  const projectRoot = path.resolve(
+    parsedArgs.values.root
+      ?? process.env.GEOFORGE_ROOT
+      ?? defaultProjectRoot(),
+  )
   loadDotEnv({ path: path.join(projectRoot, '.env'), quiet: true })
   const profile = resolveProfile(parsedArgs.values.profile)
   if (profile === 'development') applyDevelopmentDefaults(projectRoot)
-  const paths = await resolveOperationsPaths({
-    projectRoot,
+  const paths = await resolveOperationsPaths(resolveOperationsCliPathInput({
+    arguments: {
+      ...(parsedArgs.values.root ? { root: parsedArgs.values.root } : {}),
+      ...(parsedArgs.values['runtime-root'] ? { runtimeRoot: parsedArgs.values['runtime-root'] } : {}),
+      ...(parsedArgs.values['token-file'] ? { tokenFile: parsedArgs.values['token-file'] } : {}),
+      ...(parsedArgs.values['root-secret-file']
+        ? { rootSecretFile: parsedArgs.values['root-secret-file'] }
+        : {}),
+    },
+    environment: process.env,
+    defaultProjectRoot: projectRoot,
     profile,
-    ...(parsedArgs.values['runtime-root'] ? { runtimeRoot: parsedArgs.values['runtime-root'] } : {}),
-    ...(parsedArgs.values['token-file'] ? { tokenFile: parsedArgs.values['token-file'] } : {}),
-    ...(parsedArgs.values['root-secret-file'] ? { rootSecretFile: parsedArgs.values['root-secret-file'] } : {}),
-  })
+  }))
   const command = parsedArgs.positionals[0] ?? 'status'
   if (command === 'daemon') {
     await runDaemon(paths, profile)
@@ -95,7 +114,8 @@ async function runDaemon(paths: OperationsPaths, profile: OperationsProfile): Pr
   }
   const token = await ensureSecretFile(paths.tokenFile, profile === 'development')
   if (profile === 'production') await assertProductionSecretPermissions(paths.tokenFile)
-  const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' })
+  const systemLogger = createSupervisorLogger(paths)
+  const logger = systemLogger.logger
   const logBuffer = new OperationsLogBuffer(secretValues({
     ...process.env,
     GEOFORGE_SUPERVISOR_TOKEN: token,
@@ -135,6 +155,7 @@ async function runDaemon(paths: OperationsPaths, profile: OperationsProfile): Pr
     await ipc.close().catch(error => logger.error({ error }, '关闭监督 IPC 失败'))
     await supervisor.close().catch(error => logger.error({ error }, '关闭受监督服务失败'))
     await releaseLock?.().catch(() => undefined)
+    await systemLogger.close().catch(() => undefined)
   }
 }
 
@@ -147,7 +168,19 @@ async function runClientCommand(paths: OperationsPaths, command: string): Promis
       return
     }
     if (command === 'logs') {
-      await showLogs(client, parseTarget(parsedArgs.positionals[1]), parseTail(parsedArgs.values.tail), Boolean(parsedArgs.values.follow))
+      await showLogs(
+        client,
+        parseTarget(parsedArgs.positionals[1]),
+        parseTail(parsedArgs.values.tail),
+        Boolean(parsedArgs.values.follow),
+        {
+          levels: parseCsv(parsedArgs.values.level, operationsLogLevelSchema),
+          streams: parseCsv(parsedArgs.values.stream, operationsLogStreamSchema),
+          search: parsedArgs.values.search?.trim() ?? '',
+          includeSupervisor: Boolean(parsedArgs.values.supervisor),
+          afterSequence: null,
+        },
+      )
       return
     }
     if (command === 'shutdown') {
@@ -176,17 +209,26 @@ async function showLogs(
   target: OperationsServiceId | 'all',
   tail: number,
   follow: boolean,
+  filters: Omit<OperationsLogFilter, 'services'>,
 ): Promise<void> {
   const services: OperationsServiceId[] = target === 'all'
-    ? ['infra', 'worker', 'api', 'web']
+    ? ['infra', 'worker', 'api']
     : [target]
-  for (const entry of await client.logs(services, tail)) printLog(entry)
+  for (const entry of await client.logs(services, tail, filters)) printLog(entry)
   if (!follow) return
   const allowed = new Set(services)
   const dispose = client.onEvent(event => {
-    if (event.event === 'log' && event.entry.serviceId && allowed.has(event.entry.serviceId)) printLog(event.entry)
+    if (event.event !== 'log') return
+    const serviceAllowed = event.entry.serviceId
+      ? allowed.has(event.entry.serviceId)
+      : filters.includeSupervisor
+    if (serviceAllowed) printLog(event.entry)
   })
-  await client.subscribe({ metrics: false, logs: true })
+  await client.subscribe({
+    metrics: false,
+    logs: true,
+    logFilter: { services, ...filters },
+  })
   await new Promise<void>(resolve => process.once('SIGINT', resolve))
   dispose()
 }
@@ -213,8 +255,13 @@ function printOperation(result: OperationsOperationResult, json: boolean): void 
   else console.log(`${result.outcome === 'succeeded' ? '成功' : result.outcome === 'partial' ? '部分成功' : '失败'}：${result.message}（operationId: ${result.operationId}）`)
 }
 
-function printLog(entry: { createdAt: string; serviceId: OperationsServiceId | null; stream: string; message: string }): void {
-  console.log(`${entry.createdAt} [${entry.serviceId ?? 'supervisor'}] [${entry.stream}] ${entry.message}`)
+function printLog(entry: OperationsLogEntry): void {
+  const source = [
+    entry.serviceId ?? 'supervisor',
+    entry.component,
+    entry.processId ? `PID ${entry.processId}` : null,
+  ].filter(Boolean).join('/')
+  console.log(`${entry.createdAt} [${entry.level}] [${source}] [${entry.stream}] ${entry.message}`)
 }
 
 function parseTarget(value: string | undefined): OperationsServiceId | 'all' {
@@ -228,6 +275,14 @@ function parseTail(value: string | undefined): number {
   return tail
 }
 
+function parseCsv<T extends string>(
+  value: string | undefined,
+  schema: { parse(input: unknown): T },
+): T[] {
+  if (!value?.trim()) return []
+  return [...new Set(value.split(',').map(item => schema.parse(item.trim())))]
+}
+
 function resolveProfile(value: string | undefined): OperationsProfile {
   return operationsProfileSchema.parse(value ?? (process.env.NODE_ENV === 'production' ? 'production' : 'development'))
 }
@@ -237,24 +292,17 @@ function applyDevelopmentDefaults(projectRoot: string): void {
     NODE_ENV: 'development',
     RUNTIME_ROOT: path.join(projectRoot, 'runtime'),
     POSTGIS_PORT: '55432',
-    MARTIN_PORT: '3000',
-    TITILER_PORT: '8001',
     WORKER_PORT: '8012',
     API_PORT: '8000',
-    WEB_DEV_PORT: '5173',
-    WEB_STATIC_PORT: '4173',
     WORKER_PYTHON: process.platform === 'win32' ? 'python.exe' : 'python3',
   }
   for (const [name, value] of Object.entries(defaults)) process.env[name] ??= value
   process.env.GEOFORGE_ROOT = projectRoot
   process.env.DATABASE_URL ??= `postgresql://geo_agent:geo_agent@127.0.0.1:${process.env.POSTGIS_PORT}/geo_agent`
   process.env.WORKER_URL ??= `http://127.0.0.1:${process.env.WORKER_PORT}`
-  process.env.MARTIN_INTERNAL_URL ??= `http://127.0.0.1:${process.env.MARTIN_PORT}`
-  process.env.TITILER_INTERNAL_URL ??= `http://127.0.0.1:${process.env.TITILER_PORT}`
   process.env.APP_BASE_URL ??= `http://127.0.0.1:${process.env.API_PORT}`
-  process.env.WEB_BASE_URL ??= `http://127.0.0.1:${process.env.WEB_DEV_PORT}`
   process.env.BETTER_AUTH_URL ??= process.env.APP_BASE_URL
-  process.env.TRUSTED_ORIGINS ??= `${process.env.WEB_BASE_URL},http://localhost:${process.env.WEB_DEV_PORT}`
+  process.env.TRUSTED_ORIGINS ??= 'geoforge://app,com.geoforge.desktop://auth/callback'
 }
 
 function defaultProjectRoot(): string {
@@ -294,7 +342,7 @@ function formatBytes(value: number | null): string {
 function printHelp(): void {
   console.log(`GeoForge TypeScript 进程监督器
 
-用法：geoforge-supervisor <daemon|start|stop|restart|status|logs|shutdown> [all|infra|worker|api|web]
+用法：geoforge-supervisor <daemon|start|stop|restart|status|logs|shutdown> [all|infra|worker|api]
 
 选项：
   --profile development|production
@@ -303,6 +351,10 @@ function printHelp(): void {
   --json                 输出机器可读结果
   --tail <数量>          日志尾部行数
   --follow               持续跟随日志
+  --level <级别,...>     按 debug/info/warn/error/unknown 筛选
+  --stream <流,...>      按 stdout/stderr/supervisor 筛选
+  --search <文字>        搜索服务、组件和日志正文
+  --supervisor           同时包含 Supervisor 自身日志
   --keep-infra           stop all 时保留基础设施`)
 }
 

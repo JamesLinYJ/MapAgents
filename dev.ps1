@@ -15,27 +15,37 @@
 #     作者: OpenAI Codex
 #     说明: 开发入口在启动 API 或 Agent CLI 前构建跨端对话展示包。
 #
-#   维护记录 (2026-07-27):
+#   维护记录 (2026-07-29):
 #     作者: OpenAI Codex
-#     说明: 运行中的 Web 开发服务改用原位增量构建，避免清空 dist 触发模块加载失败。
+#     说明: 桌面入口启动三个后台服务后运行 Electron；浏览器工作台不再受监督。
+#
+#   维护记录 (2026-07-29):
+#     作者: OpenAI Codex
+#     说明: 支持一键桌面启动器显式传入已验证的 Node 24 可执行文件。
 # --------------------------------------------------------------------------
 
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('default', 'start', 'stop', 'restart', 'status', 'logs', 'console', 'agent', 'shutdown')]
+    [ValidateSet('default', 'start', 'stop', 'restart', 'status', 'logs', 'console', 'agent', 'desktop', 'shutdown')]
     [string]$Action = 'default',
 
     [Parameter(Position = 1)]
-    [ValidateSet('all', 'infra', 'worker', 'api', 'web')]
+    [ValidateSet('all', 'infra', 'worker', 'api')]
     [string]$Service = 'all',
 
     [ValidateRange(0, 10000)]
     [int]$Tail = 80,
 
-    [switch]$OpenBrowser,
     [switch]$KeepPostgis,
     [switch]$FollowLogs,
+    [ValidateSet('debug', 'info', 'warn', 'error', 'unknown')]
+    [string]$LogLevel,
+    [ValidateSet('stdout', 'stderr', 'supervisor')]
+    [string]$LogStream,
+    [ValidateLength(0, 200)]
+    [string]$LogSearch,
+    [switch]$IncludeSupervisor,
     [switch]$Json,
     [switch]$Check,
 
@@ -55,6 +65,23 @@ $ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location -LiteralPath $Root
+$ConfiguredNode = [Environment]::GetEnvironmentVariable('GEOFORGE_NODE_EXECUTABLE', 'Process')
+if ($ConfiguredNode) {
+    $Node = if ([IO.Path]::IsPathRooted($ConfiguredNode)) {
+        [IO.Path]::GetFullPath($ConfiguredNode)
+    } else {
+        [IO.Path]::GetFullPath((Join-Path $Root $ConfiguredNode))
+    }
+    if (-not (Test-Path -LiteralPath $Node -PathType Leaf)) {
+        throw 'GEOFORGE_NODE_EXECUTABLE 指向的 Node 可执行文件不存在。'
+    }
+} else {
+    $Node = (Get-Command node.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+}
+$NodeDirectory = Split-Path -Parent $Node
+$env:Path = "$NodeDirectory$([IO.Path]::PathSeparator)$($env:Path)"
+& $Node (Join-Path $Root 'scripts\require-node24.mjs')
+if ($LASTEXITCODE -ne 0) { throw 'GeoForge 开发入口要求先切换到 Node 24 LTS。' }
 . (Join-Path $Root 'scripts\dev-environment.ps1')
 Initialize-GeoForgeDevEnvironment -ProjectRoot $Root
 
@@ -62,7 +89,6 @@ $SupervisorCli = Join-Path $Root 'packages\operations-supervisor\dist\cli.js'
 $OpsRoot = Join-Path $env:RUNTIME_ROOT 'ops'
 $LaunchOut = Join-Path $OpsRoot 'supervisor-launch.stdout.log'
 $LaunchError = Join-Path $OpsRoot 'supervisor-launch.stderr.log'
-$Node = (Get-Command node.exe -ErrorAction Stop).Source
 
 function Invoke-GeoForgeBuild {
     npm run build:dev --workspace '@geo-agent-platform/shared-types'
@@ -94,6 +120,7 @@ function Protect-NativeArgument {
 }
 
 function Start-Supervisor {
+    param([switch]$BackgroundOnly)
     if (Test-Supervisor) { return }
     New-Item -ItemType Directory -Force -Path $OpsRoot | Out-Null
     $Arguments = @(
@@ -109,6 +136,7 @@ function Start-Supervisor {
         -RedirectStandardError $LaunchError `
         -WindowStyle Hidden `
         -PassThru
+    if ($BackgroundOnly) { return }
     $Deadline = (Get-Date).AddSeconds(20)
     do {
         if (Test-Supervisor) { return }
@@ -155,7 +183,15 @@ function Open-AgentConsole {
     if ($LASTEXITCODE -ne 0) { throw "GeoForge 本机 Agent 异常退出（exit $LASTEXITCODE）。" }
 }
 
-if ($Action -in @('default', 'start', 'restart', 'console', 'agent')) { Invoke-GeoForgeBuild }
+function Open-Desktop {
+    # Electron Renderer 与后台服务生命周期解耦。Supervisor 在旁路启动，
+    # Renderer 立即挂载并通过非模态状态提示自动恢复连接。
+    if (-not (Test-Supervisor)) { Start-Supervisor -BackgroundOnly }
+    & npm run dev --workspace '@geo-agent-platform/desktop'
+    if ($LASTEXITCODE -ne 0) { throw "GeoForge 桌面应用异常退出（exit $LASTEXITCODE）。" }
+}
+
+if ($Action -in @('default', 'start', 'restart', 'console', 'agent', 'desktop')) { Invoke-GeoForgeBuild }
 
 switch ($Action) {
     'default' {
@@ -192,18 +228,19 @@ switch ($Action) {
         if (-not (Test-Supervisor)) { throw 'GeoForge 监督器未运行。' }
         $Arguments = @('logs', $Service, '--tail', [string]$Tail)
         if ($FollowLogs) { $Arguments += '--follow' }
+        if ($LogLevel) { $Arguments += @('--level', $LogLevel) }
+        if ($LogStream) { $Arguments += @('--stream', $LogStream) }
+        if ($LogSearch) { $Arguments += @('--search', $LogSearch) }
+        if ($IncludeSupervisor) { $Arguments += '--supervisor' }
         Invoke-Supervisor @Arguments
     }
     'console' { Open-LocalConsole }
     'agent' { Open-AgentConsole }
+    'desktop' { Open-Desktop }
     'shutdown' {
         if (-not (Test-Supervisor)) { Write-Host 'GeoForge 监督器未运行。' -ForegroundColor DarkGray; break }
         $Arguments = @('shutdown')
         if ($Json) { $Arguments += '--json' }
         Invoke-Supervisor @Arguments
     }
-}
-
-if ($OpenBrowser -and $Action -in @('default', 'start', 'restart')) {
-    Start-Process "http://127.0.0.1:$($env:WEB_DEV_PORT)"
 }

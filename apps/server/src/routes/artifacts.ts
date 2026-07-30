@@ -22,6 +22,8 @@ export function artifactRoutes(artifacts: ArtifactReader, runtimeRoot: string, s
     const artifact = await artifacts.getArtifact(c.req.param('artifactId'))
     if (!artifact) return c.json({ detail: '产物不存在' }, 404)
     await authorizeArtifact(security, c, artifact, 'read')
+    c.header('Cache-Control', 'private, no-store')
+    c.header('Pragma', 'no-cache')
     return c.json({
       artifactId: artifact.artifactId,
       artifactType: artifact.artifactType,
@@ -36,12 +38,21 @@ export function artifactRoutes(artifacts: ArtifactReader, runtimeRoot: string, s
     const artifactId = c.req.param('artifactId')
     const artifact = await artifacts.getArtifact(artifactId)
     if (!artifact) return new Response(JSON.stringify({ detail: '产物不存在' }), {
-      status: 404, headers: { 'Content-Type': 'application/json' },
+      status: 404,
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'private, no-store',
+        Pragma: 'no-cache',
+      },
     })
     await authorizeArtifact(security, c, artifact, 'read')
     const filePath = resolveRuntimePath(runtimeRoot, artifact.relativePath)
     const bytes = await readFile(filePath)
-    const headers: Record<string, string> = { 'Content-Type': contentTypeFor(artifact.artifactType) }
+    const headers: Record<string, string> = {
+      'Content-Type': contentTypeFor(artifact.artifactType),
+      'Cache-Control': 'private, no-store',
+      Pragma: 'no-cache',
+    }
     if (download) headers['Content-Disposition'] = `attachment; filename="${encodeURIComponent(artifact.name || artifactId)}"`
     return new Response(bytes, { headers })
   }

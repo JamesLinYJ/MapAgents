@@ -121,7 +121,6 @@ export const platformSessions = pgTable('platform_sessions', {
   createdByUserId: text('created_by_user_id').references(() => platformUsers.userId, { onDelete: 'set null' }),
   visibility: text('visibility').notNull().default('workspace'),
   status: text('status').notNull().default('active'),
-  shareToken: text('share_token').notNull(),
   latestThreadId: text('latest_thread_id'),
   latestRunId: text('latest_run_id'),
   latestUploadedLayerKey: text('latest_uploaded_layer_key'),
@@ -129,7 +128,6 @@ export const platformSessions = pgTable('platform_sessions', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
-  shareTokenIdx: uniqueIndex('idx_platform_sessions_share_token_unique').on(table.shareToken),
   workspaceUpdatedIdx: index('idx_platform_sessions_workspace_updated').on(table.workspaceId, table.updatedAt),
   ownerUpdatedIdx: index('idx_platform_sessions_owner_updated').on(table.createdByUserId, table.updatedAt),
 }))

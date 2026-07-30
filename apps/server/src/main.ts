@@ -25,11 +25,11 @@ import { errorLogPayload, logger, logHttpRequestSummary, traceId, withLogContext
 import { LocalAgentTracing } from './observability/agentTracing.js'
 import { getEnv } from './framework/env.js'
 import { artifactRoutes } from './routes/artifacts.js'
+import { desktopExportRoutes } from './routes/desktopExports.js'
 import { fileRoutes } from './routes/files.js'
 import { layerRoutes } from './routes/layers.js'
 import { mapRoutes } from './routes/map.js'
 import { meteorologyRoutes } from './routes/meteorology.js'
-import { shareRoutes } from './routes/share.js'
 import { createWsHandler } from './ws/handler.js'
 import { AuthorizationError } from './security/authorizationService.js'
 import { requireHttpAuth, securityRoutes } from './security/routes.js'
@@ -39,6 +39,7 @@ import {
 } from './security/httpRateLimit.js'
 import { installLifecycleManager } from './lifecycle.js'
 import { createAppContainer } from './app/container.js'
+import { platformNotFoundHandler } from './app/httpNotFound.js'
 
 const env = getEnv()
 // SDK tracing 使用进程级 provider。这里只安装本地结构化处理器，不注册
@@ -48,10 +49,14 @@ agentTracing.install()
 const container = await createAppContainer({ env, projectRoot, agentTracing })
 
 const app = new Hono()
+// 匿名分享已永久退役。该边界必须先于全局 CORS 注册，确保预检请求也稳定
+// 返回 404，而不是被 CORS 中间件提前处理成伪可用的 204。
+const retiredPublicShareRoot = ['/api', 'share'].join('/')
+app.all(retiredPublicShareRoot, platformNotFoundHandler)
+app.all(`${retiredPublicShareRoot}/*`, platformNotFoundHandler)
 const trustedOrigins = new Set([
   ...container.security.auth.trustedOrigins(),
   env.APP_BASE_URL.replace(/\/+$/u, ''),
-  ...(env.WEB_BASE_URL ? [env.WEB_BASE_URL.replace(/\/+$/u, '')] : []),
 ])
 let isShuttingDown = false
 app.use('*', cors({
@@ -97,20 +102,23 @@ app.get('/health', async c => {
 app.get('/metrics', async () => {
   return metricsResponse()
 })
-app.use('/api/share/*', apiRateLimitMiddleware(container.security))
-app.route('/', shareRoutes(container.store))
 app.on(['GET', 'POST'], '/api/auth/*', authRateLimitMiddleware, c => container.security.auth.handler(c.req.raw))
 app.use('/api/v1/*', apiRateLimitMiddleware(container.security), (c, next) => requireHttpAuth(container.security, c, next))
 app.route('/', securityRoutes(container.security))
 app.route('/', fileRoutes(container.runtimeRoot, container.store, container.security, env))
 app.route('/', layerRoutes(container.managedLayers, container.store, container.security, env))
 app.route('/', artifactRoutes(container.artifactRepository, container.runtimeRoot, container.security))
+app.route('/', desktopExportRoutes({
+  artifacts: container.artifactRepository,
+  audit: container.auditStore,
+  mapStore: container.mapStore,
+  security: container.security,
+  store: container.store,
+}))
 app.route('/', mapRoutes({
   mapStore: container.mapStore,
   tileGateway: container.mapTileGateway,
   security: container.security,
-  publicShareStore: container.store,
-  runtimeRoot: container.runtimeRoot,
 }))
 app.route('/', meteorologyRoutes(container.runtimeRoot, container.store, container.security, env))
 app.onError((error, c) => {
@@ -119,7 +127,7 @@ app.onError((error, c) => {
   logger.error({ error: errorLogPayload(error), path: c.req.path, method: c.req.method }, 'request failed')
   return c.json({ detail: '服务处理失败。请查看服务端日志。' }, 500)
 })
-app.notFound(c => c.json({ detail: 'Not found' }, 404))
+app.notFound(platformNotFoundHandler)
 
 const server = createServer(getRequestListener(app.fetch))
 const wsServer = createWsHandler(server, {

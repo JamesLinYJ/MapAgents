@@ -10,8 +10,8 @@
 
 // 模块职责
 //
-// 负责构造单次 run 的 sandbox manifest，并根据运行时配置选择 SDK 原生 sandbox
-// backend。这里是沙箱后端选择的唯一边界，运行时编排不直接感知 Docker/本地实现细节。
+// 负责构造单次 run 的 sandbox manifest，并选择 SDK 原生 Unix 本地沙箱。
+// Windows 不具备 SDK 官方支持的原生本地后端，因此默认禁用，不能伪装成可用能力。
 
 import {
   dir,
@@ -24,10 +24,7 @@ import {
 } from '@openai/agents/sandbox'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
-import {
-  DockerSandboxClient,
-  UnixLocalSandboxClient,
-} from '@openai/agents/sandbox/local'
+import { UnixLocalSandboxClient } from '@openai/agents/sandbox/local'
 import type { RuntimeSandboxConfig } from '../schemas/types.js'
 
 export type SandboxClientFactory = (config: RuntimeSandboxConfig) => SandboxClient
@@ -152,13 +149,13 @@ export async function prepareRunArtifactDirectory(runtimeRoot: string, runId: st
 export function createConfiguredSandboxClient(
   config: RuntimeSandboxConfig,
 ): SandboxClient {
-  if (config.backend === 'docker') {
-    return new DockerSandboxClient({ image: config.dockerImage })
-  }
   if (config.backend === 'unix_local') {
+    if (process.platform === 'win32') {
+      throw new Error('Windows 不支持 OpenAI Agents SDK 的 Unix 本地沙箱；当前运行必须禁用沙箱能力。')
+    }
     return new UnixLocalSandboxClient()
   }
-  throw new Error(`不支持的 sandbox backend：${config.backend}`)
+  throw new Error('当前运行已禁用 SDK 沙箱，不能创建沙箱客户端。')
 }
 
 export function buildSandboxRunConfig(
@@ -166,6 +163,9 @@ export function buildSandboxRunConfig(
   config: RuntimeSandboxConfig,
   factory: SandboxClientFactory = createConfiguredSandboxClient,
 ): SandboxRunConfig {
+  if (config.backend === 'disabled') {
+    throw new Error('当前运行已禁用 SDK 沙箱，不能构造沙箱运行配置。')
+  }
   const client = factory(config)
   if (client.backendId !== config.backend) {
     throw new Error(`Sandbox client backend '${client.backendId}' 与运行配置 '${config.backend}' 不匹配`)

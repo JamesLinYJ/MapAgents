@@ -32,7 +32,7 @@ export interface RuntimeAssembly {
   context: AgentsExecutionContext
   coordinator: ToolExecutionCoordinator
   adapter: ModelAdapter
-  sandbox: SandboxRunConfig
+  sandbox?: SandboxRunConfig
   sdkIntegration: RuntimeSdkIntegration
   modelInput: RuntimeModelInputController
   configDigest: string

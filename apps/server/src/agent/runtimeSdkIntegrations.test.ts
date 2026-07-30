@@ -78,7 +78,7 @@ describe('runtime SDK integrations', () => {
         '# Geo Skill',
       ].join('\n'))
 
-      const config = defaultRuntimeConfig()
+      const config = defaultRuntimeConfig({ sandbox: { backend: 'unix_local' } })
       config.sdk.skills = {
         enabled: true,
         skillsPath: '.agents',
@@ -160,7 +160,7 @@ describe('runtime SDK integrations', () => {
   it('rejects enabled SDK skills when no SKILL.md exists', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geoforge-sdk-skills-empty-'))
     try {
-      const config = defaultRuntimeConfig()
+      const config = defaultRuntimeConfig({ sandbox: { backend: 'unix_local' } })
       config.sdk.skills = {
         enabled: true,
         skillsPath: '.agents',
@@ -181,7 +181,7 @@ describe('runtime SDK integrations', () => {
       await mkdir(skillDir, { recursive: true })
       await writeFile(path.join(skillDir, 'sKilL.md'), '# Wrong case')
 
-      const config = defaultRuntimeConfig()
+      const config = defaultRuntimeConfig({ sandbox: { backend: 'unix_local' } })
       config.sdk.skills = {
         enabled: true,
         skillsPath: '.agents',

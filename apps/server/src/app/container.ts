@@ -20,7 +20,9 @@ import type { Env } from '../framework/env.js'
 import { discoverAndLoad } from '../framework/loader.js'
 import { ToolRegistry } from '../framework/registry.js'
 import { ManagedLayerService } from '../gis/managedLayers/managedLayerService.js'
+import { LocalRasterTileRenderer } from '../map/localRasterTileRenderer.js'
 import { MapTileGateway } from '../map/mapTileGateway.js'
+import { PostgisVectorTileSource } from '../map/postgisVectorTileSource.js'
 import { seedLayersFromDirectory } from '../gis/seedLayers.js'
 import { ModelAdapterRegistry } from '../model/registry.js'
 import { ensureModelResultCacheTable, ModelCompletionService, ModelResultCacheStore } from '../model/modelResultCache.js'
@@ -96,7 +98,13 @@ export async function createAppContainer(input: {
   const managedLayers = new ManagedLayerService(db)
   const artifactRepository = new ArtifactPublicationRepository(db)
   const mapStore = new MapStore(db, store.mapSceneBus)
-  const mapTileGateway = new MapTileGateway(env)
+  const mapTileGateway = new MapTileGateway(
+    new PostgisVectorTileSource(db.pool, env.MAP_TILE_TIMEOUT_MS),
+    new LocalRasterTileRenderer({
+      runtimeRoot,
+      timeoutMs: env.MAP_TILE_TIMEOUT_MS,
+    }),
+  )
   const auditStore = new AuditStore(db)
   const userRepository = new PlatformUserRepository(db)
   const workspaceRepository = new WorkspaceRepository(db)
@@ -126,7 +134,6 @@ export async function createAppContainer(input: {
   const runtimeConfigDefaults = defaultRuntimeConfig({
     sandbox: {
       backend: env.SANDBOX_BACKEND,
-      dockerImage: env.SANDBOX_DOCKER_IMAGE,
     },
   })
   let startedJobQueue: JobQueueService | null = null
@@ -237,7 +244,7 @@ export async function createAppContainer(input: {
     defaultRuntimeConfig: runtimeConfigDefaults,
     shutdown: async () => {
       await jobQueue.stop()
-      await Promise.all([runTasks.drain(), backgroundTasks.drain()])
+      await Promise.all([runTasks.drain(), backgroundTasks.drain(), mapTileGateway.close()])
       await agentTracing?.shutdown()
     },
     checkReadiness: () => checkReadiness({ db, managedLayers, instanceLock, env }),
@@ -249,6 +256,9 @@ export async function createAppContainer(input: {
         logger.error({ error: errorLogPayload(cleanupError) }, 'job queue cleanup after startup failure failed')
       })
     }
+    await mapTileGateway.close().catch(cleanupError => {
+      logger.error({ error: errorLogPayload(cleanupError) }, 'map tile renderer cleanup after startup failure failed')
+    })
     await store.closeConversationStore().catch(cleanupError => {
       logger.error({ error: errorLogPayload(cleanupError) }, 'payload store cleanup after startup failure failed')
     })

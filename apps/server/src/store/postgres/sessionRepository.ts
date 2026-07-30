@@ -23,7 +23,6 @@ export class PostgresSessionRepository implements SessionRepository {
       createdByUserId: session.createdByUserId,
       visibility: session.visibility,
       status: session.status,
-      shareToken: session.shareToken,
       latestThreadId: session.latestThreadId,
       latestRunId: session.latestRunId,
       latestUploadedLayerKey: session.latestUploadedLayerKey,

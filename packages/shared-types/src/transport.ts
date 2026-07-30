@@ -3,16 +3,12 @@ import { z } from 'zod'
 import {
   conversationItemSchema,
   runEventSchema,
-  type ConversationItem,
-  type RunEvent,
 } from './core.js'
 import {
+  compactionRecordSchema,
   threadManifestSchema,
+  threadMemoryDocumentSchema,
   transcriptEntrySchema,
-  type CompactionRecord,
-  type ThreadManifest,
-  type ThreadMemoryDocument,
-  type TranscriptEntry,
 } from './conversation.js'
 import {
   analysisRunSchema,
@@ -20,9 +16,8 @@ import {
   authMeSchema,
   runSummarySchema,
   sessionRecordSchema,
-  type AgentThreadRecord,
-  type AnalysisRun,
 } from './platform.js'
+import { mapSceneSchema } from './map.js'
 import { modelProviderDescriptorSchema, toolDescriptorSchema } from './resources.js'
 
 export const runSummaryPageSchema = z.object({
@@ -62,64 +57,39 @@ export type ThreadHistoryPage = z.infer<typeof threadHistoryPageSchema>
 export type ThreadDetailSnapshot = z.infer<typeof threadDetailSnapshotSchema>
 export type RunSnapshot = z.infer<typeof runSnapshotSchema>
 
-export const publicShareThreadSchema = agentThreadRecordSchema.pick({
-  id: true,
-  title: true,
-  status: true,
-  createdAt: true,
-  updatedAt: true,
-  latestUserQuery: true,
-  latestAssistantSummary: true,
-  historyPreview: true,
-  runCount: true,
-})
-
-export const publicShareSnapshotSchema = z.object({
-  shareId: z.string(),
-  session: z.object({
-    createdAt: z.string(),
-    status: z.string(),
-  }),
-  threads: z.array(publicShareThreadSchema),
-  selectedThread: publicShareThreadSchema.nullable(),
-  history: z.object({
-    entries: z.array(transcriptEntrySchema),
-    nextCursor: z.string().nullable(),
-  }).nullable(),
-})
-
-export type PublicShareThread = z.infer<typeof publicShareThreadSchema>
-export type PublicShareSnapshot = z.infer<typeof publicShareSnapshotSchema>
-
 // --- WebSocket control plane ---
 
-export type WsControlCommand =
-  | 'workspace:bootstrap'
-  | 'session:get-default' | 'session:get'
-  | 'thread:list' | 'thread:get' | 'thread:create' | 'thread:update' | 'thread:delete'
-  | 'thread:history' | 'thread:fork' | 'thread:compact' | 'thread:context'
-  | 'thread:subscribe' | 'thread:unsubscribe'
-  | 'thread:memory:get' | 'thread:memory:update' | 'thread:memory:rebuild'
-  | 'thread:trash:list' | 'thread:trash:restore' | 'thread:trash:purge'
-  | 'run:list' | 'run:start' | 'run:get' | 'run:cancel' | 'run:resume' | 'run:steer' | 'run:respond-decision' | 'run:subscribe' | 'run:unsubscribe'
-  | 'tool:list' | 'tool:run'
-  | 'tool-catalog:list' | 'tool-catalog:upsert' | 'tool-catalog:delete'
-  | 'runtime-config:get' | 'runtime-config:update'
-  | 'provider:list' | 'system:get'
-  | 'usage:summary'
-  | 'speech:authorization'
-  | 'memory:list' | 'memory:read' | 'memory:write' | 'memory:delete' | 'memory:search'
-  | 'memory:extract' | 'memory:dream'
-  | 'memory:session:get' | 'memory:session:rebuild'
-  | 'memory:instructions:list'
-  | 'file:list' | 'file:delete'
-  | 'layer:list' | 'layer:update' | 'layer:delete'
-  | 'map-scene:update'
-  | 'automation:list' | 'automation:validate' | 'automation:create' | 'automation:update'
-  | 'automation:publish' | 'automation:disable' | 'automation:history'
-  | 'automation:start' | 'automation:cancel' | 'automation:run:get' | 'automation:respond-approval'
-  | 'scheduled-task:list' | 'scheduled-task:create' | 'scheduled-task:update' | 'scheduled-task:delete'
-  | 'background-task:list' | 'background-task:promote' | 'background-task:cancel'
+export const wsControlCommands = [
+  'workspace:bootstrap',
+  'session:get-default', 'session:get',
+  'thread:list', 'thread:get', 'thread:create', 'thread:update', 'thread:delete',
+  'thread:history', 'thread:fork', 'thread:compact', 'thread:context',
+  'thread:subscribe', 'thread:unsubscribe',
+  'thread:memory:get', 'thread:memory:update', 'thread:memory:rebuild',
+  'thread:trash:list', 'thread:trash:restore', 'thread:trash:purge',
+  'run:list', 'run:start', 'run:get', 'run:cancel', 'run:resume', 'run:steer', 'run:respond-decision', 'run:subscribe', 'run:unsubscribe',
+  'tool:list', 'tool:run',
+  'tool-catalog:list', 'tool-catalog:upsert', 'tool-catalog:delete',
+  'runtime-config:get', 'runtime-config:update',
+  'provider:list', 'system:get',
+  'usage:summary',
+  'speech:authorization',
+  'memory:list', 'memory:read', 'memory:write', 'memory:delete', 'memory:search',
+  'memory:extract', 'memory:dream',
+  'memory:session:get', 'memory:session:rebuild',
+  'memory:instructions:list',
+  'file:list', 'file:delete',
+  'layer:list', 'layer:update', 'layer:delete',
+  'map-scene:update',
+  'automation:list', 'automation:validate', 'automation:create', 'automation:update',
+  'automation:publish', 'automation:disable', 'automation:history',
+  'automation:start', 'automation:cancel', 'automation:run:get', 'automation:respond-approval',
+  'scheduled-task:list', 'scheduled-task:create', 'scheduled-task:update', 'scheduled-task:delete',
+  'background-task:list', 'background-task:promote', 'background-task:cancel',
+] as const
+
+export const wsControlCommandSchema = z.enum(wsControlCommands)
+export type WsControlCommand = z.infer<typeof wsControlCommandSchema>
 
 export interface WsControlRequest {
   type: WsControlCommand
@@ -136,12 +106,31 @@ export type WsControlResponse<T = unknown> = {
   payload: { ok: true; data: T } | { ok: false; error: { code: string; message: string } }
 }
 
-export type WsRunPush =
-  | { type: 'run.item'; id: null; payload: { data: ConversationItem } }
-  | { type: 'run.event'; id: null; payload: { data: RunEvent } }
-  | { type: 'run.snapshot'; id: null; payload: { data: { run: AnalysisRun; items: ConversationItem[]; events: RunEvent[] } } }
-  | { type: 'thread.entry'; id: null; payload: { data: TranscriptEntry } }
-  | { type: 'thread.updated'; id: null; payload: { data: { thread: AgentThreadRecord; manifest: ThreadManifest } } }
-  | { type: 'thread.compacted'; id: null; payload: { data: CompactionRecord } }
-  | { type: 'thread.memory.updated'; id: null; payload: { data: ThreadMemoryDocument } }
-  | { type: 'map.scene.updated'; id: null; payload: { data: import('./map.js').MapScene } }
+const wsPushEnvelope = <const TType extends string, TData extends z.ZodType>(
+  type: TType,
+  data: TData,
+) => z.object({
+  type: z.literal(type),
+  id: z.null(),
+  payload: z.object({ data }).strict(),
+}).strict()
+
+export const wsRunPushSchema = z.discriminatedUnion('type', [
+  wsPushEnvelope('run.item', conversationItemSchema),
+  wsPushEnvelope('run.event', runEventSchema),
+  wsPushEnvelope('run.snapshot', z.object({
+    run: analysisRunSchema,
+    items: z.array(conversationItemSchema),
+    events: z.array(runEventSchema),
+  }).strict()),
+  wsPushEnvelope('thread.entry', transcriptEntrySchema),
+  wsPushEnvelope('thread.updated', z.object({
+    thread: agentThreadRecordSchema,
+    manifest: threadManifestSchema,
+  }).strict()),
+  wsPushEnvelope('thread.compacted', compactionRecordSchema),
+  wsPushEnvelope('thread.memory.updated', threadMemoryDocumentSchema),
+  wsPushEnvelope('map.scene.updated', mapSceneSchema),
+])
+
+export type WsRunPush = z.infer<typeof wsRunPushSchema>

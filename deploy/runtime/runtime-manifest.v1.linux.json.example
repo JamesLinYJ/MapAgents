@@ -1,0 +1,9 @@
+{
+  "kind": "geoforge.desktop-runtime",
+  "schemaVersion": 1,
+  "projectRoot": "/opt/geoforge/releases/0.1.0",
+  "runtimeRoot": "/var/lib/geoforge/runtime",
+  "apiBaseUrl": "http://127.0.0.1:8000",
+  "supervisorTokenFile": "/var/lib/geoforge/runtime/secrets/supervisor.token",
+  "allowedEnvironmentOverrides": []
+}

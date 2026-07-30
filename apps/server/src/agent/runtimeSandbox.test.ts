@@ -36,7 +36,7 @@ import {
 describe('runtimeSandbox', () => {
   it('passes a client and manifest to Runner without creating a session early', () => {
     const create = vi.fn()
-    const client: SandboxClient = { backendId: 'docker', create }
+    const client: SandboxClient = { backendId: 'unix_local', create }
     const manifest = buildSandboxManifest(
       { runId: 'run_1', sessionId: 'session_1' },
       'thread_1',
@@ -44,7 +44,7 @@ describe('runtimeSandbox', () => {
 
     const runConfig = buildSandboxRunConfig(
       manifest,
-      { backend: 'docker', dockerImage: 'node:22-bookworm-slim' },
+      { backend: 'unix_local' },
       () => client,
     )
 
@@ -60,9 +60,24 @@ describe('runtimeSandbox', () => {
 
     expect(() => buildSandboxRunConfig(
       manifest,
-      { backend: 'docker', dockerImage: 'node:22-bookworm-slim' },
-      () => ({ backendId: 'unix_local' }),
-    )).toThrow("backend 'unix_local' 与运行配置 'docker' 不匹配")
+      { backend: 'unix_local' },
+      () => ({ backendId: 'other_native' }),
+    )).toThrow("backend 'other_native' 与运行配置 'unix_local' 不匹配")
+  })
+
+  it('does not create a fake sandbox when the runtime explicitly disables it', () => {
+    const manifest = buildSandboxManifest(
+      { runId: 'run_disabled', sessionId: 'session_disabled' },
+      'thread_disabled',
+    )
+    const factory = vi.fn()
+
+    expect(() => buildSandboxRunConfig(
+      manifest,
+      { backend: 'disabled' },
+      factory,
+    )).toThrow('当前运行已禁用 SDK 沙箱')
+    expect(factory).not.toHaveBeenCalled()
   })
 
   it('mounts authorized historical Artifacts at their canonical read-only paths', () => {
@@ -95,7 +110,7 @@ describe('runtimeSandbox', () => {
   })
 
   it('lets the SDK preserve, serialize, resume and finally clean an owned session', async () => {
-    const { client, telemetry } = createInstrumentedTestSandboxClient('docker')
+    const { client, telemetry } = createInstrumentedTestSandboxClient('unix_local')
     const manifest = buildSandboxManifest(
       { runId: 'run_lifecycle', sessionId: 'session_lifecycle' },
       'thread_lifecycle',
@@ -136,7 +151,7 @@ describe('runtimeSandbox', () => {
     }))
     const serialized = interrupted.state.toString()
     expect(JSON.parse(serialized)).toMatchObject({
-      sandbox: { backendId: 'docker' },
+      sandbox: { backendId: 'unix_local' },
     })
 
     const restored = await RunState.fromString(agent, serialized)
@@ -160,8 +175,8 @@ describe('runtimeSandbox', () => {
   })
 
   it('lets the SDK reject a checkpoint owned by another sandbox backend', async () => {
-    const docker = createInstrumentedTestSandboxClient('docker')
-    const unixLocal = createInstrumentedTestSandboxClient('unix_local')
+    const firstNative = createInstrumentedTestSandboxClient('unix_local')
+    const incompatibleNative = createInstrumentedTestSandboxClient('other_native')
     const manifest = buildSandboxManifest(
       { runId: 'run_backend_mismatch', sessionId: 'session_backend_mismatch' },
       'thread_backend_mismatch',
@@ -184,17 +199,17 @@ describe('runtimeSandbox', () => {
     })
     const interrupted = await new Runner({ model, tracingDisabled: true }).run(
       agent,
-      '创建 Docker sandbox 检查点。',
-      { sandbox: { client: docker.client, manifest } },
+      '创建 Unix 本地 sandbox 检查点。',
+      { sandbox: { client: firstNative.client, manifest } },
     )
     const restored = await RunState.fromString(agent, interrupted.state.toString())
 
     await expect(new Runner({ model, tracingDisabled: true }).run(
       agent,
       restored,
-      { sandbox: { client: unixLocal.client, manifest } },
+      { sandbox: { client: incompatibleNative.client, manifest } },
     )).rejects.toThrow(/backend/iu)
-    expect(unixLocal.telemetry.resumeCount).toBe(0)
+    expect(incompatibleNative.telemetry.resumeCount).toBe(0)
   })
 })
 

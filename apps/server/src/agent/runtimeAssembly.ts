@@ -9,7 +9,9 @@
 // --------------------------------------------------------------------------
 
 import {
+  Agent,
   Runner,
+  type AgentOptions,
   type AgentInputItem,
   type Tool,
 } from '@openai/agents'
@@ -202,7 +204,10 @@ export class RuntimeAssemblyFactory {
     const valueState = createThreadValueState(store, threadId, options.runId)
     const executionGate = new RunToolConcurrencyGate()
     let coordinator: ToolExecutionCoordinator
-    const coreSandboxCapabilities = planAwareSandboxCapabilities(executionGate)
+    const sandboxEnabled = options.runtimeConfig.sandbox.backend !== 'disabled'
+    const coreSandboxCapabilities = sandboxEnabled
+      ? planAwareSandboxCapabilities(executionGate)
+      : []
     const context: AgentsExecutionContext = {
       runId: options.runId,
       isExecutionEnabled: () => coordinator.isExecutionEnabled(),
@@ -276,21 +281,24 @@ export class RuntimeAssemblyFactory {
     const sandboxIntegration = buildRuntimeSdkSandboxIntegration(options.runtimeConfig, {
       executionGate,
     })
-    const artifactDirectory = await prepareRunArtifactDirectory(store.runtimeRoot, options.runId)
-    const sandboxManifest = buildSandboxManifest(
-      options,
-      threadId,
-      sandboxIntegration.pathGrants,
-      {
-        artifactDirectory,
-        artifactMounts: visibleArtifactResources.flatMap(toSandboxArtifactMount),
-      },
-    )
-    const sandbox = buildSandboxRunConfig(
-      sandboxManifest,
-      options.runtimeConfig.sandbox,
-      runtimeOptions.createSandboxClient,
-    )
+    const sandboxManifest = sandboxEnabled
+      ? buildSandboxManifest(
+          options,
+          threadId,
+          sandboxIntegration.pathGrants,
+          {
+            artifactDirectory: await prepareRunArtifactDirectory(store.runtimeRoot, options.runId),
+            artifactMounts: visibleArtifactResources.flatMap(toSandboxArtifactMount),
+          },
+        )
+      : null
+    const sandbox = sandboxManifest
+      ? buildSandboxRunConfig(
+          sandboxManifest,
+          options.runtimeConfig.sandbox,
+          runtimeOptions.createSandboxClient,
+        )
+      : undefined
     const reservedToolNames = new Set([
       ...toolRegistry.list().map(tool => tool.name),
       ...subAgentTools.map(tool => tool.name),
@@ -354,7 +362,7 @@ export class RuntimeAssemblyFactory {
       ...subAgentTools,
       ...sdkIntegration.tools,
     ]
-    const agent = new SandboxAgent<AgentsExecutionContext, typeof supervisorDeliverySchema>({
+    const agentOptions: AgentOptions<AgentsExecutionContext, typeof supervisorDeliverySchema> = {
       name: options.runtimeConfig.supervisor.name,
       instructions: () => buildSupervisorInstructions(),
       model,
@@ -375,12 +383,17 @@ export class RuntimeAssemblyFactory {
             && state.agentWorkflow === null
         },
       })],
+    }
+    const agent: Agent<AgentsExecutionContext, typeof supervisorDeliverySchema> = sandboxManifest
+      ? new SandboxAgent<AgentsExecutionContext, typeof supervisorDeliverySchema>({
+        ...agentOptions,
       defaultManifest: sandboxManifest,
       capabilities: [
         ...coreSandboxCapabilities,
         ...sandboxIntegration.capabilities,
       ],
-    })
+      })
+      : new Agent<AgentsExecutionContext, typeof supervisorDeliverySchema>(agentOptions)
     const unavailableSdkToolCallIds = new Set<string>()
     const runner = new Runner({
       model,
@@ -574,14 +587,14 @@ export class RuntimeAssemblyFactory {
       history,
       projectSessionItems,
     )
-    assembly = {
+    const completedAssembly: RuntimeAssembly = {
       agent,
       runner,
       session,
       context,
       coordinator,
       adapter,
-      sandbox,
+      ...(sandbox ? { sandbox } : {}),
       sdkIntegration,
       modelInput,
       configDigest: runtimeConfigDigest(options.runtimeConfig),
@@ -599,7 +612,8 @@ export class RuntimeAssemblyFactory {
       flushPendingSessionAssistantMessage,
       discardPendingSessionAssistantMessage,
     }
-    return assembly
+    assembly = completedAssembly
+    return completedAssembly
   }
 }
 

@@ -23,6 +23,9 @@ describe('map database baseline contract', () => {
     expect(functionBody).toBeDefined()
     expect(functionBody).toContain("ST_AsMVT(tile_features, 'features', 4096, 'geometry')")
     expect(functionBody).not.toContain("ST_AsMVT(tile_features, 'features', 4096, 'geometry', 'feature_id')")
+    expect(functionBody).toContain('margin => (64.0 / 4096)')
+    expect(functionBody).toContain('feature.geometry && query_bounds.geometry')
+    expect(functionBody).not.toContain('ST_Intersects(ST_Transform(feature.geometry, 3857)')
   })
 
   it('persists label configuration with each scene layer', async () => {

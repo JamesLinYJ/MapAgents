@@ -2,6 +2,16 @@ node_modules/
 dist/
 coverage/
 .vite/
+apps/desktop/out/
+apps/desktop/release/
+apps/desktop/.squirrel-vendor/
+apps/desktop/runtime/
+.npm-cache*/
+.tmp-electron-playwright*/
+.tmp_weekly_*/
+playwright-report/
+test-results/
+artifacts/**/*.log
 .DS_Store
 *.docx
 __pycache__/

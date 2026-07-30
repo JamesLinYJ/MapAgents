@@ -106,7 +106,6 @@ export const sessionRecordSchema = z.object({
   visibility: resourceVisibilitySchema,
   createdAt: z.string(),
   status: z.string().default('active'),
-  shareToken: z.string(),
   latestThreadId: z.string().nullable().default(null),
   latestRunId: z.string().nullable().default(null),
   latestUploadedLayerKey: z.string().nullable().default(null),

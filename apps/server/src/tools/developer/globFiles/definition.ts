@@ -25,7 +25,7 @@ export const globFilesTool: ToolDef = {
   jsonSchema: {
     type: 'object',
     properties: {
-      pattern: { type: 'string', title: 'Glob 模式', description: '例如 **/*.ts、apps/web/**/*.tsx。' },
+      pattern: { type: 'string', title: 'Glob 模式', description: '例如 **/*.ts、apps/desktop/**/*.tsx。' },
       path: { type: 'string', title: '搜索根目录', description: '可选目录；省略时使用首个允许根。' },
       limit: { type: 'integer', title: '结果上限', description: '最大返回数量。', minimum: 1, maximum: 1000 },
     },

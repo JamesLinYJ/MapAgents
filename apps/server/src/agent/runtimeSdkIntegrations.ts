@@ -99,6 +99,9 @@ export function buildRuntimeSdkSandboxIntegration(
   if (!skillConfig.enabled) {
     return { capabilities: [], pathGrants: [], activeSkills: [] }
   }
+  if (config.sandbox.backend === 'disabled') {
+    throw new Error('SDK Skill 依赖沙箱工作区；当前平台已禁用沙箱，不能启用 Skill。')
+  }
   const skillDirectories = discoverSkillDirectories(skillConfig, options.baseDir ?? process.cwd())
   if (skillDirectories.length === 0) {
     throw new Error('已启用 SDK Skill，但没有发现可用的 SKILL.md。')

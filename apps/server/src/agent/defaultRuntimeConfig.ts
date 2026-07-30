@@ -5,8 +5,7 @@ interface DefaultRuntimeConfigOptions {
 }
 
 const DEFAULT_SANDBOX_CONFIG: RuntimeSandboxConfig = {
-  backend: 'docker',
-  dockerImage: 'node:22-bookworm-slim',
+  backend: 'disabled',
 }
 
 export function defaultRuntimeConfig(options: DefaultRuntimeConfigOptions = {}): AgentRuntimeConfig {

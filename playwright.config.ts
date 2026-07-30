@@ -1,40 +1,37 @@
 // +-------------------------------------------------------------------------
 //
-//   地理智能平台 - Playwright 浏览器回归配置
+//   地理智能平台 - Playwright Electron 回归配置
 //
 //   文件:       playwright.config.ts
 //
 //   日期:       2026年06月15日
 //   作者:       OpenAI Codex
+//
+//   维护记录 (2026-07-29):
+//     作者: OpenAI Codex
+//     说明: 浏览器回归收敛为真实 Electron Main/Preload/Renderer 验收。
 // --------------------------------------------------------------------------
 
-import { defineConfig, devices } from '@playwright/test'
-import { resolve } from 'node:path'
-
-const executablePath = process.env.PLAYWRIGHT_EXECUTABLE_PATH
-const authStatePath = resolve('output/playwright/auth-state.json')
+import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: './tests/e2e',
-  globalSetup: './tests/e2e/globalSetup.ts',
   fullyParallel: false,
-  timeout: 45_000,
-  expect: { timeout: 10_000 },
+  workers: 1,
+  timeout: 90_000,
+  expect: { timeout: 15_000 },
   retries: process.env.CI ? 1 : 0,
   reporter: [['list'], ['html', { outputFolder: 'output/playwright/report', open: 'never' }]],
   outputDir: 'output/playwright/results',
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:5173',
-    storageState: authStatePath,
-    launchOptions: executablePath ? { executablePath } : undefined,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
-    video: 'retain-on-failure',
+    video: 'off',
   },
   projects: [
     {
-      name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      name: 'electron-desktop',
+      testMatch: '**/*.electron.spec.ts',
     },
   ],
 })

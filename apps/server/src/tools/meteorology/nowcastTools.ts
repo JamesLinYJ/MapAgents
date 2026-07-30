@@ -44,12 +44,12 @@ const AUTOMATION_TOOL_OPTIONS: Pick<ToolDef, 'executionSurfaces'> = {
 export function createNowcastMeteorologyTools(deps: MeteorologyToolDeps): ToolDef[] {
   return [
     tool('create_nowcast_sequence', '创建短时临近预报序列', '从当前线程气象文件集合创建短时临近预报序列引用；仅用于短时临近预报问答、连续时次分析和区域累计面雨量排行表，不作为短时强降水风险区划图 dataset_ref', {
-      file_collection_ref: refParameter('文件集合引用'),
-      variable_ref: refParameter('变量引用'),
+      file_collection_ref: refParameter('文件集合引用', ['meteorological_file_collection']),
+      variable_ref: refParameter('变量引用', ['meteorological_variable']),
       horizon_minutes: { ...numberParameter('预报时效（分钟）'), type: 'integer', minimum: 5, maximum: 360 },
     }, withMeteorologyDeps(deps, createNowcastSequence), ['file_collection_ref'], AUTOMATION_TOOL_OPTIONS),
     tool('inspect_nowcast_sequence', '检查短时临近预报序列', '检查短时临近预报序列每个时次的数据集', {
-      sequence_ref: refParameter('短时临近预报序列引用'),
+      sequence_ref: refParameter('短时临近预报序列引用', ['nowcast_sequence']),
     }, withMeteorologyDeps(deps, inspectNowcastSequence), ['sequence_ref'], AUTOMATION_TOOL_OPTIONS),
     tool('prepare_nowcast_scope', '准备短时临近预报范围', '根据问题和已有边界/坐标引用准备区划或地点范围', {
       question: textParameter('短时临近预报（短临）问题'),
@@ -58,19 +58,19 @@ export function createNowcastMeteorologyTools(deps: MeteorologyToolDeps): ToolDe
       district_name_field: textParameter('区划名称字段'),
     }, prepareNowcastScope, ['question'], AUTOMATION_TOOL_OPTIONS),
     tool('meteorological_precipitation_nowcast', '分析短时临近预报（短临）降水', '按时次和区划或地点范围计算降水统计事实', {
-      sequence_ref: refParameter('短时临近预报序列引用'),
-      variable_ref: refParameter('变量引用'),
-      scope_ref: refParameter('区划或地点范围引用'),
+      sequence_ref: refParameter('短时临近预报序列引用', ['nowcast_sequence']),
+      variable_ref: refParameter('变量引用', ['meteorological_variable']),
+      scope_ref: refParameter('区划或地点范围引用', ['nowcast_area', 'nowcast_coordinate', 'feature_collection', 'layer', 'place_candidate']),
     }, withMeteorologyDeps(deps, analyzeNowcast), ['sequence_ref'], AUTOMATION_TOOL_OPTIONS),
     tool('answer_nowcast_question', '回答短时临近预报（短临）问题', '根据短时临近预报（短临）分析事实回答明确问题并生成代表时次地图', {
-      nowcast_analysis_ref: refParameter('短时临近预报（短临）分析引用'),
+      nowcast_analysis_ref: refParameter('短时临近预报（短临）分析引用', ['nowcast_analysis']),
       question: textParameter('问题'),
     }, withMeteorologyDeps(deps, answerNowcast), ['nowcast_analysis_ref', 'question'], AUTOMATION_TOOL_OPTIONS),
     tool('generate_nowcast_forecast_text', '生成短时临近预报（短临）预报文本', '保存基于短时临近预报（短临）分析事实生成并校验的模型文本', {
-      nowcast_analysis_ref: refParameter('短时临近预报（短临）分析引用'),
+      nowcast_analysis_ref: refParameter('短时临近预报（短临）分析引用', ['nowcast_analysis']),
     }, withMeteorologyDeps(deps, generateNowcastText), ['nowcast_analysis_ref'], AUTOMATION_TOOL_OPTIONS),
     tool('render_nowcast_raster', '渲染短时临近预报（短临）栅格', '生成短时临近预报候选时次 COG 地图与 PNG 预览', {
-      nowcast_map_candidate_ref: refParameter('短时临近预报（短临）地图候选引用'),
+      nowcast_map_candidate_ref: refParameter('短时临近预报（短临）地图候选引用', ['nowcast_map_candidate']),
     }, withMeteorologyDeps(deps, renderNowcastRaster), ['nowcast_map_candidate_ref'], AUTOMATION_TOOL_OPTIONS),
   ]
 }

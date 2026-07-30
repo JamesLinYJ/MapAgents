@@ -63,7 +63,7 @@ Linux/macOS：
 /resume  /cancel  /tools  /agents  /exit
 ```
 
-`Ctrl+C` 在运行中取消 run，有文本时清空输入，空闲时连续按两次才分离。分离不会停止 API、Worker、Web 或监督器。
+`Ctrl+C` 在运行中取消 run，有文本时清空输入，空闲时连续按两次才分离。分离不会停止 API、Worker、Electron 桌面端或监督器。
 
 审批默认选中“拒绝”。选择批准后必须再次确认，连接中断时写操作不会自动重放。
 
@@ -100,7 +100,7 @@ apps/server/src/operations/agent/
   cli/           # 参数、一次性输出与进程入口
   ui/            # Ink 中文界面和 ConversationItem 呈现
 packages/conversation-presentation/
-  src/           # Web Chat 与 CLI 共用的消息分类、工具配对和公开展示投影
+  src/           # Desktop Chat 与 CLI 共用的消息分类、工具配对和公开展示投影
 ```
 
-主 API 的 Agent SDK Runner 仍位于 `apps/server/src/agent/`。本机 CLI 不导入 `@openai/agents`，不创建应用容器，也不争抢数据库单实例锁。Web 与 CLI 共用业务展示投影，但保留 DOM Markdown 与终端 Markdown 两个最终渲染器。
+主 API 的 Agent SDK Runner 仍位于 `apps/server/src/agent/`。本机 CLI 不导入 `@openai/agents`，不创建应用容器，也不争抢数据库单实例锁。Desktop Chat 与 CLI 共用业务展示投影，但保留 DOM Markdown 与终端 Markdown 两个最终渲染器。

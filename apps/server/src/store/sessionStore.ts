@@ -9,7 +9,7 @@
 // --------------------------------------------------------------------------
 
 import type { SessionRecord } from '../schemas/types.js'
-import { makeId, makeShareToken, nowUtc } from '../utils/ids.js'
+import { makeId, nowUtc } from '../utils/ids.js'
 import type { ConversationProjectionIndex } from './conversationProjectionIndex.js'
 import type { SessionRepository } from './postgres/conversationPersistencePorts.js'
 
@@ -63,15 +63,6 @@ export class SessionStore {
     return this.index.getSession(sessionId)
   }
 
-  getByShareToken(shareToken: string): SessionRecord | null {
-    const normalized = shareToken.trim()
-    if (!normalized) return null
-    for (const session of this.values()) {
-      if (session.shareToken === normalized) return session
-    }
-    return null
-  }
-
   async update(sessionId: string, fields: Partial<SessionRecord>): Promise<SessionRecord> {
     const next = { ...this.get(sessionId), ...fields }
     await this.persist(next)
@@ -92,7 +83,6 @@ export class SessionStore {
       id: sessionId,
       createdAt: nowUtc(),
       status: 'active',
-      shareToken: makeShareToken(),
       workspaceId: owner?.workspaceId ?? null,
       createdByUserId: owner?.userId ?? null,
       visibility: 'workspace',

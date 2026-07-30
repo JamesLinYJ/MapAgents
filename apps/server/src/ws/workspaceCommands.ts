@@ -17,6 +17,7 @@ import type { WsCommandRegistry } from './commandRegistry.js'
 
 const workspaceBootstrapSchema = z.object({
   sessionId: z.string().min(1).nullable().optional(),
+  workspaceId: z.string().min(1).nullable().optional(),
 }).passthrough()
 
 export function registerWorkspaceCommands(registry: WsCommandRegistry): void {
@@ -32,6 +33,7 @@ export function registerWorkspaceCommands(registry: WsCommandRegistry): void {
         auth,
         context.dependencies.security,
         payload.sessionId ?? null,
+        payload.workspaceId ?? null,
       )
       return {
         session,
@@ -49,11 +51,18 @@ async function resolveBootstrapSession(
   auth: AuthContext,
   security: SecurityServices,
   requestedSessionId: string | null,
+  requestedWorkspaceId: string | null,
 ) {
   if (!requestedSessionId || requestedSessionId === PlatformPersistenceFacade.DEFAULT_SESSION_ID) {
-    return store.getOrCreateUserDefaultSession({ workspaceId: auth.defaultWorkspaceId, userId: auth.userId })
+    return store.getOrCreateUserDefaultSession({
+      workspaceId: requestedWorkspaceId ?? auth.defaultWorkspaceId,
+      userId: auth.userId,
+    })
   }
   const session = store.getSession(requestedSessionId)
+  if (requestedWorkspaceId && session.workspaceId !== requestedWorkspaceId) {
+    throw new Error('请求的工作区与会话归属不一致。')
+  }
   await security.authorization.assertResourceWorkspace(auth, 'session', 'read', {
     workspaceId: session.workspaceId,
     createdByUserId: session.createdByUserId,

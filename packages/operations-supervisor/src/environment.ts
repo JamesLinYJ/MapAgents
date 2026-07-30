@@ -13,20 +13,23 @@ import type { OperationsServiceId } from '@geo-agent-platform/shared-types/opera
 const COMMON_NAMES = new Set([
   'PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'ComSpec', 'COMSPEC', 'WINDIR',
   'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'PROGRAMDATA',
-  'SHELL', 'TERM', 'COLORTERM', 'NO_COLOR', 'FORCE_COLOR', 'NODE_OPTIONS', 'NODE_ENV',
+  'ProgramFiles', 'PROGRAMFILES', 'ProgramW6432', 'PROGRAMW6432',
+  'SHELL', 'TERM', 'COLORTERM', 'NO_COLOR', 'FORCE_COLOR', 'NODE_ENV',
   'GEOFORGE_ROOT', 'RUNTIME_ROOT', 'PYTHONIOENCODING', 'PYTHONUTF8',
 ])
 
 const PREFIXES: Record<OperationsServiceId, readonly string[]> = {
-  infra: ['POSTGRES_', 'POSTGIS_', 'MARTIN_', 'TITILER_', 'COMPOSE_', 'DOCKER_', 'RUNTIME_'],
+  infra: ['DATABASE_', 'POSTGRES_', 'POSTGIS_', 'RUNTIME_'],
   worker: ['WORKER_', 'PYTHON', 'GDAL_', 'PROJ_', 'RUNTIME_', 'POSTGIS_', 'DATA_'],
   api: [
-    'API_', 'APP_', 'WEB_', 'WORKER_', 'DATABASE_', 'POSTGRES_', 'POSTGIS_', 'MARTIN_',
-    'TITILER_', 'BETTER_AUTH_', 'CSRF_', 'TRUSTED_', 'OPENAI_', 'DEEPSEEK_', 'MODEL_',
-    'GATEWAY_', 'AMAP_', 'OPEN_METEO_', 'ENABLED_', 'DEVELOPER_', 'SEED_', 'SCHEDULED_', 'RUNTIME_',
+    'API_', 'APP_', 'WORKER_', 'DATABASE_', 'POSTGRES_', 'POSTGIS_',
+    'BETTER_AUTH_', 'BOOTSTRAP_', 'CSRF_', 'TRUSTED_',
+    'OPENAI_', 'DEEPSEEK_', 'ANTHROPIC_', 'GEMINI_', 'OLLAMA_', 'MODEL_', 'DEFAULT_MODEL_',
+    'GATEWAY_', 'AMAP_', 'OPEN_METEO_', 'VALHALLA_', 'ROUTING_', 'TIANDITU_',
+    'ENABLED_', 'DEVELOPER_', 'SEED_', 'SCHEDULED_', 'SANDBOX_', 'RUNTIME_',
+    'MAX_', 'MAP_', 'USAGE_', 'AZURE_SPEECH_', 'GEOFORGE_MEMORY_', 'RIPGREP_', 'RG_',
     'OTEL_', 'LOG_',
   ],
-  web: ['VITE_', 'WEB_DEV_', 'WEB_STATIC_', 'API_PROXY_', 'NODE_ENV'],
 }
 
 const FORBIDDEN_PREFIXES = [

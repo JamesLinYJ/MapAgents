@@ -1,7 +1,7 @@
 <service>
   <id>GeoForgeSupervisor</id>
   <name>GeoForge Supervisor</name>
-  <description>Supervises GeoForge web, API, worker and infrastructure through the local TypeScript control plane.</description>
+  <description>Supervises GeoForge API, worker and native PostgreSQL/PostGIS infrastructure through the local TypeScript control plane.</description>
   <executable>@@PWSH_EXECUTABLE@@</executable>
   <arguments>-NoProfile -NonInteractive -File "@@GEOFORGE_ROOT@@\scripts\run-geoforge-windows-service.ps1" -Component Supervisor -EnvironmentFile "@@SERVICE_ENV_FILE@@"</arguments>
   <workingdirectory>@@GEOFORGE_ROOT@@</workingdirectory>

@@ -104,7 +104,8 @@ export function ensureToolSchemas(tool: {
 export function parametersFromJsonSchema(schema: Record<string, unknown>): ToolParameterSchema {
   const result = z.fromJSONSchema(schema)
   if (!(result instanceof z.ZodObject)) throw new Error('工具 parameters 顶层必须是 object')
-  return schema.additionalProperties === true ? result.passthrough() : result.strict()
+  const annotated = preserveJsonSchemaDescriptions(result, schema)
+  return schema.additionalProperties === true ? annotated.passthrough() : annotated.strict()
 }
 
 export function parametersForAgentsSdk(schema: Record<string, unknown>): ToolParameterSchema {
@@ -276,6 +277,30 @@ function enrichSchema(value: unknown): unknown {
 function valueRefKinds(schema: Record<string, unknown>): string[] {
   if (!Array.isArray(schema['x-value-ref-kinds'])) return []
   return schema['x-value-ref-kinds'].map(String).filter(Boolean)
+}
+
+// Zod 的 JSON Schema 导入器负责结构与校验，但不会在所有版本中保留字段级
+// description。Agents SDK 随后再输出 JSON Schema，因此这里显式保留标准注解，
+// 防止模型丢失 valueRef kind 等参数约束。
+function preserveJsonSchemaDescriptions(
+  object: z.ZodObject,
+  jsonSchema: Record<string, unknown>,
+): z.ZodObject {
+  if (!isRecord(jsonSchema.properties)) return object
+  const replacements: Record<string, z.ZodType> = {}
+  for (const [key, rawProperty] of Object.entries(jsonSchema.properties)) {
+    const field = object.shape[key]
+    if (!field || !isRecord(rawProperty)) continue
+    let annotated: z.ZodType = field
+    if (typeof rawProperty.description === 'string' && rawProperty.description.trim()) {
+      annotated = annotated.describe(rawProperty.description.trim())
+    }
+    if (annotated instanceof z.ZodObject) {
+      annotated = preserveJsonSchemaDescriptions(annotated, rawProperty)
+    }
+    replacements[key] = annotated
+  }
+  return object.safeExtend(replacements)
 }
 
 function schemaAllowsType(schema: Record<string, unknown>, expected: string): boolean {

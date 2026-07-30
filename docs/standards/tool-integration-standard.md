@@ -143,7 +143,7 @@ Python worker 必须：
 
 ```bash
 npm test
-npm run lint:web
+npm run lint:desktop
 npm run build
 pytest -q
 npm run test:e2e

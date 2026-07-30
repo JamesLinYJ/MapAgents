@@ -12,7 +12,8 @@
     "./resources": { "types": "./dist/resources.d.ts", "import": "./dist/resources.js" },
     "./transport": { "types": "./dist/transport.d.ts", "import": "./dist/transport.js" },
     "./worker": { "types": "./dist/worker.d.ts", "import": "./dist/worker.js" },
-    "./operations": { "types": "./dist/operations.d.ts", "import": "./dist/operations.js" }
+    "./operations": { "types": "./dist/operations.d.ts", "import": "./dist/operations.js" },
+    "./desktop": { "types": "./dist/desktop.d.ts", "import": "./dist/desktop.js" }
   },
   "types": "./dist/index.d.ts",
   "scripts": {

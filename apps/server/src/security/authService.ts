@@ -9,6 +9,7 @@
 // --------------------------------------------------------------------------
 
 import { betterAuth } from 'better-auth'
+import { electron } from '@better-auth/electron'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
 import { admin } from 'better-auth/plugins'
 import { createHmac } from 'node:crypto'
@@ -89,7 +90,12 @@ function createBetterAuthRuntime(db: Database, env: Env, trustedOrigins: string[
         expiresIn: 60 * 60 * 12,
         updateAge: 60 * 60,
       },
-      plugins: [admin()],
+      plugins: [
+        admin(),
+        electron({
+          clientID: 'geoforge-desktop',
+        }),
+      ],
     })
 }
 
@@ -440,17 +446,18 @@ export class BetterAuthService {
 
   isTrustedOrigin(origin?: string | null): boolean {
     if (!origin) return false
-    return this.trustedOrigins().has(origin.replace(/\/+$/u, ''))
+    return this.trustedOrigins().has(normalizeTrustedOrigin(origin))
   }
 
   trustedOrigins(): Set<string> {
     const origins = [
       ...this.env.TRUSTED_ORIGINS.split(','),
       this.env.APP_BASE_URL,
-      this.env.WEB_BASE_URL ?? '',
       this.env.BETTER_AUTH_URL,
+      'geoforge://app',
+      'com.geoforge.desktop:/',
     ]
-    return new Set(origins.map(item => item.trim().replace(/\/+$/u, '')).filter(Boolean))
+    return new Set(origins.map(normalizeTrustedOrigin).filter(Boolean))
   }
 
   toAuthMe(auth: AuthContext): AuthMe {
@@ -571,6 +578,12 @@ function normalizeDateString(value: string | Date | null | undefined): string | 
   if (!value) return null
   const date = value instanceof Date ? value : new Date(value)
   return Number.isNaN(date.getTime()) ? null : date.toISOString()
+}
+
+function normalizeTrustedOrigin(value: string): string {
+  const trimmed = value.trim()
+  if (/^[a-z][a-z0-9+.-]*:\/$/iu.test(trimmed)) return trimmed
+  return trimmed.replace(/\/+$/u, '')
 }
 
 function splitAuthRoles(value: string | null | undefined): string[] {

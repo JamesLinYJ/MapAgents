@@ -122,8 +122,8 @@ npm test
 
 ```bash
 npm run test --workspace geo-agent-server
-npm run lint:web
-npm run build:web
+npm run lint:desktop
+npm run build:desktop
 ```
 
 ## 接入检查

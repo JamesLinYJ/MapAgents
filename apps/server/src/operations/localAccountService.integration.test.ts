@@ -44,7 +44,6 @@ describeIntegration('LocalAccountService with Better Auth Admin Plugin', () => {
       DATABASE_URL: databaseUrl,
       RUNTIME_ROOT: './runtime/integration-test',
       APP_BASE_URL: 'http://127.0.0.1:18000',
-      WEB_BASE_URL: 'http://127.0.0.1:15173',
       BETTER_AUTH_URL: 'http://127.0.0.1:18000',
       BETTER_AUTH_SECRET: 'integration-only-better-auth-secret-change-before-production',
       BETTER_AUTH_ALLOW_SIGN_UP: 'false',

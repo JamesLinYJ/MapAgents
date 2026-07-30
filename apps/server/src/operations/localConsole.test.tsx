@@ -235,6 +235,8 @@ function createLogs(count: number): OperationsLogEntry[] {
   return Array.from({ length: count }, (_, index) => ({
     sequence: index + 1,
     serviceId: 'api',
+    component: 'http',
+    processId: 8_000 + index,
     stream: 'stdout',
     level: 'info',
     message: `日志 ${index + 1}`,
@@ -313,14 +315,13 @@ const snapshot: OperationsSnapshot = {
     service('infra', '杭州基础设施', []),
     service('worker', '科学计算', ['infra']),
     service('api', '平台 API', ['infra', 'worker']),
-    service('web', 'Web 工作台', ['api']),
   ],
 }
 
 function service(
-  serviceId: 'infra' | 'worker' | 'api' | 'web',
+  serviceId: 'infra' | 'worker' | 'api',
   displayName: string,
-  blockedBy: Array<'infra' | 'worker' | 'api' | 'web'>,
+  blockedBy: Array<'infra' | 'worker' | 'api'>,
 ): OperationsSnapshot['services'][number] {
   return {
     serviceId,
@@ -336,6 +337,5 @@ function service(
     restartCount: 0,
     lastExitCode: null,
     blockedBy,
-    containers: [],
   }
 }

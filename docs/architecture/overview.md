@@ -7,14 +7,14 @@ GeoForge 是一个中文优先的地理与气象智能平台。仓库采用 npm/
 ```text
 apps/
   server/       Node.js API、WebSocket、Agent 编排与治理
-  web/          React + MapLibre 工作台
+  desktop/      Electron + React + MapLibre 桌面 GIS 工作台
   worker/       FastAPI 科学计算边界
 packages/
   shared-types/ 跨进程 Zod 契约
-  conversation-presentation/ 浏览器与 CLI 共用的只读对话展示投影
+  conversation-presentation/ 桌面端与 CLI 共用的只读对话展示投影
   gis-meteorology/  地理与气象领域算法
   operations-supervisor/ TypeScript 进程监督器
-infra/          PostgreSQL/PostGIS migration、种子与 Compose
+infra/          PostgreSQL/PostGIS migration 与地图种子
 deploy/         systemd、WinSW 和生产环境模板
 scripts/        开发、校验、部署与数据维护脚本
 tests/          跨应用端到端测试
@@ -28,13 +28,13 @@ vendor/         保留来源与许可证的第三方代码
 
 ```mermaid
 flowchart LR
-  UI["体验平面<br/>Web 工作台 / 本机 TUI / Agent CLI"]
+  UI["体验平面<br/>Electron 桌面工作台 / 本机 TUI / Agent CLI"]
   GOV["治理平面<br/>Better Auth / RBAC / 审批 / 审计"]
   ORCH["编排平面<br/>Session / Thread / Run / Workflow / Automation"]
   EXEC["执行平面<br/>Agents SDK / ToolProvider / Python Worker"]
   DATA["数据平面<br/>PostgreSQL/PostGIS / 对象存储 / 外部数据"]
 
-  UI -->|"HTTP / 受约束 WS"| GOV
+  UI -->|"Preload IPC / Main HTTP+WS"| GOV
   GOV -->|"授权后的应用命令"| ORCH
   ORCH -->|"RunState、工具与任务"| EXEC
   EXEC -->|"事务写入 / 内容引用"| DATA
@@ -49,7 +49,7 @@ flowchart LR
 |---|---|
 | 用户、工作区、RBAC、Session、Thread、Run、Transcript、Workflow、Approval、Audit | PostgreSQL/PostGIS |
 | 上传内容、Artifact 二进制、SDK checkpoint 载荷、Markdown 记忆正文 | 内容寻址对象存储；数据库保存引用与生命周期 |
-| 浏览器实时 run、timeline、连接与工作区状态 | Zustand |
+| 桌面 Renderer 实时 run、timeline、连接与工作区状态 | Zustand |
 | HTTP 可重取查询缓存 | TanStack Query |
 | 服务进程、健康、重启预算、指标和日志 | TypeScript operations supervisor 的内存状态与真实进程句柄 |
 
@@ -57,9 +57,9 @@ flowchart LR
 
 ## 主要运行链路
 
-### Web 与 API
+### Desktop 与 API
 
-1. `apps/web` 通过 HTTP 获取认证、文件、地图和分页查询，通过统一 WebSocket transport 执行实时业务命令。
+1. `apps/desktop` 的 Main 进程持有 Better Auth、HTTP、WebSocket、文件和导出边界；Renderer 只调用经 Zod 校验的 Preload IPC。
 2. `apps/server` 在 HTTP upgrade 阶段验证 Origin 和 Better Auth session，再由命令 registry 执行 Zod、CSRF、RBAC 和限速。
 3. 路由与 WS handler 只适配协议；资源写入由应用服务和按资源拆分的 PostgreSQL Store 负责。
 
@@ -70,7 +70,7 @@ flowchart LR
 3. GeoForge 负责工作流、权限、工具注册、`valueRef`、数据库事实、审计与分层记忆。
 4. DeepSeek 使用专属 OpenAI-compatible Chat Completions Model 适配器；Provider descriptor 限定可选模型和真实能力。
 5. ToolProvider 经过 manifest/schema 一致性校验后才可注册。Python 工具契约以 Pydantic catalog 为事实源。
-6. Web Chat 与本机 Agent CLI 都从 `packages/conversation-presentation` 获取消息分类、工具调用配对和公开展示标识；DOM Markdown 与终端 Markdown 只是两个最终渲染目标，不得各自重建业务投影。
+6. Desktop Chat 与本机 Agent CLI 都从 `packages/conversation-presentation` 获取消息分类、工具调用配对和公开展示标识；DOM Markdown 与终端 Markdown 只是两个最终渲染目标，不得各自重建业务投影。
 
 ### 科学计算
 
@@ -78,7 +78,7 @@ flowchart LR
 
 ### 本机运维
 
-`packages/operations-supervisor` 监督固定的 `infra`、`worker`、`api`、`web` 服务。`concurrently` 仅作为子进程执行适配器。运维 TUI 和 Agent CLI 是本机人工入口，不是网页终端、Shell、Agent Tool 或 Automation 动作。
+`packages/operations-supervisor` 监督固定的 `infra`、`worker`、`api` 三项后台服务。`concurrently` 仅作为子进程执行适配器。Electron 自身不进入 Supervisor；运维 TUI 和 Agent CLI 是本机人工入口，不是网页终端、Shell、Agent Tool 或 Automation 动作。
 
 ## 关键边界
 
@@ -93,7 +93,7 @@ flowchart LR
 核心结构守卫位于：
 
 - `apps/server/src/architecture.test.ts`
-- `apps/web/src/__tests__/architecture.test.ts`
+- `apps/desktop/src/renderer/__tests__/architecture.test.ts`
 - `packages/operations-supervisor/src/*.test.ts`
 - `apps/worker/tests/scan_security.py`
 

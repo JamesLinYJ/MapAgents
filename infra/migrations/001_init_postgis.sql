@@ -120,7 +120,6 @@ CREATE TABLE IF NOT EXISTS platform_sessions (
   created_by_user_id             TEXT REFERENCES platform_users(user_id) ON DELETE SET NULL,
   visibility                     TEXT NOT NULL DEFAULT 'workspace',
   status                         TEXT NOT NULL DEFAULT 'active',
-  share_token                    TEXT NOT NULL,
   latest_thread_id               TEXT,
   latest_run_id                  TEXT,
   latest_uploaded_layer_key      TEXT,
@@ -128,8 +127,6 @@ CREATE TABLE IF NOT EXISTS platform_sessions (
   created_at                     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at                     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_sessions_share_token_unique
-  ON platform_sessions (share_token);
 CREATE INDEX IF NOT EXISTS idx_platform_sessions_workspace_updated
   ON platform_sessions (workspace_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_platform_sessions_owner_updated
@@ -450,8 +447,8 @@ CREATE INDEX IF NOT EXISTS idx_platform_layer_features_layer
 CREATE INDEX IF NOT EXISTS idx_platform_layer_features_geometry
   ON platform_layer_features USING GIST (geometry);
 
--- Martin 只发布这个经过审计的函数源。query 中仅接收 Node 网关已授权的
--- mapLayerId；数据库表本身不作为 Martin 自动发现的数据源。
+-- Node 地图网关只调用这个经过审计的固定函数。query 中仅接收已授权的
+-- mapLayerId；数据库表名、SQL 和任意筛选条件都不会跨越 HTTP 边界。
 CREATE OR REPLACE FUNCTION geoforge_layer_tiles(z integer, x integer, y integer, query json)
 RETURNS bytea
 LANGUAGE sql
@@ -460,6 +457,11 @@ PARALLEL SAFE
 AS $$
   WITH tile_bounds AS (
     SELECT ST_TileEnvelope(z, x, y) AS geometry
+  ), query_bounds AS (
+    SELECT ST_Transform(
+      ST_TileEnvelope(z, x, y, margin => (64.0 / 4096)),
+      4326
+    ) AS geometry
   ), tile_features AS (
     SELECT
       feature.feature_id,
@@ -473,8 +475,9 @@ AS $$
       ) AS geometry
     FROM platform_layer_features AS feature
     CROSS JOIN tile_bounds
+    CROSS JOIN query_bounds
     WHERE feature.map_layer_id = query->>'mapLayerId'
-      AND ST_Intersects(ST_Transform(feature.geometry, 3857), tile_bounds.geometry)
+      AND feature.geometry && query_bounds.geometry
   )
   -- ST_AsMVT 的第五个参数只接受整数列作为 MVT feature id。GeoForge 的
   -- feature_id 是跨导入稳定的文本标识，因此保留为普通 MVT 属性；MapLibre

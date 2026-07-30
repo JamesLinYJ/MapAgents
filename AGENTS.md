@@ -35,7 +35,7 @@
 
 GeoForge 的目标不是"能跑"，而是长期可演进、可审计、可测试的地理智能平台。新增或重构代码必须遵守以下优先级：
 
-1. **事实源唯一**：每类状态只能有一个权威事实源。PostgreSQL 是结构化平台与会话事实源；内容寻址文件存储只保存大对象、Artifact 内容、SDK checkpoint 载荷和 Markdown 记忆正文；Zustand 是浏览器端实时业务状态事实源；TanStack Query 是 HTTP 查询缓存事实源。
+1. **事实源唯一**：每类状态只能有一个权威事实源。PostgreSQL 是结构化平台与会话事实源；内容寻址文件存储只保存大对象、Artifact 内容、SDK checkpoint 载荷和 Markdown 记忆正文；Zustand 是桌面 Renderer 实时业务状态事实源；TanStack Query 是 HTTP 查询缓存事实源。
 2. **边界显式**：HTTP、WS、Worker、文件系统、数据库、模型输出都是信任边界。跨边界必须有 schema、权限、错误模型和测试。
 3. **资源所有权清晰**：按 Session、Thread、Run、Artifact、Dataset、Layer、Tool、Config、Audit 等资源拆分模块。任何模块同时拥有三类以上资源的写路径，都需要重新设计。
 4. **通用基础设施优先成熟组件**：弹窗、下拉、表格、虚拟列表、表单、查询缓存、WebSocket 重连、日志、指标、队列、限速、文件锁等通用能力优先使用稳定组件，再用 GeoForge 风格封装。
@@ -70,7 +70,7 @@ GeoForge 按能力平面划分，而不是按技术名词随意分层：
 - **编排平面**：Session、Thread、Run、Workflow、定时任务和上下文，决定“任务如何推进”。
 - **执行平面**：Agent、ToolProvider、Python Worker 和科学计算包，决定“能力如何执行”。
 - **数据平面**：PostgreSQL/PostGIS、对象存储、地图数据服务和外部数据源，保存或提供权威事实。
-- **体验平面**：Web 工作台、地图、对话、管理后台和分享页，负责呈现事实与采集意图，不创造后端事实。
+- **体验平面**：Electron 桌面 GIS 工作台、本机 TUI 与 Agent CLI 负责呈现事实与采集意图，不创造后端事实。公开浏览器工作台和匿名分享页不属于产品边界。
 
 依赖方向固定为：体验层调用应用服务，应用服务编排领域能力，领域能力通过 Port 使用基础设施；基础设施实现不得反向决定业务规则。跨平面通信必须经过显式接口、schema、事件或注册表，禁止通过内部对象穿透、目录扫描、共享可变单例或隐含命名约定耦合。
 
@@ -151,7 +151,7 @@ GeoForge 按能力平面划分，而不是按技术名词随意分层：
 
 目录结构反映架构分层。添加新文件时遵循以下规则：
 
-- **`apps/`**：可独立启动或部署的应用。Node Server、React Web 与 Python Worker 分别位于 `apps/server/`、`apps/web/`、`apps/worker/`
+- **`apps/`**：可独立启动或部署的应用。Node Server、Electron Desktop 与 Python Worker 分别位于 `apps/server/`、`apps/desktop/`、`apps/worker/`
 - **`packages/`**：可复用能力与跨应用契约。源码统一放在各包的 `src/`，不得另建 `src-ts/` 等语言后缀目录
 - **`docs/`**：当前架构、运维手册、工程标准、历史评审和汇报材料分别进入 `architecture/`、`operations/`、`standards/`、`reviews/`、`presentations/`；历史评审不得冒充当前架构事实
 - **`apps/server/src/agent/`**：Agent 运行时编排——run 生命周期、上下文管理、审批、沙箱。不含工具实现
@@ -162,14 +162,17 @@ GeoForge 按能力平面划分，而不是按技术名词随意分层：
 - **`apps/server/src/ws/`**：WebSocket 控制面。命令必须通过 registry 注册；一个文件一个命令组（如 `memoryCommand.ts`、`toolCommand.ts`），禁止新增大型 switch
 - **`apps/server/src/security/`**：认证、授权、限速、CSRF。安全逻辑集中管理
 - **`apps/server/src/app/` 或 `apps/server/src/container/`**：应用级依赖装配。只创建 container、store、runtime、registry 和 route/WS 依赖，不写业务逻辑
-- **`apps/web/src/app/`**：应用壳层、路由、全局 store 装配、启动流程
-- **`apps/web/src/app/stores/`**：Zustand slices。只保存跨功能事实状态和 WebSocket streaming 状态，不放 UI 临时表单字段
-- **`apps/web/src/features/`**：功能模块——每个子目录是一个自包含的功能域（含组件、局部状态、类型）
-- **`apps/web/src/shared/`**：跨功能共享的组件和工具函数
-- **`apps/web/src/api/`**：传输层（HTTP + WebSocket），不含业务逻辑
+- **`apps/desktop/src/main/`**：Electron Main 的认证、HTTP/WS、Supervisor、文件、导出和窗口生命周期；不得把令牌、Cookie、数据库地址或原始路径投影到 Renderer
+- **`apps/desktop/src/preload/`**：只暴露经 Zod 校验的窄 IPC；不得提供任意通道、任意 URL、任意路径或 Node 对象
+- **`apps/desktop/src/contracts/`**：Main、Preload、Renderer 共用的严格 IPC 契约；控制帧和操作白名单在这里定义
+- **`apps/desktop/src/renderer/app/`**：桌面工作台壳、文档注册表、全局 store 装配和启动流程
+- **`apps/desktop/src/renderer/app/stores/`**：Zustand slices。只保存跨功能事实状态和 WebSocket streaming 状态，不放 UI 临时表单字段
+- **`apps/desktop/src/renderer/features/`**：功能模块——每个子目录是一个自包含的功能域（含组件、局部状态、类型）
+- **`apps/desktop/src/renderer/shared/`**：跨功能共享的组件和工具函数
+- **`apps/desktop/src/renderer/api/`**：Renderer 传输门面，只调用 Preload 桥，不直接持有认证或创建生产网络连接
 - **Worker 工具契约**：Worker 内部 API 以 Python Pydantic request/response model 为事实源，`/tools/catalog` 由 `model_json_schema()` 自动生成；Node 只消费 catalog 并校验出站参数，不维护第二份手写 Worker schema
 - **`packages/gis-meteorology/`**：科学计算领域逻辑。不含 Web 框架代码
-- **`packages/conversation-presentation/`**：浏览器 Chat 与本机 Agent CLI 共用的 ConversationItem 展示投影。负责消息分类、工具调用/结果配对、公开工具名称和结果摘要；不得包含 DOM、Ink、网络请求或运行状态写入。各客户端只保留自己的最终渲染器
+- **`packages/conversation-presentation/`**：桌面 Chat 与本机 Agent CLI 共用的 ConversationItem 展示投影。负责消息分类、工具调用/结果配对、公开工具名称和结果摘要；不得包含 DOM、Ink、网络请求或运行状态写入。各客户端只保留自己的最终渲染器
 - **`apps/worker/`**：Python Web 层——仅路由和中间件。领域逻辑委托给 `gis_meteorology`
 
 ### 1.4 注释规范
@@ -219,7 +222,7 @@ TypeScript 的编译器选项是第一道防线。
 
 - **禁止 `as any`**：生产源码中不允许出现。对外部数据使用 `unknown` + 类型守卫或 Zod `safeParse`；对确实无法推断的场景使用 `as unknown as SpecificType` 双重断言并附注释说明原因
 - **Zod 作为边界校验**：所有外部输入（HTTP body、WS payload、环境变量、文件内容）必须经过 Zod schema 校验后才进入内部逻辑。不允许 `as T` 裸断言跨越信任边界
-- **共享类型**：跨包类型定义放在 `packages/shared-types/src/index.ts`，通过 Zod schema 派生 TypeScript 类型。Server 和 Web 各自派生自己的内部类型，只在边界使用共享类型
+- **共享类型**：跨包类型定义放在 `packages/shared-types/src/index.ts`，通过 Zod schema 派生 TypeScript 类型。Server 和 Desktop 各自派生自己的内部类型，只在边界使用共享类型
 - **泛型使用**：泛型应该约束类型关系，而非绕过类型检查。如果泛型参数只出现一次且不需要约束关系，考虑是否真的需要泛型
 
 ### 2.3 模块系统
@@ -331,13 +334,13 @@ GeoForge 前端使用分层状态，不用单一巨大 Context，也不把所有
 
 - **Zustand**：跨功能事实状态。按领域拆成 `authStore`、`workspaceStore`、`sessionStore`、`runStore`、`resourceStore`、`uiStore`。组件必须用 selector 精确订阅，禁止一次订阅整个大对象。
 - **TanStack Query**：HTTP query/cache。只管理 `auth/me`、后台管理、图层/数据列表等可重新获取的数据；不要承载 WebSocket streaming 状态。
-- **React Context**：只用于低频、稳定的 dependency/context，如 theme、i18n、query client、router。高频 run/timeline 状态禁止放 Context。
+- **React Context**：只用于低频、稳定的 dependency/context，如 theme、i18n 和 query client。高频 run/timeline 状态禁止放 Context。
 - **Props**：用于局部、短链路、纯展示组件。一个 prop 穿过 3 层以上且中间层不使用时，应改为 store selector、组件组合或局部 provider。
 - **react-hook-form + Zod**：登录、管理后台、工具表单、运行时配置表单的默认方案。
 
 ### 4.3 AppShell 与控制器
 
-`AppShell.tsx` 是装配层，不是业务 God Component。它负责 Provider、路由、布局壳和少量启动流程，不持有大段业务状态。
+`AppShell.tsx` 是装配层，不是业务 God Component。它负责 Provider、桌面文档注册表、布局壳和少量启动流程，不持有大段业务状态。
 
 - 控制器 Hook 放在 `app/controllers/`，只做 UI orchestration：把用户动作编排成 store action、query mutation 或 `requestControl`。
 - 跨组件事实状态在 Zustand slice 中，不靠 AppShell props 逐层下传。
@@ -358,20 +361,21 @@ GeoForge 前端使用分层状态，不用单一巨大 Context，也不把所有
 
 ### 4.5 传输层
 
-`apps/web/src/api/transport.ts` 统一三种通信方式：
+`apps/desktop/src/renderer/api/transport.ts` 统一三种业务通信语义，实际网络连接由 Electron Main 持有：
 
 | 函数 | 协议 | 用途 | 超时 |
 |------|------|------|------|
 | `requestJson<T>()` | HTTP | JSON 请求/响应 | 30s |
-| `requestFormJson<T>()` | HTTP | FormData 上传 | 120s |
+| `requestFormJson<T>()` | HTTP | Main 持有句柄的 multipart 上传 | 120s |
 | `requestControl<T>()` | WebSocket | 业务控制命令 | 45s (WS 超时) |
 
 - 三者共享 CSRF 令牌注入、错误格式化和 Zod schema 校验
 - 新增后端功能时按协议语义选择边界：实时控制、运行状态、订阅和短命令使用 `requestControl`；认证、文件上传、blob 下载、健康检查、指标、可分页查询和可缓存查询使用 HTTP。例外必须在调用点或 route/command 注册处说明原因
-- API 基地址通过 `deriveApiBaseUrl()` 推断，支持同源部署和跨端口开发两种模式
+- API 基地址只由 Main 的部署配置解析；Renderer 不推断生产地址，也不读取认证令牌
 - 可选的 Zod schema 参数用于校验后端响应，防止 `as T` 掩藏字段缺失或类型变更
-- 浏览器端 WebSocket 底层连接使用 PartySocket/ReconnectingWebSocket；GeoForge 自己的 transport 只负责 request id、pending map、CSRF、Zod response validation、push 分发和重连后的 resubscribe
-- 禁止组件直接 `new WebSocket()`。所有业务 WS 调用必须通过 `requestControl` 或统一 transport action
+- Main 进程负责 WebSocket 连接、鉴权、重连、pending request 和 push 分发；Renderer 只消费经过 Preload 验证的事件
+- 禁止 Renderer 组件直接 `fetch()`、`new WebSocket()` 或读取文件路径。所有业务调用必须通过统一 transport 或文件句柄边界
+- 本地文件和文件夹只能由 Main 原生选择器打开；Renderer 不得创建 `<input type="file">`、接收 DOM `File`，也不得通过 Preload 反查绝对路径。Main 只投影窗口绑定、限时、一次性的不透明句柄与安全相对显示信息
 
 ---
 
@@ -432,7 +436,7 @@ GeoForge 前端使用分层状态，不用单一巨大 Context，也不把所有
 
 ### 5.4 HTTP 与 WebSocket 分工
 
-- **HTTP 数据面**：承载认证、健康检查、指标、文件上传、blob 下载、可分页查询、可缓存查询和浏览器/代理天然支持更好的请求响应操作
+- **HTTP 数据面**：承载认证、健康检查、指标、文件上传、blob 下载、可分页查询、可缓存查询和 HTTP 客户端/代理天然支持更好的请求响应操作
 - **WebSocket 控制面**（`/ws`）：承载实时运行控制、订阅、决策响应、流式状态、低延迟命令和需要连接级上下文的业务动作
 - HTTP 与 WS 都只是传输层；端点必须是薄层，验证输入后委托给 Service/Store/Runtime，不在 route 或 command 里堆业务逻辑
 - 不在 WebSocket 消息中传输大文件——文件引用使用 `contentRef`（SHA256 路径）
@@ -604,7 +608,7 @@ third_party/
 
 | 层次 | 机制 | 位置 |
 |------|------|------|
-| 传输 | HTTPS + WSS（生产环境 Nginx 终止 TLS） | `infra/docker/web/nginx.conf` |
+| 传输 | 本机 Electron 使用受控 `geoforge://app` 协议；远程部署由受管入口终止 HTTPS + WSS | Electron Main / 部署入口 |
 | 认证 | Better Auth (email/password + session, 12h 过期) | `apps/server/src/security/authService.ts` |
 | 授权 | Casbin RBAC (workspace 级隔离, deny-by-default) | `apps/server/src/security/authorizationService.ts` |
 | CSRF | 自定义 header `x-geoforge-csrf`（HMAC 派生的会话级令牌） | HTTP + WS 消息级 |
@@ -666,7 +670,7 @@ third_party/
 - 进程状态的唯一事实源是 GeoForge 监督后台的内存状态、实时子进程句柄和健康探针；租约只用于异常退出后的旧进程验证与清理，不得凭 PID 文件认领服务或伪造健康状态
 - `concurrently` 只作为跨平台命令启动、输出事件和进程树终止的执行适配器，不拥有依赖拓扑、重启预算、健康、指标、日志、IPC 或运维权限规则
 - 可操作的服务 ID、命令、工作目录、端口、健康检查与环境变量范围必须来自编译期固定目录；IPC 和界面不得接收任意 Shell 命令、任意路径或任意环境变量
-- CPU 与内存按完整后代进程树汇总；容器资源按固定 Compose 项目的实际容器汇总。采集失败必须显示“未知”及原因，不得用零值冒充成功采样
+- CPU 与内存按完整后代进程树汇总，原生 PostgreSQL/PostGIS 也只按监督器实际持有的进程树采样。采集失败必须显示“未知”及原因，不得用零值冒充成功采样
 - 本机运维 TUI 与本机 Agent CLI 是服务器操作系统 ACL 保护下的人工最高应用管理入口。它们不得注册为 Agent Tool、Automation 动作、HTTP/WS 远程控制面或网页终端，也不得提供任意 Shell
 - TUI 的退出与监督器关闭是不同动作：普通分离不得停止服务；停止全部必须使用独立危险操作并明确确认
 - 本机账户管理以受操作系统保护的根密钥为授权根；认证账户写入必须通过临时 Better Auth Console 服务主体和官方 Admin API，平台角色仍通过事务化 RBAC 仓储修改。Console 主体不得公开登录、建立平台投影、出现在普通账户列表或成为操作目标
@@ -698,7 +702,7 @@ third_party/
 | `apps/server/src/routes/` | 每个端点一个 HTTP 状态码测试 |
 | `packages/gis-meteorology/` | 每个 public 函数一个 pytest |
 | `apps/worker/` | 认证失败、路径遍历拒绝、超时处理各一个测试 |
-| `apps/web/src/` | 每个数据模型/状态 Hook 一个测试；关键 UI 组件一个渲染测试 |
+| `apps/desktop/src/` | Main/Preload IPC 边界、每个数据模型/状态 Hook 和关键 UI 组件都必须有对应测试 |
 | E2E (`tests/e2e/`) | workspace bootstrap、run start→stream→complete、approval flow、mode switching |
 
 ### 10.3 架构守卫测试
@@ -714,7 +718,7 @@ third_party/
 - 禁止 `apps/server/src/ws/handler.ts` 出现新增大型 command switch；WS 命令必须通过 registry 注册
 - 禁止普通 Store CRUD 使用裸 `db.execute(sql...)`，除非文件位于 PostGIS/DDL/health 明确例外列表
 - 禁止生产源码新增模块级可变 singleton
-- 禁止前端组件直接 `new WebSocket()` 或绕过统一 transport
+- 禁止 Renderer 组件直接 `new WebSocket()` 或绕过统一 transport
 - 禁止 Python Worker route 中出现 `if tool_name == ...` 分发链
 
 ### 10.4 测试隔离
