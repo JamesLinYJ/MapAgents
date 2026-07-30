@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 进程监督命令行入口
+//   地理智能平台 - 进程监督命令行入口
 //
 //   文件:       cli.ts
 //
@@ -15,6 +15,11 @@ import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { fileURLToPath } from 'node:url'
+import {
+  PLATFORM_DESKTOP_APP_ORIGIN,
+  PLATFORM_DESKTOP_AUTH_CALLBACK_URL,
+  PRODUCT_CODENAME,
+} from '@geo-agent-platform/shared-types/product-identity'
 
 import {
   operationsProfileSchema,
@@ -73,7 +78,7 @@ async function main(): Promise<void> {
   }
   const projectRoot = path.resolve(
     parsedArgs.values.root
-      ?? process.env.GEOFORGE_ROOT
+      ?? process.env.GEO_AGENT_PLATFORM_ROOT
       ?? defaultProjectRoot(),
   )
   loadDotEnv({ path: path.join(projectRoot, '.env'), quiet: true })
@@ -111,7 +116,7 @@ async function runDaemon(paths: OperationsPaths, profile: OperationsProfile): Pr
       update: 5_000,
     })
   } catch (error) {
-    throw new Error(`GeoForge 监督器已在运行，或单实例锁不可用：${safeMessage(error)}`)
+    throw new Error(`${PRODUCT_CODENAME} 监督器已在运行，或单实例锁不可用：${safeMessage(error)}`)
   }
   const token = await ensureSecretFile(paths.tokenFile, profile === 'development')
   if (profile === 'production') await assertProductionSecretPermissions(paths.tokenFile)
@@ -119,7 +124,7 @@ async function runDaemon(paths: OperationsPaths, profile: OperationsProfile): Pr
   const logger = systemLogger.logger
   const logBuffer = new OperationsLogBuffer(secretValues({
     ...process.env,
-    GEOFORGE_SUPERVISOR_TOKEN: token,
+    GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN: token,
   }))
   const supervisor = new OperationsSupervisor({
     paths,
@@ -148,7 +153,7 @@ async function runDaemon(paths: OperationsPaths, profile: OperationsProfile): Pr
       workspaceId: paths.workspaceId,
       profile,
       pid: process.pid,
-    }, 'GeoForge 监督器已就绪')
+    }, `${PRODUCT_CODENAME} 监督器已就绪`)
     await shutdownRequested
   } finally {
     process.off('SIGINT', requestShutdown)
@@ -239,7 +244,7 @@ function printSnapshot(snapshot: OperationsSnapshot, json: boolean): void {
     console.log(JSON.stringify(snapshot))
     return
   }
-  console.log(`GeoForge 监督器 PID ${snapshot.host.supervisorPid} · ${snapshot.host.profile === 'production' ? '生产' : '开发'}环境`)
+  console.log(`${PRODUCT_CODENAME} 监督器 PID ${snapshot.host.supervisorPid} · ${snapshot.host.profile === 'production' ? '生产' : '开发'}环境`)
   console.table(snapshot.services.map(service => ({
     服务: service.displayName,
     状态: stateLabel(service.state),
@@ -298,12 +303,14 @@ function applyDevelopmentDefaults(projectRoot: string): void {
     WORKER_PYTHON: process.platform === 'win32' ? 'python.exe' : 'python3',
   }
   for (const [name, value] of Object.entries(defaults)) process.env[name] ??= value
-  process.env.GEOFORGE_ROOT = projectRoot
+  process.env.GEO_AGENT_PLATFORM_ROOT = projectRoot
   process.env.DATABASE_URL ??= `postgresql://geo_agent:geo_agent@127.0.0.1:${process.env.POSTGIS_PORT}/geo_agent`
   process.env.WORKER_URL ??= `http://127.0.0.1:${process.env.WORKER_PORT}`
   process.env.APP_BASE_URL ??= `http://127.0.0.1:${process.env.API_PORT}`
   process.env.BETTER_AUTH_URL ??= process.env.APP_BASE_URL
-  process.env.TRUSTED_ORIGINS ??= 'geoforge://app,com.geoforge.desktop://auth/callback'
+  process.env.TRUSTED_ORIGINS ??= (
+    `${PLATFORM_DESKTOP_APP_ORIGIN},${PLATFORM_DESKTOP_AUTH_CALLBACK_URL}`
+  )
 }
 
 function defaultProjectRoot(): string {
@@ -341,9 +348,9 @@ function formatBytes(value: number | null): string {
 }
 
 function printHelp(): void {
-  console.log(`GeoForge TypeScript 进程监督器
+  console.log(`${PRODUCT_CODENAME} TypeScript 进程监督器
 
-用法：geoforge-supervisor <daemon|start|stop|restart|status|logs|shutdown> [all|infra|worker|api]
+用法：geo-agent-platform-supervisor <daemon|start|stop|restart|status|logs|shutdown> [all|infra|worker|api]
 
 选项：
   --profile development|production
@@ -364,6 +371,6 @@ function safeMessage(error: unknown): string {
 }
 
 main().catch(error => {
-  console.error(`GeoForge 监督命令失败：${safeMessage(error)}`)
+  console.error(`${PRODUCT_CODENAME} 监督命令失败：${safeMessage(error)}`)
   process.exitCode = 1
 })

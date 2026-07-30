@@ -27,7 +27,7 @@ const logContextStore = new AsyncLocalStorage<LogContext>()
 
 export const logger = pino({
   level: LEVEL,
-  base: { service: 'geoforge-api' },
+  base: { service: 'geo-agent-platform-api' },
   timestamp: pino.stdTimeFunctions.isoTime,
   messageKey: 'message',
   redact: {

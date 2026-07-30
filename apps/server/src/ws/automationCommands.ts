@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-// GeoForge Automation Studio、运行、审批、定时任务和后台任务 WS 命令。
+// 平台 Automation Studio、运行、审批、定时任务和后台任务 WS 命令。
 
 import { z } from 'zod'
 import { automationGraphSchema } from '../automations/schemas.js'

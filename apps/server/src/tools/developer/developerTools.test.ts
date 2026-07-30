@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
-// 这些测试约束开发工具的硬边界：它们只维护 GeoForge GIS/气象 Agent，
+// 这些测试约束开发工具的硬边界：它们只维护平台 GIS/气象 Agent，
 // 不提供泛用 shell/后台任务能力，也不能越过显式 allowlist 访问文件。
 
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
@@ -34,8 +34,8 @@ describe('geo-platform-developer-tools', () => {
   const previousRuntimeRoot = process.env.RUNTIME_ROOT
 
   beforeEach(async () => {
-    root = await mkdtemp(path.join(os.tmpdir(), 'geoforge-dev-tools-'))
-    runtimeRoot = await mkdtemp(path.join(os.tmpdir(), 'geoforge-dev-runtime-'))
+    root = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-dev-tools-'))
+    runtimeRoot = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-dev-runtime-'))
     process.env.DEVELOPER_TOOL_ALLOWED_ROOTS = root
     process.env.RUNTIME_ROOT = runtimeRoot
   })

@@ -1,6 +1,6 @@
 -- +-------------------------------------------------------------------------
 --
---   GeoForge 地理智能平台 - Better Auth Admin Plugin Schema
+--   地理智能平台 - Better Auth Admin Plugin Schema
 --
 --   文件:       003_better_auth_admin.sql
 --

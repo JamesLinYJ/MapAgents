@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本机运维特权进程边界
+//   地理智能平台 - 本机运维特权进程边界
 //
 //   文件:       localOperationsBrokerEntry.ts
 //
@@ -53,8 +53,8 @@ async function main(): Promise<void> {
     projectRoot,
     profile,
     ...(process.env.RUNTIME_ROOT ? { runtimeRoot: path.resolve(projectRoot, process.env.RUNTIME_ROOT) } : {}),
-    ...(process.env.GEOFORGE_LOCAL_ROOT_SECRET_FILE
-      ? { rootSecretFile: path.resolve(projectRoot, process.env.GEOFORGE_LOCAL_ROOT_SECRET_FILE) }
+    ...(process.env.GEO_AGENT_PLATFORM_LOCAL_ROOT_SECRET_FILE
+      ? { rootSecretFile: path.resolve(projectRoot, process.env.GEO_AGENT_PLATFORM_LOCAL_ROOT_SECRET_FILE) }
       : {}),
   })
   const rootSecret = await ensureSecretFile(paths.rootSecretFile, profile === 'development')
@@ -257,6 +257,6 @@ function errorMessage(error: unknown): string {
 }
 
 main().catch(error => {
-  process.stderr.write(`GeoForge 本机运维 Broker 启动失败：${errorMessage(error)}\n`)
+  process.stderr.write(`平台 本机运维 Broker 启动失败：${errorMessage(error)}\n`)
   process.exitCode = 1
 })

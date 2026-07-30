@@ -10,6 +10,10 @@
 // --------------------------------------------------------------------------
 
 import type { Storage } from '@better-auth/electron/client'
+import {
+  PLATFORM_TECHNICAL_ID,
+  PRODUCT_CODENAME,
+} from '@geo-agent-platform/shared-types/product-identity'
 import { safeStorage } from 'electron'
 import Conf from 'conf'
 import { z } from 'zod'
@@ -22,14 +26,14 @@ const storedCipherSchema = z.string().min(1)
  */
 export class SecureAuthStorage implements Storage {
   private readonly store = new Conf<Record<string, string>>({
-    projectName: 'GeoForge',
+    projectName: PLATFORM_TECHNICAL_ID,
     configName: 'desktop-auth',
     clearInvalidConfig: false,
   })
 
   constructor() {
     if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error('系统安全存储不可用，GeoForge 不会把认证会话降级为明文保存。')
+      throw new Error(`系统安全存储不可用，${PRODUCT_CODENAME} 不会把认证会话降级为明文保存。`)
     }
   }
 

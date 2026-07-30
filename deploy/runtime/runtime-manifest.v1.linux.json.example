@@ -1,9 +1,9 @@
 {
-  "kind": "geoforge.desktop-runtime",
+  "kind": "geo-agent-platform.desktop-runtime",
   "schemaVersion": 1,
-  "projectRoot": "/opt/geoforge/releases/0.1.0",
-  "runtimeRoot": "/var/lib/geoforge/runtime",
+  "projectRoot": "/opt/geo-agent-platform/releases/0.1.0",
+  "runtimeRoot": "/var/lib/geo-agent-platform/runtime",
   "apiBaseUrl": "http://127.0.0.1:8000",
-  "supervisorTokenFile": "/var/lib/geoforge/runtime/secrets/supervisor.token",
+  "supervisorTokenFile": "/var/lib/geo-agent-platform/runtime/secrets/supervisor.token",
   "allowedEnvironmentOverrides": []
 }

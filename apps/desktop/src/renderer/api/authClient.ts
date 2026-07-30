@@ -46,8 +46,8 @@ async function callDesktopAuth(
   payload: Record<string, unknown>,
   fallback: string,
 ): Promise<unknown> {
-  const bridge = typeof window === 'undefined' ? undefined : window.geoforgeDesktop
-  if (!bridge) throw new Error('认证只允许通过 GeoForge 桌面主进程执行。')
+  const bridge = typeof window === 'undefined' ? undefined : window.platformDesktop
+  if (!bridge) throw new Error('认证只允许通过平台桌面主进程执行。')
   const response = await bridge.auth.request({
     version: 1,
     requestId: crypto.randomUUID(),

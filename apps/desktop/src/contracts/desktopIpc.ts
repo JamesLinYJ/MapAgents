@@ -21,6 +21,9 @@
 
 import { z } from 'zod'
 import {
+  PLATFORM_IPC_CHANNEL_PREFIX,
+} from '@geo-agent-platform/shared-types/product-identity'
+import {
   adminMembershipCreateSchema,
   adminUserPatchSchema,
   adminWorkspaceCreateSchema,
@@ -441,22 +444,22 @@ export const desktopEventTransportSchema = z.union([
 ])
 
 export const DESKTOP_IPC_CHANNELS = {
-  apiRequest: 'geoforge:api:request',
-  apiUpload: 'geoforge:api:upload',
-  apiDownload: 'geoforge:api:download',
-  authRequest: 'geoforge:auth:request',
-  clipboardWrite: 'geoforge:clipboard:write',
-  controlRequest: 'geoforge:control:request',
-  diagnosticReport: 'geoforge:diagnostic:report',
-  dialogConfirm: 'geoforge:dialog:confirm',
-  exportRequest: 'geoforge:export:request',
-  fileSelect: 'geoforge:file:select',
-  fileReadText: 'geoforge:file:read-text',
-  microphonePermission: 'geoforge:microphone:permission',
-  supervisorLogs: 'geoforge:supervisor:logs',
-  supervisorRequest: 'geoforge:supervisor:request',
-  windowCommand: 'geoforge:window:command',
-  event: 'geoforge:event',
+  apiRequest: `${PLATFORM_IPC_CHANNEL_PREFIX}:api:request`,
+  apiUpload: `${PLATFORM_IPC_CHANNEL_PREFIX}:api:upload`,
+  apiDownload: `${PLATFORM_IPC_CHANNEL_PREFIX}:api:download`,
+  authRequest: `${PLATFORM_IPC_CHANNEL_PREFIX}:auth:request`,
+  clipboardWrite: `${PLATFORM_IPC_CHANNEL_PREFIX}:clipboard:write`,
+  controlRequest: `${PLATFORM_IPC_CHANNEL_PREFIX}:control:request`,
+  diagnosticReport: `${PLATFORM_IPC_CHANNEL_PREFIX}:diagnostic:report`,
+  dialogConfirm: `${PLATFORM_IPC_CHANNEL_PREFIX}:dialog:confirm`,
+  exportRequest: `${PLATFORM_IPC_CHANNEL_PREFIX}:export:request`,
+  fileSelect: `${PLATFORM_IPC_CHANNEL_PREFIX}:file:select`,
+  fileReadText: `${PLATFORM_IPC_CHANNEL_PREFIX}:file:read-text`,
+  microphonePermission: `${PLATFORM_IPC_CHANNEL_PREFIX}:microphone:permission`,
+  supervisorLogs: `${PLATFORM_IPC_CHANNEL_PREFIX}:supervisor:logs`,
+  supervisorRequest: `${PLATFORM_IPC_CHANNEL_PREFIX}:supervisor:request`,
+  windowCommand: `${PLATFORM_IPC_CHANNEL_PREFIX}:window:command`,
+  event: `${PLATFORM_IPC_CHANNEL_PREFIX}:event`,
 } as const
 
 export type DesktopApiOperation = z.infer<typeof desktopApiOperationSchema>

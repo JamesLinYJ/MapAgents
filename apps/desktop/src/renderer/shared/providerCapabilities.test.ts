@@ -43,7 +43,7 @@ describe('providerCapabilities', () => {
   it('describes the real DeepSeek Agent runtime boundary', () => {
     expect(supportsAgentSdkLiveSupervisor(deepSeekProvider)).toBe(true)
     expect(agentRuntimeCapabilitySummary(deepSeekProvider)).toBe(
-      'DeepSeek Chat Completions · 支持同轮多工具响应 · 由 GeoForge 本地安全闸门控制并发 · Hosted Tools、远程 Conversation、服务端压缩不可用',
+      'DeepSeek Chat Completions · 支持同轮多工具响应 · 由平台本地安全闸门控制并发 · Hosted Tools、远程 Conversation、服务端压缩不可用',
     )
   })
 

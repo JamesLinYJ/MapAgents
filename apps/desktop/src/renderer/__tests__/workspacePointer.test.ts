@@ -23,7 +23,7 @@ describe('workspace pointer ownership', () => {
   afterEach(() => vi.unstubAllGlobals())
 
   it('根路径不会读取旧版全局会话指针', () => {
-    window.localStorage.setItem('geoforge.workspace.pointer.v1', JSON.stringify({
+    window.localStorage.setItem('geo-agent-platform.workspace.pointer.v1', JSON.stringify({
       activeSessionId: 'session_previous_user',
       activeThreadId: 'thread_previous_user',
       activeRunId: 'run_previous_user',

@@ -1,4 +1,4 @@
-# GeoForge Desktop 视觉验收
+# 地理智能平台 Desktop 视觉验收
 
 生成日期：2026-07-29  
 运行环境：Windows 11、Electron 43.2.0、Playwright Electron  
@@ -20,7 +20,7 @@
 
 ## 已核验区域
 
-- Electron 安全协议 `geoforge://app` 与 MapLibre CSP Worker。
+- Electron 安全协议 `geo-agent-platform://app` 与 MapLibre CSP Worker。
 - 顶部命令栏、Ribbon、左侧内容树、中间地图文档区、右侧智能对话和底部地图状态栏。
 - 左右停靠面板的鼠标拖动、折叠和键盘操作。
 - 多工作区窗口隔离及同工作区窗口复用。

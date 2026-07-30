@@ -1,4 +1,4 @@
-# 🔍 GeoForge 地理智能平台 — 全面架构审查报告
+# 🔍 地理智能平台 — 全面架构审查报告
 
 **审查日期**: 2026-07-23  
 **项目版本**: v0.1.0  
@@ -36,7 +36,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                         GeoForge 平台健康度                             │
+│                          地理智能平台健康度                                 │
 ├──────────────┬───────────┬──────────────────────────────────────────┤
 │ 架构设计      │  ████████░ │ 8/10  分层清晰，资源拆分到位；Facade 过宽  │
 │ 安全性        │  ████████░ │ 8/10  纵深防御体系完整；缺分布式限流       │
@@ -51,7 +51,7 @@
 
 | 属性 | 值 |
 |------|-----|
-| **项目名称** | GeoForge (geo-agent-platform) |
+| **项目名称** | 地理智能平台 (geo-agent-platform) |
 | **项目类型** | Monorepo — 地理智能平台 |
 | **语言混合** | TypeScript (主), Python (科学计算), SQL (PostGIS) |
 | **仓库结构** | 4 npm workspaces + 2 Python packages |
@@ -64,11 +64,11 @@
 
 ### 2.1 五平面架构
 
-GeoForge 按能力平面划分，而不是按技术名词随意分层：
+地理智能平台 按能力平面划分，而不是按技术名词随意分层：
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           GeoForge 五平面架构                                 │
+│                           地理智能平台 五平面架构                                 │
 │                                                                             │
 │  ┌───────────────────────────────────────────────────────────────────────┐ │
 │  │                        体验平面 (Experience)                           │ │
@@ -260,7 +260,7 @@ geo-agent-platform/  (root)
 │                    │  ┌──────────────────────────────┐     │        │
 │                    │  │  CSRF 防护                    │     │        │
 │                    │  │  • HMAC(secret, "csrf:"+sid) │     │        │
-│                    │  │  • x-geoforge-csrf header    │     │        │
+│                    │  │  • x-geo-agent-platform-csrf header    │     │        │
 │                    │  │  • HTTP + WS 双重校验         │     │        │
 │                    │  └──────────────┬───────────────┘     │        │
 │                    │                 │                     │        │
@@ -1111,7 +1111,7 @@ server/src/store/
 │   │  deny-by-default · workspace 隔离 · 4 角色                      │ │
 │   │  ═══════════════════════════════════════════                    │ │
 │   │  Layer 4: CSRF 防护                                             │ │
-│   │  x-geoforge-csrf header (HMAC 派生会话级令牌)                   │ │
+│   │  x-geo-agent-platform-csrf header (HMAC 派生会话级令牌)                   │ │
 │   │  ═══════════════════════════════════════════                    │ │
 │   │  Layer 5: 限速控制                                              │ │
 │   │  HTTP 双级 (Auth 10/min + API 120/min)                          │ │
@@ -1343,7 +1343,7 @@ server/src/store/
 │  │  Logging (Pino 结构化日志)                                    │    │
 │  │  ─────────────────────────────────────────────────────────── │    │
 │  │  • AsyncLocalStorage → traceId 自动生成 (12 字符)             │    │
-│  │  • traceId 传播: HTTP → WS → Worker (x-geoforge-trace-id)    │    │
+│  │  • traceId 传播: HTTP → WS → Worker (x-geo-agent-platform-trace-id)    │    │
 │  │  • 日志级别: trace / debug / info / warn / error             │    │
 │  │  • 脱敏: 29 路径模式 + key 名检测 + Bearer/Basic/sk- 正则    │    │
 │  │  • 30+ 文件使用 logger (零 console.log)                      │    │
@@ -1625,6 +1625,6 @@ server/src/store/
 ---
 
 > 📄 报告生成日期: 2026-07-23  
-> 📁 项目: GeoForge (geo-agent-platform) v0.1.0  
+> 📁 项目: 地理智能平台 (geo-agent-platform) v0.1.0
 > 🔗 规范文件: [AGENTS.md](AGENTS.md) (58KB, 13 章节)  
 > 🧪 架构守卫: [architecture.test.ts](server/src/architecture.test.ts) (1277 行, 40+ 不变量)

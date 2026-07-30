@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本机 Agent 会话控制器
+//   地理智能平台 - 本机 Agent 会话控制器
 //
 //   文件:       localAgentSession.ts
 //
@@ -11,6 +11,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 import {
   analysisRunSchema,
@@ -87,7 +88,7 @@ export class LocalAgentSession {
     this.options = options
     this.state = {
       connection: 'connecting',
-      connectionMessage: '正在连接 GeoForge API…',
+      connectionMessage: `正在连接 ${PRODUCT_CODENAME} API…`,
       bootstrap: null,
       provider: null,
       model: null,
@@ -263,7 +264,9 @@ export class LocalAgentSession {
     if (this.closed) return
     this.setState({
       connection: reconnecting ? 'reconnecting' : 'connecting',
-      connectionMessage: reconnecting ? '连接中断，正在恢复…' : '正在连接 GeoForge API…',
+      connectionMessage: reconnecting
+        ? '连接中断，正在恢复…'
+        : `正在连接 ${PRODUCT_CODENAME} API…`,
     })
     const client = await this.options.connectClient()
     if (this.closed) {
@@ -373,7 +376,9 @@ export class LocalAgentSession {
   }
 
   private requireClient(): LocalAgentClientPort {
-    if (!this.client || this.state.connection !== 'online') throw new Error('GeoForge API 尚未连接。')
+    if (!this.client || this.state.connection !== 'online') {
+      throw new Error(`${PRODUCT_CODENAME} API 尚未连接。`)
+    }
     return this.client
   }
 

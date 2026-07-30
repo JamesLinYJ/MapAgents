@@ -10,10 +10,23 @@
 // --------------------------------------------------------------------------
 
 import { describe, expect, it, vi } from 'vitest'
+import path from 'node:path'
+import {
+  PLATFORM_TECHNICAL_ID,
+  PRODUCT_EXECUTABLE_BASENAME,
+} from '@geo-agent-platform/shared-types/product-identity'
 
 import { handleSquirrelLifecycle } from './squirrelLifecycle.js'
 
 describe('handleSquirrelLifecycle', () => {
+  const executableName = `${PRODUCT_EXECUTABLE_BASENAME}.exe`
+  const installedApplicationDirectory = path.win32.join(
+    'C:\\Users\\operator\\AppData\\Local',
+    PLATFORM_TECHNICAL_ID,
+    'app-0.1.0',
+  )
+  const installedExecutable = path.win32.join(installedApplicationDirectory, executableName)
+
   it.each([
     ['--squirrel-install', '--createShortcut'],
     ['--squirrel-updated', '--createShortcut'],
@@ -24,15 +37,15 @@ describe('handleSquirrelLifecycle', () => {
 
     expect(handleSquirrelLifecycle({
       platform: 'win32',
-      arguments: ['C:\\Users\\operator\\AppData\\Local\\GeoForge\\app-0.1.0\\GeoForge.exe', event],
-      executablePath: 'C:\\Users\\operator\\AppData\\Local\\GeoForge\\app-0.1.0\\GeoForge.exe',
+      arguments: [installedExecutable, event],
+      executablePath: installedExecutable,
       quit,
       runUpdate,
     })).toBe(true)
 
     expect(runUpdate).toHaveBeenCalledWith(
-      'C:\\Users\\operator\\AppData\\Local\\GeoForge\\Update.exe',
-      [expectedVerb, 'GeoForge.exe'],
+      path.win32.join(path.win32.dirname(installedApplicationDirectory), 'Update.exe'),
+      [expectedVerb, executableName],
       quit,
     )
     expect(quit).not.toHaveBeenCalled()
@@ -44,8 +57,8 @@ describe('handleSquirrelLifecycle', () => {
 
     expect(handleSquirrelLifecycle({
       platform: 'win32',
-      arguments: ['GeoForge.exe', '--squirrel-obsolete'],
-      executablePath: 'C:\\GeoForge\\app-0.1.0\\GeoForge.exe',
+      arguments: [executableName, '--squirrel-obsolete'],
+      executablePath: path.win32.join('C:\\PlatformFixture\\app-0.1.0', executableName),
       quit,
       runUpdate,
     })).toBe(true)
@@ -57,8 +70,8 @@ describe('handleSquirrelLifecycle', () => {
     const quit = vi.fn()
     const runUpdate = vi.fn()
     const normal = {
-      arguments: ['GeoForge.exe', '--squirrel-firstrun'],
-      executablePath: 'C:\\GeoForge\\app-0.1.0\\GeoForge.exe',
+      arguments: [executableName, '--squirrel-firstrun'],
+      executablePath: path.win32.join('C:\\PlatformFixture\\app-0.1.0', executableName),
       quit,
       runUpdate,
     }
@@ -67,7 +80,7 @@ describe('handleSquirrelLifecycle', () => {
     expect(handleSquirrelLifecycle({
       ...normal,
       platform: 'linux',
-      arguments: ['geoforge', '--squirrel-install'],
+      arguments: ['platform-fixture', '--squirrel-install'],
     })).toBe(false)
     expect(quit).not.toHaveBeenCalled()
     expect(runUpdate).not.toHaveBeenCalled()

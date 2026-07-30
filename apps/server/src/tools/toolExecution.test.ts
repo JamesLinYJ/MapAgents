@@ -244,7 +244,7 @@ describe('geo tools', () => {
   })
 
   it('passes query_layer GeoJSON valueRefs into analysis, layer creation, and export', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'geoforge-geojson-value-ref-'))
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-geojson-value-ref-'))
     try {
       const polygon: Geometry = {
         type: 'Polygon',

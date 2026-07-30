@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 监督器命令行路径投影
+//   地理智能平台 - 监督器命令行路径投影
 //
 //   文件:       cliRuntimePaths.ts
 //
@@ -39,16 +39,16 @@ export function resolveOperationsCliPathInput(input: {
   profile: OperationsProfile
 }): OperationsCliPathInput {
   const projectRoot = resolvePath(
-    input.arguments.root ?? input.environment.GEOFORGE_ROOT ?? input.defaultProjectRoot,
+    input.arguments.root ?? input.environment.GEO_AGENT_PLATFORM_ROOT ?? input.defaultProjectRoot,
   )
   const runtimeRoot = optionalPath(
     input.arguments.runtimeRoot ?? input.environment.RUNTIME_ROOT,
   )
   const tokenFile = optionalPath(
-    input.arguments.tokenFile ?? input.environment.GEOFORGE_SUPERVISOR_TOKEN_FILE,
+    input.arguments.tokenFile ?? input.environment.GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE,
   )
   const rootSecretFile = optionalPath(
-    input.arguments.rootSecretFile ?? input.environment.GEOFORGE_LOCAL_ROOT_SECRET_FILE,
+    input.arguments.rootSecretFile ?? input.environment.GEO_AGENT_PLATFORM_LOCAL_ROOT_SECRET_FILE,
   )
   return {
     projectRoot,

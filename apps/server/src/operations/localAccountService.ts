@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本地特权账户管理服务
+//   地理智能平台 - 本地特权账户管理服务
 //
 //   文件:       localAccountService.ts
 //
@@ -120,7 +120,7 @@ export class LocalAccountService {
         authUserId,
         stage: 'platform_projection',
       }).catch(() => undefined)
-      throw new Error('认证账户已创建，但 GeoForge 管理员投影失败；请保留日志并修复投影后再继续。', { cause: error })
+      throw new Error('认证账户已创建，但 平台 管理员投影失败；请保留日志并修复投影后再继续。', { cause: error })
     }
     try {
       await this.audit(null, 'local_console.admin.create', projectionUserId, 'allowed', {
@@ -210,7 +210,7 @@ export class LocalAccountService {
   ): Promise<LocalManagedAccount> {
     const target = await this.requireAccount(targetEmail)
     if (!target.platformUserId || !hasPlatformRole(target, 'platform_admin')) {
-      throw new Error('目标账户不是 GeoForge 平台管理员。')
+      throw new Error('目标账户不是平台管理员。')
     }
     await this.assertNotLastActiveAdmin(target)
     const previousAuthRoles = splitAuthRoles(target.authRole)
@@ -477,7 +477,7 @@ function hasPlatformRole(account: LocalManagedAccount, role: string): boolean {
 }
 
 function requirePlatformUserId(account: LocalManagedAccount): string {
-  if (!account.platformUserId) throw new Error('认证账户尚未建立 GeoForge 平台投影。')
+  if (!account.platformUserId) throw new Error('认证账户尚未建立平台身份投影。')
   return account.platformUserId
 }
 

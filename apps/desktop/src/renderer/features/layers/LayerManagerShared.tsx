@@ -142,7 +142,7 @@ export function LayerNodeView({
           return
         }
         event.dataTransfer.effectAllowed = 'move'
-        event.dataTransfer.setData('application/x-geoforge-layer-id', node.id)
+        event.dataTransfer.setData('application/x-geo-agent-platform-layer-id', node.id)
         event.dataTransfer.setData('text/plain', node.id)
       }}
       onDragOver={event => {
@@ -153,7 +153,7 @@ export function LayerNodeView({
       onDrop={event => {
         if (isGroup || !onMoveLayer) return
         event.preventDefault()
-        const sourceId = event.dataTransfer.getData('application/x-geoforge-layer-id')
+        const sourceId = event.dataTransfer.getData('application/x-geo-agent-platform-layer-id')
           || event.dataTransfer.getData('text/plain')
         if (sourceId && sourceId !== node.id) onMoveLayer(sourceId, node.id)
       }}

@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 中文本地运维台
+//   地理智能平台 - 中文本地运维台
 //
 //   文件:       localConsole.tsx
 //
@@ -22,10 +22,11 @@ import type {
 } from '@geo-agent-platform/shared-types/operations'
 import type { AuditEvent } from '@geo-agent-platform/shared-types/platform'
 import type { LocalManagedAccount } from '@geo-agent-platform/shared-types/local-operations'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 import { Box, Text, render, useApp, useInput, usePaste, useWindowSize } from 'ink'
 
 import { LocalConsoleMouseProvider, MouseRegion, type MouseRegionState } from './localConsoleMouse.js'
-import { consolePalette, geoForgeConsoleTheme } from './localConsoleTheme.js'
+import { consolePalette, platformConsoleTheme } from './localConsoleTheme.js'
 import type { LocalConsoleDataPlane, LocalConsoleOptions, LocalConsoleTab } from './localConsoleTypes.js'
 import { createTerminalMouseController, type TerminalMouseSource } from './terminalMouse.js'
 
@@ -56,7 +57,7 @@ type ConsoleDialog =
 export async function runLocalConsole(options: LocalConsoleOptions): Promise<void> {
   const mouse = createTerminalMouseController()
   const instance = render(
-    <ThemeProvider theme={geoForgeConsoleTheme}>
+    <ThemeProvider theme={platformConsoleTheme}>
       <LocalConsoleApp options={options} mouse={mouse} />
     </ThemeProvider>,
     {
@@ -613,7 +614,7 @@ function ConsoleHeader({ snapshot, connection, mouseEnabled, columns }: {
       <Box width="100%" flexShrink={0} flexDirection="column" borderStyle="round" borderColor={tone(consolePalette.border)} paddingX={1}>
         <Box width="100%">
           <Box flexGrow={1} flexShrink={1} minWidth={0}>
-            <Text wrap="truncate-end" bold color={tone(consolePalette.focus)}>◆ GeoForge 本地运维台</Text>
+            <Text wrap="truncate-end" bold color={tone(consolePalette.focus)}>◆ {PRODUCT_CODENAME} 本地运维台</Text>
           </Box>
           <Text color={tone(connection === '已连接' ? consolePalette.healthy : consolePalette.warning)}>{connectionLabel}</Text>
         </Box>
@@ -624,7 +625,7 @@ function ConsoleHeader({ snapshot, connection, mouseEnabled, columns }: {
   return (
     <Box width="100%" flexShrink={0} borderStyle="round" borderColor={tone(consolePalette.border)} paddingX={1} justifyContent="space-between">
       <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
-        <Text bold color={tone(consolePalette.focus)}>◆ GeoForge 本地运维台</Text>
+        <Text bold color={tone(consolePalette.focus)}>◆ {PRODUCT_CODENAME} 本地运维台</Text>
         <Text wrap="truncate-end" color={tone(consolePalette.muted)}>{identity}</Text>
       </Box>
       <Box flexDirection="column" alignItems="flex-end" flexShrink={0}>
@@ -885,7 +886,7 @@ function AccountsView(input: {
   const visible = selectListWindow(input.accounts, input.selectedIndex, Math.max(4, input.rows - (compact ? 8 : 7)))
   return (
     <MouseRegion flexDirection="column" flexGrow={1} borderStyle="round" borderColor={tone(consolePalette.border)} paddingX={1} priority={1} onWheel={input.onScroll}>
-      <Text bold color={tone(consolePalette.focus)}>Better Auth 账户 + GeoForge RBAC 投影</Text>
+      <Text bold color={tone(consolePalette.focus)}>Better Auth 账户 + {PRODUCT_CODENAME} RBAC 投影</Text>
       {input.error && <Text color={tone(consolePalette.danger)}>✕ {input.error}</Text>}
       <AccountActions
         compact={compact}

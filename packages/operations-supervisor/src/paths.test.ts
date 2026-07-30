@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 运维监督运行时路径测试
+//   地理智能平台 - 运维监督运行时路径测试
 //
 //   文件:       paths.test.ts
 //
@@ -25,7 +25,7 @@ afterEach(async () => {
 
 describe('operations secret files', () => {
   it('can protect an existing development secret repeatedly without rotating it', async () => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), 'geoforge-secret-'))
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-secret-'))
     cleanupPaths.push(directory)
     const filePath = path.join(directory, 'supervisor.token')
 

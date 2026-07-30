@@ -1,4 +1,4 @@
-# 🔍 Newmap (GeoForge 地理智能平台) 全面架构审查报告 v2
+# 🔍 地理智能平台全面架构审查报告 v2
 
 > **审查日期**：2026-07-09  
 > **审查方法**：43 个 AI Agent 团队 — 8 维度并行深度审查 + 34 条高危交叉验证 + 综合报告  
@@ -76,7 +76,7 @@ Phase 3: 综合报告 (1 agent)
 
 ## 2. 总体评价
 
-**GeoForge（地理智能平台）是一个架构思想成熟、核心设计精良的 GIS Agent 平台。** 项目的三层分离（HTTP 数据面 / WebSocket 控制面 / Python 科学计算 Worker）清晰合理，文件系统作为会话唯一事实源的设计决策贯彻到位。近期重构将 WS 层从单体 handler 拆分为 CommandRegistry + 独立命令模块，显著提升了可维护性；新增的 Zustand stores 减轻了 AppShell 的单体编排压力。
+**地理智能平台（地理智能平台）是一个架构思想成熟、核心设计精良的 GIS Agent 平台。** 项目的三层分离（HTTP 数据面 / WebSocket 控制面 / Python 科学计算 Worker）清晰合理，文件系统作为会话唯一事实源的设计决策贯彻到位。近期重构将 WS 层从单体 handler 拆分为 CommandRegistry + 独立命令模块，显著提升了可维护性；新增的 Zustand stores 减轻了 AppShell 的单体编排压力。
 
 技术亮点集中在三个领域：**安全纵深防御**（WS 五层认证链 + Worker 四层防重放 + Developer Tools 路径策略）、**工具系统契约校验**（ToolProvider 双射校验 + valueRef kind 链 + JSON Schema 双向转换）、**存储可靠性**（DurableJsonlStore 串行队列 + Journal 恢复 + 行级损坏恢复）。
 
@@ -155,7 +155,7 @@ ConversationIndexStore 是纯内存索引，启动时从 JSON/JSONL 文件重建
 **文件**：[`server/src/framework/schema.ts:41`](server/src/framework/schema.ts#L41)  
 **分类**：工具系统
 
-`parametersFromJsonSchema`(line 41) 利用 Zod v4 内置 `z.fromJSONSchema` 实现 JSON Schema → Zod 转换；`parametersForAgentsSdk`(line 47) 通过 `addNullableToOptional`(line 53-68) 对可选字段添加 null 类型，适配 OpenAI Agents SDK 的 null 传入行为。GeoForge 约定未设置 additionalProperties 时默认拒绝未识别参数（line 44），安全性优于 JSON Schema 规范。
+`parametersFromJsonSchema`(line 41) 利用 Zod v4 内置 `z.fromJSONSchema` 实现 JSON Schema → Zod 转换；`parametersForAgentsSdk`(line 47) 通过 `addNullableToOptional`(line 53-68) 对可选字段添加 null 类型，适配 OpenAI Agents SDK 的 null 传入行为。地理智能平台 约定未设置 additionalProperties 时默认拒绝未识别参数（line 44），安全性优于 JSON Schema 规范。
 
 ### #10: PostgresPlatformStore 门面 + 子 Store 职责分离
 

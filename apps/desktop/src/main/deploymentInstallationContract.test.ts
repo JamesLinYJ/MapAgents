@@ -18,17 +18,17 @@ import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 
 const deploymentManifestSchema = z.object({
-  kind: z.literal('geoforge.desktop-runtime'),
+  kind: z.literal('geo-agent-platform.desktop-runtime'),
   schemaVersion: z.literal(1),
   projectRoot: z.string().min(1),
   runtimeRoot: z.string().min(1),
   apiBaseUrl: z.string().url(),
   supervisorTokenFile: z.string().min(1),
   allowedEnvironmentOverrides: z.array(z.enum([
-    'GEOFORGE_ROOT',
+    'GEO_AGENT_PLATFORM_ROOT',
     'RUNTIME_ROOT',
     'APP_BASE_URL',
-    'GEOFORGE_SUPERVISOR_TOKEN_FILE',
+    'GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE',
   ])),
 }).strict()
 
@@ -77,11 +77,12 @@ describe('production installation contract', () => {
       'RandomNumberGenerator]::Fill',
       '[IO.File]::Move($TemporaryManifestPath, $ManifestPath, $true)',
       '[IO.File]::Move($TemporaryTokenPath, $SupervisorTokenFile, $true)',
-      "Join-Path $GeoForgeConfigRoot 'runtime-manifest.v1.json'",
-      "GetFullPath('C:\\ProgramData\\GeoForge')",
-      'Assert-GeoForgeOrdinaryPath',
+      "Join-Path $PlatformConfigRoot 'runtime-manifest.v1.json'",
+      '[Environment]::GetFolderPath(',
+      "Join-Path $CommonApplicationData 'GeoAgentPlatform'",
+      'Assert-PlatformOrdinaryPath',
       '$PreserveExistingSupervisorToken',
-      'Set-GeoForgeProtectedFileAcl -LiteralPath $ServiceEnvironmentFile -AllowService',
+      'Set-PlatformProtectedFileAcl -LiteralPath $ServiceEnvironmentFile -AllowService',
       "Join-Path $PSScriptRoot 'validate-production-environment.mjs'",
     ]) {
       expect(installer, securityBoundary).toContain(securityBoundary)
@@ -95,7 +96,7 @@ describe('production installation contract', () => {
 
     for (const securityBoundary of [
       'if ((EUID != 0))',
-      "config_root='/etc/geoforge'",
+      "config_root='/etc/geo-agent-platform'",
       "manifest_path=\"$config_root/runtime-manifest.v1.json\"",
       'assert_no_links',
       "stat -c '%h'",
@@ -128,9 +129,9 @@ describe('production installation contract', () => {
   it('keeps all server-required production fields and passes the token path to systemd', async () => {
     const environment = parseEnvironmentExample(await readRepositoryFile('deploy/env/supervisor.env.example'))
     for (const requiredName of [
-      'GEOFORGE_ROOT',
+      'GEO_AGENT_PLATFORM_ROOT',
       'RUNTIME_ROOT',
-      'GEOFORGE_SUPERVISOR_TOKEN_FILE',
+      'GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE',
       'API_HOST',
       'API_PORT',
       'DATABASE_URL',
@@ -144,30 +145,30 @@ describe('production installation contract', () => {
       expect(environment.get(requiredName), requiredName).toBeTruthy()
     }
 
-    const systemd = await readRepositoryFile('deploy/systemd/geoforge-supervisor.service')
-    expect(systemd).toContain('--profile production --token-file "${GEOFORGE_SUPERVISOR_TOKEN_FILE}"')
-    expect(systemd).toContain('SupplementaryGroups=geoforge-ops')
+    const systemd = await readRepositoryFile('deploy/systemd/geo-agent-platform-supervisor.service')
+    expect(systemd).toContain('--profile production --token-file "${GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE}"')
+    expect(systemd).toContain('SupplementaryGroups=geo-agent-platform-ops')
   })
 
   it('validates a complete production environment against installation values', async () => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), 'geoforge-production-env-'))
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-production-env-'))
     try {
       const projectRoot = path.join(directory, 'release')
       const runtimeRoot = path.join(directory, 'runtime')
       const supervisorTokenFile = path.join(runtimeRoot, 'secrets', 'supervisor.token')
-      const environmentFile = path.join(directory, 'geoforge.env')
+      const environmentFile = path.join(directory, 'geo-agent-platform.env')
       const environment = [
         'NODE_ENV=production',
-        `GEOFORGE_ROOT=${projectRoot}`,
+        `GEO_AGENT_PLATFORM_ROOT=${projectRoot}`,
         `RUNTIME_ROOT=${runtimeRoot}`,
-        `GEOFORGE_SUPERVISOR_TOKEN_FILE=${supervisorTokenFile}`,
-        `GEOFORGE_LOCAL_ROOT_SECRET_FILE=${path.join(directory, 'local-root.secret')}`,
+        `GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE=${supervisorTokenFile}`,
+        `GEO_AGENT_PLATFORM_LOCAL_ROOT_SECRET_FILE=${path.join(directory, 'local-root.secret')}`,
         'POSTGIS_PORT=5432',
         'WORKER_PORT=8012',
         'API_HOST=127.0.0.1',
         'API_PORT=8000',
         `WORKER_PYTHON=${path.join(directory, 'venv', process.platform === 'win32' ? 'python.exe' : 'bin/python')}`,
-        'DATABASE_URL=postgresql://geoforge:secret@127.0.0.1:5432/geoforge',
+        'DATABASE_URL=postgresql://geo-agent-platform:secret@127.0.0.1:5432/geo-agent-platform',
         'WORKER_URL=http://127.0.0.1:8012',
         'APP_BASE_URL=http://127.0.0.1:8000',
         'BETTER_AUTH_URL=http://127.0.0.1:8000',

@@ -20,6 +20,7 @@
 
 import { lazy, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
+import { PRODUCT_DESKTOP_NAME } from '@geo-agent-platform/shared-types/product-identity'
 import './index.css'
 import { BootScreen } from './app/AppLoader'
 import { ErrorBoundary } from './shared/components/ErrorBoundary'
@@ -29,8 +30,8 @@ const DesktopApplicationRuntime = lazy(() => import('./app/DesktopApplicationRun
 const rootElement = document.getElementById('root')
 if (!rootElement) throw new Error('桌面 Renderer 缺少根挂载节点。')
 
-if (!window.geoforgeDesktop) {
-  rootElement.textContent = 'GeoForge GIS 工作台只能通过 Electron 桌面应用启动。'
+if (!window.platformDesktop) {
+  rootElement.textContent = `${PRODUCT_DESKTOP_NAME}只能通过 Electron 桌面应用启动。`
   rootElement.setAttribute('role', 'alert')
 } else {
   createRoot(rootElement).render(

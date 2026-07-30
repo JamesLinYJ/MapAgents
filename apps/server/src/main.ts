@@ -74,7 +74,7 @@ app.use('*', cors({
 app.use('*', async (c, next) => {
   const requestTraceId = traceId()
   const pathname = new URL(c.req.url).pathname
-  c.header('x-geoforge-trace-id', requestTraceId)
+  c.header('x-geo-agent-platform-trace-id', requestTraceId)
   const started = performance.now()
   await withLogContext({
     traceId: requestTraceId,

@@ -9,11 +9,12 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
-// GeoForge 跨包协议公共入口。领域模块可通过 package subpath 直接导入，避免加载无关 schema。
+// 平台 跨包协议公共入口。领域模块可通过 package subpath 直接导入，避免加载无关 schema。
 export * from './core.js'
 export * from './conversation.js'
 export * from './runtime.js'
 export * from './platform.js'
+export * from './productIdentity.js'
 export * from './resources.js'
 export * from './transport.js'
 export * from './worker.js'

@@ -126,7 +126,7 @@ export async function fetchMeteorologyWorkerCatalog(workerUrl: string, workerSha
 
 function traceHeaders(): Record<string, string> {
   const currentTraceId = currentLogContext().traceId
-  return currentTraceId ? { 'x-geoforge-trace-id': currentTraceId } : {}
+  return currentTraceId ? { 'x-geo-agent-platform-trace-id': currentTraceId } : {}
 }
 
 export function clearMeteorologyWorkerCatalogCache(): void {

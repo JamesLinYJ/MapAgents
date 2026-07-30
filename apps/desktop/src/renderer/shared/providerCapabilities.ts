@@ -45,7 +45,7 @@ export function agentRuntimeCapabilitySummary(
   const multiTool = runtime.multiToolResponse ? '支持同轮多工具响应' : '不支持同轮多工具响应'
   const concurrency = runtime.providerParallelToolControl
     ? '提供商可控制并行'
-    : '由 GeoForge 本地安全闸门控制并发'
+    : '由平台本地安全闸门控制并发'
   const unavailable = [
     !runtime.hostedTools ? 'Hosted Tools' : null,
     !runtime.remoteConversation ? '远程 Conversation' : null,

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # +-------------------------------------------------------------------------
 #
-#   GeoForge 地理智能平台 - Linux Desktop 生产运行时清单安装器
+#   地理智能平台 - Linux Desktop 生产运行时清单安装器
 #
 #   文件:       install-desktop-runtime-manifest.sh
 #
@@ -13,12 +13,12 @@
 set -euo pipefail
 
 project_root=''
-service_user='geoforge'
-operators_group='geoforge-ops'
-runtime_root='/var/lib/geoforge/runtime'
+service_user='geo_platform'
+operators_group='geo-agent-platform-ops'
+runtime_root='/var/lib/geo-agent-platform/runtime'
 api_base_url='http://127.0.0.1:8000'
 supervisor_token_file=''
-service_environment_file='/etc/geoforge/geoforge.env'
+service_environment_file='/etc/geo-agent-platform/geo-agent-platform.env'
 preserve_token='false'
 declare -a allowed_overrides=()
 
@@ -81,10 +81,10 @@ service_environment_file="$(realpath -m -- "$service_environment_file")"
 }
 assert_no_links "$project_root"
 
-config_root='/etc/geoforge'
+config_root='/etc/geo-agent-platform'
 manifest_path="$config_root/runtime-manifest.v1.json"
 [[ "$service_environment_file" == "$config_root/"* ]] || {
-  echo 'serviceEnvironmentFile 必须位于 /etc/geoforge 内。' >&2
+  echo 'serviceEnvironmentFile 必须位于 /etc/geo-agent-platform 内。' >&2
   exit 1
 }
 [[ -f "$service_environment_file" && ! -L "$service_environment_file" ]] || {
@@ -116,7 +116,7 @@ assert_no_links "$token_directory"
 declare -A seen_overrides=()
 for override in "${allowed_overrides[@]}"; do
   case "$override" in
-    GEOFORGE_ROOT|RUNTIME_ROOT|APP_BASE_URL|GEOFORGE_SUPERVISOR_TOKEN_FILE) ;;
+    GEO_AGENT_PLATFORM_ROOT|RUNTIME_ROOT|APP_BASE_URL|GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE) ;;
     *) echo "未知受控环境变量覆盖：$override" >&2; exit 1 ;;
   esac
   [[ -z "${seen_overrides[$override]+present}" ]] || {
@@ -209,7 +209,7 @@ MANIFEST_PATH="$temporary_manifest" \
 node -e '
   const fs = require("node:fs");
   const manifest = {
-    kind: "geoforge.desktop-runtime",
+    kind: "geo-agent-platform.desktop-runtime",
     schemaVersion: 1,
     projectRoot: process.env.PROJECT_ROOT,
     runtimeRoot: process.env.RUNTIME_ROOT,

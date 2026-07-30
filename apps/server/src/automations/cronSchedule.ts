@@ -17,7 +17,7 @@ export interface CronScheduleInput {
   from?: Date
 }
 
-// GeoForge v1 明确采用标准 5 字段 cron。pg-boss 接受更宽的表达式，
+// 平台 v1 明确采用标准 5 字段 cron。pg-boss 接受更宽的表达式，
 // 但产品层只开放一个稳定语义，避免用户看到与 UI/审计不一致的触发时间。
 export function assertSupportedCronExpression(cron: string): void {
   const normalized = cron.trim().replace(/\s+/gu, ' ')

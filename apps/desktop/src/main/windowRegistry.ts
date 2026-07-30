@@ -14,6 +14,10 @@ import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import windowStateKeeper from 'electron-window-state'
+import {
+  PLATFORM_DESKTOP_APP_ORIGIN,
+  PRODUCT_CODENAME,
+} from '@geo-agent-platform/shared-types/product-identity'
 
 import {
   DESKTOP_IPC_CHANNELS,
@@ -31,7 +35,7 @@ import {
 import { buildWorkspaceWindowQuery } from './workspaceWindowLocation.js'
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url))
-const BOOTSTRAP_WINDOW_KEY = '__geoforge_bootstrap__'
+const BOOTSTRAP_WINDOW_KEY = '__geo_agent_platform_bootstrap__'
 
 export class WorkspaceWindowRegistry {
   private readonly windows = new Map<string, BrowserWindow>()
@@ -89,7 +93,7 @@ export class WorkspaceWindowRegistry {
     }
     this.windows.set(workspace.workspaceId, sourceWindow)
     this.restoreWorkspaceWindowState(sourceWindow, workspace.workspaceId)
-    const title = `${workspace.workspaceName} — GeoForge`
+    const title = `${workspace.workspaceName} — ${PRODUCT_CODENAME}`
     this.windowTitles.set(sourceWindow, title)
     sourceWindow.setTitle(title)
     return sourceWindow
@@ -113,7 +117,7 @@ export class WorkspaceWindowRegistry {
 
   private createWindow(workspace: DesktopWorkspaceWindowDescriptor | null): BrowserWindow {
     const state = createWindowState(workspace?.workspaceId ?? BOOTSTRAP_WINDOW_KEY)
-    const windowTitle = `${workspace?.workspaceName ?? 'GeoForge 工作台'} — GeoForge`
+    const windowTitle = `${workspace?.workspaceName ?? `${PRODUCT_CODENAME} 工作台`} — ${PRODUCT_CODENAME}`
     const window = new BrowserWindow({
       width: Math.max(1_100, state.width),
       height: Math.max(700, state.height),
@@ -176,7 +180,7 @@ export class WorkspaceWindowRegistry {
       url.search = query
       void window.loadURL(url.toString())
     } else {
-      void window.loadURL(`geoforge://app/index.html${query}`)
+      void window.loadURL(`${PLATFORM_DESKTOP_APP_ORIGIN}/index.html${query}`)
     }
     return window
   }

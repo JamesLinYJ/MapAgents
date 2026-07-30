@@ -23,6 +23,7 @@ import {
   type ReactNode,
 } from 'react'
 import type { AgentThreadRecord } from '@geo-agent-platform/shared-types'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 import { requireDesktopBridge } from '../../api/transport'
 import {
   desktopMenuCommandSchema,
@@ -229,7 +230,7 @@ export function WorkspaceLayout(props: WorkspaceLayoutProps) {
     return () => window.removeEventListener('keydown', handleWorkbenchShortcut, { capture: true })
   }, [])
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
-    id: `geoforge-desktop:${workspaceLayoutKey}`,
+    id: `geo-agent-platform-desktop:${workspaceLayoutKey}`,
     panelIds: ['contents', 'document', 'assistant'],
     storage: localStorage,
     onlySaveAfterUserInteractions: true,
@@ -305,7 +306,7 @@ export function WorkspaceLayout(props: WorkspaceLayoutProps) {
   }, [onContentsModeChange])
 
   const focusWorkspacePicker = useCallback(() => {
-    const picker = document.getElementById('geoforge-workspace-picker')
+    const picker = document.getElementById('geo-agent-platform-workspace-picker')
     if (picker instanceof HTMLSelectElement) {
       picker.focus()
       picker.showPicker?.()
@@ -408,7 +409,7 @@ export function WorkspaceLayout(props: WorkspaceLayoutProps) {
         </label>
       </div>
 
-      <section className="gf-ribbon" aria-label="GeoForge 功能区">
+      <section className="gf-ribbon" aria-label={`${PRODUCT_CODENAME} 功能区`}>
         <div className="gf-ribbon-tabs" role="tablist" aria-label="功能区选项卡">
           {visibleRibbonTabs.map(tab => (
             <button

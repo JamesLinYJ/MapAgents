@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本地运维台视觉主题
+//   地理智能平台 - 本地运维台视觉主题
 //
 //   文件:       localConsoleTheme.ts
 //
@@ -35,7 +35,7 @@ export const consolePalette = {
   selected: '#183E57',
 } as const
 
-export const geoForgeConsoleTheme = extendTheme(defaultTheme, {
+export const platformConsoleTheme = extendTheme(defaultTheme, {
   components: {
     TextInput: {
       styles: { value: () => ({ color: consolePalette.focus, bold: true }) },

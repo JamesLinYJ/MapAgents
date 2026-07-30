@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 原生基础设施进程组
+//   地理智能平台 - 原生基础设施进程组
 //
 //   文件:       nativeInfrastructure.ts
 //
@@ -333,7 +333,7 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const projectRoot = process.env.GEOFORGE_ROOT ?? process.cwd()
+  const projectRoot = process.env.GEO_AGENT_PLATFORM_ROOT ?? process.cwd()
   const runtimeRoot = process.env.RUNTIME_ROOT ?? path.join(projectRoot, 'runtime')
   const profile = process.env.NODE_ENV === 'production' ? 'production' : 'development'
   const input = { projectRoot, runtimeRoot, profile, environment: process.env } as const

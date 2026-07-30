@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-// GeoForge Automation DAG 执行器。
+// 平台 Automation DAG 执行器。
 // 每次运行固定消费 definition revision 快照；节点状态、分支选择和审批 checkpoint 持久化后才继续。
 
 import type { RunTaskManager } from '../agent/runTaskManager.js'

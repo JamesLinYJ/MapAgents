@@ -200,7 +200,7 @@ describe('FileHandleRegistry', () => {
 })
 
 async function createTemporaryDirectory(): Promise<string> {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'geoforge-file-handles-'))
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-file-handles-'))
   temporaryDirectories.push(directory)
   return directory
 }

@@ -10,6 +10,10 @@
 // --------------------------------------------------------------------------
 
 import { app, session } from 'electron'
+import {
+  PLATFORM_DESKTOP_USER_MODEL_ID,
+  PRODUCT_CODENAME,
+} from '@geo-agent-platform/shared-types/product-identity'
 
 import { DesktopApiGateway } from './apiGateway.js'
 import { installAppProtocol, registerPrivilegedAppScheme } from './appProtocol.js'
@@ -67,11 +71,11 @@ async function launchDesktop(): Promise<void> {
 }
 
 async function startDesktop(logger: DesktopSystemLogger): Promise<void> {
-  if (process.platform === 'win32') app.setAppUserModelId('GeoForge.Desktop')
+  if (process.platform === 'win32') app.setAppUserModelId(PLATFORM_DESKTOP_USER_MODEL_ID)
   app.setAboutPanelOptions({
-    applicationName: 'GeoForge',
+    applicationName: PRODUCT_CODENAME,
     applicationVersion: app.getVersion(),
-    copyright: 'GeoForge 地理智能平台',
+    copyright: '地理智能平台',
     version: app.getVersion(),
   })
   const runtime = resolveDesktopRuntimeConfig(process.env)

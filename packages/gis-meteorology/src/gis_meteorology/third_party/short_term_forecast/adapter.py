@@ -9,7 +9,7 @@
 #   协助:       OpenAI Codex:GPT-5.5
 # --------------------------------------------------------------------------
 
-"""GeoForge wrapper for the copied short-term rainfall table tool.
+"""平台 wrapper for the copied short-term rainfall table tool.
 
 The source project used a Flask page, browser screenshots, and local directory
 browsing. This adapter keeps the scientific calculation and table artifact

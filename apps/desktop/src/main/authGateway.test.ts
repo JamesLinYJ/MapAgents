@@ -10,6 +10,7 @@
 // --------------------------------------------------------------------------
 
 import { describe, expect, it, vi } from 'vitest'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 vi.mock('@better-auth/electron/client', () => ({ electronClient: vi.fn(() => ({})) }))
 vi.mock('better-auth/client', () => ({ createAuthClient: vi.fn(() => ({})) }))
@@ -78,7 +79,7 @@ describe('DesktopAuthGateway auto auth', () => {
     expect(result).toEqual({ mode: 'local_auto', status: 'authenticated', message: null })
     expect(client.signUp.email).toHaveBeenCalledWith({
       email: 'admin@example.com',
-      name: 'GeoForge 演示管理员',
+      name: `${PRODUCT_CODENAME} 演示管理员`,
       password: 'local-secret-that-never-enters-renderer',
     })
     expect(JSON.stringify(response)).not.toContain('local-secret-that-never-enters-renderer')
@@ -245,7 +246,7 @@ function authRequest(command: 'projection' | 'sign-out') {
 function autoAuth(): DesktopAutoAuthConfig {
   return {
     email: 'admin@example.com',
-    displayName: 'GeoForge 演示管理员',
+    displayName: `${PRODUCT_CODENAME} 演示管理员`,
     credentialFile: 'C:\\runtime\\desktop\\auto-auth.secret',
     allowAccountCreation: true,
   }

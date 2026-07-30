@@ -304,7 +304,7 @@ describe('memory core', () => {
 })
 
 async function makeTempRoot(): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), 'geoforge-memory-'))
+  const root = await mkdtemp(path.join(tmpdir(), 'geo-agent-platform-memory-'))
   tempRoots.push(root)
   return root
 }

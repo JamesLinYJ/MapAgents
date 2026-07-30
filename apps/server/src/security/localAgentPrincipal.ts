@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本机 Agent 服务主体标识
+//   地理智能平台 - 本机 Agent 服务主体标识
 //
 //   文件:       localAgentPrincipal.ts
 //
@@ -11,7 +11,7 @@
 
 import { createHmac } from 'node:crypto'
 
-export const LOCAL_AGENT_EMAIL_DOMAIN = 'local-agent.geoforge.invalid'
+export const LOCAL_AGENT_EMAIL_DOMAIN = 'local-agent.geo-agent-platform.invalid'
 export const LOCAL_AGENT_EMAIL = `agent@${LOCAL_AGENT_EMAIL_DOMAIN}`
 
 export interface LocalAgentCredential {
@@ -39,6 +39,6 @@ export function isLocalAgentEmail(email: string): boolean {
 
 function derive(rootSecret: string, purpose: string): string {
   return createHmac('sha256', rootSecret)
-    .update(`geoforge-local-agent:${purpose}:v1`)
+    .update(`geo-agent-platform-local-agent:${purpose}:v1`)
     .digest('base64url')
 }

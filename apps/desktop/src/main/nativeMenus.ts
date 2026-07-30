@@ -20,6 +20,7 @@ import {
   type MenuItem,
   type MenuItemConstructorOptions,
 } from 'electron'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 import {
   DESKTOP_IPC_CHANNELS,
@@ -148,7 +149,7 @@ function applicationMenuTemplate(
         commandItem('导出成果', 'export-results', 'CommandOrControl+Shift+E'),
         { type: 'separator' },
         { role: 'close', label: '关闭窗口' },
-        { role: 'quit', label: '退出 GeoForge' },
+        { role: 'quit', label: `退出 ${PRODUCT_CODENAME}` },
         ...(access.canStopAllAndQuit
           ? [
               { type: 'separator' as const },
@@ -212,7 +213,7 @@ function applicationMenuTemplate(
       submenu: [
         commandItem('命令搜索', 'focus-command', 'Alt+Q'),
         {
-          label: '关于 GeoForge',
+          label: `关于 ${PRODUCT_CODENAME}`,
           click: (_item, window) => {
             const target = window instanceof BrowserWindow ? window : BrowserWindow.getFocusedWindow()
             void app.showAboutPanel()
@@ -268,7 +269,7 @@ async function showShutdownFailure(
     type: 'error',
     title: '未停止后台服务',
     message,
-    detail: 'GeoForge Desktop 将继续运行；普通退出也不会停止后台服务。',
+    detail: `${PRODUCT_CODENAME} Desktop 将继续运行；普通退出也不会停止后台服务。`,
     buttons: ['知道了'],
     defaultId: 0,
     cancelId: 0,

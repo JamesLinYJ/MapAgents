@@ -10,6 +10,9 @@
 // --------------------------------------------------------------------------
 
 import type { BasemapDescriptor } from '@geo-agent-platform/shared-types'
+import {
+  PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME,
+} from '@geo-agent-platform/shared-types/product-identity'
 
 export interface DataReferenceSummary {
   id: string
@@ -34,7 +37,7 @@ export const DEFAULT_BASEMAP: BasemapDescriptor = {
   provider: 'osm',
   kind: 'raster',
   attribution: '© OpenStreetMap contributors',
-  tileUrls: ['geoforge-resource://basemap/osm/{z}/{x}/{y}.png'],
+  tileUrls: [`${PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME}://basemap/osm/{z}/{x}/{y}.png`],
   labelTileUrls: [],
   available: true,
   isDefault: true,

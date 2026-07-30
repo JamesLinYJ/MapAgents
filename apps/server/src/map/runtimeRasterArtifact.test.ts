@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 运行目录栅格 Artifact 解析测试
+//   地理智能平台 - 运行目录栅格 Artifact 解析测试
 //
 //   文件:       runtimeRasterArtifact.test.ts
 //
@@ -57,7 +57,7 @@ describe('RuntimeRasterArtifactResolver', () => {
 })
 
 async function temporaryDirectory(): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'geoforge-raster-path-'))
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-raster-path-'))
   cleanupDirectories.push(directory)
   return directory
 }

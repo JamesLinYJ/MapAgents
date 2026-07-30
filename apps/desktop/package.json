@@ -2,10 +2,9 @@
   "name": "@geo-agent-platform/desktop",
   "private": true,
   "version": "0.1.0",
-  "productName": "GeoForge",
-  "description": "GeoForge 地理智能工作台",
+  "description": "可配置产品代号的地理智能工作台",
   "author": {
-    "name": "GeoForge"
+    "name": "Geo Agent Platform Contributors"
   },
   "license": "UNLICENSED",
   "engines": {

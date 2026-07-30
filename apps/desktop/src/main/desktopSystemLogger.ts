@@ -38,7 +38,7 @@ export interface DesktopSystemLogger {
 }
 
 /**
- * electron-log 负责轮转、Electron 崩溃事件与未捕获异常；GeoForge 包装层只允许
+ * electron-log 负责轮转、Electron 崩溃事件与未捕获异常；平台包装层只允许
  * 结构化事件，并在任何 transport 之前统一脱敏。
  */
 export function createDesktopSystemLogger(
@@ -63,7 +63,7 @@ export function createDesktopSystemLogger(
     ...message,
     data: message.data.map(value => sanitizeDesktopLogValue(value, secrets)),
   }))
-  // Renderer 只允许 GeoForge 自有的窄 Preload；不要让日志组件注入第二个桥。
+  // Renderer 只允许平台自有的窄 Preload；不要让日志组件注入第二个桥。
   log.initialize({ preload: false, spyRendererConsole: false })
   log.errorHandler.startCatching({ showDialog: false })
   log.eventLogger.startLogging({

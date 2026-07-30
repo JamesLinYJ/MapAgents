@@ -11,6 +11,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { LayerDescriptor, MapLegend, MapLayerStyle, MapSceneLayer } from '@geo-agent-platform/shared-types'
+import {
+  PLATFORM_RENDERER_EVENT_PREFIX,
+} from '@geo-agent-platform/shared-types/product-identity'
 import type { SceneRenderLayer } from '../map/useMapScene'
 import { isRecord } from '../../shared/utils/guards'
 
@@ -510,5 +513,5 @@ function isVisibilityFilter(value: unknown): value is LayerVisibilityFilter {
 }
 
 function storageKey(preferenceKey: string): string {
-  return `geoforge:layer-manager:${preferenceKey}`
+  return `${PLATFORM_RENDERER_EVENT_PREFIX}:layer-manager:${preferenceKey}`
 }

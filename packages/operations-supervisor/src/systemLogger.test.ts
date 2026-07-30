@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - Supervisor 轮转日志测试
+//   地理智能平台 - Supervisor 轮转日志测试
 //
 //   文件:       systemLogger.test.ts
 //
@@ -28,7 +28,7 @@ afterEach(async () => {
 
 describe('createSupervisorLogger', () => {
   it('writes structured JSONL and redacts secret-bearing fields', async () => {
-    const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'geoforge-system-log-'))
+    const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-system-log-'))
     cleanupPaths.push(projectRoot)
     const paths = await resolveOperationsPaths({ projectRoot, profile: 'development' })
     const output = createSupervisorLogger(paths, 'debug', { includeStdout: false })

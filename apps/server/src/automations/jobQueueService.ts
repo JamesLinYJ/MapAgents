@@ -15,7 +15,7 @@ import { z } from 'zod'
 import type { Env } from '../framework/env.js'
 import { errorLogPayload, logger } from '../observability/logger.js'
 
-export const AUTOMATION_QUEUE_NAME = 'geoforge.automation.run'
+export const AUTOMATION_QUEUE_NAME = 'geo-agent-platform.automation.run'
 
 export const automationJobPayloadSchema = z.object({
   scheduledTaskId: z.string().min(1).nullable().default(null),
@@ -41,7 +41,7 @@ export class JobQueueService {
     this.boss = new PgBoss({
       connectionString: env.DATABASE_URL,
       schema: 'pgboss',
-      application_name: 'geoforge-automation-queue',
+      application_name: 'geo-agent-platform-automation-queue',
       schedule: true,
       migrate: true,
       createSchema: true,

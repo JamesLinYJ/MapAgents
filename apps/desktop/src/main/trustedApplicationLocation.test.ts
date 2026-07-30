@@ -17,12 +17,12 @@ import {
 } from './trustedApplicationLocation.js'
 
 describe('isTrustedApplicationUrl', () => {
-  it('accepts only the exact GeoForge application host', () => {
-    expect(isTrustedApplicationUrl('geoforge://app/index.html?workspace=1')).toBe(true)
-    expect(isTrustedApplicationUrl('geoforge://app')).toBe(true)
-    expect(isTrustedApplicationUrl('geoforge://app.evil/index.html')).toBe(false)
-    expect(isTrustedApplicationUrl('geoforge://app@evil.example/index.html')).toBe(false)
-    expect(isTrustedApplicationUrl('geoforge://app:443/index.html')).toBe(false)
+  it('accepts only the exact platform application host', () => {
+    expect(isTrustedApplicationUrl('geo-agent-platform://app/index.html?workspace=1')).toBe(true)
+    expect(isTrustedApplicationUrl('geo-agent-platform://app')).toBe(true)
+    expect(isTrustedApplicationUrl('geo-agent-platform://app.evil/index.html')).toBe(false)
+    expect(isTrustedApplicationUrl('geo-agent-platform://app@evil.example/index.html')).toBe(false)
+    expect(isTrustedApplicationUrl('geo-agent-platform://app:443/index.html')).toBe(false)
   })
 
   it('allows only the exact configured loopback development origin', () => {

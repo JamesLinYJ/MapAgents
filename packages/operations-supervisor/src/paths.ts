@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 运维监督运行时路径
+//   地理智能平台 - 运维监督运行时路径
 //
 //   文件:       paths.ts
 //
@@ -50,7 +50,7 @@ export async function resolveOperationsPaths(input: {
   rootSecretFile?: string
   profile: OperationsProfile
 }): Promise<OperationsPaths> {
-  if (!path.isAbsolute(input.projectRoot)) throw new Error('GEOFORGE_ROOT 必须是绝对路径。')
+  if (!path.isAbsolute(input.projectRoot)) throw new Error('GEO_AGENT_PLATFORM_ROOT 必须是绝对路径。')
   const projectRoot = await realpath(input.projectRoot)
   const runtimeRoot = path.resolve(input.runtimeRoot ?? path.join(projectRoot, 'runtime'))
   const operationsRoot = path.join(runtimeRoot, 'ops')
@@ -62,7 +62,7 @@ export async function resolveOperationsPaths(input: {
     operationsRoot,
     workspaceId,
     endpoint: process.platform === 'win32'
-      ? `\\\\.\\pipe\\geoforge-operations-${workspaceId}`
+      ? `\\\\.\\pipe\\geo-agent-platform-operations-${workspaceId}`
       : path.join(operationsRoot, `supervisor-${workspaceId}.sock`),
     tokenFile: path.resolve(input.tokenFile ?? path.join(operationsRoot, 'supervisor.token')),
     rootSecretFile: path.resolve(input.rootSecretFile ?? path.join(operationsRoot, 'local-root.secret')),
@@ -130,16 +130,16 @@ async function protectWindowsSecret(filePath: string): Promise<void> {
 
 async function readWindowsAcl(filePath: string): Promise<z.infer<typeof windowsAclSchema>> {
   const script = [
-    '$Target = $env:GEOFORGE_ACL_TARGET',
+    '$Target = $env:GEO_AGENT_PLATFORM_ACL_TARGET',
     '$acl = Get-Acl -LiteralPath $Target',
     '$currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
     '$operatorSid = $null',
-    'if ($env:GEOFORGE_OPERATORS_PRINCIPAL) { try { $operatorSid = ([Security.Principal.NTAccount]::new($env:GEOFORGE_OPERATORS_PRINCIPAL)).Translate([Security.Principal.SecurityIdentifier]).Value } catch {} }',
+    'if ($env:GEO_AGENT_PLATFORM_OPERATORS_PRINCIPAL) { try { $operatorSid = ([Security.Principal.NTAccount]::new($env:GEO_AGENT_PLATFORM_OPERATORS_PRINCIPAL)).Translate([Security.Principal.SecurityIdentifier]).Value } catch {} }',
     '$rules = @($acl.Access | ForEach-Object { [pscustomobject]@{ sid = $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value; type = $_.AccessControlType.ToString(); inherited = $_.IsInherited } })',
     '[pscustomobject]@{ protected = $acl.AreAccessRulesProtected; currentSid = $currentSid; operatorSid = $operatorSid; rules = $rules } | ConvertTo-Json -Depth 4 -Compress',
   ].join('; ')
   const { stdout } = await execFileAsync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', script], {
-    env: { ...process.env, GEOFORGE_ACL_TARGET: filePath },
+    env: { ...process.env, GEO_AGENT_PLATFORM_ACL_TARGET: filePath },
     windowsHide: true,
     encoding: 'utf8',
     timeout: 10_000,

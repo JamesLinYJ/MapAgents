@@ -84,6 +84,6 @@ function installBridge(files: DesktopBridge['files']): void {
   const bridge = { files } as unknown as DesktopBridge
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
-    value: { geoforgeDesktop: bridge },
+    value: { platformDesktop: bridge },
   })
 }

@@ -30,7 +30,7 @@ describe('mapResourceProtocolProjection', () => {
     const projected = projectMapTileJsonForDesktop(canonical)
 
     expect(projected?.tiles).toEqual([
-      'geoforge-resource://api/api/v1/map/layers/map_layer_1/tiles/{z}/{x}/{y}?v=7',
+      'geo-agent-platform-resource://api/api/v1/map/layers/map_layer_1/tiles/{z}/{x}/{y}?v=7',
     ])
     expect(canonical.tiles).toEqual([
       '/api/v1/map/layers/map_layer_1/tiles/{z}/{x}/{y}?v=7',
@@ -39,7 +39,7 @@ describe('mapResourceProtocolProjection', () => {
 
   it('把受控数据面的查询参数原样交给 Server 权威契约', () => {
     const resource = new URL(
-      'geoforge-resource://api/api/v1/map/layers/map_layer_1/tiles/9/426/211?v=7&time=2026-07-29T12%3A00%3A00Z',
+      'geo-agent-platform-resource://api/api/v1/map/layers/map_layer_1/tiles/9/426/211?v=7&time=2026-07-29T12%3A00%3A00Z',
     )
     expect(projectDesktopApiResourceRequest(resource)).toEqual({
       targetPath: '/api/v1/map/layers/map_layer_1/tiles/9/426/211?v=7&time=2026-07-29T12%3A00%3A00Z',
@@ -48,15 +48,15 @@ describe('mapResourceProtocolProjection', () => {
 
   it('拒绝协议范围外路径', () => {
     expect(projectDesktopApiResourceRequest(new URL(
-      'geoforge-resource://api/api/v1/map/layers/map_layer_1/tilejson',
+      'geo-agent-platform-resource://api/api/v1/map/layers/map_layer_1/tilejson',
     ))).toEqual({
       targetPath: '/api/v1/map/layers/map_layer_1/tilejson',
     })
     expect(projectDesktopApiResourceRequest(new URL(
-      'geoforge-resource://api/api/v1/admin/users',
+      'geo-agent-platform-resource://api/api/v1/admin/users',
     ))).toBeNull()
     expect(projectDesktopApiResourceRequest(new URL(
-      'geoforge-resource://api/api/v1/map/%2e%2e/admin',
+      'geo-agent-platform-resource://api/api/v1/map/%2e%2e/admin',
     ))).toBeNull()
   })
 

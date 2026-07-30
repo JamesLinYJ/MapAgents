@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 受监督服务环境隔离
+//   地理智能平台 - 受监督服务环境隔离
 //
 //   文件:       environment.ts
 //
@@ -16,7 +16,7 @@ const COMMON_NAMES = new Set([
   'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'PROGRAMDATA',
   'ProgramFiles', 'PROGRAMFILES', 'ProgramW6432', 'PROGRAMW6432',
   'SHELL', 'TERM', 'COLORTERM', 'NO_COLOR', 'FORCE_COLOR', 'NODE_ENV',
-  'GEOFORGE_ROOT', 'RUNTIME_ROOT', 'PYTHONIOENCODING', 'PYTHONUTF8',
+  'GEO_AGENT_PLATFORM_ROOT', 'RUNTIME_ROOT', 'PYTHONIOENCODING', 'PYTHONUTF8',
 ])
 
 const PREFIXES: Record<OperationsServiceId, readonly string[]> = {
@@ -28,14 +28,14 @@ const PREFIXES: Record<OperationsServiceId, readonly string[]> = {
     'OPENAI_', 'DEEPSEEK_', 'ANTHROPIC_', 'GEMINI_', 'OLLAMA_', 'MODEL_', 'DEFAULT_MODEL_',
     'GATEWAY_', 'AMAP_', 'OPEN_METEO_', 'VALHALLA_', 'ROUTING_', 'TIANDITU_',
     'ENABLED_', 'DEVELOPER_', 'SEED_', 'SCHEDULED_', 'SANDBOX_', 'RUNTIME_',
-    'MAX_', 'MAP_', 'USAGE_', 'AZURE_SPEECH_', 'GEOFORGE_MEMORY_', 'RIPGREP_', 'RG_',
+    'MAX_', 'MAP_', 'USAGE_', 'AZURE_SPEECH_', 'GEO_AGENT_PLATFORM_MEMORY_', 'RIPGREP_', 'RG_',
     'OTEL_', 'LOG_',
   ],
 }
 
 const FORBIDDEN_PREFIXES = [
-  'GEOFORGE_SUPERVISOR_',
-  'GEOFORGE_LOCAL_ROOT_',
+  'GEO_AGENT_PLATFORM_SUPERVISOR_',
+  'GEO_AGENT_PLATFORM_LOCAL_ROOT_',
 ]
 
 export function environmentForService(
@@ -72,7 +72,7 @@ export function environmentForConcurrently(
 export function secretValues(source: NodeJS.ProcessEnv): string[] {
   return [...new Set(Object.entries(source)
     .filter(([name, value]) => Boolean(value) && value!.length >= 8 && /(KEY|SECRET|TOKEN|PASSWORD)/iu.test(name))
-    .filter(([name]) => !name.startsWith('GEOFORGE_MANAGED_MARKER'))
+    .filter(([name]) => !name.startsWith('GEO_AGENT_PLATFORM_MANAGED_MARKER'))
     .map(([, value]) => value!))]
     .sort((left, right) => right.length - left.length)
 }

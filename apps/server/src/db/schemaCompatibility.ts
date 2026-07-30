@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 数据库 Schema 兼容性检查
+//   地理智能平台 - 数据库 Schema 兼容性检查
 //
 //   文件:       schemaCompatibility.ts
 //
@@ -65,7 +65,7 @@ export async function verifyDatabaseSchemaCompatibility(
   if (unsupported.length > 0) {
     throw new Error(
       `数据库版本高于当前服务支持的 v${CURRENT_DATABASE_SCHEMA_VERSION}：`
-      + `${unsupported.map(entry => entry.migrationId).join('、')}。请升级 GeoForge 服务，不能用旧服务连接新数据库。`,
+      + `${unsupported.map(entry => entry.migrationId).join('、')}。请升级 平台 服务，不能用旧服务连接新数据库。`,
     )
   }
 }

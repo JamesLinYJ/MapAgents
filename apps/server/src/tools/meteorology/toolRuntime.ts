@@ -30,7 +30,7 @@ const THIRD_PARTY_SOURCE_SNAPSHOTS = {
   rainfall_risk_map: 'packages/gis-meteorology/src/gis_meteorology/third_party/rainfall_risk_map/source/original',
   short_term_forecast: 'packages/gis-meteorology/src/gis_meteorology/third_party/short_term_forecast/source/original',
 } as const
-const THIRD_PARTY_WRAPPER_VERSION = 'geoforge-wrapper-2026-06-23'
+const THIRD_PARTY_WRAPPER_VERSION = 'geo-agent-platform-wrapper-2026-06-23'
 
 export function result(
   name: string,

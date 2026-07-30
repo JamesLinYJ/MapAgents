@@ -57,7 +57,7 @@ describe('meteorology routes', () => {
 const TEST_AUTH: AuthContext = {
   userId: 'user-test',
   subject: 'auth-user-test',
-  email: 'tester@geoforge.local',
+  email: 'tester@geo-agent-platform.local',
   displayName: '测试用户',
   authSessionId: 'session-test',
   authSessionExpiresAt: '2099-01-01T00:00:00.000Z',

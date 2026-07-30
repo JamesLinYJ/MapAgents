@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本机 Agent WebSocket 客户端
+//   地理智能平台 - 本机 Agent WebSocket 客户端
 //
 //   文件:       localAgentClient.ts
 //
@@ -17,6 +17,7 @@ import type {
   WsControlRequest,
   WsRunPush,
 } from '@geo-agent-platform/shared-types/transport'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 import WebSocket from 'ws'
 import { z } from 'zod'
 
@@ -51,7 +52,7 @@ export interface LocalAgentClientOptions {
 }
 
 /**
- * 只实现 GeoForge 已注册的 WS 命令。它不持有根密钥、模型密钥或任意命令
+ * 只实现平台已注册的 WS 命令。它不持有根密钥、模型密钥或任意命令
  * 能力；Cookie 仅保存在当前进程内存中。
  */
 export class LocalAgentClient {
@@ -84,7 +85,7 @@ export class LocalAgentClient {
       origin: options.origin,
       headers: {
         cookie,
-        'user-agent': 'GeoForge-Local-Agent/1',
+        'user-agent': `${PRODUCT_CODENAME}-Local-Agent/1`,
       },
       maxPayload: MAX_RESPONSE_BYTES,
       perMessageDeflate: false,
@@ -248,7 +249,7 @@ function waitForOpen(socket: WebSocket, timeoutMs: number): Promise<void> {
     const timer = setTimeout(() => {
       cleanup()
       socket.terminate()
-      reject(new Error('连接 GeoForge Agent 控制面超时。'))
+      reject(new Error(`连接 ${PRODUCT_CODENAME} Agent 控制面超时。`))
     }, timeoutMs)
     timer.unref()
     const onOpen = (): void => {
@@ -257,7 +258,7 @@ function waitForOpen(socket: WebSocket, timeoutMs: number): Promise<void> {
     }
     const onError = (error: Error): void => {
       cleanup()
-      reject(new Error('无法连接 GeoForge Agent 控制面。', { cause: error }))
+      reject(new Error(`无法连接 ${PRODUCT_CODENAME} Agent 控制面。`, { cause: error }))
     }
     const cleanup = (): void => {
       clearTimeout(timer)

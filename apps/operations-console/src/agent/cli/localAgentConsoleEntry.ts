@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本机 Agent 命令行入口
+//   地理智能平台 - 本机 Agent 命令行入口
 //
 //   文件:       localAgentConsoleEntry.ts
 //
@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url'
 
 import { config as loadDotEnv } from 'dotenv'
 import { z } from 'zod'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 import { LocalOperationsBrokerClient } from '../../localOperationsBrokerClient.js'
 import {
@@ -39,7 +40,9 @@ async function main(): Promise<void> {
 
   const projectRoot = fileURLToPath(new URL('../../../../../', import.meta.url))
   loadDotEnv({ path: path.join(projectRoot, '.env'), quiet: true })
-  if (!(await stat(projectRoot)).isDirectory()) throw new Error('GeoForge 项目根目录不存在。')
+  if (!(await stat(projectRoot)).isDirectory()) {
+    throw new Error(`${PRODUCT_CODENAME} 项目根目录不存在。`)
+  }
   const broker = LocalOperationsBrokerClient.open(projectRoot, 'agent')
   const authorization = await broker.waitForAgentAuthorization()
   const headers = new Headers({ cookie: authorization.cookie })
@@ -73,7 +76,7 @@ async function main(): Promise<void> {
       }
       process.stdout.write(options.json
         ? `${JSON.stringify(check, null, 2)}\n`
-        : `GeoForge 本机 Agent 已就绪：${ready.provider?.displayName ?? '未知 Provider'} / ${ready.model ?? '未知模型'}。\n`)
+        : `${PRODUCT_CODENAME} 本机 Agent 已就绪：${ready.provider?.displayName ?? '未知 Provider'} / ${ready.model ?? '未知模型'}。\n`)
       return
     }
 
@@ -117,6 +120,6 @@ async function readProjectVersion(projectRoot: string): Promise<string> {
 
 main().catch(error => {
   const message = error instanceof Error && error.message ? error.message : '未知错误。'
-  process.stderr.write(`GeoForge 本机 Agent 启动失败：${message.replace(/[\r\n]+/gu, ' ')}\n`)
+  process.stderr.write(`${PRODUCT_CODENAME} 本机 Agent 启动失败：${message.replace(/[\r\n]+/gu, ' ')}\n`)
   process.exitCode = 1
 })

@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 运行时数据完整性检查测试
+//   地理智能平台 - 运行时数据完整性检查测试
 //
 //   文件:       runtimeIntegrityChecker.test.ts
 //
@@ -79,7 +79,7 @@ function catalog(
 }
 
 async function createRoot(): Promise<string> {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'geoforge-integrity-'))
+  const root = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-integrity-'))
   roots.push(root)
   return root
 }

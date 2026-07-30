@@ -9,10 +9,10 @@
 #   协助:       OpenAI Codex:GPT-5.5
 # --------------------------------------------------------------------------
 
-"""GeoForge wrapper for the copied radar mosaic tool.
+"""平台 wrapper for the copied radar mosaic tool.
 
 The original files under ``source`` are kept intact. This adapter translates
-GeoForge valueRef inputs into the original pure Python algorithm calls and writes
+平台 valueRef inputs into the original pure Python algorithm calls and writes
 only explicit artifact targets supplied by the worker.
 """
 

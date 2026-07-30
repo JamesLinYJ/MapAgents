@@ -222,7 +222,7 @@ const bridge: DesktopBridge = {
   },
 }
 
-contextBridge.exposeInMainWorld('geoforgeDesktop', bridge)
+contextBridge.exposeInMainWorld('platformDesktop', bridge)
 
 async function invokeSupervisor(
   command: 'status' | 'start',
@@ -245,7 +245,7 @@ async function invokeSupervisor(
 
 function readDesktopPlatform(platform: NodeJS.Platform): DesktopBridge['platform'] {
   if (platform === 'win32' || platform === 'darwin' || platform === 'linux') return platform
-  throw new Error(`GeoForge 桌面端不支持当前操作系统：${platform}`)
+  throw new Error(`平台桌面端不支持当前操作系统：${platform}`)
 }
 
 function validateDesktopAuthResponse(

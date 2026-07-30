@@ -1,4 +1,4 @@
--- GeoForge 桌面工作台公开分享移除迁移
+-- 地理智能平台 桌面工作台公开分享移除迁移
 -- 文件:       005_remove_public_sharing.sql
 -- 日期: 2026年07月29日
 -- 作者:       JamesLinYJ

@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   地理智能平台 - GeoForge 登录页渲染测试
+//   地理智能平台 - 登录页渲染测试
 //
 //   文件:       authLoginScreen.test.tsx
 //
@@ -12,6 +12,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactElement } from 'react'
 import { describe, expect, it } from 'vitest'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 import { BootScreen } from '../app/AppLoader'
 import { LoginScreen } from '../app/auth/LoginScreen'
 import { canSubmitLoginStep } from '../app/auth/loginModel'
@@ -34,9 +35,9 @@ describe('LoginScreen', () => {
   it('renders the email-first Microsoft-style flow without tabs', () => {
     const html = renderLogin(<LoginScreen onAuthenticated={noop} />)
 
-    expect(html).not.toContain('GeoForge')
+    expect(html).not.toContain(PRODUCT_CODENAME)
     expect(html).toContain('<h1 id="platform-entry-title">地理智能工作台</h1>')
-    expect(html).toContain('<h2 id="geoforge-login-panel-title">登录</h2>')
+    expect(html).toContain('<h2 id="geo-agent-platform-login-panel-title">登录</h2>')
     expect(html).toContain('气象分析')
     expect(html).toContain('地图浏览')
     expect(html).toContain('服务协议')

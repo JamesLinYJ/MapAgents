@@ -10,6 +10,9 @@
 // --------------------------------------------------------------------------
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  PLATFORM_RENDERER_EVENT_PREFIX,
+} from '@geo-agent-platform/shared-types/product-identity'
 
 import type { DesktopDocument } from './layout/WorkspaceLayout.js'
 import {
@@ -44,7 +47,7 @@ describe('desktop document navigation', () => {
     const listener = vi.fn()
     const unsubscribe = subscribeDesktopDocument(listener)
 
-    window.dispatchEvent(new CustomEvent('geoforge:desktop-document', {
+    window.dispatchEvent(new CustomEvent(`${PLATFORM_RENDERER_EVENT_PREFIX}:desktop-document`, {
       detail: 'external-url',
     }))
 

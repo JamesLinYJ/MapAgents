@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "geoforge-supervisor": "./dist/cli.js",
-    "geoforge-dev": "./dist/devCli.js"
+    "geo-agent-platform-supervisor": "./dist/cli.js",
+    "geo-agent-platform-dev": "./dist/devCli.js"
   },
   "exports": {
     ".": "./dist/index.js",

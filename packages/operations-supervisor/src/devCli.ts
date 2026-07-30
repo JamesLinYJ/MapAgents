@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 统一开发启动器入口
+//   地理智能平台 - 统一开发启动器入口
 //
 //   文件:       devCli.ts
 //
@@ -13,6 +13,7 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { config as loadDotEnv } from 'dotenv'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 import { parseDevLauncherCommand, runDevLauncher } from './devLauncher.js'
 
@@ -25,6 +26,8 @@ runDevLauncher(parseDevLauncherCommand(process.argv.slice(2)), {
 }).then(code => {
   process.exitCode = code
 }).catch(error => {
-  process.stderr.write(`GeoForge 开发启动失败：${error instanceof Error ? error.message : String(error)}\n`)
+  process.stderr.write(
+    `${PRODUCT_CODENAME} 开发启动失败：${error instanceof Error ? error.message : String(error)}\n`,
+  )
   process.exitCode = 1
 })

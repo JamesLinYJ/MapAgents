@@ -11,6 +11,7 @@
 
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 import { TopBar } from '../app/layout/TopBar'
 import { WorkspaceLayout } from '../app/layout/WorkspaceLayout'
@@ -92,7 +93,7 @@ describe('offline desktop workspace', () => {
       />,
     )
 
-    expect(html).toContain('GeoForge')
+    expect(html).toContain(PRODUCT_CODENAME)
     expect(html).toContain('地图画布（本地）')
     expect(html).toContain('智能对话')
     expect(html).toContain('服务恢复并完成认证后即可输入消息')

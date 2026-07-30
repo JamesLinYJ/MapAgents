@@ -11,12 +11,15 @@
 
 import type { DesktopDocument } from './layout/WorkspaceLayout'
 import {
+  PLATFORM_RENDERER_EVENT_PREFIX,
+} from '@geo-agent-platform/shared-types/product-identity'
+import {
   desktopMenuCommandSchema,
   type DesktopMenuCommand,
 } from '../../contracts/desktopIpc'
 
-const DESKTOP_DOCUMENT_EVENT = 'geoforge:desktop-document'
-const DESKTOP_COMMAND_EVENT = 'geoforge:desktop-command'
+const DESKTOP_DOCUMENT_EVENT = `${PLATFORM_RENDERER_EVENT_PREFIX}:desktop-document`
+const DESKTOP_COMMAND_EVENT = `${PLATFORM_RENDERER_EVENT_PREFIX}:desktop-command`
 const DOCUMENTS = new Set<DesktopDocument>([
   'map',
   'tools',

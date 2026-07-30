@@ -532,7 +532,7 @@ function toChatMessages(input: string | AgentInputItem[]): ChatCompletionMessage
 function toChatTool(tool: SerializedTool): ChatCompletionTool {
   if (tool.type !== 'function') throw new UserError(`Chat Completions 不支持工具类型 '${tool.type}'`)
   if (!FUNCTION_NAME.test(tool.name)) throw new UserError(`工具名称 '${tool.name}' 不符合 Chat Completions 约束`)
-  // DeepSeek 的 strict function calling 是 /beta 专属能力。GeoForge 使用稳定
+  // DeepSeek 的 strict function calling 是 /beta 专属能力。平台 使用稳定
   // Chat Completions 端点，因此不发送该 Beta 字段；SDK 仍会在本地按同一
   // schema 严格校验工具参数。
   return {

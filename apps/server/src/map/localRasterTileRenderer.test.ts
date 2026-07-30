@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本地 GeoTIFF 栅格瓦片渲染测试
+//   地理智能平台 - 本地 GeoTIFF 栅格瓦片渲染测试
 //
 //   文件:       localRasterTileRenderer.test.ts
 //
@@ -28,7 +28,7 @@ afterEach(async () => {
 
 describe('LocalRasterTileRenderer', () => {
   it('reads a GeoTIFF window and returns a cached 256px PNG without Python sidecars', async () => {
-    const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'geoforge-raster-render-'))
+    const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-raster-render-'))
     cleanupDirectories.push(runtimeRoot)
     const relativePath = 'artifacts/run_1/rain.tif'
     const rasterPath = path.join(runtimeRoot, ...relativePath.split('/'))

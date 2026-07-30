@@ -26,7 +26,7 @@ export function reportClientDiagnostic(level: ClientDiagnosticLevel, payload: Cl
   } else {
     console.warn('[地理智能工作台]', sanitized)
   }
-  const bridge = typeof window === 'undefined' ? undefined : window.geoforgeDesktop
+  const bridge = typeof window === 'undefined' ? undefined : window.platformDesktop
   if (!bridge?.diagnostics) return
   void bridge.diagnostics.report({
     level,

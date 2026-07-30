@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - PostGIS 矢量瓦片数据源
+//   地理智能平台 - PostGIS 矢量瓦片数据源
 //
 //   文件:       postgisVectorTileSource.ts
 //
@@ -49,7 +49,7 @@ export class PostgisVectorTileSource implements VectorTileSource {
         [String(this.timeoutMs)],
       )
       const result = await client.query(
-        `SELECT geoforge_layer_tiles(
+        `SELECT geo_agent_platform_layer_tiles(
           $1::integer,
           $2::integer,
           $3::integer,

@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本机进程监督运行时测试
+//   地理智能平台 - 本机进程监督运行时测试
 //
 //   文件:       supervisor.test.ts
 //
@@ -30,7 +30,7 @@ afterEach(async () => {
 
 describe('OperationsSupervisor operations', () => {
   it('deduplicates an in-flight operationId instead of replaying the write', async () => {
-    const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'geoforge-supervisor-'))
+    const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-supervisor-'))
     cleanupPaths.push(projectRoot)
     const paths = await resolveOperationsPaths({ projectRoot, profile: 'development' })
     const logBuffer = new OperationsLogBuffer([])
@@ -532,7 +532,7 @@ describe('OperationsSupervisor operations', () => {
 })
 
 async function createSupervisor(environment: NodeJS.ProcessEnv = {}): Promise<{ supervisor: OperationsSupervisor }> {
-  const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'geoforge-supervisor-'))
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-supervisor-'))
   cleanupPaths.push(projectRoot)
   const paths = await resolveOperationsPaths({ projectRoot, profile: 'development' })
   return {

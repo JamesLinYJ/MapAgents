@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest'
 import type { DesktopWorkspaceBootstrapSnapshot } from '../../contracts/desktopIpc'
 
 import { loadBootstrapFromWorkspacePointer } from '../app/useWorkspaceBootstrap'
-import { GeoForgeTransportError } from '../api/errors'
+import { PlatformTransportError } from '../api/errors'
 
 describe('loadBootstrapFromWorkspacePointer', () => {
   it('优先使用可访问的分享 session', async () => {
@@ -48,7 +48,7 @@ describe('loadBootstrapFromWorkspacePointer', () => {
       sessionSource: 'route',
     }, async sessionId => {
       calls.push(sessionId)
-      throw new GeoForgeTransportError('无权访问该会话。', {
+      throw new PlatformTransportError('无权访问该会话。', {
         transport: 'websocket',
         code: 'forbidden',
       })

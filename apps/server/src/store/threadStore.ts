@@ -233,7 +233,7 @@ export class ThreadStore {
     })
     const reference = await this.payloadStore.putObject(
       JSON.stringify(document),
-      'application/vnd.geoforge.thread-memory+json',
+      'application/vnd.geo-agent-platform.thread-memory+json',
     )
     await this.repositories.memory.saveThreadMemoryVersion({
       threadId,

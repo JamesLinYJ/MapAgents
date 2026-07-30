@@ -22,6 +22,7 @@ import {
   shell,
   type Capability,
 } from '@openai/agents/sandbox'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 import type { ItemSink } from '../conversation/itemSink.js'
 import type { ToolRegistry } from '../framework/registry.js'
@@ -384,11 +385,11 @@ export class RuntimeAssemblyFactory {
     const unavailableSdkToolCallIds = new Set<string>()
     const runner = new Runner({
       model,
-      // GeoForge 的本地 tracing 由 LocalAgentTracing 投影；SDK 外部导出始终关闭，
+      // 平台 的本地 tracing 由 LocalAgentTracing 投影；SDK 外部导出始终关闭，
       // 避免把用户输入、工具参数或 DeepSeek 内容发送到另一个提供商。
       tracingDisabled: !runtimeOptions.agentTracing,
       traceIncludeSensitiveData: false,
-      workflowName: 'GeoForge Agent Workflow',
+      workflowName: `${PRODUCT_CODENAME} Agent Workflow`,
       groupId: threadId,
       traceMetadata: {
         runId: options.runId,

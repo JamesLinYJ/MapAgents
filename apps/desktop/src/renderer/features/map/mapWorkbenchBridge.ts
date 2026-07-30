@@ -9,6 +9,10 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
+import {
+  PLATFORM_RENDERER_EVENT_PREFIX,
+} from '@geo-agent-platform/shared-types/product-identity'
+
 export type MapWorkbenchCommand =
   | 'zoom-in'
   | 'zoom-out'
@@ -25,8 +29,8 @@ export interface MapWorkbenchStatus {
   selectedFeatureCount: number
 }
 
-const COMMAND_EVENT = 'geoforge:map-command'
-const STATUS_EVENT = 'geoforge:map-status'
+const COMMAND_EVENT = `${PLATFORM_RENDERER_EVENT_PREFIX}:map-command`
+const STATUS_EVENT = `${PLATFORM_RENDERER_EVENT_PREFIX}:map-status`
 
 export const INITIAL_MAP_WORKBENCH_STATUS: MapWorkbenchStatus = {
   ready: false,

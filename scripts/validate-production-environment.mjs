@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 生产监督器环境校验器
+//   地理智能平台 - 生产监督器环境校验器
 //
 //   文件:       validate-production-environment.mjs
 //
@@ -30,10 +30,10 @@ if (stat.size <= 0 || stat.size > 256 * 1_024) {
 const environment = parseEnvironment(readFileSync(environmentFile, 'utf8'))
 const requiredNames = [
   'NODE_ENV',
-  'GEOFORGE_ROOT',
+  'GEO_AGENT_PLATFORM_ROOT',
   'RUNTIME_ROOT',
-  'GEOFORGE_SUPERVISOR_TOKEN_FILE',
-  'GEOFORGE_LOCAL_ROOT_SECRET_FILE',
+  'GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE',
+  'GEO_AGENT_PLATFORM_LOCAL_ROOT_SECRET_FILE',
   'POSTGIS_PORT',
   'WORKER_PORT',
   'API_HOST',
@@ -54,14 +54,14 @@ for (const name of requiredNames) {
 if (environment.get('NODE_ENV') !== 'production') {
   throw new Error('NODE_ENV 必须为 production。')
 }
-assertEquivalentPath(environment.get('GEOFORGE_ROOT'), projectRoot, 'GEOFORGE_ROOT')
+assertEquivalentPath(environment.get('GEO_AGENT_PLATFORM_ROOT'), projectRoot, 'GEO_AGENT_PLATFORM_ROOT')
 assertEquivalentPath(environment.get('RUNTIME_ROOT'), runtimeRoot, 'RUNTIME_ROOT')
 assertEquivalentPath(
-  environment.get('GEOFORGE_SUPERVISOR_TOKEN_FILE'),
+  environment.get('GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE'),
   supervisorTokenFile,
-  'GEOFORGE_SUPERVISOR_TOKEN_FILE',
+  'GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE',
 )
-for (const name of ['GEOFORGE_LOCAL_ROOT_SECRET_FILE', 'WORKER_PYTHON']) {
+for (const name of ['GEO_AGENT_PLATFORM_LOCAL_ROOT_SECRET_FILE', 'WORKER_PYTHON']) {
   const value = environment.get(name)
   if (!value || !path.isAbsolute(value)) throw new Error(`${name} 必须是绝对路径。`)
 }

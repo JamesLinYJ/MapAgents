@@ -45,7 +45,7 @@ def create_worker_app(
         nonce_cache_max=settings.nonce_cache_max,
     ))
 
-    app = FastAPI(title="geoforge-science-worker", version="0.3.0")
+    app = FastAPI(title="geo-agent-platform-science-worker", version="0.3.0")
     app.add_middleware(
         WorkerSecurityMiddleware,
         worker_auth=worker_auth,

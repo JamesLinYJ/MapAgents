@@ -67,7 +67,7 @@ def verify_worker_authorization(
 ) -> tuple[int, str] | None:
     if not authorization:
         return 401, "缺少 Worker 授权头"
-    prefix = "GeoForge-Worker "
+    prefix = "GeoAgentPlatform-Worker "
     if not authorization.startswith(prefix):
         return 403, "Worker 授权格式无效"
     token = authorization[len(prefix) :]

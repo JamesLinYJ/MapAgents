@@ -15,6 +15,7 @@
 // --------------------------------------------------------------------------
 
 import { clipboard, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 import {
   DESKTOP_IPC_CHANNELS,
@@ -148,7 +149,7 @@ export function installDesktopIpcHandlers(dependencies: DesktopIpcDependencies):
     const result = await dialog.showMessageBox(window, {
       type: 'question',
       title: '允许本次使用麦克风',
-      message: 'GeoForge 是否可以为本次语音识别使用麦克风？',
+      message: `${PRODUCT_CODENAME} 是否可以为本次语音识别使用麦克风？`,
       detail: '授权仅供当前窗口下一次音频请求使用，并将在 60 秒后失效。'
         + '语音可能由已配置的第三方语音服务处理。',
       buttons: ['取消', '允许本次使用'],
@@ -237,7 +238,7 @@ function requireWindow(
   }
   const url = event.senderFrame.url
   if (!isTrustedApplicationUrl(url)) {
-    throw new Error('拒绝来自非 GeoForge 应用源的桌面 IPC 请求。')
+    throw new Error('拒绝来自非平台应用源的桌面 IPC 请求。')
   }
   return window
 }

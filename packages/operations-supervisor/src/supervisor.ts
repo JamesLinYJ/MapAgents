@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本机进程监督运行时
+//   地理智能平台 - 本机进程监督运行时
 //
 //   文件:       supervisor.ts
 //
@@ -429,14 +429,14 @@ export class OperationsSupervisor {
     record.state = 'starting'
     record.healthMessage = automatic ? '自动重启中' : '正在启动'
     record.healthFailures = 0
-    const marker = `GEOFORGE_MANAGED_${this.options.paths.workspaceId}_${serviceId}`
+    const marker = `GEO_AGENT_PLATFORM_MANAGED_${this.options.paths.workspaceId}_${serviceId}`
     const baseCommand = commandFor(record.definition, this.options.profile)
     const markedCommand = process.platform === 'win32'
-      ? `set "GEOFORGE_MANAGED_MARKER=${marker}" && ${baseCommand}`
-      : `GEOFORGE_MANAGED_MARKER=${marker} ${baseCommand}`
+      ? `set "GEO_AGENT_PLATFORM_MANAGED_MARKER=${marker}" && ${baseCommand}`
+      : `GEO_AGENT_PLATFORM_MANAGED_MARKER=${marker} ${baseCommand}`
     const environment = environmentForService(serviceId, this.options.environment, {
-      GEOFORGE_MANAGED_MARKER: marker,
-      GEOFORGE_ROOT: this.options.paths.projectRoot,
+      GEO_AGENT_PLATFORM_MANAGED_MARKER: marker,
+      GEO_AGENT_PLATFORM_ROOT: this.options.paths.projectRoot,
       RUNTIME_ROOT: this.options.paths.runtimeRoot,
       FORCE_COLOR: '0',
     })
@@ -780,7 +780,7 @@ export class OperationsSupervisor {
       await execFileAsync(command.file, [...command.args], {
         cwd: this.options.paths.projectRoot,
         env: environmentForService(record.definition.serviceId, this.options.environment, {
-          GEOFORGE_ROOT: this.options.paths.projectRoot,
+          GEO_AGENT_PLATFORM_ROOT: this.options.paths.projectRoot,
           RUNTIME_ROOT: this.options.paths.runtimeRoot,
         }),
         timeout: probe.timeoutMs,
@@ -798,7 +798,7 @@ export class OperationsSupervisor {
     await execFileAsync(command.file, [...command.args], {
       cwd: this.options.paths.projectRoot,
       env: environmentForService(record.definition.serviceId, this.options.environment, {
-        GEOFORGE_ROOT: this.options.paths.projectRoot,
+        GEO_AGENT_PLATFORM_ROOT: this.options.paths.projectRoot,
         RUNTIME_ROOT: this.options.paths.runtimeRoot,
       }),
       timeout: 40_000,
@@ -931,7 +931,7 @@ export class OperationsSupervisor {
         const record = this.requireRecord(serviceId)
         const pid = record.command?.pid
         if (!pid || !record.startedAt) return []
-        const marker = `GEOFORGE_MANAGED_${this.options.paths.workspaceId}_${serviceId}`
+        const marker = `GEO_AGENT_PLATFORM_MANAGED_${this.options.paths.workspaceId}_${serviceId}`
         return [{
           serviceId,
           pid,

@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 中文本机 Agent 终端
+//   地理智能平台 - 中文本机 Agent 终端
 //
 //   文件:       localAgentConsole.tsx
 //
@@ -17,11 +17,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { DecisionRequest } from '@geo-agent-platform/shared-types'
+import { PRODUCT_CODENAME_UPPER } from '@geo-agent-platform/shared-types/product-identity'
 import { ThemeProvider } from '@inkjs/ui'
 import { Box, Text, render, useApp, useInput, usePaste, useWindowSize } from 'ink'
 
 import { LocalConsoleMouseProvider, MouseRegion } from '../../localConsoleMouse.js'
-import { consolePalette, geoForgeConsoleTheme } from '../../localConsoleTheme.js'
+import { consolePalette, platformConsoleTheme } from '../../localConsoleTheme.js'
 import {
   type LocalAgentSession,
   type LocalAgentSessionSnapshot,
@@ -80,7 +81,7 @@ export async function runLocalAgentConsole(
 ): Promise<void> {
   const mouse = createTerminalMouseController(process.stdin, process.stdout, { trackMotion: false })
   const instance = render(
-    <ThemeProvider theme={geoForgeConsoleTheme}>
+    <ThemeProvider theme={platformConsoleTheme}>
       <LocalAgentConsoleApp
         session={session}
         identity={identity}
@@ -545,7 +546,9 @@ function AgentHeader({
     >
       <Box justifyContent="space-between">
         <Box>
-          <Text bold color={consolePalette.canvas} backgroundColor={consolePalette.focus}> GEOFORGE </Text>
+          <Text bold color={consolePalette.canvas} backgroundColor={consolePalette.focus}>
+            {' '}{PRODUCT_CODENAME_UPPER}{' '}
+          </Text>
           <Text bold color={consolePalette.accent}> 智能体终端 </Text>
           <Text color={consolePalette.muted}>v{identity.version}</Text>
         </Box>

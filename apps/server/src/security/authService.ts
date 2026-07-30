@@ -15,6 +15,11 @@ import { drizzleAdapter } from 'better-auth/adapters/drizzle'
 import { admin } from 'better-auth/plugins'
 import { createHmac } from 'node:crypto'
 import { z } from 'zod'
+import {
+  PLATFORM_DESKTOP_APP_ORIGIN,
+  PLATFORM_DESKTOP_AUTH_ORIGIN,
+  PRODUCT_CODENAME,
+} from '@geo-agent-platform/shared-types/product-identity'
 import type { Database } from '../db/connection.js'
 import { authAccount, authSession, authUser, authVerification } from '../db/schema.js'
 import type { Env } from '../framework/env.js'
@@ -66,7 +71,7 @@ type BetterAuthSessionProjection = z.infer<typeof betterAuthSessionProjectionSch
 
 function createBetterAuthRuntime(db: Database, env: Env, trustedOrigins: string[]) {
   return betterAuth({
-      appName: 'GeoForge',
+      appName: PRODUCT_CODENAME,
       baseURL: env.BETTER_AUTH_URL,
       basePath: '/api/auth',
       secret: env.BETTER_AUTH_SECRET,
@@ -94,7 +99,7 @@ function createBetterAuthRuntime(db: Database, env: Env, trustedOrigins: string[
       plugins: [
         admin(),
         electron({
-          clientID: 'geoforge-desktop',
+          clientID: 'geo-agent-platform-desktop',
         }),
       ],
     })
@@ -161,7 +166,7 @@ export class BetterAuthService {
           body: {
             email: credential.email,
             password: credential.password,
-            name: 'GeoForge Local Console',
+            name: `${PRODUCT_CODENAME} Local Console`,
             role: 'admin',
           },
         })
@@ -190,7 +195,7 @@ export class BetterAuthService {
         body: {
           email: credential.email,
           password: credential.password,
-          name: 'GeoForge Local Agent',
+          name: `${PRODUCT_CODENAME} Local Agent`,
           role: 'user',
         },
       })).user
@@ -216,7 +221,7 @@ export class BetterAuthService {
         platformUserId: platformUserIdFor(authUser.id),
         authUserId: authUser.id,
         email: credential.email,
-        displayName: 'GeoForge Local Agent',
+        displayName: `${PRODUCT_CODENAME} Local Agent`,
         personalWorkspaceId: personalWorkspaceIdFor(credential.email),
         bootstrapAdmin: true,
       })
@@ -292,7 +297,7 @@ export class BetterAuthService {
     const result = localListedUsersSchema.parse(await this.auth.api.listUsers({
       headers: current.headers,
       query: {
-        searchValue: '@console.geoforge.invalid',
+        searchValue: '@console.geo-agent-platform.invalid',
         searchField: 'email',
         searchOperator: 'ends_with',
         limit: 100,
@@ -455,8 +460,8 @@ export class BetterAuthService {
       ...this.env.TRUSTED_ORIGINS.split(','),
       this.env.APP_BASE_URL,
       this.env.BETTER_AUTH_URL,
-      'geoforge://app',
-      'com.geoforge.desktop:/',
+      PLATFORM_DESKTOP_APP_ORIGIN,
+      PLATFORM_DESKTOP_AUTH_ORIGIN,
     ]
     return new Set(origins.map(normalizeTrustedOrigin).filter(Boolean))
   }

@@ -297,7 +297,7 @@ export class RunStore {
     this.get(runId)
     const reference = await this.payloadStore.putObject(
       serializedState,
-      'application/vnd.geoforge.agents-state+json',
+      'application/vnd.geo-agent-platform.agents-state+json',
     )
     await this.repository.saveAgentsSdkCheckpoint(runId, {
       contentHash: reference.hash,

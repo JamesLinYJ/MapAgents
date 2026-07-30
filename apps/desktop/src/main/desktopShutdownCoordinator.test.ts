@@ -11,6 +11,7 @@
 
 import type { BrowserWindow } from 'electron'
 import { describe, expect, it, vi } from 'vitest'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 import type { DesktopAuthenticatedIdentity } from './authGateway.js'
 import {
@@ -54,7 +55,7 @@ describe('DesktopShutdownCoordinator', () => {
     expect(confirmation.request).toHaveBeenCalledWith(null, expect.objectContaining({
       expectedText: STOP_ALL_CONFIRMATION_TEXT,
       message: expect.stringContaining('PostgreSQL/PostGIS'),
-      detail: expect.stringContaining('普通“退出 GeoForge”不会停止'),
+      detail: expect.stringContaining(`普通“退出 ${PRODUCT_CODENAME}”不会停止`),
     }))
     expect(order).toEqual(['confirmed', 'shutdown', 'quit'])
   })

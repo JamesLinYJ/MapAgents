@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-// GeoForge Node 与科学计算 Worker 的目录协商协议。
+// 平台 Node 与科学计算 Worker 的目录协商协议。
 import { z } from 'zod'
 
 // Python Pydantic 模型生成目录；TypeScript 只校验目录 envelope 与协商元数据。

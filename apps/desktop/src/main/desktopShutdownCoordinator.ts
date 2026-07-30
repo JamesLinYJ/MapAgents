@@ -11,6 +11,7 @@
 
 import type { BrowserWindow } from 'electron'
 import type { OperationsOperationResult } from '@geo-agent-platform/shared-types/operations'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 import type { DesktopAuthenticatedIdentity } from './authGateway.js'
 
@@ -58,9 +59,9 @@ export class DesktopShutdownCoordinator {
       this.authorization.requireAuthorizationContext(),
     )
     const enteredText = await this.confirmation.request(parent, {
-      title: '停止全部服务并退出 GeoForge',
+      title: `停止全部服务并退出 ${PRODUCT_CODENAME}`,
       message: '此操作会停止 API、Python Worker、PostgreSQL/PostGIS，并关闭本机监督器。',
-      detail: '正在运行的分析、上传和后台任务会被中断。普通“退出 GeoForge”不会停止这些服务。',
+      detail: `正在运行的分析、上传和后台任务会被中断。普通“退出 ${PRODUCT_CODENAME}”不会停止这些服务。`,
       expectedText: STOP_ALL_CONFIRMATION_TEXT,
     })
     if (enteredText === null) return 'canceled'

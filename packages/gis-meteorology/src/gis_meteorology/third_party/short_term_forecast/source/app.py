@@ -19,8 +19,8 @@ app = Flask(__name__)
 
 # === 默认配置 ===
 CONFIG = {
-    'nc_dir': os.environ.get('GEOFORGE_SAMPLE_NC_DIR', ''),
-    'shp_path': os.environ.get('GEOFORGE_SAMPLE_BOUNDARY_PATH', ''),
+    'nc_dir': os.environ.get('GEO_AGENT_PLATFORM_SAMPLE_NC_DIR', ''),
+    'shp_path': os.environ.get('GEO_AGENT_PLATFORM_SAMPLE_BOUNDARY_PATH', ''),
     'output_dir': os.path.join(os.path.dirname(__file__), 'output'),
     'data_source': '雷达QPF网格数据',
     'top_n': 10,
@@ -284,7 +284,7 @@ def do_generate(config):
         with open(tmp_html, 'w', encoding='utf-8') as f:
             f.write(html_str)
 
-        edge_exe = os.environ.get('GEOFORGE_BROWSER_EXECUTABLE')
+        edge_exe = os.environ.get('GEO_AGENT_PLATFORM_BROWSER_EXECUTABLE')
         if edge_exe and not os.path.exists(edge_exe):
             edge_exe = None
 

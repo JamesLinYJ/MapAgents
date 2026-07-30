@@ -9,8 +9,9 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-// GeoForge 运行时配置协议。
+// 平台 运行时配置协议。
 import { z } from 'zod'
+import { PLATFORM_STATE_DIRECTORY_NAME } from './productIdentity.js'
 
 // --- Config ---
 
@@ -126,7 +127,7 @@ export const runtimeContextConfigSchema = z.object({
   contextEntryWindow: z.number().default(18),
   memoryFileCharLimit: z.number().default(4000),
   memoryEnabled: z.boolean().default(true),
-  memoryBaseDir: z.string().default('~/.geoforge/projects'),
+  memoryBaseDir: z.string().default(`~/${PLATFORM_STATE_DIRECTORY_NAME}/projects`),
   privateMemoryDir: z.string().nullable().default(null),
   teamMemoryDir: z.string().nullable().default(null),
   memoryEntrypointName: z.string().default('MEMORY.md'),
@@ -317,7 +318,7 @@ export const agentRuntimeConfigSchema = z.object({
     contextEntryWindow: 18,
     memoryFileCharLimit: 4000,
     memoryEnabled: true,
-    memoryBaseDir: '~/.geoforge/projects',
+    memoryBaseDir: `~/${PLATFORM_STATE_DIRECTORY_NAME}/projects`,
     privateMemoryDir: null,
     teamMemoryDir: null,
     memoryEntrypointName: 'MEMORY.md',

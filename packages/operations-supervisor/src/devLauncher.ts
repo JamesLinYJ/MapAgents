@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 统一开发启动器
+//   地理智能平台 - 统一开发启动器
 //
 //   文件:       devLauncher.ts
 //
@@ -14,6 +14,11 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { parseArgs } from 'node:util'
 import { z } from 'zod'
+import {
+  PLATFORM_DESKTOP_APP_ORIGIN,
+  PLATFORM_DESKTOP_AUTH_CALLBACK_URL,
+  PRODUCT_CODENAME,
+} from '@geo-agent-platform/shared-types/product-identity'
 
 const actionSchema = z.enum([
   'default', 'start', 'stop', 'restart', 'status', 'logs',
@@ -209,7 +214,7 @@ export async function runDevLauncher(
     return supervisor(['status', ...(command.json ? ['--json'] : [])])
   }
   if (command.action === 'logs') {
-    if (await probe() !== 0) throw new Error('GeoForge 监督器未运行。')
+    if (await probe() !== 0) throw new Error(`${PRODUCT_CODENAME} 监督器未运行。`)
     return supervisor([
       'logs', command.service, '--tail', String(command.tail),
       ...(command.follow ? ['--follow'] : []),
@@ -279,7 +284,7 @@ function applyDevelopmentEnvironment(projectRoot: string): void {
   const defaultRuntimeRoot = path.join(projectRoot, 'runtime')
   const defaults: Record<string, string> = {
     NODE_ENV: 'development',
-    GEOFORGE_ROOT: projectRoot,
+    GEO_AGENT_PLATFORM_ROOT: projectRoot,
     RUNTIME_ROOT: defaultRuntimeRoot,
     POSTGIS_PORT: '55432',
     WORKER_PORT: '8012',
@@ -292,14 +297,16 @@ function applyDevelopmentEnvironment(projectRoot: string): void {
   process.env.WORKER_URL ??= `http://127.0.0.1:${process.env.WORKER_PORT}`
   process.env.APP_BASE_URL ??= `http://127.0.0.1:${process.env.API_PORT}`
   process.env.BETTER_AUTH_URL ??= process.env.APP_BASE_URL
-  process.env.TRUSTED_ORIGINS ??= 'geoforge://app,com.geoforge.desktop://auth/callback'
+  process.env.TRUSTED_ORIGINS ??= (
+    `${PLATFORM_DESKTOP_APP_ORIGIN},${PLATFORM_DESKTOP_AUTH_CALLBACK_URL}`
+  )
   process.env.BOOTSTRAP_ADMIN_EMAIL ??= 'admin@example.com'
-  process.env.GEOFORGE_DESKTOP_AUTO_AUTH ??= 'true'
-  process.env.GEOFORGE_DESKTOP_AUTO_AUTH_EMAIL ??= process.env.BOOTSTRAP_ADMIN_EMAIL
-  process.env.GEOFORGE_DESKTOP_AUTO_AUTH_NAME ??= 'GeoForge 本机演示管理员'
+  process.env.GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH ??= 'true'
+  process.env.GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_EMAIL ??= process.env.BOOTSTRAP_ADMIN_EMAIL
+  process.env.GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_NAME ??= `${PRODUCT_CODENAME} 本机演示管理员`
   const runtimeRoot = process.env.RUNTIME_ROOT ?? defaultRuntimeRoot
-  process.env.GEOFORGE_SUPERVISOR_TOKEN_FILE ??= path.join(runtimeRoot, 'ops', 'supervisor.token')
-  process.env.GEOFORGE_LOCAL_ROOT_SECRET_FILE ??= path.join(runtimeRoot, 'ops', 'local-root.secret')
+  process.env.GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE ??= path.join(runtimeRoot, 'ops', 'supervisor.token')
+  process.env.GEO_AGENT_PLATFORM_LOCAL_ROOT_SECRET_FILE ??= path.join(runtimeRoot, 'ops', 'local-root.secret')
 }
 
 function nativeDependencies(): DevLauncherDependencies {
@@ -312,7 +319,7 @@ function nativeDependencies(): DevLauncherDependencies {
         ? await openDetachedOutput(options.stdoutPath, options.stderrPath)
         : null
       const child = spawn(executable, executableArguments, {
-        cwd: process.env.GEOFORGE_ROOT,
+        cwd: process.env.GEO_AGENT_PLATFORM_ROOT,
         env: process.env,
         shell: false,
         windowsHide: true,

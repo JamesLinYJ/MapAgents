@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 开发工具敏感路径拒绝策略
+//   地理智能平台 - 开发工具敏感路径拒绝策略
 //
 //   文件:       secretPathPolicy.ts
 //
@@ -13,8 +13,8 @@ import path from 'node:path'
 
 export interface SecretPathConfig {
   RUNTIME_ROOT?: string
-  GEOFORGE_SUPERVISOR_TOKEN_FILE?: string
-  GEOFORGE_LOCAL_ROOT_SECRET_FILE?: string
+  GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE?: string
+  GEO_AGENT_PLATFORM_LOCAL_ROOT_SECRET_FILE?: string
 }
 
 const SENSITIVE_FILE_NAME = /^(?:\.env(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?)$|\.(?:secret|token|pem|key|p12|pfx|jks|keystore)$/iu
@@ -41,8 +41,8 @@ export function isDeveloperPathSensitive(
   if (runtimeRoot && isInside(absolute, path.join(runtimeRoot, 'ops'))) return true
 
   for (const configured of [
-    config.GEOFORGE_SUPERVISOR_TOKEN_FILE,
-    config.GEOFORGE_LOCAL_ROOT_SECRET_FILE,
+    config.GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE,
+    config.GEO_AGENT_PLATFORM_LOCAL_ROOT_SECRET_FILE,
   ]) {
     const resolved = resolveConfiguredPath(configured)
     if (resolved && samePath(absolute, resolved)) return true
@@ -72,8 +72,8 @@ export function sensitiveRipgrepGlobs(root: string, config: SecretPathConfig = p
   const runtimeRoot = resolveConfiguredPath(config.RUNTIME_ROOT)
   if (runtimeRoot) appendRelativeDirectoryGlob(globs, root, path.join(runtimeRoot, 'ops'))
   for (const configured of [
-    config.GEOFORGE_SUPERVISOR_TOKEN_FILE,
-    config.GEOFORGE_LOCAL_ROOT_SECRET_FILE,
+    config.GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE,
+    config.GEO_AGENT_PLATFORM_LOCAL_ROOT_SECRET_FILE,
   ]) {
     const resolved = resolveConfiguredPath(configured)
     if (resolved) appendRelativeFileGlob(globs, root, resolved)

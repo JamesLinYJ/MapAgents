@@ -10,6 +10,7 @@
 // --------------------------------------------------------------------------
 
 import { z } from 'zod'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 const MAX_RESPONSE_BYTES = 512 * 1024
 const HOURS_PER_DAY = 24
@@ -434,7 +435,7 @@ export class OpenMeteoClient implements PublicWeatherClient {
     let response: Response
     try {
       response = await this.fetchImpl(url, {
-        headers: { Accept: 'application/json', 'User-Agent': 'GeoForge/0.1 public-weather' },
+        headers: { Accept: 'application/json', 'User-Agent': `${PRODUCT_CODENAME}/0.1 public-weather` },
         signal: requestSignal,
       })
     } catch (error) {

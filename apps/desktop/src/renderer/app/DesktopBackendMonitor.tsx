@@ -47,7 +47,7 @@ export function DesktopBackendMonitor({ children }: { children: ReactNode }) {
     if (requestInFlight.current) return
     requestInFlight.current = true
     try {
-      const bridge = window.geoforgeDesktop
+      const bridge = window.platformDesktop
       if (!bridge) throw new Error('桌面安全桥未加载，无法检查本机服务。')
 
       let current = await bridge.supervisor.status()
@@ -96,7 +96,7 @@ export function DesktopBackendMonitor({ children }: { children: ReactNode }) {
   }, [refresh])
 
   useEffect(() => {
-    const bridge = window.geoforgeDesktop
+    const bridge = window.platformDesktop
     if (!bridge) return
     return bridge.events.subscribe(event => {
       if (event.event !== 'desktop:command') return

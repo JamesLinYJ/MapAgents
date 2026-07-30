@@ -15,32 +15,42 @@
 // --------------------------------------------------------------------------
 
 import { FuseV1Options, FuseVersion } from '@electron/fuses'
+import {
+  PLATFORM_DESKTOP_APPLICATION_ID,
+  PLATFORM_DESKTOP_PROTOCOL_SCHEME,
+  PLATFORM_MACHINE_ID,
+  PRODUCT_CODENAME,
+  PRODUCT_DESKTOP_NAME,
+  PRODUCT_EXECUTABLE_BASENAME,
+} from '@geo-agent-platform/shared-types/product-identity'
 import { existsSync } from 'node:fs'
 import { rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { GeoForgeZipMaker } from './packaging/geoForgeZipMaker.mjs'
+import { DesktopZipMaker } from './packaging/desktopZipMaker.mjs'
 
 const squirrelVendorDirectory = fileURLToPath(new URL('./.squirrel-vendor', import.meta.url))
-const windowsIconPath = fileURLToPath(new URL('./assets/geoforge.ico', import.meta.url))
+const windowsIconPath = fileURLToPath(new URL('./assets/desktop.ico', import.meta.url))
 const windowsSigningOptions = resolveWindowsSigningOptions(process.env)
 const unsignedTestBuild = windowsSigningOptions === undefined
+const executableFilename = `${PRODUCT_EXECUTABLE_BASENAME}.exe`
+const setupFilename = `${PRODUCT_EXECUTABLE_BASENAME}-0.1.0-Setup.exe`
 
 export default {
   outDir: 'release',
   packagerConfig: {
-    appBundleId: 'com.geoforge.desktop',
+    appBundleId: PLATFORM_DESKTOP_APPLICATION_ID,
     appCategoryType: 'public.app-category.productivity',
     asar: true,
-    executableName: 'GeoForge',
+    executableName: PRODUCT_EXECUTABLE_BASENAME,
     icon: windowsIconPath,
     windowsSign: windowsSigningOptions,
     win32metadata: {
-      CompanyName: 'GeoForge',
-      FileDescription: 'GeoForge 地理智能工作台',
-      InternalName: 'GeoForge',
-      OriginalFilename: 'GeoForge.exe',
-      ProductName: 'GeoForge',
+      CompanyName: 'Geo Agent Platform Contributors',
+      FileDescription: PRODUCT_DESKTOP_NAME,
+      InternalName: PRODUCT_EXECUTABLE_BASENAME,
+      OriginalFilename: executableFilename,
+      ProductName: PRODUCT_CODENAME,
     },
     // electron-vite bundles Main, Preload and Renderer into /out. Packaging an
     // allowlisted build tree avoids npm-workspace symlink traversal and keeps
@@ -48,8 +58,8 @@ export default {
     ignore: filePath => !isPackagedApplicationFile(filePath),
     protocols: [
       {
-        name: 'GeoForge Desktop Protocol',
-        schemes: ['geoforge'],
+        name: `${PRODUCT_CODENAME} Desktop Protocol`,
+        schemes: [PLATFORM_DESKTOP_PROTOCOL_SCHEME],
       },
     ],
   },
@@ -58,25 +68,25 @@ export default {
     {
       name: '@electron-forge/maker-squirrel',
       config: {
-        name: 'geoforge_desktop',
-        authors: 'GeoForge',
-        copyright: 'Copyright © GeoForge',
-        description: 'GeoForge 地理智能工作台',
-        exe: 'GeoForge.exe',
+        name: `${PLATFORM_MACHINE_ID}_desktop`,
+        authors: 'Geo Agent Platform Contributors',
+        copyright: 'Copyright © Geo Agent Platform Contributors',
+        description: PRODUCT_DESKTOP_NAME,
+        exe: executableFilename,
         additionalFiles: unsignedTestBuild
           ? [{ src: 'UNSIGNED-TEST-BUILD.txt', target: 'lib\\net45' }]
           : [],
         noMsi: true,
         setupIcon: windowsIconPath,
         setupExe: unsignedTestBuild
-          ? 'GeoForge-0.1.0-UNSIGNED-TEST-Setup.exe'
-          : 'GeoForge-0.1.0-Setup.exe',
-        title: 'GeoForge',
+          ? `${PRODUCT_EXECUTABLE_BASENAME}-0.1.0-UNSIGNED-TEST-Setup.exe`
+          : setupFilename,
+        title: PRODUCT_CODENAME,
         vendorDirectory: squirrelVendorDirectory,
         windowsSign: windowsSigningOptions,
       },
     },
-    new GeoForgeZipMaker({}, ['win32']),
+    new DesktopZipMaker({}, ['win32']),
   ],
   hooks: {
     postPackage: async (_forgeConfig, packageResult) => {
@@ -84,7 +94,7 @@ export default {
       await Promise.all(packageResult.outputPaths.map(outputPath => writeFile(
         path.join(outputPath, 'UNSIGNED-TEST-BUILD.txt'),
         [
-          'GeoForge UNSIGNED TEST BUILD',
+          `${PRODUCT_CODENAME} UNSIGNED TEST BUILD`,
           'This package is for local verification only and must not be distributed as a production release.',
           '',
         ].join('\r\n'),
@@ -130,7 +140,7 @@ function isPackagedApplicationFile(filePath) {
 }
 
 function resolveWindowsSigningOptions(environment) {
-  const releaseBuild = environment.GEOFORGE_RELEASE_BUILD?.trim() === '1'
+  const releaseBuild = environment.GEO_AGENT_PLATFORM_RELEASE_BUILD?.trim() === '1'
   const certificateFile = environment.WINDOWS_CERTIFICATE_FILE?.trim()
   const certificatePassword = environment.WINDOWS_CERTIFICATE_PASSWORD
   if (!certificateFile && !certificatePassword) {

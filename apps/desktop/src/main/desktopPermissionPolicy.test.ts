@@ -26,21 +26,21 @@ describe('desktop permission policy', () => {
   it('keeps checks read-only and consumes only a trusted main-frame audio request', () => {
     const gate = new MicrophonePermissionGate(() => 1_000, 60_000)
     const { check, request } = installPolicy(gate)
-    const webContents = fakeWebContents(41, 'geoforge://app/workspace')
+    const webContents = fakeWebContents(41, 'geo-agent-platform://app/workspace')
     gate.grant(webContents.id)
 
-    expect(check(webContents, 'media', 'geoforge://app', {
+    expect(check(webContents, 'media', 'geo-agent-platform://app', {
       isMainFrame: true,
       mediaType: 'audio',
-      requestingUrl: 'geoforge://app/workspace',
+      requestingUrl: 'geo-agent-platform://app/workspace',
     })).toBe(false)
     expect(gate.hasActiveGrant(webContents.id)).toBe(true)
 
     const callback = vi.fn()
     request(webContents, 'media', callback, {
       isMainFrame: true,
-      requestingUrl: 'geoforge://app/workspace',
-      securityOrigin: 'geoforge://app',
+      requestingUrl: 'geo-agent-platform://app/workspace',
+      securityOrigin: 'geo-agent-platform://app',
       mediaTypes: ['audio'],
     })
     expect(callback).toHaveBeenCalledWith(true)
@@ -49,8 +49,8 @@ describe('desktop permission policy', () => {
     const repeated = vi.fn()
     request(webContents, 'media', repeated, {
       isMainFrame: true,
-      requestingUrl: 'geoforge://app/workspace',
-      securityOrigin: 'geoforge://app',
+      requestingUrl: 'geo-agent-platform://app/workspace',
+      securityOrigin: 'geo-agent-platform://app',
       mediaTypes: ['audio'],
     })
     expect(repeated).toHaveBeenCalledWith(false)
@@ -59,47 +59,47 @@ describe('desktop permission policy', () => {
   it('rejects video, mixed media, subframes, unknown windows and untrusted origins', () => {
     const gate = new MicrophonePermissionGate(() => 1_000, 60_000)
     const { check, request } = installPolicy(gate)
-    const webContents = fakeWebContents(51, 'geoforge://app/workspace')
+    const webContents = fakeWebContents(51, 'geo-agent-platform://app/workspace')
     gate.grant(webContents.id)
 
-    expect(check(webContents, 'media', 'geoforge://app', {
+    expect(check(webContents, 'media', 'geo-agent-platform://app', {
       isMainFrame: true,
       mediaType: 'video',
-      requestingUrl: 'geoforge://app/workspace',
+      requestingUrl: 'geo-agent-platform://app/workspace',
     })).toBe(false)
-    expect(check(webContents, 'media', 'geoforge://app', {
+    expect(check(webContents, 'media', 'geo-agent-platform://app', {
       isMainFrame: false,
       mediaType: 'audio',
-      requestingUrl: 'geoforge://app/frame',
+      requestingUrl: 'geo-agent-platform://app/frame',
     })).toBe(false)
     expect(check(webContents, 'media', 'https://evil.example', {
       isMainFrame: true,
       mediaType: 'audio',
       requestingUrl: 'https://evil.example/',
     })).toBe(false)
-    expect(check(fakeWebContents(52, 'geoforge://app/workspace'), 'media', 'geoforge://app', {
+    expect(check(fakeWebContents(52, 'geo-agent-platform://app/workspace'), 'media', 'geo-agent-platform://app', {
       isMainFrame: true,
       mediaType: 'audio',
-      requestingUrl: 'geoforge://app/workspace',
+      requestingUrl: 'geo-agent-platform://app/workspace',
     })).toBe(false)
 
     for (const details of [
       {
         isMainFrame: true,
-        requestingUrl: 'geoforge://app/workspace',
-        securityOrigin: 'geoforge://app',
+        requestingUrl: 'geo-agent-platform://app/workspace',
+        securityOrigin: 'geo-agent-platform://app',
         mediaTypes: ['video'] as Array<'video' | 'audio'>,
       },
       {
         isMainFrame: true,
-        requestingUrl: 'geoforge://app/workspace',
-        securityOrigin: 'geoforge://app',
+        requestingUrl: 'geo-agent-platform://app/workspace',
+        securityOrigin: 'geo-agent-platform://app',
         mediaTypes: ['audio', 'video'] as Array<'video' | 'audio'>,
       },
       {
         isMainFrame: false,
-        requestingUrl: 'geoforge://app/frame',
-        securityOrigin: 'geoforge://app',
+        requestingUrl: 'geo-agent-platform://app/frame',
+        securityOrigin: 'geo-agent-platform://app',
         mediaTypes: ['audio'] as Array<'video' | 'audio'>,
       },
       {

@@ -50,7 +50,7 @@ class WorkerSecurityMiddleware:
 
         path = str(scope.get("path") or "")
         headers = Headers(scope=scope)
-        trace_id = headers.get("x-geoforge-trace-id") or uuid4().hex[:12]
+        trace_id = headers.get("x-geo-agent-platform-trace-id") or uuid4().hex[:12]
         state = scope.setdefault("state", {})
         state["trace_id"] = trace_id
         if path == "/health":

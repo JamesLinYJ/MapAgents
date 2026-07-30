@@ -9,11 +9,15 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
+import {
+  PLATFORM_DESKTOP_PROTOCOL_SCHEME,
+} from '@geo-agent-platform/shared-types/product-identity'
+
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '[::1]', 'localhost'])
 
 /**
  * 可信来源必须按解析后的协议、主机和端口精确匹配。字符串前缀不能作为
- * 安全边界，否则 `geoforge://app.evil` 或相似开发域名会被错误接受。
+ * 安全边界，否则 `geo-agent-platform://app.evil` 或相似开发域名会被错误接受。
  */
 export function isTrustedApplicationUrl(
   value: string,
@@ -22,7 +26,7 @@ export function isTrustedApplicationUrl(
   const candidate = parseCredentialFreeUrl(value)
   if (!candidate) return false
   if (
-    candidate.protocol === 'geoforge:'
+    candidate.protocol === `${PLATFORM_DESKTOP_PROTOCOL_SCHEME}:`
     && candidate.hostname === 'app'
     && candidate.port === ''
   ) {

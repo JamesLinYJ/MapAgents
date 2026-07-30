@@ -9,7 +9,7 @@
 #   协助:       OpenAI Codex:GPT-5.5
 # --------------------------------------------------------------------------
 
-"""GeoForge Python 科学计算 Worker 进程入口。"""
+"""平台 Python 科学计算 Worker 进程入口。"""
 
 from pathlib import Path
 

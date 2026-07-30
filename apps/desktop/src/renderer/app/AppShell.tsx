@@ -21,6 +21,7 @@
 import { Suspense, useCallback, useDeferredValue, useMemo } from 'react'
 import { domAnimation, LazyMotion, MotionConfig } from 'framer-motion'
 import { useQuery } from '@tanstack/react-query'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 import './AppShell.css'
 import './styles/glass.css'
@@ -713,7 +714,7 @@ function AppShell() {
                 {exportWizardOpen && (
                   <ExportWizard
                     open
-                    title={currentThreadTitle || 'GeoForge 分析成果'}
+                    title={currentThreadTitle || `${PRODUCT_CODENAME} 分析成果`}
                     artifacts={artifacts}
                     defaultArtifactId={selectedArtifact?.artifactId ?? artifacts.at(-1)?.artifactId}
                     busy={exportBusy}
@@ -931,7 +932,12 @@ function AppShell() {
                     : <WorkspaceRestrictedDocument title="分析结果" reason={remoteUnavailableReason} />}
                 />
                 {showInteractiveLogin ? (
-                  <div className="gf-login-overlay" role="dialog" aria-modal="true" aria-label="登录 GeoForge">
+                  <div
+                    className="gf-login-overlay"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label={`登录 ${PRODUCT_CODENAME}`}
+                  >
                     <LoginScreen onAuthenticated={retryAuth} />
                   </div>
                 ) : null}

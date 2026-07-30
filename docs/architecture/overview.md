@@ -1,6 +1,6 @@
-# GeoForge 架构总览
+# 地理智能平台 架构总览
 
-GeoForge 是一个中文优先的地理与气象智能平台。仓库采用 npm/Python 混合 monorepo：用户体验、Agent 编排、科学计算、结构化事实和本机运维具有独立所有者，通过严格契约连接。
+地理智能平台 是一个中文优先的地理与气象智能平台。仓库采用 npm/Python 混合 monorepo：用户体验、Agent 编排、科学计算、结构化事实和本机运维具有独立所有者，通过严格契约连接。
 
 ## 仓库布局
 
@@ -67,7 +67,7 @@ flowchart LR
 
 1. 用户消息进入 canonical Thread/Run。
 2. `@openai/agents` Runner 是单次运行的编排状态机，RunState 是审批中断和恢复载荷。
-3. GeoForge 负责工作流、权限、工具注册、`valueRef`、数据库事实、审计与分层记忆。
+3. 地理智能平台 负责工作流、权限、工具注册、`valueRef`、数据库事实、审计与分层记忆。
 4. DeepSeek 使用专属 OpenAI-compatible Chat Completions Model 适配器；Provider descriptor 限定可选模型和真实能力。
 5. ToolProvider 经过 manifest/schema 一致性校验后才可注册。Python 工具契约以 Pydantic catalog 为事实源。
 6. Desktop Chat 与本机 Agent CLI 都从 `packages/conversation-presentation` 获取消息分类、工具调用配对和公开展示标识；DOM Markdown 与终端 Markdown 只是两个最终渲染目标，不得各自重建业务投影。

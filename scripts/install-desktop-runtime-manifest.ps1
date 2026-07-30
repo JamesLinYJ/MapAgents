@@ -1,6 +1,6 @@
 # +-------------------------------------------------------------------------
 #
-#   GeoForge 地理智能平台 - Windows Desktop 生产运行时清单安装器
+#   地理智能平台 - Windows Desktop 生产运行时清单安装器
 #
 #   文件:       install-desktop-runtime-manifest.ps1
 #
@@ -17,23 +17,23 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ServicePrincipal,
 
-    [string]$RuntimeRoot = 'C:\ProgramData\GeoForge\runtime',
+    [string]$RuntimeRoot,
 
     [string]$ApiBaseUrl = 'http://127.0.0.1:8000',
 
     [string]$SupervisorTokenFile,
 
-    [string]$ServiceEnvironmentFile = 'C:\ProgramData\GeoForge\supervisor.env',
+    [string]$ServiceEnvironmentFile,
 
-    [string]$OperatorsPrincipal = 'GeoForge Operators',
+    [string]$OperatorsPrincipal = 'Geo Agent Platform Operators',
 
     [switch]$PreserveExistingSupervisorToken,
 
     [ValidateSet(
-        'GEOFORGE_ROOT',
+        'GEO_AGENT_PLATFORM_ROOT',
         'RUNTIME_ROOT',
         'APP_BASE_URL',
-        'GEOFORGE_SUPERVISOR_TOKEN_FILE'
+        'GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE'
     )]
     [string[]]$AllowedEnvironmentOverrides = @()
 )
@@ -46,8 +46,20 @@ if (-not $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     throw '安装受保护的 Desktop runtime manifest 需要管理员权限。'
 }
 
-$GeoForgeConfigRoot = [IO.Path]::GetFullPath('C:\ProgramData\GeoForge')
-$ManifestPath = Join-Path $GeoForgeConfigRoot 'runtime-manifest.v1.json'
+$CommonApplicationData = [Environment]::GetFolderPath(
+    [Environment+SpecialFolder]::CommonApplicationData
+)
+if (-not $CommonApplicationData -or -not [IO.Path]::IsPathFullyQualified($CommonApplicationData)) {
+    throw '无法解析 Windows 公共应用数据目录。'
+}
+$PlatformConfigRoot = [IO.Path]::GetFullPath((Join-Path $CommonApplicationData 'GeoAgentPlatform'))
+$RuntimeRoot = if ($RuntimeRoot) { $RuntimeRoot } else { Join-Path $PlatformConfigRoot 'runtime' }
+$ServiceEnvironmentFile = if ($ServiceEnvironmentFile) {
+    $ServiceEnvironmentFile
+} else {
+    Join-Path $PlatformConfigRoot 'supervisor.env'
+}
+$ManifestPath = Join-Path $PlatformConfigRoot 'runtime-manifest.v1.json'
 $SystemIdentity = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
 $AdministratorsIdentity = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
 $OperatorsIdentity = [Security.Principal.NTAccount]::new($OperatorsPrincipal).Translate(
@@ -57,7 +69,7 @@ $ServiceIdentity = [Security.Principal.NTAccount]::new($ServicePrincipal).Transl
     [Security.Principal.SecurityIdentifier]
 )
 
-function Assert-GeoForgeOrdinaryPath {
+function Assert-PlatformOrdinaryPath {
     param(
         [Parameter(Mandatory = $true)]
         [string]$LiteralPath,
@@ -80,7 +92,7 @@ function Assert-GeoForgeOrdinaryPath {
     }
 }
 
-function Add-GeoForgeFileAccessRule {
+function Add-PlatformFileAccessRule {
     param(
         [Parameter(Mandatory = $true)]
         [Security.AccessControl.FileSecurity]$Acl,
@@ -99,7 +111,7 @@ function Add-GeoForgeFileAccessRule {
     ))
 }
 
-function Set-GeoForgeProtectedFileAcl {
+function Set-PlatformProtectedFileAcl {
     param(
         [Parameter(Mandatory = $true)]
         [string]$LiteralPath,
@@ -112,22 +124,22 @@ function Set-GeoForgeProtectedFileAcl {
     $Acl = [Security.AccessControl.FileSecurity]::new()
     $Acl.SetOwner($AdministratorsIdentity)
     $Acl.SetAccessRuleProtection($true, $false)
-    Add-GeoForgeFileAccessRule -Acl $Acl -Identity $SystemIdentity `
+    Add-PlatformFileAccessRule -Acl $Acl -Identity $SystemIdentity `
         -Rights ([Security.AccessControl.FileSystemRights]::FullControl)
-    Add-GeoForgeFileAccessRule -Acl $Acl -Identity $AdministratorsIdentity `
+    Add-PlatformFileAccessRule -Acl $Acl -Identity $AdministratorsIdentity `
         -Rights ([Security.AccessControl.FileSystemRights]::FullControl)
     if ($AllowOperators) {
-        Add-GeoForgeFileAccessRule -Acl $Acl -Identity $OperatorsIdentity `
+        Add-PlatformFileAccessRule -Acl $Acl -Identity $OperatorsIdentity `
             -Rights ([Security.AccessControl.FileSystemRights]::ReadAndExecute)
     }
     if ($AllowService) {
-        Add-GeoForgeFileAccessRule -Acl $Acl -Identity $ServiceIdentity `
+        Add-PlatformFileAccessRule -Acl $Acl -Identity $ServiceIdentity `
             -Rights ([Security.AccessControl.FileSystemRights]::ReadAndExecute)
     }
     Set-Acl -LiteralPath $LiteralPath -AclObject $Acl
 }
 
-function Add-GeoForgeDirectoryAccessRule {
+function Add-PlatformDirectoryAccessRule {
     param(
         [Parameter(Mandatory = $true)]
         [Security.AccessControl.DirectorySecurity]$Acl,
@@ -150,7 +162,7 @@ function Add-GeoForgeDirectoryAccessRule {
     ))
 }
 
-function Set-GeoForgeProtectedDirectoryAcl {
+function Set-PlatformProtectedDirectoryAcl {
     param(
         [Parameter(Mandatory = $true)]
         [string]$LiteralPath,
@@ -164,13 +176,13 @@ function Set-GeoForgeProtectedDirectoryAcl {
     $Acl = [Security.AccessControl.DirectorySecurity]::new()
     $Acl.SetOwner($AdministratorsIdentity)
     $Acl.SetAccessRuleProtection($true, $false)
-    Add-GeoForgeDirectoryAccessRule -Acl $Acl -Identity $SystemIdentity `
+    Add-PlatformDirectoryAccessRule -Acl $Acl -Identity $SystemIdentity `
         -Rights ([Security.AccessControl.FileSystemRights]::FullControl)
-    Add-GeoForgeDirectoryAccessRule -Acl $Acl -Identity $AdministratorsIdentity `
+    Add-PlatformDirectoryAccessRule -Acl $Acl -Identity $AdministratorsIdentity `
         -Rights ([Security.AccessControl.FileSystemRights]::FullControl)
-    Add-GeoForgeDirectoryAccessRule -Acl $Acl -Identity $ServiceIdentity -Rights $ServiceRights
+    Add-PlatformDirectoryAccessRule -Acl $Acl -Identity $ServiceIdentity -Rights $ServiceRights
     if ($AllowOperators) {
-        Add-GeoForgeDirectoryAccessRule -Acl $Acl -Identity $OperatorsIdentity `
+        Add-PlatformDirectoryAccessRule -Acl $Acl -Identity $OperatorsIdentity `
             -Rights ([Security.AccessControl.FileSystemRights]::ReadAndExecute)
     }
     Set-Acl -LiteralPath $LiteralPath -AclObject $Acl
@@ -183,20 +195,20 @@ $ProjectRoot = [IO.Path]::GetFullPath($ProjectRoot)
 if ([IO.Path]::GetPathRoot($ProjectRoot) -eq $ProjectRoot) {
     throw 'ProjectRoot 不能是卷根目录。'
 }
-Assert-GeoForgeOrdinaryPath -LiteralPath $ProjectRoot -ExpectedType Directory
+Assert-PlatformOrdinaryPath -LiteralPath $ProjectRoot -ExpectedType Directory
 
 if (-not [IO.Path]::IsPathFullyQualified($RuntimeRoot)) {
     throw 'RuntimeRoot 必须是绝对路径。'
 }
 $RuntimeRoot = [IO.Path]::GetFullPath($RuntimeRoot)
-$RelativeRuntimePath = [IO.Path]::GetRelativePath($GeoForgeConfigRoot, $RuntimeRoot)
+$RelativeRuntimePath = [IO.Path]::GetRelativePath($PlatformConfigRoot, $RuntimeRoot)
 if (
     -not $RelativeRuntimePath -or
     [IO.Path]::IsPathFullyQualified($RelativeRuntimePath) -or
     $RelativeRuntimePath -eq '..' -or
     $RelativeRuntimePath.StartsWith("..$([IO.Path]::DirectorySeparatorChar)")
 ) {
-    throw 'RuntimeRoot 必须位于固定的 C:\ProgramData\GeoForge 配置根目录内部。'
+    throw "RuntimeRoot 必须位于平台配置根目录内部：$PlatformConfigRoot"
 }
 
 if (-not $SupervisorTokenFile) {
@@ -224,16 +236,16 @@ if (-not [IO.Path]::IsPathFullyQualified($ServiceEnvironmentFile)) {
     throw 'ServiceEnvironmentFile 必须是绝对路径。'
 }
 $ServiceEnvironmentFile = [IO.Path]::GetFullPath($ServiceEnvironmentFile)
-$RelativeEnvironmentPath = [IO.Path]::GetRelativePath($GeoForgeConfigRoot, $ServiceEnvironmentFile)
+$RelativeEnvironmentPath = [IO.Path]::GetRelativePath($PlatformConfigRoot, $ServiceEnvironmentFile)
 if (
     -not $RelativeEnvironmentPath -or
     [IO.Path]::IsPathFullyQualified($RelativeEnvironmentPath) -or
     $RelativeEnvironmentPath -eq '..' -or
     $RelativeEnvironmentPath.StartsWith("..$([IO.Path]::DirectorySeparatorChar)")
 ) {
-    throw 'ServiceEnvironmentFile 必须位于固定的 C:\ProgramData\GeoForge 配置根目录内部。'
+    throw "ServiceEnvironmentFile 必须位于平台配置根目录内部：$PlatformConfigRoot"
 }
-Assert-GeoForgeOrdinaryPath -LiteralPath $ServiceEnvironmentFile -ExpectedType File
+Assert-PlatformOrdinaryPath -LiteralPath $ServiceEnvironmentFile -ExpectedType File
 
 try {
     $ApiUri = [Uri]::new($ApiBaseUrl, [UriKind]::Absolute)
@@ -270,35 +282,35 @@ if ($LASTEXITCODE -ne 0) {
     throw '生产监督器环境校验失败。'
 }
 
-if ($PSCmdlet.ShouldProcess($ManifestPath, '安装受保护的 GeoForge Desktop runtime manifest')) {
-    New-Item -ItemType Directory -Path $GeoForgeConfigRoot -Force | Out-Null
-    Assert-GeoForgeOrdinaryPath -LiteralPath $GeoForgeConfigRoot -ExpectedType Directory
-    Set-GeoForgeProtectedDirectoryAcl -LiteralPath $GeoForgeConfigRoot `
+if ($PSCmdlet.ShouldProcess($ManifestPath, '安装受保护的 Desktop runtime manifest')) {
+    New-Item -ItemType Directory -Path $PlatformConfigRoot -Force | Out-Null
+    Assert-PlatformOrdinaryPath -LiteralPath $PlatformConfigRoot -ExpectedType Directory
+    Set-PlatformProtectedDirectoryAcl -LiteralPath $PlatformConfigRoot `
         -ServiceRights ([Security.AccessControl.FileSystemRights]::ReadAndExecute) `
         -AllowOperators
 
     New-Item -ItemType Directory -Path $RuntimeRoot -Force | Out-Null
-    Assert-GeoForgeOrdinaryPath -LiteralPath $RuntimeRoot -ExpectedType Directory
-    Set-GeoForgeProtectedDirectoryAcl -LiteralPath $RuntimeRoot `
+    Assert-PlatformOrdinaryPath -LiteralPath $RuntimeRoot -ExpectedType Directory
+    Set-PlatformProtectedDirectoryAcl -LiteralPath $RuntimeRoot `
         -ServiceRights ([Security.AccessControl.FileSystemRights]::Modify) `
         -AllowOperators
 
     New-Item -ItemType Directory -Path $TokenDirectory -Force | Out-Null
-    Assert-GeoForgeOrdinaryPath -LiteralPath $TokenDirectory -ExpectedType Directory
-    Set-GeoForgeProtectedDirectoryAcl -LiteralPath $TokenDirectory `
+    Assert-PlatformOrdinaryPath -LiteralPath $TokenDirectory -ExpectedType Directory
+    Set-PlatformProtectedDirectoryAcl -LiteralPath $TokenDirectory `
         -ServiceRights ([Security.AccessControl.FileSystemRights]::ReadAndExecute) `
         -AllowOperators
 
-    Assert-GeoForgeOrdinaryPath -LiteralPath $ServiceEnvironmentFile -ExpectedType File
-    Set-GeoForgeProtectedFileAcl -LiteralPath $ServiceEnvironmentFile -AllowService
+    Assert-PlatformOrdinaryPath -LiteralPath $ServiceEnvironmentFile -ExpectedType File
+    Set-PlatformProtectedFileAcl -LiteralPath $ServiceEnvironmentFile -AllowService
 
     if ($PreserveExistingSupervisorToken -and (Test-Path -LiteralPath $SupervisorTokenFile)) {
-        Assert-GeoForgeOrdinaryPath -LiteralPath $SupervisorTokenFile -ExpectedType File
+        Assert-PlatformOrdinaryPath -LiteralPath $SupervisorTokenFile -ExpectedType File
         $ExistingToken = [IO.File]::ReadAllText($SupervisorTokenFile).Trim()
         if ($ExistingToken -notmatch '^[A-Za-z0-9_-]{43}$') {
             throw '显式保留的 Supervisor token 必须是 256 位 base64url 值。'
         }
-        Set-GeoForgeProtectedFileAcl -LiteralPath $SupervisorTokenFile -AllowOperators -AllowService
+        Set-PlatformProtectedFileAcl -LiteralPath $SupervisorTokenFile -AllowOperators -AllowService
     } else {
         $TokenBytes = [byte[]]::new(32)
         [Security.Cryptography.RandomNumberGenerator]::Fill($TokenBytes)
@@ -310,9 +322,9 @@ if ($PSCmdlet.ShouldProcess($ManifestPath, '安装受保护的 GeoForge Desktop 
                 "$Token$([Environment]::NewLine)",
                 [Text.UTF8Encoding]::new($false)
             )
-            Set-GeoForgeProtectedFileAcl -LiteralPath $TemporaryTokenPath -AllowOperators -AllowService
+            Set-PlatformProtectedFileAcl -LiteralPath $TemporaryTokenPath -AllowOperators -AllowService
             [IO.File]::Move($TemporaryTokenPath, $SupervisorTokenFile, $true)
-            Set-GeoForgeProtectedFileAcl -LiteralPath $SupervisorTokenFile -AllowOperators -AllowService
+            Set-PlatformProtectedFileAcl -LiteralPath $SupervisorTokenFile -AllowOperators -AllowService
         } finally {
             if (Test-Path -LiteralPath $TemporaryTokenPath -PathType Leaf) {
                 Remove-Item -LiteralPath $TemporaryTokenPath -Force
@@ -321,7 +333,7 @@ if ($PSCmdlet.ShouldProcess($ManifestPath, '安装受保护的 GeoForge Desktop 
     }
 
     $Manifest = [ordered]@{
-        kind = 'geoforge.desktop-runtime'
+        kind = 'geo-agent-platform.desktop-runtime'
         schemaVersion = 1
         projectRoot = $ProjectRoot
         runtimeRoot = $RuntimeRoot
@@ -330,16 +342,16 @@ if ($PSCmdlet.ShouldProcess($ManifestPath, '安装受保护的 GeoForge Desktop 
         allowedEnvironmentOverrides = @($AllowedEnvironmentOverrides)
     }
     $ManifestJson = $Manifest | ConvertTo-Json -Depth 4
-    $TemporaryManifestPath = Join-Path $GeoForgeConfigRoot ".runtime-manifest.$([Guid]::NewGuid().ToString('N')).tmp"
+    $TemporaryManifestPath = Join-Path $PlatformConfigRoot ".runtime-manifest.$([Guid]::NewGuid().ToString('N')).tmp"
     try {
         [IO.File]::WriteAllText(
             $TemporaryManifestPath,
             "$ManifestJson$([Environment]::NewLine)",
             [Text.UTF8Encoding]::new($false)
         )
-        Set-GeoForgeProtectedFileAcl -LiteralPath $TemporaryManifestPath -AllowOperators -AllowService
+        Set-PlatformProtectedFileAcl -LiteralPath $TemporaryManifestPath -AllowOperators -AllowService
         [IO.File]::Move($TemporaryManifestPath, $ManifestPath, $true)
-        Set-GeoForgeProtectedFileAcl -LiteralPath $ManifestPath -AllowOperators -AllowService
+        Set-PlatformProtectedFileAcl -LiteralPath $ManifestPath -AllowOperators -AllowService
     } finally {
         if (Test-Path -LiteralPath $TemporaryManifestPath -PathType Leaf) {
             Remove-Item -LiteralPath $TemporaryManifestPath -Force

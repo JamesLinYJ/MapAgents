@@ -12,6 +12,9 @@
 import { homedir } from 'node:os'
 import { lstat, realpath } from 'node:fs/promises'
 import path from 'node:path'
+import {
+  PLATFORM_STATE_DIRECTORY_NAME,
+} from '@geo-agent-platform/shared-types/product-identity'
 import type { AgentRuntimeConfig } from '../schemas/types.js'
 import type { MemoryScope } from './schemas.js'
 
@@ -37,7 +40,7 @@ export function createMemoryPathConfig(
   const projectKey = stableProjectKey(projectRoot)
   const baseDir = config.memoryBaseDir.trim()
     ? resolveConfiguredBase(config.memoryBaseDir, runtimeRoot)
-    : path.join(homedir(), '.geoforge', 'projects')
+    : path.join(homedir(), PLATFORM_STATE_DIRECTORY_NAME, 'projects')
   const privateDir = config.privateMemoryDir?.trim()
     ? resolveConfiguredBase(config.privateMemoryDir, runtimeRoot)
     : path.join(baseDir, projectKey, 'memory', 'private')

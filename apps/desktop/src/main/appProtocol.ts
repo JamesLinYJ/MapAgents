@@ -12,11 +12,15 @@
 import { app, net, protocol } from 'electron'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import {
+  PLATFORM_DESKTOP_PROTOCOL_SCHEME,
+  PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME,
+} from '@geo-agent-platform/shared-types/product-identity'
 
 export function registerPrivilegedAppScheme(): void {
   protocol.registerSchemesAsPrivileged([
     {
-      scheme: 'geoforge',
+      scheme: PLATFORM_DESKTOP_PROTOCOL_SCHEME,
       privileges: {
         standard: true,
         secure: true,
@@ -26,7 +30,7 @@ export function registerPrivilegedAppScheme(): void {
       },
     },
     {
-      scheme: 'geoforge-resource',
+      scheme: PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME,
       privileges: {
         standard: true,
         secure: true,
@@ -40,7 +44,7 @@ export function registerPrivilegedAppScheme(): void {
 
 export async function installAppProtocol(): Promise<void> {
   const rendererRoot = path.resolve(app.getAppPath(), 'out', 'renderer')
-  await protocol.handle('geoforge', (request) => {
+  await protocol.handle(PLATFORM_DESKTOP_PROTOCOL_SCHEME, (request) => {
     const url = new URL(request.url)
     if (url.hostname !== 'app') return new Response('Not Found', { status: 404 })
     const relativePath = decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname)

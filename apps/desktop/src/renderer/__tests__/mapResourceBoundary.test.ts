@@ -18,7 +18,7 @@ import { DEFAULT_BASEMAP } from '../shared/constants'
 describe('desktop map resource boundary', () => {
   it('routes the bootstrap basemap through the controlled Main-process protocol', () => {
     expect(DEFAULT_BASEMAP.tileUrls).toEqual([
-      'geoforge-resource://basemap/osm/{z}/{x}/{y}.png',
+      'geo-agent-platform-resource://basemap/osm/{z}/{x}/{y}.png',
     ])
 
     const style = buildBasemapStyle(DEFAULT_BASEMAP)
@@ -30,7 +30,7 @@ describe('desktop map resource boundary', () => {
 
   it('projects only validated relative API resources at the MapLibre boundary', () => {
     expect(desktopMapResourceUrl('/api/v1/map/layers/layer_1/tilejson')).toBe(
-      'geoforge-resource://api/api/v1/map/layers/layer_1/tilejson',
+      'geo-agent-platform-resource://api/api/v1/map/layers/layer_1/tilejson',
     )
     expect(() => desktopMapResourceUrl('https://example.com/tilejson')).toThrow(
       '地图资源地址不在桌面受控范围内',

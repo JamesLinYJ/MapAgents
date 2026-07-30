@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-// GeoForge Automation 启动、审批、取消、定时任务和进程内后台任务服务。
+// 平台 Automation 启动、审批、取消、定时任务和进程内后台任务服务。
 // 定义版本由 AutomationDefinitionService 管理，持久队列由 pg-boss 管理。
 
 import { randomUUID } from 'node:crypto'

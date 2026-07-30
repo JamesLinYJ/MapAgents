@@ -1,6 +1,6 @@
-# GeoForge 代码审查综合报告
+# 地理智能平台 代码审查综合报告
 
-**项目**: GeoForge (geo-agent-platform / 地理智能平台)  
+**项目**: 地理智能平台 (geo-agent-platform)
 **审查日期**: 2026-07-09  
 **审查范围**: 全栈架构审查，覆盖 server (TypeScript/Hono)、前端 (React/MapLibre)、Python Worker、数据库 (PostGIS)、基础设施配置、测试与文档
 
@@ -8,7 +8,7 @@
 
 ## 1. 总体评价
 
-GeoForge 是一个架构设计精良、工程实践成熟的中大型 GIS Agent 平台项目。代码库在架构分层（HTTP 数据面 / WS 控制面 / Worker 计算面三级分离）、类型安全（Zod 全链路校验）、并发安全（串行写入队列、进程级排空）、安全设计（HMAC Worker 认证、RBAC、CSRF 框架）等方面展现出非常高水平的工程素养。文件系统作为会话事实源结合内存索引的双层存储设计、进程优雅关闭协调机制、以及 Worker 端三重防伪签名方案尤其令人印象深刻。项目整体处于中后期开发阶段，核心架构决策稳健，但在规模化（多实例部署、大型数据集）、工程完整性（事务缺失、测试覆盖不足、i18n 空白）、以及部分代码细节（上帝组件、长方法、重复定义）上存在明显短板。最值得关注的风险集中在数据库事务的全面缺失、基于单进程内存的速率限制在多实例部署下完全无效、以及 CSRF 保护以 opt-in 模式运作带来的遗漏风险。
+地理智能平台 是一个架构设计精良、工程实践成熟的中大型 GIS Agent 平台项目。代码库在架构分层（HTTP 数据面 / WS 控制面 / Worker 计算面三级分离）、类型安全（Zod 全链路校验）、并发安全（串行写入队列、进程级排空）、安全设计（HMAC Worker 认证、RBAC、CSRF 框架）等方面展现出非常高水平的工程素养。文件系统作为会话事实源结合内存索引的双层存储设计、进程优雅关闭协调机制、以及 Worker 端三重防伪签名方案尤其令人印象深刻。项目整体处于中后期开发阶段，核心架构决策稳健，但在规模化（多实例部署、大型数据集）、工程完整性（事务缺失、测试覆盖不足、i18n 空白）、以及部分代码细节（上帝组件、长方法、重复定义）上存在明显短板。最值得关注的风险集中在数据库事务的全面缺失、基于单进程内存的速率限制在多实例部署下完全无效、以及 CSRF 保护以 opt-in 模式运作带来的遗漏风险。
 
 ---
 
@@ -19,7 +19,7 @@ GeoForge 是一个架构设计精良、工程实践成熟的中大型 GIS Agent 
 **文件**: `server/src/framework/validation.ts:55`  
 **严重度**: Low
 
-`validateManifestParity()` 在 Provider 注册前逐一比对 manifest 声明与运行时实现的 label、description、group、tags、jsonSchema 五个关键字段，使用 `stableJson` 做深度比较，确保 UI 和 Agent 看到的公开契约与运行时完全一致。这一设计的精妙之处在于它从架构层面杜绝了"前后端契约漂移"这一分布式系统中最隐蔽的错误来源。在传统架构中，工具清单（manifest）常作为独立文档维护，极易出现文档更新滞后于实现或实现悄悄扩展参数而前端不知情的情况。GeoForge 将契约校验嵌入 Provider 注册的生命周期钩子，任何不匹配都会阻止 Provider 加载，相当于在系统边界处设置了一道自动化的"合同公证"关卡。这不仅提升了系统的可靠性，也降低了多人协作时沟通契约变更的认知负担——改实现就必须改 manifest，改 manifest 就必须通过校验，二者在编译/启动时即强绑定。
+`validateManifestParity()` 在 Provider 注册前逐一比对 manifest 声明与运行时实现的 label、description、group、tags、jsonSchema 五个关键字段，使用 `stableJson` 做深度比较，确保 UI 和 Agent 看到的公开契约与运行时完全一致。这一设计的精妙之处在于它从架构层面杜绝了"前后端契约漂移"这一分布式系统中最隐蔽的错误来源。在传统架构中，工具清单（manifest）常作为独立文档维护，极易出现文档更新滞后于实现或实现悄悄扩展参数而前端不知情的情况。地理智能平台 将契约校验嵌入 Provider 注册的生命周期钩子，任何不匹配都会阻止 Provider 加载，相当于在系统边界处设置了一道自动化的"合同公证"关卡。这不仅提升了系统的可靠性，也降低了多人协作时沟通契约变更的认知负担——改实现就必须改 manifest，改 manifest 就必须通过校验，二者在编译/启动时即强绑定。
 
 ### 第2名：内存索引 + 文件事实源的双层存储架构
 
@@ -33,7 +33,7 @@ GeoForge 是一个架构设计精良、工程实践成熟的中大型 GIS Agent 
 **文件**: `server/src/lifecycle.ts:31`  
 **严重度**: Low
 
-`installLifecycleManager()` 是进程关闭的唯一协调点，定义了精确的 7 步排空顺序：停止新任务（jobQueue.stop + runTasks.drain）→ WS 连接发送 1001 关闭帧 → HTTP 停止接受新连接 + WS Server 关闭 → objectStore flush → 数据库关闭。每一步都有明确的目的和先后依赖关系，10 秒超时保护确保进程不会在关闭阶段无限挂起。这一设计的精妙之处在于它处理了分布式系统关闭中最棘手的"仍有处理中的工作"问题。在 Agent 平台中，关闭时可能仍有正在执行的 run、正在流式输出的 WebSocket 连接、以及尚未刷入文件系统的事件。如果随意终止进程，会导致三类数据丢失：内存中的事件尚未持久化、WS 客户端收到异常断开而非规范的关闭帧、运行中的 run 状态变为"僵尸"。GeoForge 的排空机制确保所有异步操作有序收敛，超时后的 `process.exit(1)` 作为"熔断"手段，避免进程在关闭阶段无限等待不可用资源——这是一种务实的工程权衡。
+`installLifecycleManager()` 是进程关闭的唯一协调点，定义了精确的 7 步排空顺序：停止新任务（jobQueue.stop + runTasks.drain）→ WS 连接发送 1001 关闭帧 → HTTP 停止接受新连接 + WS Server 关闭 → objectStore flush → 数据库关闭。每一步都有明确的目的和先后依赖关系，10 秒超时保护确保进程不会在关闭阶段无限挂起。这一设计的精妙之处在于它处理了分布式系统关闭中最棘手的"仍有处理中的工作"问题。在 Agent 平台中，关闭时可能仍有正在执行的 run、正在流式输出的 WebSocket 连接、以及尚未刷入文件系统的事件。如果随意终止进程，会导致三类数据丢失：内存中的事件尚未持久化、WS 客户端收到异常断开而非规范的关闭帧、运行中的 run 状态变为"僵尸"。地理智能平台 的排空机制确保所有异步操作有序收敛，超时后的 `process.exit(1)` 作为"熔断"手段，避免进程在关闭阶段无限等待不可用资源——这是一种务实的工程权衡。
 
 ### 第4名：Worker 短期签名 + Nonce + BodyHash 三重防护
 
@@ -99,18 +99,18 @@ GeoForge 是一个架构设计精良、工程实践成熟的中大型 GIS Agent 
 
 `assertRegisteredCommandCsrf` 使用 `if (!command.csrf || !auth) return` 条件，只有命令定义中显式设置 `csrf: true` 时才执行 CSRF 校验。新增修改型（mutating）WS 命令如忘记设置 `csrf: true`，将完全跳过 CSRF 保护。
 
-**可能导致后果**: opt-in 模式默认不开启保护，这意味着安全依赖于开发者的记忆和纪律。在团队协作中，新成员可能不熟悉安全架构，新增命令时遗漏 CSRF 标记。WS 控制面上的修改型操作（如删除文件、修改会话、执行工具）如果缺失 CSRF 保护，可能被恶意网站通过 CSRF 攻击利用——攻击者构造一个页面，通过浏览器向 GeoForge WS 端点发送跨站请求，在用户不知情的情况下执行敏感操作。由于无自动化测试或 lint 规则强制所有修改命令启用 CSRF，这种遗漏在代码审查中也可能被忽略。
+**可能导致后果**: opt-in 模式默认不开启保护，这意味着安全依赖于开发者的记忆和纪律。在团队协作中，新成员可能不熟悉安全架构，新增命令时遗漏 CSRF 标记。WS 控制面上的修改型操作（如删除文件、修改会话、执行工具）如果缺失 CSRF 保护，可能被恶意网站通过 CSRF 攻击利用——攻击者构造一个页面，通过浏览器向 地理智能平台 WS 端点发送跨站请求，在用户不知情的情况下执行敏感操作。由于无自动化测试或 lint 规则强制所有修改命令启用 CSRF，这种遗漏在代码审查中也可能被忽略。
 
 **修复建议**: 将 CSRF 策略改为 `deny-by-default`（opt-out 模式）：默认要求所有注册的命令启用 CSRF，只有显式设置 `csrf: false`（需注明原因）才能绕过。添加 lint 规则 `@typescript-eslint/no-unnecessary-condition` 或自定义 ESLint 插件检测所有 `WsCommandDefinition` 注册中是否遗漏了 `csrf` 字段。在命令注册阶段（`defaultCommandRegistry.ts:39-42` 的断言块）增加对所有非只读命令的 CSRF 覆盖断言。
 
 ### 第5名：无 i18n 框架，全部 UI 文案硬编码为简体中文
 
-**文件**: `C:\Projects\Newmap\apps\web\src\app\derivedState.ts:33` 及大量前端文件  
+**文件**: `apps/web/src/app/derivedState.ts:33` 及大量前端文件
 **严重度**: High
 
 所有 UI 展示文案、错误提示和交互标签都硬编码为简体中文。没有使用 react-intl、i18next 或任何翻译框架。后端 API 原生错误直接传递到 UI。
 
-**可能导致后果**: (1) 项目在 README 和代码中使用英文项目名（geo-agent-platform、GeoForge），表明有面向国际市场的意图，但 UI 完全不具备国际化扩展能力。(2) 后端 API 错误信息（如 "运行历史加载失败"）直接传递到前端 UI，在多语言场景下会产生中英文混合的错误提示——用户可能同时看到 "Something went wrong" 的 HTTP 状态和中文的错误描述。(3) 大规模国际化时，所有 50+ 个硬编码的中文字符串需要逐个文件提取到 locale 文件，这是一项高成本、高风险的重构。
+**可能导致后果**: (1) 项目在 README 和代码中使用英文项目名（geo-agent-platform、地理智能平台），表明有面向国际市场的意图，但 UI 完全不具备国际化扩展能力。(2) 后端 API 错误信息（如 "运行历史加载失败"）直接传递到前端 UI，在多语言场景下会产生中英文混合的错误提示——用户可能同时看到 "Something went wrong" 的 HTTP 状态和中文的错误描述。(3) 大规模国际化时，所有 50+ 个硬编码的中文字符串需要逐个文件提取到 locale 文件，这是一项高成本、高风险的重构。
 
 **修复建议**: 
 - 短期：在 `derivedState.ts` 等纯函数文件中，将格式化函数（如 `formatTopBarRunStatus`）的中文输出提取为可注入的函数参数或配置项，使其在不改变调用签名的情况下可替换。
@@ -134,9 +134,9 @@ GeoForge 是一个架构设计精良、工程实践成熟的中大型 GIS Agent 
 | 24 | `server/src/gis/postgis.ts:210` | `importGeoJsonLayer` 无事务包裹，中途失败会留下不一致状态 |
 | 25 | `server/src/gis/postgis.ts:84` | `listLayers` 含非 sargable OR 查询，JSONB OR 条件使索引无法有效使用 |
 | 26 | `server/src/gis/postgis.ts:228` | `importGeoJsonLayer` 逐行 INSERT 性能差，数千要素的导入每个要素独立往返 |
-| 29 | `C:\Projects\Newmap\docs\architecture.md:1` | 架构文档严重不足，仅 11 行 6 条提纲，缺少架构图和组件交互说明 |
-| 30 | `C:\Projects\Newmap\tests\e2e\workspace.spec.ts:1` | E2E 测试缺失核心流程，run start-stream-complete、approval flow 未覆盖 |
-| 31 | `C:\Projects\Newmap\apps\worker\tests\:1` | Worker 测试严重不足，路径沙箱、超时处理测试缺失 |
+| 29 | `docs/architecture.md:1` | 架构文档严重不足，仅 11 行 6 条提纲，缺少架构图和组件交互说明 |
+| 30 | `tests/e2e/workspace.spec.ts:1` | E2E 测试缺失核心流程，run start-stream-complete、approval flow 未覆盖 |
+| 31 | `apps/worker/tests/:1` | Worker 测试严重不足，路径沙箱、超时处理测试缺失 |
 
 ### 4.2 中严重度
 
@@ -149,8 +149,8 @@ GeoForge 是一个架构设计精良、工程实践成熟的中大型 GIS Agent 
 | 13 | `server/src/security/routes.ts:160` | 错误消息包含原始异常信息，可能泄露内部路径、SQL 片段 |
 | 15 | `server/src/framework/registry.ts:28` | `provider.tools()` 无幂等契约，多次调用可能返回不同实例 |
 | 19 | `apps/worker/src/worker_app/tool_routes.py:37` | asyncio 超时后科学计算线程无法取消，信号量槽位不释放 |
-| 20 | `C:\Projects\Newmap\apps\web\src\app\AppShell.tsx:96` | AppShell 约 1150 行过度庞大，承担过多编排职责 |
-| 21 | `C:\Projects\Newmap\apps\web\src\features\conversation\types.ts:52` | Props 透传深度大，ChatPanelProps 超 50 字段经 5 层传递 |
+| 20 | `apps/web/src/app/AppShell.tsx:96` | AppShell 约 1150 行过度庞大，承担过多编排职责 |
+| 21 | `apps/web/src/features/conversation/types.ts:52` | Props 透传深度大，ChatPanelProps 超 50 字段经 5 层传递 |
 | 27 | `server/src/gis/postgis.ts:219` | PostGisRepository 全部 DML 操作非原子，无回滚机制 |
 | 28 | `server/src/store/eventBus.ts:16` | InMemoryEventBus 纯内存，崩溃即丢失事件，无持久化和背压机制 |
 | 32 | `server/src/app/container.ts:64` | 手写依赖注入，新增依赖需修改容器签名和所有消费方 |
@@ -223,10 +223,10 @@ GeoForge 是一个架构设计精良、工程实践成熟的中大型 GIS Agent 
 | 97 | `infra/migrations/001_init_postgis.sql:1` | Schema 迁移无版本化工具链 |
 | 98 | `server/src/gis/postgis.ts:70` | PostGIS status 检查对连接池无健康检查 |
 | 100 | `server/src/conversation/itemSink.ts:136` | ItemSink publish 无背压控制 |
-| 101 | `C:\Projects\Newmap\README.md:1` | README 与仓库状态不一致（项目名/路径） |
-| 102 | `C:\Projects\Newmap\docs\tool-integration-standard.md:36` | 规范文件互相矛盾 |
-| 103 | `C:\Projects\Newmap\playwright.config.ts:30` | Playwright 只配置 chromium，缺少 firefox/webkit |
-| 104 | `C:\Projects\Newmap\apps\web\src\:1` | 前端关键逻辑缺失测试（Composer 多模式、WS 重连、审批交互） |
+| 101 | `README.md:1` | README 与仓库状态不一致（项目名/路径） |
+| 102 | `docs/tool-integration-standard.md:36` | 规范文件互相矛盾 |
+| 103 | `playwright.config.ts:30` | Playwright 只配置 chromium，缺少 firefox/webkit |
+| 104 | `apps/web/src/:1` | 前端关键逻辑缺失测试（Composer 多模式、WS 重连、审批交互） |
 
 ---
 

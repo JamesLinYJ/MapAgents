@@ -19,7 +19,7 @@ import { createScheduledWakeUpProvider } from './index.js'
 const TEST_AUTH: AuthContext = {
   userId: 'user_test',
   subject: 'auth_user_test',
-  email: 'tester@geoforge.local',
+  email: 'tester@geo-agent-platform.local',
   displayName: '测试用户',
   authSessionId: 'auth_session_test',
   authSessionExpiresAt: null,

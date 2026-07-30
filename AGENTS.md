@@ -2,7 +2,7 @@
 
 ## 文档定位
 
-本文件是 GeoForge 地理智能平台的**工程标准文档**。它定义代码的组织方式、命名惯例、质量边界和设计约束，供人类开发者和 AI Agent 共同遵从。
+本文件是 地理智能平台的**工程标准文档**。它定义代码的组织方式、命名惯例、质量边界和设计约束，供人类开发者和 AI Agent 共同遵从。
 
 本文件不是临时笔记、不是 bug 追踪、不是重构待办清单。它描述"应该怎样"，不描述"当前哪里不符合"。不符合标准的代码是技术债务，技术债务在代码中管理，不在这里。
 
@@ -33,20 +33,21 @@
 
 ## 零、架构原则
 
-GeoForge 的目标不是"能跑"，而是长期可演进、可审计、可测试的地理智能平台。新增或重构代码必须遵守以下优先级：
+地理智能平台 的目标不是"能跑"，而是长期可演进、可审计、可测试的地理智能平台。新增或重构代码必须遵守以下优先级：
 
 1. **事实源唯一**：每类状态只能有一个权威事实源。PostgreSQL 是结构化平台与会话事实源；内容寻址文件存储只保存大对象、Artifact 内容、SDK checkpoint 载荷和 Markdown 记忆正文；Zustand 是桌面 Renderer 实时业务状态事实源；TanStack Query 是 HTTP 查询缓存事实源。
 2. **边界显式**：HTTP、WS、Worker、文件系统、数据库、模型输出都是信任边界。跨边界必须有 schema、权限、错误模型和测试。
 3. **资源所有权清晰**：按 Session、Thread、Run、Artifact、Dataset、Layer、Tool、Config、Audit 等资源拆分模块。任何模块同时拥有三类以上资源的写路径，都需要重新设计。
-4. **通用基础设施优先成熟组件**：弹窗、下拉、表格、虚拟列表、表单、查询缓存、WebSocket 重连、日志、指标、队列、限速、文件锁等通用能力优先使用稳定组件，再用 GeoForge 风格封装。
+4. **通用基础设施优先成熟组件**：弹窗、下拉、表格、虚拟列表、表单、查询缓存、WebSocket 重连、日志、指标、队列、限速、文件锁等通用能力优先使用稳定组件，再用 地理智能平台 风格封装。
 5. **平台核心边界自研**：Agent 运行时状态机、valueRef 流、工具审批、地理/气象领域语义、权限策略和跨语言工具契约属于平台核心，必须可审计、可测试，不外包给隐式黑盒。
 6. **硬失败优先于假成功**：schema 漂移、工具失败、权限失败、Worker 失败、索引写失败必须明确失败并暴露中文原因。禁止 fallback 成功文案、兼容旧 payload、catch 后吞错或伪造 artifact。
 7. **测试证明架构边界**：重构不是移动文件。每个新边界必须有测试证明：调用方只依赖窄接口、禁止旧路径回流、失败路径真实失败。
-8. **可用性与工程性共同验收**：GeoForge 既是可运行产品，也是可复用的工程样例。架构清晰不能以功能退化为代价，功能可用也不能以跨层耦合为代价；每次修改必须同时证明真实用户链路和工程边界没有被破坏。
+8. **可用性与工程性共同验收**：地理智能平台 既是可运行产品，也是可复用的工程样例。架构清晰不能以功能退化为代价，功能可用也不能以跨层耦合为代价；每次修改必须同时证明真实用户链路和工程边界没有被破坏。
 9. **不为优化而优化**：重构必须消除可指认的问题，例如多资源所有权、重复事实源、不可隔离测试、扩展必须修改核心分支、无界重渲染或不可观测失败。仅减少行数、增加目录、套一层 facade 或替换术语，不构成有效优化。
 10. **样例平台优先可扩展性**：领域能力应通过窄接口、注册表、schema、适配器或明确组合根接入。新增一种地图 source、工具 provider、workflow step、数据集 reader 或 UI 面板时，应新增独立实现并注册，而不是修改中央 switch 或复制整条链路。
 11. **命名是架构契约**：文件、类、目录和接口名必须描述当前职责与所有权。重构改变职责后应同步重命名过时的 `Store`、`Manager`、`Controller`、`Utils` 等名称；不得为了保留旧名字增加转发文件、别名导出或兼容分支。
 12. **改动以证据闭环**：架构改动至少给出四类证据中的三类：依赖方向变窄、扩展点可独立注册、失败路径测试、真实运行链路验证。跨边界或核心事实源改动必须四类齐全。
+13. **产品代号单一事实源**：可变产品代号只在 `packages/shared-types/src/productIdentity.ts` 定义。界面、CLI、窗口标题、导出物和安装包从该模块读取；源码文件名、目录名、环境变量、IPC 通道、协议、服务名、数据库标识和持久化目录使用与代号无关的稳定技术名称。修改代号不得要求全仓搜索替换，也不得改变既有协议或数据位置。
 
 ### 0.1 架构决策层级
 
@@ -64,7 +65,7 @@ GeoForge 的目标不是"能跑"，而是长期可演进、可审计、可测试
 
 ### 0.2 系统分层与依赖方向
 
-GeoForge 按能力平面划分，而不是按技术名词随意分层：
+地理智能平台 按能力平面划分，而不是按技术名词随意分层：
 
 - **治理平面**：身份、工作区、RBAC、审批、审计和配额，决定“谁可以做什么”。
 - **编排平面**：Session、Thread、Run、Workflow、定时任务和上下文，决定“任务如何推进”。
@@ -129,7 +130,7 @@ GeoForge 按能力平面划分，而不是按技术名词随意分层：
 
 ### 1.2 文件复杂度预算
 
-文件可维护性不能用固定行数机械判断。GeoForge 使用**职责复杂度预算**：一个文件应当能用一句话说明唯一职责，且主要修改原因应该集中在同一个资源、协议或 UI 面板边界内。
+文件可维护性不能用固定行数机械判断。地理智能平台 使用**职责复杂度预算**：一个文件应当能用一句话说明唯一职责，且主要修改原因应该集中在同一个资源、协议或 UI 面板边界内。
 
 以下信号出现两个以上时，必须优先考虑拆分，而不是继续堆代码：
 
@@ -178,6 +179,7 @@ GeoForge 按能力平面划分，而不是按技术名词随意分层：
 - **`packages/gis-meteorology/`**：科学计算领域逻辑。不含 Web 框架代码
 - **`packages/conversation-presentation/`**：桌面 Chat 与本机 Agent CLI 共用的 ConversationItem 展示投影。负责消息分类、工具调用/结果配对、公开工具名称和结果摘要；不得包含 DOM、Ink、网络请求或运行状态写入。各客户端只保留自己的最终渲染器
 - **`apps/worker/`**：Python Web 层——仅路由和中间件。领域逻辑委托给 `gis_meteorology`
+- **仓库路径可移植性**：源码、测试夹具、脚本和当前架构文档不得写入开发者盘符、用户主目录、仓库检出绝对路径或检出目录名。运行入口从 `import.meta.url`、脚本自身位置或显式 `GEO_AGENT_PLATFORM_ROOT` 解析仓库根；测试使用临时目录。只有专门验证绝对路径拒绝或脱敏的边界测试可以构造虚拟绝对路径，生产系统配置目录只能由平台目录 API 或部署配置确定
 
 ### 1.4 注释规范
 
@@ -334,7 +336,7 @@ def _np():
 
 ### 4.2 前端状态事实源
 
-GeoForge 前端使用分层状态，不用单一巨大 Context，也不把所有状态塞进组件 props。
+地理智能平台 前端使用分层状态，不用单一巨大 Context，也不把所有状态塞进组件 props。
 
 - **Zustand**：跨功能事实状态。按领域拆成 `authStore`、`workspaceStore`、`sessionStore`、`runStore`、`resourceStore`、`uiStore`。组件必须用 selector 精确订阅，禁止一次订阅整个大对象。
 - **TanStack Query**：HTTP query/cache。只管理 `auth/me`、后台管理、图层/数据列表等可重新获取的数据；不要承载 WebSocket streaming 状态。
@@ -494,7 +496,7 @@ WS 控制面必须使用命令注册表，而不是单个 `handleMessage()` 大�
 
 3. **协议组不可拆散**：当前输入、近期轮次、未完成工具调用、调用与结果配对、审批项以及提供商要求的 reasoning 配对必须完整保留。达到硬上限且无法安全压缩时必须失败，不得静默删消息或留下孤立调用
 
-4. **摘要可追溯**：跨轮压缩由 GeoForge 管理。摘要必须按来源消息组记录摘要哈希、来源数量和预算变化；同一来源可幂等复用，不能冒充提供商服务端 compaction
+4. **摘要可追溯**：跨轮压缩由 地理智能平台 管理。摘要必须按来源消息组记录摘要哈希、来源数量和预算变化；同一来源可幂等复用，不能冒充提供商服务端 compaction
 
 5. **valueRef 是唯一的数据流**：工具产出的标量值、坐标、bbox、变量名、统计数据、时间索引必须通过 `valueRef` 在运行时黑板中流转。后续工具自己解析引用，遇到未知 ref 必须失败——**禁止模型直接复制原始值**
 
@@ -529,7 +531,7 @@ WS 控制面必须使用命令注册表，而不是单个 `handleMessage()` 大�
 - 返回主智能体的子智能体使用 SDK `Agent.asTool()`，转交所有权使用 SDK `handoff()`；不得增加自定义 batch 工具、手动并行 Runner 或第二套工具调度队列
 - 无副作用、非破坏、免审批的只读工具默认进入共享并发通道；确有线程不安全实现时用 `parallelSafe=false` 显式退出。写工具、审批工具和无法证明只读的能力进入独占通道
 - 写工具、审批工具、MCP 工具和不能证明安全的子智能体始终独占执行；安全声明不是对权限、审批和审计的豁免
-- 并发数量由 SDK Runner 的工具并发上限约束；GeoForge 执行闸门只实施业务安全约束，不负责重新调度模型返回的调用
+- 并发数量由 SDK Runner 的工具并发上限约束；地理智能平台 执行闸门只实施业务安全约束，不负责重新调度模型返回的调用
 - 工具 `customDataExtractor` 只保存经过 schema 校验的结果引用、valueRef、Artifact 和展示元数据。自定义元数据可进入 RunState 和平台投影，但不得取代数据库结果账本或注入模型上下文
 
 ### 6.7 Sandbox、MCP 与模型协议
@@ -591,7 +593,7 @@ WS 控制面必须使用命令注册表，而不是单个 `handleMessage()` 大�
 ```
 third_party/
   {algorithm_name}/
-    adapter.py              # GeoForge 适配器（平台代码）
+    adapter.py              # 地理智能平台 适配器（平台代码）
     source/                  # 适配后的第三方代码
       app.py
       ...
@@ -612,10 +614,10 @@ third_party/
 
 | 层次 | 机制 | 位置 |
 |------|------|------|
-| 传输 | 本机 Electron 使用受控 `geoforge://app` 协议；远程部署由受管入口终止 HTTPS + WSS | Electron Main / 部署入口 |
+| 传输 | 本机 Electron 使用受控 `geo-agent-platform://app` 协议；远程部署由受管入口终止 HTTPS + WSS | Electron Main / 部署入口 |
 | 认证 | Better Auth (email/password + session, 12h 过期) | `apps/server/src/security/authService.ts` |
 | 授权 | Casbin RBAC (workspace 级隔离, deny-by-default) | `apps/server/src/security/authorizationService.ts` |
-| CSRF | 自定义 header `x-geoforge-csrf`（HMAC 派生的会话级令牌） | HTTP + WS 消息级 |
+| CSRF | 自定义 header `x-geo-agent-platform-csrf`（HMAC 派生的会话级令牌） | HTTP + WS 消息级 |
 | HTTP 限速 | 认证端点 + API 端点双级限速 | `apps/server/src/security/httpRateLimit.ts` |
 | WS 限速 | 按消息类型 per-connection | `apps/server/src/security/rateLimiter.ts` |
 | WS 认证 | Origin 检查 + Session 验证（在 HTTP upgrade 阶段完成） | `apps/server/src/ws/security.ts` |
@@ -671,7 +673,7 @@ third_party/
 
 ### 9.4 本机进程监督与运维入口
 
-- 进程状态的唯一事实源是 GeoForge 监督后台的内存状态、实时子进程句柄和健康探针；租约只用于异常退出后的旧进程验证与清理，不得凭 PID 文件认领服务或伪造健康状态
+- 进程状态的唯一事实源是 地理智能平台 监督后台的内存状态、实时子进程句柄和健康探针；租约只用于异常退出后的旧进程验证与清理，不得凭 PID 文件认领服务或伪造健康状态
 - `concurrently` 只作为跨平台命令启动、输出事件和进程树终止的执行适配器，不拥有依赖拓扑、重启预算、健康、指标、日志、IPC 或运维权限规则
 - 可操作的服务 ID、命令、工作目录、端口、健康检查与环境变量范围必须来自编译期固定目录；IPC 和界面不得接收任意 Shell 命令、任意路径或任意环境变量
 - CPU 与内存按完整后代进程树汇总，原生 PostgreSQL/PostGIS 也只按监督器实际持有的进程树采样。采集失败必须显示“未知”及原因，不得用零值冒充成功采样
@@ -791,11 +793,11 @@ Python Worker 使用 registry dispatch：
 
 ### 11.4.2 SDK Skill 目录
 
-OpenAI Agents SDK Skill 是可选扩展能力，不能和 GeoForge 内置工具混成一个事实源。
+OpenAI Agents SDK Skill 是可选扩展能力，不能和 地理智能平台 内置工具混成一个事实源。
 
 - Skill 目录的入口文件名必须严格为 `SKILL.md`。`skill.md`、`sKilL.md`、`Skill.md` 都是配置错误，系统必须返回明确中文错误，不得隐式兼容为合法 Skill，也不得继续执行后抛底层异常。
-- Skill 目录只能通过运行时配置显式启用。安装到本机目录不等于进入 GeoForge run。
-- GeoForge 只负责验证目录、读取 `SKILL.md` 以及可选的 `scripts/`、`references/`、`assets/`，再交给 SDK 的 `skills()` capability。不要把宿主绝对路径、用户主目录或产品旧名写进 prompt、manifest 或日志。
+- Skill 目录只能通过运行时配置显式启用。安装到本机目录不等于进入 地理智能平台 run。
+- 地理智能平台 只负责验证目录、读取 `SKILL.md` 以及可选的 `scripts/`、`references/`、`assets/`，再交给 SDK 的 `skills()` capability。不要把宿主绝对路径、用户主目录或产品旧名写进 prompt、manifest 或日志。
 - `load_skill` 只把已配置 Skill 的不可变快照物化到当前 run 沙箱，应在规划和执行阶段可用，不得与任意 MCP、Shell 或文件写入共用总开关。
 - Skill 是运行时上下文扩展，不是权限绕过入口。Skill 中的脚本和引用文件只进入 sandbox workspace，仍受工具权限、文件沙箱和审批边界约束。
 
@@ -821,7 +823,7 @@ OpenAI Agents SDK Skill 是可选扩展能力，不能和 GeoForge 内置工具�
 
 ### 12.1 设计原则
 
-- 本文件（`AGENTS.md`）是仓库的指令入口，但 GeoForge 运行时**必须**保持指令加载关闭（`instructionMemoryEnabled` 默认 false）。本文件供开发 Agent 和仓库维护者使用——不是隐藏的产品 prompt 注入
+- 本文件（`AGENTS.md`）是仓库的指令入口，但 地理智能平台 运行时**必须**保持指令加载关闭（`instructionMemoryEnabled` 默认 false）。本文件供开发 Agent 和仓库维护者使用——不是隐藏的产品 prompt 注入
 - `MEMORY.md` 只是长期记忆的**索引**——包含短链接/钩子，绝不包含完整记忆正文
 - 完整记忆正文存储在独立的 Markdown 话题文件中，使用 Zod 校验的 frontmatter
 
@@ -890,14 +892,14 @@ paths: ["optional", "file", "paths"]
 **修改 vendored 代码的原则**：
 
 - 优先使用适配器/包装模式——保持 vendored 源码整洁
-- 必须修改时，在代码中用明确的注释标记（`// GEOfORGE-VENDOR-CHANGE: <原因>`）
+- 必须修改时，在代码中用明确的注释标记（`// PLATFORM-VENDOR-CHANGE: <原因>`）
 - 不接受仅为了"风格统一"而做的格式化修改——这会使上游同步变得困难
 
 ### 13.4 第三方科学计算代码
 
 `packages/gis-meteorology/third_party/` 中的第三方气象算法：
 
-- `adapter.py` 是平台代码（GeoForge 原创）——将 valueRef 转换为算法调用
+- `adapter.py` 是平台代码（地理智能平台 原创）——将 valueRef 转换为算法调用
 - `source/` 包含适配后的第三方代码
 - 原始未修改的快照**不在 active package tree 中**——归档到独立参考仓库
 - 每个适配器在模块 docstring 中记录：来源、版本、许可证、所做修改的摘要

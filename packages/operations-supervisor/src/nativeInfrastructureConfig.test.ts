@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 原生基础设施配置测试
+//   地理智能平台 - 原生基础设施配置测试
 //
 //   文件:       nativeInfrastructureConfig.test.ts
 //
@@ -151,7 +151,7 @@ function createFixture(): {
   postgresBin: string
   environment: NodeJS.ProcessEnv
 } {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'geoforge-native-infra-'))
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'geo-agent-platform-native-infra-'))
   temporaryDirectories.push(projectRoot)
   const runtimeRoot = path.join(projectRoot, 'runtime')
   const postgresBin = path.join(projectRoot, 'postgres', 'bin')

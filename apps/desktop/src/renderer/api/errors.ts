@@ -21,26 +21,26 @@ export interface TransportErrorOptions {
   cause?: unknown
 }
 
-export class GeoForgeTransportError extends Error {
+export class PlatformTransportError extends Error {
   readonly transport: TransportKind
   readonly code: string
   readonly status?: number
 
   constructor(message: string, options: TransportErrorOptions) {
     super(message, { cause: options.cause })
-    this.name = 'GeoForgeTransportError'
+    this.name = 'PlatformTransportError'
     this.transport = options.transport
     this.code = options.code
     this.status = options.status
   }
 }
 
-export function isGeoForgeTransportError(error: unknown): error is GeoForgeTransportError {
-  return error instanceof GeoForgeTransportError
+export function isPlatformTransportError(error: unknown): error is PlatformTransportError {
+  return error instanceof PlatformTransportError
 }
 
 export function isResourceAccessError(error: unknown): boolean {
-  return isGeoForgeTransportError(error)
+  return isPlatformTransportError(error)
     && (error.status === 403
       || error.status === 404
       || error.code === 'forbidden'

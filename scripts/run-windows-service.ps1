@@ -1,8 +1,8 @@
 # +-------------------------------------------------------------------------
 #
-#   GeoForge 地理智能平台 - Windows 服务固定入口
+#   地理智能平台 - Windows 服务固定入口
 #
-#   文件:       run-geoforge-windows-service.ps1
+#   文件:       run-geo-agent-platform-windows-service.ps1
 #
 #   日期:       2026年07月21日
 #   作者:       JamesLinYJ
@@ -42,12 +42,12 @@ foreach ($Line in Get-Content -LiteralPath $EnvironmentFile) {
     [Environment]::SetEnvironmentVariable($Name, $Value, 'Process')
 }
 
-[Environment]::SetEnvironmentVariable('GEOFORGE_ROOT', $Root, 'Process')
+[Environment]::SetEnvironmentVariable('GEO_AGENT_PLATFORM_ROOT', $Root, 'Process')
 Set-Location -LiteralPath $Root
 
 $Executable = Join-Path $Root 'packages\operations-supervisor\dist\cli.js'
-$TokenFile = [Environment]::GetEnvironmentVariable('GEOFORGE_SUPERVISOR_TOKEN_FILE', 'Process')
-if (-not $TokenFile) { throw '监督服务环境缺少 GEOFORGE_SUPERVISOR_TOKEN_FILE。' }
+$TokenFile = [Environment]::GetEnvironmentVariable('GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE', 'Process')
+if (-not $TokenFile) { throw '监督服务环境缺少 GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE。' }
 $TokenFile = if ([IO.Path]::IsPathRooted($TokenFile)) {
     [IO.Path]::GetFullPath($TokenFile)
 } else {

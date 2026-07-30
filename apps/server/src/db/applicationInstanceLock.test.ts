@@ -10,6 +10,7 @@
 // --------------------------------------------------------------------------
 
 import { describe, expect, it, vi } from 'vitest'
+import { PLATFORM_MACHINE_ID } from '@geo-agent-platform/shared-types/product-identity'
 
 import type { Database } from './connection.js'
 import {
@@ -31,7 +32,7 @@ describe('ApplicationInstanceLock', () => {
     expect(query).toHaveBeenCalledWith("SET lock_timeout = '15000ms'")
     expect(query).toHaveBeenCalledWith(
       'SELECT pg_advisory_lock(hashtext($1), hashtext($2))',
-      ['geoforge', 'api-single-writer-v1'],
+      [PLATFORM_MACHINE_ID, 'api-single-writer-v1'],
     )
     expect(release).not.toHaveBeenCalled()
 
@@ -40,7 +41,7 @@ describe('ApplicationInstanceLock', () => {
     expect(lock.isHeld()).toBe(false)
     expect(query).toHaveBeenCalledWith(
       'SELECT pg_advisory_unlock(hashtext($1), hashtext($2))',
-      ['geoforge', 'api-single-writer-v1'],
+      [PLATFORM_MACHINE_ID, 'api-single-writer-v1'],
     )
     expect(release).toHaveBeenCalledTimes(1)
   })

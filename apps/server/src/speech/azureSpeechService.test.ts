@@ -91,13 +91,13 @@ describe('AzureSpeechService', () => {
   it('synthesizes text through the Azure Speech SDK instead of returning a fake artifact', async () => {
     const service = new AzureSpeechService(env())
     const result = await service.synthesizeTextToFile({
-      text: '你好，欢迎使用 GeoForge。',
+      text: '你好，欢迎使用地理智能平台。',
       outputPath: 'C:/runtime/artifacts/run_1/audio.mp3',
     })
 
     expect(sdkMock.fromSubscription).toHaveBeenCalledWith('secret_key', 'eastasia')
     expect(sdkMock.fromAudioFileOutput).toHaveBeenCalledWith('C:/runtime/artifacts/run_1/audio.mp3')
-    expect(sdkMock.speakTextAsync).toHaveBeenCalledWith('你好，欢迎使用 GeoForge。')
+    expect(sdkMock.speakTextAsync).toHaveBeenCalledWith('你好，欢迎使用地理智能平台。')
     expect(sdkMock.closeResult).toHaveBeenCalled()
     expect(sdkMock.closeSynthesizer).toHaveBeenCalled()
     expect(result).toMatchObject({

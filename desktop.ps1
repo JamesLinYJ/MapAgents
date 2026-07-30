@@ -1,8 +1,8 @@
 # +-------------------------------------------------------------------------
 #
-#   GeoForge 地理智能平台 - Windows 一键桌面启动器
+#   地理智能平台 - Windows 一键桌面启动器
 #
-#   文件:       GeoForge.ps1
+#   文件:       desktop.ps1
 #
 #   日期:       2026年07月29日
 #   作者:       JamesLinYJ
@@ -27,7 +27,7 @@ $ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 $Root = [IO.Path]::GetFullPath($PSScriptRoot)
 
-function Test-GeoForgeNode {
+function Test-PlatformNode {
     param([Parameter(Mandatory = $true)][string]$LiteralPath)
 
     if (-not (Test-Path -LiteralPath $LiteralPath -PathType Leaf)) { return $false }
@@ -42,7 +42,7 @@ function Test-GeoForgeNode {
     }
 }
 
-function Add-GeoForgeVersionManagerCandidates {
+function Add-PlatformVersionManagerCandidates {
     param(
         [Parameter(Mandatory = $true)]
         [Collections.Generic.List[string]]$Candidates,
@@ -62,9 +62,9 @@ function Add-GeoForgeVersionManagerCandidates {
     }
 }
 
-function Resolve-GeoForgeNode {
+function Resolve-PlatformNode {
     $Candidates = [Collections.Generic.List[string]]::new()
-    $Configured = [Environment]::GetEnvironmentVariable('GEOFORGE_NODE_EXECUTABLE', 'Process')
+    $Configured = [Environment]::GetEnvironmentVariable('GEO_AGENT_PLATFORM_NODE_EXECUTABLE', 'Process')
     if ($Configured) {
         $ConfiguredPath = if ([IO.Path]::IsPathRooted($Configured)) {
             [IO.Path]::GetFullPath($Configured)
@@ -86,15 +86,15 @@ function Resolve-GeoForgeNode {
     } else {
         Join-Path $env:LOCALAPPDATA 'fnm\node-versions'
     }
-    Add-GeoForgeVersionManagerCandidates `
+    Add-PlatformVersionManagerCandidates `
         -Candidates $Candidates `
         -VersionsRoot (Join-Path $VoltaRoot 'tools\image\node') `
         -ExecutableRelativePath 'node.exe'
-    Add-GeoForgeVersionManagerCandidates `
+    Add-PlatformVersionManagerCandidates `
         -Candidates $Candidates `
         -VersionsRoot $NvmRoot `
         -ExecutableRelativePath 'node.exe'
-    Add-GeoForgeVersionManagerCandidates `
+    Add-PlatformVersionManagerCandidates `
         -Candidates $Candidates `
         -VersionsRoot $FnmVersionsRoot `
         -ExecutableRelativePath 'installation\node.exe'
@@ -108,23 +108,23 @@ function Resolve-GeoForgeNode {
     }
 
     foreach ($Candidate in @($Candidates | Select-Object -Unique)) {
-        if (Test-GeoForgeNode -LiteralPath $Candidate) {
+        if (Test-PlatformNode -LiteralPath $Candidate) {
             return [IO.Path]::GetFullPath($Candidate)
         }
     }
 
     throw @'
 未找到受支持的 Node.js（22.13 以上的 Node 22 LTS，或 Node 24 及以上版本）。可安装 .node-version 推荐的版本，或将
-GEOFORGE_NODE_EXECUTABLE 设置为 node.exe 的绝对路径后重新运行 GeoForge.ps1。
+GEO_AGENT_PLATFORM_NODE_EXECUTABLE 设置为 node.exe 的绝对路径后重新运行 desktop.ps1。
 '@
 }
 
-$Node = Resolve-GeoForgeNode
+$Node = Resolve-PlatformNode
 $NodeDirectory = Split-Path -Parent $Node
 $env:Path = "$NodeDirectory$([IO.Path]::PathSeparator)$($env:Path)"
-$env:GEOFORGE_NODE_EXECUTABLE = $Node
+$env:GEO_AGENT_PLATFORM_NODE_EXECUTABLE = $Node
 
 & (Join-Path $Root 'dev.ps1') desktop
 if ($LASTEXITCODE -ne 0) {
-    throw "GeoForge 桌面应用异常退出（exit $LASTEXITCODE）。"
+    throw "桌面应用异常退出（exit $LASTEXITCODE）。"
 }

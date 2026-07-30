@@ -19,6 +19,7 @@ import type {
   SessionRecord,
   TranscriptEntry,
 } from '@geo-agent-platform/shared-types'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 
@@ -182,7 +183,7 @@ export function renderTranscriptMarkdown(
   title: string,
   entries: readonly TranscriptEntry[],
 ): string {
-  const normalizedTitle = title.replace(/\s+/gu, ' ').trim() || 'GeoForge 分析成果'
+  const normalizedTitle = title.replace(/\s+/gu, ' ').trim() || `${PRODUCT_CODENAME} 分析成果`
   const sections: string[] = [`# ${normalizedTitle}`]
   for (const entry of entries) {
     const section = transcriptEntryMarkdown(entry)
@@ -195,7 +196,7 @@ function transcriptEntryMarkdown(entry: TranscriptEntry): string | null {
   if (entry.kind === 'message') {
     const content = textValue(entry.payload.content)
     if (!content) return null
-    const role = entry.payload.role === 'user' ? '用户' : 'GeoForge'
+    const role = entry.payload.role === 'user' ? '用户' : PRODUCT_CODENAME
     return `## ${role}\n\n${content}`
   }
   if (entry.kind === 'tool_call') {

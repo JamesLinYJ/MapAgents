@@ -65,7 +65,7 @@ describe('DesktopExportService authorization', () => {
   })
 
   it('accepts no Renderer CSRF field and injects Main-owned CSRF for the audit write', async () => {
-    const destination = await mkdtemp(path.join(os.tmpdir(), 'geoforge-export-auth-'))
+    const destination = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-export-auth-'))
     temporaryDirectories.push(destination)
     electronState.destination = path.join(destination, '认证边界测试.pdf')
     electronState.fetch.mockImplementation(async (url: string | URL) => {
@@ -111,13 +111,13 @@ describe('DesktopExportService authorization', () => {
     expect(auditCall).toBeDefined()
     const headers = new Headers(auditCall?.[1]?.headers)
     expect(headers.get('cookie')).toBe('better-auth.session_token=main-only-cookie')
-    expect(headers.get('x-geoforge-csrf')).toBe('main-only-csrf')
+    expect(headers.get('x-geo-agent-platform-csrf')).toBe('main-only-csrf')
     expect(JSON.stringify(result)).not.toContain('main-only-csrf')
     expect(JSON.stringify(result)).not.toContain('main-only-cookie')
   })
 
   it('writes openable PDF, PNG and ZIP signatures with a verifiable artifact hash', async () => {
-    const destination = await mkdtemp(path.join(os.tmpdir(), 'geoforge-export-package-'))
+    const destination = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-export-package-'))
     temporaryDirectories.push(destination)
     electronState.destination = path.join(destination, '完整成果.zip')
     const artifactContent = Buffer.from('{"type":"FeatureCollection","features":[]}')
@@ -169,7 +169,7 @@ describe('DesktopExportService authorization', () => {
     const service = new DesktopExportService(
       'http://127.0.0.1:8000',
       authorization,
-      async () => Buffer.from('%PDF-1.7\nGeoForge\n%%EOF\n'),
+      async () => Buffer.from('%PDF-1.7\nProductFixture\n%%EOF\n'),
     )
 
     const result = await service.create(fakeWindow(), {

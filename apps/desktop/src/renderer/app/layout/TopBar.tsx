@@ -17,6 +17,7 @@
 import { useState } from 'react'
 import { FileText, LockKeyhole, LogOut, Menu, PanelLeft, Search, ShieldCheck, UserRound } from 'lucide-react'
 import type { PlatformWorkspace } from '@geo-agent-platform/shared-types'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 import type { DesktopAuthProjection } from '../../../contracts/desktopIpc'
 import type { DesktopDocument } from './WorkspaceLayout'
 import { requestDesktopCommand } from '../desktopNavigation'
@@ -82,7 +83,7 @@ export function TopBar({
         </button>
         <span className="workbench-chrome__divider" />
         <span className="workbench-chrome__brand">
-          <strong>GeoForge</strong>
+          <strong>{PRODUCT_CODENAME}</strong>
           <small>GIS 工作台</small>
         </span>
       </div>
@@ -92,7 +93,7 @@ export function TopBar({
           <label className="workbench-workspace-picker">
             <span>工作区</span>
             <select
-              id="geoforge-workspace-picker"
+              id="geo-agent-platform-workspace-picker"
               aria-label="打开工作区窗口"
               value={activeWorkspaceId ?? ''}
               onChange={event => onOpenWorkspace(event.currentTarget.value)}

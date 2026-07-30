@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本地账户管理真实数据库集成测试
+//   地理智能平台 - 本地账户管理真实数据库集成测试
 //
 //   文件:       localAccountService.integration.test.ts
 //
@@ -27,7 +27,7 @@ import { PlatformUserRepository } from '../store/postgres/platformUserRepository
 import { WorkspaceRepository } from '../store/postgres/workspaceRepository.js'
 import { LocalAccountService } from './localAccountService.js'
 
-const databaseUrl = process.env.GEOFORGE_LOCAL_CONSOLE_TEST_DATABASE_URL
+const databaseUrl = process.env.GEO_AGENT_PLATFORM_LOCAL_CONSOLE_TEST_DATABASE_URL
 const describeIntegration = databaseUrl ? describe : describe.skip
 
 describeIntegration('LocalAccountService with Better Auth Admin Plugin', () => {
@@ -116,7 +116,7 @@ describeIntegration('LocalAccountService with Better Auth Admin Plugin', () => {
     expect(revoked.platformRoles.some(binding => binding.role === 'platform_admin')).toBe(false)
     await expect(accountRepository.countActivePlatformAdmins()).resolves.toBe(1)
     await expect(signInStatus(auth, 'target@example.test', replacementPassword)).resolves.toBe(200)
-    expect((await accountRepository.list()).every(account => !account.email.endsWith('@console.geoforge.invalid'))).toBe(true)
+    expect((await accountRepository.list()).every(account => !account.email.endsWith('@console.geo-agent-platform.invalid'))).toBe(true)
 
     const events = await new AuditStore(db).listRecent()
     expect(events.map(event => event.action)).toEqual(expect.arrayContaining([
@@ -138,7 +138,7 @@ describeIntegration('LocalAccountService with Better Auth Admin Plugin', () => {
     })
 
     expect((await accountRepository.list()).every(account =>
-      !account.email.endsWith('@local-agent.geoforge.invalid'))).toBe(true)
+      !account.email.endsWith('@local-agent.geo-agent-platform.invalid'))).toBe(true)
   }, 30_000)
 })
 

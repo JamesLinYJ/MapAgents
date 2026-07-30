@@ -10,6 +10,9 @@
 // --------------------------------------------------------------------------
 
 import { mapTileJsonSchema, type MapTileJson } from '@geo-agent-platform/shared-types'
+import {
+  PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME,
+} from '@geo-agent-platform/shared-types/product-identity'
 
 const API_RESOURCE_PATH = /^\/api\/v1\/(?:map|results|artifacts)\//u
 
@@ -43,7 +46,9 @@ export function projectMapTileJsonForDesktop(payload: unknown): MapTileJson | nu
   const canonical = parsed.data
   return {
     ...canonical,
-    tiles: canonical.tiles.map(tileUrl => `geoforge-resource://api${tileUrl}`),
+    tiles: canonical.tiles.map(
+      tileUrl => `${PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME}://api${tileUrl}`,
+    ),
   }
 }
 

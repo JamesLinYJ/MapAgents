@@ -13,6 +13,10 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import {
+  PLATFORM_TECHNICAL_ID,
+  PRODUCT_CODENAME,
+} from '@geo-agent-platform/shared-types/product-identity'
 
 import {
   defaultDesktopRuntimeManifestPath,
@@ -26,7 +30,7 @@ describe('resolveDesktopAutoAuthConfig', () => {
   it('enables the matching bootstrap administrator by default in development', () => {
     const config = resolveDesktopAutoAuthConfig({
       environment: {
-        GEOFORGE_DESKTOP_AUTO_AUTH_EMAIL: 'ADMIN@example.com',
+        GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_EMAIL: 'ADMIN@example.com',
         BOOTSTRAP_ADMIN_EMAIL: 'admin@example.com',
         BETTER_AUTH_ALLOW_SIGN_UP: 'true',
       },
@@ -37,7 +41,7 @@ describe('resolveDesktopAutoAuthConfig', () => {
 
     expect(config).toEqual({
       email: 'admin@example.com',
-      displayName: 'GeoForge 本机演示管理员',
+      displayName: `${PRODUCT_CODENAME} 本机演示管理员`,
       credentialFile: path.join(runtimeRoot, 'desktop', 'auto-auth.secret'),
       allowAccountCreation: true,
     })
@@ -46,7 +50,7 @@ describe('resolveDesktopAutoAuthConfig', () => {
   it('restores interactive login when development auto auth is explicitly disabled', () => {
     expect(resolveDesktopAutoAuthConfig({
       environment: {
-        GEOFORGE_DESKTOP_AUTO_AUTH: 'false',
+        GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH: 'false',
       },
       profile: 'development',
       runtimeRoot,
@@ -56,7 +60,7 @@ describe('resolveDesktopAutoAuthConfig', () => {
 
   it('rejects remote APIs and production activation', () => {
     const environment = {
-      GEOFORGE_DESKTOP_AUTO_AUTH: 'true',
+      GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH: 'true',
       BOOTSTRAP_ADMIN_EMAIL: 'admin@example.com',
     }
     expect(() => resolveDesktopAutoAuthConfig({
@@ -77,7 +81,7 @@ describe('resolveDesktopAutoAuthConfig', () => {
     expect(() => resolveDesktopAutoAuthConfig({
       environment: {
         APP_ENV: 'development',
-        GEOFORGE_DESKTOP_AUTO_AUTH: 'true',
+        GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH: 'true',
         BOOTSTRAP_ADMIN_EMAIL: 'admin@example.com',
       },
       profile: 'production',
@@ -89,8 +93,8 @@ describe('resolveDesktopAutoAuthConfig', () => {
   it('rejects a client-side account that differs from the server bootstrap identity', () => {
     expect(() => resolveDesktopAutoAuthConfig({
       environment: {
-        GEOFORGE_DESKTOP_AUTO_AUTH: 'true',
-        GEOFORGE_DESKTOP_AUTO_AUTH_EMAIL: 'other@example.com',
+        GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH: 'true',
+        GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_EMAIL: 'other@example.com',
         BOOTSTRAP_ADMIN_EMAIL: 'admin@example.com',
       },
       profile: 'development',
@@ -102,7 +106,7 @@ describe('resolveDesktopAutoAuthConfig', () => {
 
 describe('resolveDesktopRuntimeConfig', () => {
   it('uses the protected production manifest instead of ambient legacy variables', async () => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), 'geoforge-desktop-config-'))
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-desktop-config-'))
     try {
       const runtimeRoot = path.join(directory, 'runtime')
       const projectRoot = path.join(directory, 'project')
@@ -112,7 +116,7 @@ describe('resolveDesktopRuntimeConfig', () => {
       await mkdir(path.dirname(supervisorTokenFile), { recursive: true })
       await writeFile(supervisorTokenFile, 'test-supervisor-token\n', 'utf8')
       await writeFile(manifestPath, JSON.stringify({
-        kind: 'geoforge.desktop-runtime',
+        kind: 'geo-agent-platform.desktop-runtime',
         schemaVersion: 1,
         projectRoot,
         runtimeRoot,
@@ -146,15 +150,15 @@ describe('resolveDesktopRuntimeConfig', () => {
     expect(defaultDesktopRuntimeManifestPath('win32', {
       ProgramData: path.win32.join('C:\\', 'ProgramData'),
     }))
-      .toBe('C:\\ProgramData\\GeoForge\\runtime-manifest.v1.json')
+      .toBe(path.win32.join('C:\\ProgramData', PLATFORM_TECHNICAL_ID, 'runtime-manifest.v1.json'))
     expect(defaultDesktopRuntimeManifestPath('linux'))
-      .toBe('/etc/geoforge/runtime-manifest.v1.json')
+      .toBe('/etc/geo-agent-platform/runtime-manifest.v1.json')
   })
 
   it('requires the Windows system configuration root instead of embedding a project path', () => {
     expect(defaultDesktopRuntimeManifestPath('win32', {
       ProgramData: path.win32.join('C:\\', 'ProgramData'),
-    })).toBe('C:\\ProgramData\\GeoForge\\runtime-manifest.v1.json')
+    })).toBe(path.win32.join('C:\\ProgramData', PLATFORM_TECHNICAL_ID, 'runtime-manifest.v1.json'))
     expect(() => defaultDesktopRuntimeManifestPath('win32', {}))
       .toThrow('ProgramData')
   })

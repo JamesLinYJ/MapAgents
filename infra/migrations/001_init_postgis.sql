@@ -1,6 +1,6 @@
 -- +-------------------------------------------------------------------------
 --
---   GeoForge Baseline Schema — 全新 PostGIS 数据库初始化
+--   地理智能平台 Baseline Schema — 全新 PostGIS 数据库初始化
 --
 --   文件:       001_init_postgis.sql
 --
@@ -453,7 +453,7 @@ CREATE INDEX IF NOT EXISTS idx_platform_layer_features_geometry
 
 -- Node 地图网关只调用这个经过审计的固定函数。query 中仅接收已授权的
 -- mapLayerId；数据库表名、SQL 和任意筛选条件都不会跨越 HTTP 边界。
-CREATE OR REPLACE FUNCTION geoforge_layer_tiles(z integer, x integer, y integer, query json)
+CREATE OR REPLACE FUNCTION geo_agent_platform_layer_tiles(z integer, x integer, y integer, query json)
 RETURNS bytea
 LANGUAGE sql
 STABLE
@@ -483,7 +483,7 @@ AS $$
     WHERE feature.map_layer_id = query->>'mapLayerId'
       AND feature.geometry && query_bounds.geometry
   )
-  -- ST_AsMVT 的第五个参数只接受整数列作为 MVT feature id。GeoForge 的
+  -- ST_AsMVT 的第五个参数只接受整数列作为 MVT feature id。地理智能平台 的
   -- feature_id 是跨导入稳定的文本标识，因此保留为普通 MVT 属性；MapLibre
   -- 查询结果仍可读取它，同时不会让 PostGIS 因错误的整数主键契约而拒绝出瓦片。
   SELECT ST_AsMVT(tile_features, 'features', 4096, 'geometry')

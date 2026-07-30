@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 受监督环境隔离测试
+//   地理智能平台 - 受监督环境隔离测试
 //
 //   文件:       environment.test.ts
 //
@@ -22,12 +22,12 @@ describe('service environment isolation', () => {
       API_PORT: '8000',
       OPENAI_API_KEY: 'provider-secret',
       OPEN_METEO_TIMEOUT_MS: '10000',
-      GEOFORGE_SUPERVISOR_TOKEN: 'supervisor-secret',
-      GEOFORGE_LOCAL_ROOT_SECRET: 'root-secret',
+      GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN: 'supervisor-secret',
+      GEO_AGENT_PLATFORM_LOCAL_ROOT_SECRET: 'root-secret',
       NODE_OPTIONS: '--require malicious-hook.js',
       WEB_DEV_PORT: '5173',
       UNRELATED_SECRET: 'unrelated-secret',
-    }, { GEOFORGE_ROOT: 'C:\\project' })
+    }, { GEO_AGENT_PLATFORM_ROOT: 'C:\\project' })
 
     expect(result).toMatchObject({
       PATH: 'test-path',
@@ -35,8 +35,8 @@ describe('service environment isolation', () => {
       OPENAI_API_KEY: 'provider-secret',
       OPEN_METEO_TIMEOUT_MS: '10000',
     })
-    expect(result).not.toHaveProperty('GEOFORGE_SUPERVISOR_TOKEN')
-    expect(result).not.toHaveProperty('GEOFORGE_LOCAL_ROOT_SECRET')
+    expect(result).not.toHaveProperty('GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN')
+    expect(result).not.toHaveProperty('GEO_AGENT_PLATFORM_LOCAL_ROOT_SECRET')
     expect(result).not.toHaveProperty('NODE_OPTIONS')
     expect(result).not.toHaveProperty('WEB_DEV_PORT')
     expect(result).not.toHaveProperty('UNRELATED_SECRET')
@@ -49,9 +49,9 @@ describe('service environment isolation', () => {
       POSTGRES_BIN_DIR: 'C:\\Program Files\\PostgreSQL\\18\\bin',
       POSTGRES_DATA_DIR: 'C:\\runtime\\postgresql',
       ProgramFiles: 'C:\\Program Files',
-      GEOFORGE_SUPERVISOR_TOKEN: 'must-not-leak',
+      GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN: 'must-not-leak',
     }, {
-      GEOFORGE_ROOT: 'C:\\project',
+      GEO_AGENT_PLATFORM_ROOT: 'C:\\project',
       RUNTIME_ROOT: 'C:\\runtime',
     })
 
@@ -61,10 +61,10 @@ describe('service environment isolation', () => {
       POSTGRES_BIN_DIR: 'C:\\Program Files\\PostgreSQL\\18\\bin',
       POSTGRES_DATA_DIR: 'C:\\runtime\\postgresql',
       ProgramFiles: 'C:\\Program Files',
-      GEOFORGE_ROOT: 'C:\\project',
+      GEO_AGENT_PLATFORM_ROOT: 'C:\\project',
       RUNTIME_ROOT: 'C:\\runtime',
     })
-    expect(result).not.toHaveProperty('GEOFORGE_SUPERVISOR_TOKEN')
+    expect(result).not.toHaveProperty('GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN')
   })
 
   it('passes the complete fixed API runtime configuration surface', () => {
@@ -130,7 +130,7 @@ describe('service environment isolation', () => {
       'VALHALLA_BASE_URL',
       'ROUTING_TIMEOUT_MS',
       'TIANDITU_API_KEY',
-      'GEOFORGE_MEMORY_BASE_DIR',
+      'GEO_AGENT_PLATFORM_MEMORY_BASE_DIR',
       'RIPGREP_PATH',
       'RG_PATH',
     ] as const
@@ -147,13 +147,13 @@ describe('service environment isolation', () => {
   })
 
   it('masks parent-only values when concurrently merges its inherited environment', () => {
-    const parent = { PATH: process.env.PATH, GEOFORGE_SUPERVISOR_TOKEN: 'must-not-leak' }
+    const parent = { PATH: process.env.PATH, GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN: 'must-not-leak' }
     const allowed = { PATH: process.env.PATH, API_PORT: '8000' }
     const adapterEnvironment = environmentForConcurrently(parent, allowed)
     const merged = { ...parent, ...adapterEnvironment }
     const child = spawnSync(process.execPath, [
       '-e',
-      'process.stdout.write(JSON.stringify({token:process.env.GEOFORGE_SUPERVISOR_TOKEN ?? null,port:process.env.API_PORT}))',
+      'process.stdout.write(JSON.stringify({token:process.env.GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN ?? null,port:process.env.API_PORT}))',
     ], { env: merged, encoding: 'utf8' })
 
     expect(child.status).toBe(0)

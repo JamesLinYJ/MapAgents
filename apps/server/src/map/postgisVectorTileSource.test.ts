@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - PostGIS 矢量瓦片数据源测试
+//   地理智能平台 - PostGIS 矢量瓦片数据源测试
 //
 //   文件:       postgisVectorTileSource.test.ts
 //
@@ -30,7 +30,7 @@ describe('PostgisVectorTileSource', () => {
       ['12345'],
     )
     const tileCall = database.query.mock.calls[2]
-    expect(String(tileCall?.[0])).toContain('geoforge_layer_tiles')
+    expect(String(tileCall?.[0])).toContain('geo_agent_platform_layer_tiles')
     expect(tileCall?.[1]).toEqual([4, 12, 7, 'map_layer_1'])
     expect(String(tileCall?.[0])).not.toContain('map_layer_1')
     expect(response.contentType).toBe('application/vnd.mapbox-vector-tile')

@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - Better Auth 认证服务测试
+//   地理智能平台 - Better Auth 认证服务测试
 //
 //   文件:       authService.test.ts
 //
@@ -47,7 +47,7 @@ describe('BetterAuthService local admin boundary', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        email: 'console-test@console.geoforge.invalid',
+        email: 'console-test@console.geo-agent-platform.invalid',
         password: 'not-the-real-secret',
       }),
     }))
@@ -64,7 +64,7 @@ describe('BetterAuthService local admin boundary', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        email: 'agent@local-agent.geoforge.invalid',
+        email: 'agent@local-agent.geo-agent-platform.invalid',
         password: 'not-the-real-secret',
       }),
     }))
@@ -78,9 +78,9 @@ describe('BetterAuthService local admin boundary', () => {
   it('trusts the exact Better Auth Electron scheme without weakening origin checks', () => {
     const service = createService()
 
-    expect(service.isTrustedOrigin('com.geoforge.desktop:/')).toBe(true)
-    expect(service.isTrustedOrigin('com.geoforge.desktop.evil:/')).toBe(false)
-    expect(service.isTrustedOrigin('https://com.geoforge.desktop')).toBe(false)
+    expect(service.isTrustedOrigin('com.geo-agent-platform.desktop:/')).toBe(true)
+    expect(service.isTrustedOrigin('com.geo-agent-platform.desktop.evil:/')).toBe(false)
+    expect(service.isTrustedOrigin('https://com.geo-agent-platform.desktop')).toBe(false)
   })
 })
 

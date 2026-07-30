@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-// GeoForge 文件型会话协议：transcript、checkpoint、compaction 与上下文报告。
+// 平台 文件型会话协议：transcript、checkpoint、compaction 与上下文报告。
 import { z } from 'zod'
 import { analysisRunSchema } from './platform.js'
 

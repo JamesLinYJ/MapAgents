@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 终端 Markdown 适配器
+//   地理智能平台 - 终端 Markdown 适配器
 //
 //   文件:       terminalMarkdown.ts
 //
@@ -19,7 +19,7 @@ export interface TerminalMarkdownLine {
   rendered: string
 }
 
-const geoForgeMarkdownTheme = {
+const platformMarkdownTheme = {
   heading: { color: '#39D0D8', bold: true },
   strong: { bold: true },
   emph: { color: '#DD8CFF', italic: true },
@@ -45,7 +45,7 @@ export function renderTerminalMarkdown(markdown: string, width: number): Termina
     width: Math.max(8, width),
     color: true,
     hyperlinks: false,
-    theme: geoForgeMarkdownTheme,
+    theme: platformMarkdownTheme,
     quotePrefix: '│ ',
     tableBorder: 'unicode',
     tableTruncate: true,

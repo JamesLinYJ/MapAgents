@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 会话载荷文件存储
+//   地理智能平台 - 会话载荷文件存储
 //
 //   文件:       conversationPayloadStore.ts
 //
@@ -188,7 +188,7 @@ export class ConversationPayloadStore implements ConversationPayloadStorage {
     if (!current) {
       await atomicWriteJson(manifestPath, {
         schemaVersion: STORE_SCHEMA_VERSION,
-        kind: 'geoforge-runtime-object-store',
+        kind: 'geo-agent-platform-runtime-object-store',
         createdAt: nowUtc(),
       })
     }

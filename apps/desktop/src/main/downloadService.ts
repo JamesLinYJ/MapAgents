@@ -11,6 +11,10 @@
 
 import path from 'node:path'
 import { BrowserWindow, dialog, net } from 'electron'
+import {
+  PLATFORM_DESKTOP_APP_ORIGIN,
+  PRODUCT_CODENAME,
+} from '@geo-agent-platform/shared-types/product-identity'
 
 import {
   desktopDownloadRequestSchema,
@@ -30,13 +34,13 @@ export class DesktopDownloadService {
   async save(window: BrowserWindow, input: DesktopDownloadRequest): Promise<DesktopDownloadResult> {
     const request = desktopDownloadRequestSchema.parse(input)
     const choice = await dialog.showSaveDialog(window, {
-      title: '保存 GeoForge 数据',
+      title: `保存 ${PRODUCT_CODENAME} 数据`,
       defaultPath: sanitizeFileName(request.suggestedName),
     })
     if (choice.canceled || !choice.filePath) {
       return desktopDownloadResultSchema.parse({ canceled: true, displayName: null })
     }
-    const headers = new Headers({ accept: '*/*', origin: 'geoforge://app' })
+    const headers = new Headers({ accept: '*/*', origin: PLATFORM_DESKTOP_APP_ORIGIN })
     const cookie = this.auth.cookieHeader()
     if (cookie) headers.set('cookie', cookie)
     const response = await net.fetch(new URL(request.path, `${this.apiBaseUrl}/`).toString(), { headers })
@@ -66,5 +70,5 @@ function sanitizeFileName(value: string): string {
     .replace(/[<>:"/\\|?*]/gu, '-')
     .replace(/[.\s]+$/gu, '')
     .slice(0, 180)
-    || 'GeoForge-数据'
+    || `${PRODUCT_CODENAME}-数据`
 }

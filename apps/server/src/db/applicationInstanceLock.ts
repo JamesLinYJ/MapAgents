@@ -10,17 +10,18 @@
 // --------------------------------------------------------------------------
 
 import type { PoolClient } from 'pg'
+import { PLATFORM_MACHINE_ID } from '@geo-agent-platform/shared-types/product-identity'
 
 import { errorLogPayload, logger } from '../observability/logger.js'
 import { applicationInstanceLockHeld } from '../observability/metrics.js'
 import type { Database } from './connection.js'
 
-const LOCK_NAMESPACE = 'geoforge'
+const LOCK_NAMESPACE = PLATFORM_MACHINE_ID
 const LOCK_RESOURCE = 'api-single-writer-v1'
 
 export class ApplicationInstanceLockedError extends Error {
   constructor() {
-    super('GeoForge API 已有一个实例持有平台写锁。请先停止该实例，再重新启动。')
+    super('平台 API 已有一个实例持有平台写锁。请先停止该实例，再重新启动。')
     this.name = 'ApplicationInstanceLockedError'
   }
 }

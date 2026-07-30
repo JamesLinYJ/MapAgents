@@ -10,6 +10,7 @@
 // --------------------------------------------------------------------------
 
 import { describe, expect, it } from 'vitest'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 import type { ToolDef } from '../framework/types.js'
 import { agentStateSchema } from '../schemas/types.js'
@@ -62,7 +63,8 @@ describe('system prompt', () => {
     expect(prompt).toContain('search_docs')
     expect(prompt).toContain('## Skill 指令')
     expect(prompt).toContain('SKILL.md')
-    expect(prompt).not.toMatch(/Claude|Newmap|GeoForge|CLAUDE/u)
+    expect(prompt).not.toMatch(/Claude|CLAUDE/u)
+    expect(prompt).not.toContain(PRODUCT_CODENAME)
   })
 
   it('keeps platform artifacts distinct from sandbox local files', () => {

@@ -9,7 +9,7 @@
 #   协助:       OpenAI Codex:GPT-5.5
 # --------------------------------------------------------------------------
 
-"""GeoForge wrapper for the copied rainfall risk map tool.
+"""平台 wrapper for the copied rainfall risk map tool.
 
 The Flask session cache and local path browser from the source app are not part
 of the platform contract. This adapter exposes the same core workflow through

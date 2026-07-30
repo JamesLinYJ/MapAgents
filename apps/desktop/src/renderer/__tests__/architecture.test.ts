@@ -383,7 +383,7 @@ describe('frontend architecture guards', () => {
 
     expect(appShellSource.includes('useEffect(')).toBe(false)
     expect(appShellSource.includes('useState(')).toBe(false)
-    expect(appShellSource.includes('window.geoforgeDesktop')).toBe(false)
+    expect(appShellSource.includes('window.platformDesktop')).toBe(false)
     expect(appShellSource.includes('exportWorkspaceResult')).toBe(false)
     expect(appShellSource.includes('requestDesktopDownload')).toBe(false)
     for (const file of coordinatorFiles) {
@@ -495,7 +495,7 @@ describe('frontend architecture guards', () => {
     for (const file of files) {
       const source = await readFile(file, 'utf8')
       expect(source.includes('csrfToken'), file).toBe(false)
-      expect(source.includes('x-geoforge-csrf'), file).toBe(false)
+      expect(source.includes('x-geo-agent-platform-csrf'), file).toBe(false)
       expect(source.includes("type { AuthMe"), file).toBe(false)
     }
 

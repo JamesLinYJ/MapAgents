@@ -55,7 +55,7 @@ export function WorkspaceMapPanel({
   return (
     <m.section
       className="workbench-map-shell"
-      data-geoforge-export-map=""
+      data-geo-agent-platform-export-map=""
       aria-label="空间地图"
       layout
       transition={motionSpring.gentle}

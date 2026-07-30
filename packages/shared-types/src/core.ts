@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-// GeoForge Agent 核心协议：运行状态、决策、事件与实时对话项。
+// 平台 Agent 核心协议：运行状态、决策、事件与实时对话项。
 import { z } from 'zod'
 import { artifactDisplaySchema } from './map.js'
 

@@ -10,6 +10,10 @@
 // --------------------------------------------------------------------------
 
 import { z } from 'zod'
+import {
+  PLATFORM_DESKTOP_APP_ORIGIN,
+  PLATFORM_DESKTOP_AUTH_CALLBACK_URL,
+} from '@geo-agent-platform/shared-types/product-identity'
 import { errorLogPayload, logger } from '../observability/logger.js'
 
 const booleanEnvSchema = z.preprocess((value) => {
@@ -31,9 +35,11 @@ const envSchema = z.object({
   BETTER_AUTH_ALLOW_SIGN_UP: booleanEnvSchema.default(false),
   BETTER_AUTH_REQUIRE_EMAIL_VERIFICATION: booleanEnvSchema.default(true),
   BETTER_AUTH_MIN_PASSWORD_LENGTH: z.coerce.number().int().min(8).default(12),
-  CSRF_HEADER_NAME: z.string().min(1).default('x-geoforge-csrf'),
+  CSRF_HEADER_NAME: z.string().min(1).default('x-geo-agent-platform-csrf'),
   BOOTSTRAP_ADMIN_EMAIL: z.string().email().optional(),
-  TRUSTED_ORIGINS: z.string().default('geoforge://app,com.geoforge.desktop://auth/callback'),
+  TRUSTED_ORIGINS: z.string().default(
+    `${PLATFORM_DESKTOP_APP_ORIGIN},${PLATFORM_DESKTOP_AUTH_CALLBACK_URL}`,
+  ),
   SEED_LAYERS_DIR: z.string().optional(),
   MAX_FILE_UPLOAD_BYTES: z.coerce.number().int().positive().default(50 * 1024 * 1024),
   MAX_GEOJSON_UPLOAD_BYTES: z.coerce.number().int().positive().default(20 * 1024 * 1024),

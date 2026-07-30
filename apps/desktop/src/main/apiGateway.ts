@@ -13,6 +13,10 @@ import FormData from 'form-data'
 import type { ReadStream } from 'node:fs'
 import { net } from 'electron'
 import { basemapDescriptorSchema } from '@geo-agent-platform/shared-types'
+import {
+  PLATFORM_DESKTOP_APP_ORIGIN,
+  PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME,
+} from '@geo-agent-platform/shared-types/product-identity'
 import { z } from 'zod'
 
 import {
@@ -146,12 +150,12 @@ export class DesktopApiGateway {
     headers: Headers,
     method: DesktopApiOperation['method'],
   ): void {
-    headers.set('origin', 'geoforge://app')
+    headers.set('origin', PLATFORM_DESKTOP_APP_ORIGIN)
     const cookie = this.auth.cookieHeader()
     if (cookie) headers.set('cookie', cookie)
     if (method === 'GET') return
     headers.set(
-      'x-geoforge-csrf',
+      'x-geo-agent-platform-csrf',
       this.auth.requireAuthorizationContext().csrfToken,
     )
   }
@@ -168,7 +172,7 @@ function isSafeResponseHeader(name: string): boolean {
     || name === 'content-length'
     || name === 'cache-control'
     || name === 'etag'
-    || name === 'x-geoforge-trace-id'
+    || name === 'x-geo-agent-platform-trace-id'
 }
 
 function rewriteDesktopResourcePayload(pathname: string, body: string, headers: Headers): string {
@@ -180,7 +184,7 @@ function rewriteDesktopResourcePayload(pathname: string, body: string, headers: 
       return JSON.stringify(basemaps.map(basemap => ({
         ...basemap,
         tileUrls: basemap.basemapKey === 'osm'
-          ? ['geoforge-resource://basemap/osm/{z}/{x}/{y}.png']
+          ? [`${PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME}://basemap/osm/{z}/{x}/{y}.png`]
           : basemap.tileUrls.map(rewriteResourceUrl),
         labelTileUrls: basemap.labelTileUrls.map(rewriteResourceUrl),
       })))
@@ -193,10 +197,10 @@ function rewriteDesktopResourcePayload(pathname: string, body: string, headers: 
 
 function rewriteResourceUrl(value: string): string {
   if (/^\/api\/v1\/(?:map|results|artifacts)\//u.test(value)) {
-    return `geoforge-resource://api${value}`
+    return `${PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME}://api${value}`
   }
   if (value === 'https://tile.openstreetmap.org/{z}/{x}/{y}.png') {
-    return 'geoforge-resource://basemap/osm/{z}/{x}/{y}.png'
+    return `${PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME}://basemap/osm/{z}/{x}/{y}.png`
   }
   return value
 }

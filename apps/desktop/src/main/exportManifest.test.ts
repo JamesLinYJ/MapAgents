@@ -28,7 +28,7 @@ afterEach(async () => {
 
 describe('desktop export manifest', () => {
   it('hashes nested artifact files and never exposes absolute paths', async () => {
-    const staging = await mkdtemp(path.join(os.tmpdir(), 'geoforge-export-manifest-'))
+    const staging = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-export-manifest-'))
     temporaryDirectories.push(staging)
     const artifactDirectory = path.join(staging, 'artifacts')
     await mkdir(artifactDirectory)
@@ -54,8 +54,8 @@ describe('desktop export manifest', () => {
   })
 
   it('rejects files outside the controlled staging directory', async () => {
-    const staging = await mkdtemp(path.join(os.tmpdir(), 'geoforge-export-staging-'))
-    const outside = await mkdtemp(path.join(os.tmpdir(), 'geoforge-export-outside-'))
+    const staging = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-export-staging-'))
+    const outside = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-export-outside-'))
     temporaryDirectories.push(staging, outside)
     const outsideFile = path.join(outside, 'secret.txt')
     await writeFile(outsideFile, 'secret')

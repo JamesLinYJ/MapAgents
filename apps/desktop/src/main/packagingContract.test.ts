@@ -13,6 +13,13 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import {
+  PLATFORM_DESKTOP_APPLICATION_ID,
+  PLATFORM_DESKTOP_PROTOCOL_SCHEME,
+  PLATFORM_MACHINE_ID,
+  PRODUCT_CODENAME,
+  PRODUCT_EXECUTABLE_BASENAME,
+} from '@geo-agent-platform/shared-types/product-identity'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 
@@ -37,7 +44,7 @@ describe('desktop packaging contract', () => {
 
     expect(desktopPackage.version).toBe('0.1.0')
     expect(desktopPackage.version).toBe(rootPackage.version)
-    expect(desktopPackage.productName).toBe('GeoForge')
+    expect(desktopPackage.productName).toBeUndefined()
     expect(desktopPackage.engines.node).toBe('^22.13.0 || >=24.0.0')
     expect(rootPackage.engines.node).toBe('^22.13.0 || >=24.0.0')
     expect(desktopPackage.scripts.package).toContain('npm --prefix ../.. run build:desktop')
@@ -71,34 +78,37 @@ describe('desktop packaging contract', () => {
   it('keeps Windows installer identity and metadata explicit in Forge', async () => {
     const forgeSource = await readFile(path.resolve(process.cwd(), 'forge.config.mjs'), 'utf8')
     const zipMakerSource = await readFile(
-      path.resolve(process.cwd(), 'packaging', 'geoForgeZipMaker.mjs'),
+      path.resolve(process.cwd(), 'packaging', 'desktopZipMaker.mjs'),
       'utf8',
     )
 
     for (const requiredMetadata of [
-      "appBundleId: 'com.geoforge.desktop'",
-      "executableName: 'GeoForge'",
-      "new URL('./assets/geoforge.ico', import.meta.url)",
+      'appBundleId: PLATFORM_DESKTOP_APPLICATION_ID',
+      'executableName: PRODUCT_EXECUTABLE_BASENAME',
+      "new URL('./assets/desktop.ico', import.meta.url)",
       'icon: windowsIconPath',
-      "CompanyName: 'GeoForge'",
-      "OriginalFilename: 'GeoForge.exe'",
-      "name: 'geoforge_desktop'",
+      'OriginalFilename: executableFilename',
+      'ProductName: PRODUCT_CODENAME',
+      'name: `${PLATFORM_MACHINE_ID}_desktop`',
       'setupExe: unsignedTestBuild',
-      "'GeoForge-0.1.0-UNSIGNED-TEST-Setup.exe'",
-      "'GeoForge-0.1.0-Setup.exe'",
+      '`${PRODUCT_EXECUTABLE_BASENAME}-0.1.0-UNSIGNED-TEST-Setup.exe`',
       'asar: true',
       'vendorDirectory: squirrelVendorDirectory',
       'windowsSign: windowsSigningOptions',
       "'UNSIGNED-TEST-BUILD.txt'",
       "src: 'UNSIGNED-TEST-BUILD.txt'",
-      'GEOFORGE_RELEASE_BUILD',
+      'GEO_AGENT_PLATFORM_RELEASE_BUILD',
       'noMsi: true',
       'setupIcon: windowsIconPath',
-      "import { GeoForgeZipMaker } from './packaging/geoForgeZipMaker.mjs'",
-      "new GeoForgeZipMaker({}, ['win32'])",
+      "import { DesktopZipMaker } from './packaging/desktopZipMaker.mjs'",
+      "new DesktopZipMaker({}, ['win32'])",
+      'schemes: [PLATFORM_DESKTOP_PROTOCOL_SCHEME]',
     ]) {
       expect(forgeSource, requiredMetadata).toContain(requiredMetadata)
     }
+    expect(PLATFORM_DESKTOP_APPLICATION_ID).not.toContain(PRODUCT_CODENAME)
+    expect(PLATFORM_DESKTOP_PROTOCOL_SCHEME).not.toContain(PRODUCT_CODENAME.toLowerCase())
+    expect(PLATFORM_MACHINE_ID).not.toContain(PRODUCT_CODENAME.toLowerCase())
     expect(forgeSource).toContain("artifact.replace(/\\.zip$/iu, '-UNSIGNED-TEST.zip')")
     expect(forgeSource).not.toContain('@electron-forge/maker-zip')
     expect(zipMakerSource).toContain('new ZipArchive(')
@@ -115,28 +125,37 @@ describe('desktop packaging contract', () => {
     for (const releaseBoundary of [
       'WINDOWS_CERTIFICATE_FILE',
       'WINDOWS_CERTIFICATE_PASSWORD',
-      "SetEnvironmentVariable('GEOFORGE_RELEASE_BUILD', '1', 'Process')",
+      "SetEnvironmentVariable('GEO_AGENT_PLATFORM_RELEASE_BUILD', '1', 'Process')",
       'Get-AuthenticodeSignature -LiteralPath $File',
       'SignatureStatus]::Valid',
       'UNSIGNED-TEST-BUILD.txt',
+      'productIdentity.js',
+      'PRODUCT_EXECUTABLE_BASENAME',
     ]) {
       expect(releaseScript, releaseBoundary).toContain(releaseBoundary)
     }
   })
 
   it('creates the Windows ZIP artifact without the cross-zip compatibility path', async () => {
-    const temporaryRoot = await mkdtemp(path.join(tmpdir(), 'geoforge-zip-maker-'))
+    const temporaryRoot = await mkdtemp(path.join(tmpdir(), 'geo-agent-platform-zip-maker-'))
     try {
-      const sourceDirectory = path.join(temporaryRoot, 'GeoForge-win32-x64')
+      const sourceDirectory = path.join(
+        temporaryRoot,
+        `${PRODUCT_EXECUTABLE_BASENAME}-win32-x64`,
+      )
       await mkdir(path.join(sourceDirectory, 'resources'), { recursive: true })
-      await writeFile(path.join(sourceDirectory, 'GeoForge.exe'), 'desktop-fixture', 'utf8')
+      await writeFile(
+        path.join(sourceDirectory, `${PRODUCT_EXECUTABLE_BASENAME}.exe`),
+        'desktop-fixture',
+        'utf8',
+      )
       await writeFile(path.join(sourceDirectory, 'resources', 'app.asar'), 'asar-fixture', 'utf8')
 
       const makerModuleUrl = pathToFileURL(
-        path.resolve(process.cwd(), 'packaging', 'geoForgeZipMaker.mjs'),
+        path.resolve(process.cwd(), 'packaging', 'desktopZipMaker.mjs'),
       ).href
       const makerModule = await import(makerModuleUrl) as {
-        GeoForgeZipMaker: new () => {
+        DesktopZipMaker: new () => {
           platforms: string[]
           make: (options: {
             dir: string
@@ -147,7 +166,7 @@ describe('desktop packaging contract', () => {
           }) => Promise<string[]>
         }
       }
-      const maker = new makerModule.GeoForgeZipMaker()
+      const maker = new makerModule.DesktopZipMaker()
       const artifacts = await maker.make({
         dir: sourceDirectory,
         makeDir: path.join(temporaryRoot, 'make'),
@@ -166,7 +185,7 @@ describe('desktop packaging contract', () => {
         'zip',
         'win32',
         'x64',
-        'GeoForge-win32-x64-0.1.0.zip',
+        `${PRODUCT_EXECUTABLE_BASENAME}-win32-x64-0.1.0.zip`,
       ))
       const archive = await readFile(artifact)
       expect(archive.subarray(0, 4).toString('hex')).toBe('504b0304')
@@ -177,7 +196,7 @@ describe('desktop packaging contract', () => {
   })
 
   it('ships a multi-resolution Windows icon for the app and Squirrel setup', async () => {
-    const icon = await readFile(path.resolve(process.cwd(), 'assets', 'geoforge.ico'))
+    const icon = await readFile(path.resolve(process.cwd(), 'assets', 'desktop.ico'))
     expect(icon.readUInt16LE(0)).toBe(0)
     expect(icon.readUInt16LE(2)).toBe(1)
     const entryCount = icon.readUInt16LE(4)

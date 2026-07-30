@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-// GeoForge Automation 领域协议只在 shared-types 定义一次。
+// 平台 Automation 领域协议只在 shared-types 定义一次。
 // 服务端从共享边界导入并在编译器、存储和 WS 层复用，避免执行图与 UI 图漂移。
 export {
   backgroundTaskInfoSchema,

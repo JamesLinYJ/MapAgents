@@ -32,6 +32,7 @@ import path from 'node:path'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { describe, expect, it } from 'vitest'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 import { platformNotFoundHandler } from './app/httpNotFound.js'
 import type { ToolDef } from './framework/types.js'
 import type { ConversationItem } from './schemas/types.js'
@@ -171,24 +172,69 @@ describe('platform architecture', () => {
     }
   })
 
-  it('keeps production source free of legacy product names and local absolute paths', async () => {
-    const root = path.resolve(process.cwd(), '..', '..')
+  it('keeps production source independent of the local checkout path', async () => {
+    const repositoryRoot = path.resolve(process.cwd(), '..', '..')
     const files = await collectProductionFiles([
-      path.join(root, 'AGENTS.md'),
-      path.join(root, 'apps/server/src'),
-      path.join(root, 'apps/desktop/src'),
-      path.join(root, 'apps/worker/src'),
-      path.join(root, 'packages/shared-types/src'),
-      path.join(root, 'packages/gis-meteorology/src/gis_meteorology'),
+      path.join(repositoryRoot, 'AGENTS.md'),
+      path.join(repositoryRoot, 'apps/server/src'),
+      path.join(repositoryRoot, 'apps/desktop/src'),
+      path.join(repositoryRoot, 'apps/worker/src'),
+      path.join(repositoryRoot, 'packages/shared-types/src'),
+      path.join(repositoryRoot, 'packages/gis-meteorology/src/gis_meteorology'),
     ])
     const windowsAbsolutePath = /(^|[^A-Za-z])[A-Za-z]:[\\/]/u
+    const localHomeAbsolutePath = /(^|[^A-Za-z])\/(?:Users|home)\/[^/\s"'`]+/u
+    const checkoutPathVariants = new Set([
+      repositoryRoot,
+      repositoryRoot.replace(/\\/gu, '/'),
+      path.win32.normalize(repositoryRoot),
+    ])
 
     for (const file of files) {
       const source = await readFile(file, 'utf8')
-      expect(source.includes('Newmap'), file).toBe(false)
-      expect(source.includes('newmap'), file).toBe(false)
+      for (const checkoutPath of checkoutPathVariants) {
+        expect(source.includes(checkoutPath), `${file}: ${checkoutPath}`).toBe(false)
+      }
       expect(windowsAbsolutePath.test(source), file).toBe(false)
+      expect(localHomeAbsolutePath.test(source), file).toBe(false)
     }
+  })
+
+  it('keeps the mutable product codename in its single identity fact source', async () => {
+    const repositoryRoot = path.resolve(process.cwd(), '..', '..')
+    const productIdentityFile = path.join(
+      repositoryRoot,
+      'packages/shared-types/src/productIdentity.ts',
+    )
+    const roots = [
+      path.join(repositoryRoot, '.env.example'),
+      path.join(repositoryRoot, 'AGENTS.md'),
+      path.join(repositoryRoot, 'README.md'),
+      path.join(repositoryRoot, 'apps'),
+      path.join(repositoryRoot, 'deploy'),
+      path.join(repositoryRoot, 'dev.ps1'),
+      path.join(repositoryRoot, 'dev.sh'),
+      path.join(repositoryRoot, 'docs'),
+      path.join(repositoryRoot, 'infra'),
+      path.join(repositoryRoot, 'package-lock.json'),
+      path.join(repositoryRoot, 'package.json'),
+      path.join(repositoryRoot, 'packages'),
+      path.join(repositoryRoot, 'scripts'),
+      path.join(repositoryRoot, 'tests'),
+    ]
+    const files = await collectRepositoryTextFiles(roots)
+    const normalizedCodename = PRODUCT_CODENAME.toLocaleLowerCase('en-US')
+    const offenders: string[] = []
+
+    for (const file of files) {
+      if (path.resolve(file) === path.resolve(productIdentityFile)) continue
+      const source = await readFile(file, 'utf8')
+      if (source.toLocaleLowerCase('en-US').includes(normalizedCodename)) {
+        offenders.push(path.relative(repositoryRoot, file).replace(/\\/gu, '/'))
+      }
+    }
+
+    expect(offenders).toEqual([])
   })
 
   it('keeps the Windows development stack bound to loopback explicitly', async () => {
@@ -1317,11 +1363,11 @@ describe('platform architecture', () => {
       const source = await readFile(file, 'utf8')
       expect(/\bconsole\.(?:debug|error|info|log|trace|warn)\s*\(/u.test(source), file).toBe(false)
     }
-    expect(mainSource.includes("c.header('x-geoforge-trace-id'")).toBe(true)
+    expect(mainSource.includes("c.header('x-geo-agent-platform-trace-id'")).toBe(true)
     expect(mainSource.includes('withLogContext')).toBe(true)
     expect(wsSource.includes('withLogContext')).toBe(true)
     expect(wsSource.includes('wsMessagesTotal')).toBe(true)
-    expect(workerClientSource.includes("'x-geoforge-trace-id'")).toBe(true)
+    expect(workerClientSource.includes("'x-geo-agent-platform-trace-id'")).toBe(true)
     expect(workerSidecarSource.includes('from worker_app.logging import configure_logging')).toBe(true)
     expect(workerSidecarSource.includes('class WorkerJsonFormatter')).toBe(false)
     expect(workerLoggingSource.includes('class WorkerJsonFormatter')).toBe(true)
@@ -1622,12 +1668,52 @@ async function collectProductionFiles(roots: string[]): Promise<string[]> {
   })
 }
 
+async function collectRepositoryTextFiles(roots: string[]): Promise<string[]> {
+  const files: string[] = []
+  for (const root of roots) {
+    const entry = await stat(root)
+    if (entry.isDirectory()) {
+      await collect(root, files)
+    } else {
+      files.push(root)
+    }
+  }
+  return files.filter((file) => {
+    const normalized = file.replace(/\\/gu, '/')
+    if (
+      normalized.includes('/dist/')
+      || normalized.includes('/node_modules/')
+      || normalized.includes('/original/')
+      || normalized.includes('/output/')
+      || normalized.includes('/runtime/')
+      || normalized.includes('/vendor/')
+      || normalized.includes('/.squirrel-vendor/')
+    ) {
+      return false
+    }
+    return /\.(?:c?js|example|html|json|md|mjs|ps1|py|service|sh|sql|svg|template|ts|tsx|xml|ya?ml)$/u
+      .test(file)
+  })
+}
+
 async function collect(dir: string, files: string[]): Promise<void> {
   const entries = await readdir(dir, { withFileTypes: true })
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name)
     if (entry.isDirectory()) {
-      if (entry.name === 'dist' || entry.name === 'node_modules') continue
+      if (
+        entry.name === '.pytest_cache'
+        || entry.name === '.squirrel-vendor'
+        || entry.name === '__pycache__'
+        || entry.name === 'dist'
+        || entry.name === 'node_modules'
+        || entry.name === 'out'
+        || entry.name === 'output'
+        || entry.name === 'release'
+        || entry.name === 'runtime'
+      ) {
+        continue
+      }
       await collect(fullPath, files)
     } else {
       files.push(fullPath)

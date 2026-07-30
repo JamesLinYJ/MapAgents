@@ -191,7 +191,7 @@ function builtinProviders(): ToolProvider[] {
   const env = parseEnv({
     API_PORT: '0',
     API_HOST: '127.0.0.1',
-    DATABASE_URL: 'postgres://user:password@127.0.0.1:5432/geoforge_test',
+    DATABASE_URL: 'postgres://user:password@127.0.0.1:5432/geo_agent_platform_test',
     RUNTIME_ROOT: 'runtime-test',
     APP_BASE_URL: 'http://localhost:8000',
     BETTER_AUTH_URL: 'http://localhost:8000',

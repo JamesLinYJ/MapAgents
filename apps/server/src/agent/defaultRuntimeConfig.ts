@@ -10,6 +10,9 @@
 // --------------------------------------------------------------------------
 
 import type { AgentRuntimeConfig, RuntimeSandboxConfig } from '../schemas/types.js'
+import {
+  PLATFORM_STATE_DIRECTORY_NAME,
+} from '@geo-agent-platform/shared-types/product-identity'
 
 interface DefaultRuntimeConfigOptions {
   sandbox?: Partial<RuntimeSandboxConfig>
@@ -82,7 +85,9 @@ export function defaultRuntimeConfig(options: DefaultRuntimeConfigOptions = {}):
       historyRunLimit: 4, eventWindow: 24, toolCallWindow: 8,
       artifactWindow: 6, warningWindow: 6, promptMaxChars: 12000,
       contextEntryWindow: 18, memoryFileCharLimit: 4000,
-      memoryEnabled: true, memoryBaseDir: process.env.GEOFORGE_MEMORY_BASE_DIR?.trim() || '~/.geoforge/projects',
+      memoryEnabled: true,
+      memoryBaseDir: process.env.GEO_AGENT_PLATFORM_MEMORY_BASE_DIR?.trim()
+        || `~/${PLATFORM_STATE_DIRECTORY_NAME}/projects`,
       privateMemoryDir: null,
       teamMemoryDir: null,
       memoryEntrypointName: 'MEMORY.md',

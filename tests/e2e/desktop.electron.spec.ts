@@ -16,6 +16,10 @@ import {
   type ElectronApplication,
   type Page,
 } from '@playwright/test'
+import {
+  PLATFORM_DESKTOP_PROTOCOL_SCHEME,
+  PRODUCT_CODENAME,
+} from '@geo-agent-platform/shared-types/product-identity'
 import type { ChildProcess } from 'node:child_process'
 import { mkdir, rm } from 'node:fs/promises'
 import path from 'node:path'
@@ -27,7 +31,7 @@ const desktopRoot = path.join(repositoryRoot, 'apps', 'desktop')
 const e2eRoot = path.join(repositoryRoot, 'output', 'playwright', 'electron-runtime')
 const userDataDirectory = path.join(e2eRoot, 'user-data')
 const scale150UserDataDirectory = path.join(e2eRoot, 'user-data-scale-150')
-const realBackend = process.env.GEOFORGE_E2E_REAL === '1'
+const realBackend = process.env.GEO_AGENT_PLATFORM_E2E_REAL === '1'
 const runtimeRoot = realBackend
   ? path.resolve(process.env.RUNTIME_ROOT ?? path.join(repositoryRoot, 'runtime'))
   : path.join(e2eRoot, 'runtime')
@@ -60,15 +64,24 @@ test.afterAll(async () => {
 })
 
 test('renders the complete GIS shell even when native services are unavailable', async ({}, testInfo) => {
-  await expect(workspace).toHaveURL(/^geoforge:\/\/app\/index\.html(?:[?#].*)?$/u)
-  await expect(workspace.getByRole('region', { name: 'GeoForge 功能区' })).toBeVisible()
+  await expect(workspace).toHaveURL(new RegExp(
+    `^${PLATFORM_DESKTOP_PROTOCOL_SCHEME}://app/index\\.html(?:[?#].*)?$`,
+    'u',
+  ))
+  await expect(workspace.getByRole(
+    'region',
+    { name: `${PRODUCT_CODENAME} 功能区` },
+  )).toBeVisible()
   await expect(workspace.getByRole('complementary', { name: '内容' })).toBeVisible()
   await expect(workspace.getByRole('region', { name: '空间地图' })).toBeVisible()
   await expect(workspace.getByRole('complementary', { name: '智能对话' })).toBeVisible()
   await expect(workspace.locator('footer[aria-label="地图状态"]')).toBeVisible()
-  await expect(workspace.getByText('GeoForge', { exact: true }).first()).toBeVisible()
-  await expect(workspace.getByText('登录 GeoForge')).toHaveCount(0)
-  await expect(workspace.getByRole('dialog', { name: '登录 GeoForge' })).toHaveCount(0)
+  await expect(workspace.getByText(PRODUCT_CODENAME, { exact: true }).first()).toBeVisible()
+  await expect(workspace.getByText(`登录 ${PRODUCT_CODENAME}`)).toHaveCount(0)
+  await expect(workspace.getByRole(
+    'dialog',
+    { name: `登录 ${PRODUCT_CODENAME}` },
+  )).toHaveCount(0)
   await expect(workspace.locator('.gf-login-overlay')).toHaveCount(0)
   await expect(workspace.getByLabel('邮箱')).toHaveCount(0)
   await expect(workspace.getByLabel('密码')).toHaveCount(0)
@@ -82,7 +95,7 @@ test('renders the complete GIS shell even when native services are unavailable',
   }
   await expectMapRuntimeReady(workspace)
   await workspace.screenshot({
-    path: testInfo.outputPath('geoforge-offline-auto-auth.png'),
+    path: testInfo.outputPath('geo-agent-platform-offline-auto-auth.png'),
     animations: 'disabled',
   })
 })
@@ -189,7 +202,7 @@ test('deduplicates one workspace and opens a separate window for another workspa
   await second.waitForLoadState('domcontentloaded')
   const secondWindow = await electronApp.browserWindow(second)
   await expect.poll(() => secondWindow.evaluate(window => window.getTitle()))
-    .toMatch(/验收工作区 B — GeoForge/u)
+    .toContain(`验收工作区 B — ${PRODUCT_CODENAME}`)
   await second.close()
   await expect.poll(() => electronApp.windows().length).toBe(1)
 })
@@ -201,7 +214,7 @@ test('fits the complete workbench at the supported minimum window size', async (
   await expectBackendNoticeAvoidsPrimaryControls(workspace)
 
   await workspace.screenshot({
-    path: testInfo.outputPath('geoforge-1100x700.png'),
+    path: testInfo.outputPath('geo-agent-platform-1100x700.png'),
     animations: 'disabled',
   })
 })
@@ -220,7 +233,7 @@ test('captures every supported desktop size without clipping workbench regions',
     await expectWorkbenchFitsViewport(workspace)
     await expectBackendNoticeAvoidsPrimaryControls(workspace)
     await workspace.screenshot({
-      path: testInfo.outputPath(`geoforge-${size.label}-100.png`),
+      path: testInfo.outputPath(`geo-agent-platform-${size.label}-100.png`),
       animations: 'disabled',
     })
   }
@@ -228,7 +241,7 @@ test('captures every supported desktop size without clipping workbench regions',
 
 test('runs a real auto-authenticated conversation when native services are enabled', async () => {
   test.setTimeout(180_000)
-  test.skip(!realBackend, '设置 GEOFORGE_E2E_REAL=1 后运行原生 PostgreSQL/PostGIS、Worker 与 API 全链路。')
+  test.skip(!realBackend, '设置 GEO_AGENT_PLATFORM_E2E_REAL=1 后运行原生 PostgreSQL/PostGIS、Worker 与 API 全链路。')
 
   const composer = workspace.getByRole('textbox', { name: '输入空间分析需求' })
   await expect(composer).toBeVisible()
@@ -253,9 +266,9 @@ test('runs a real auto-authenticated conversation when native services are enabl
 
 test('uploads an NC folder and completes a natural-language nowcast workflow', async ({}, testInfo) => {
   test.setTimeout(360_000)
-  test.skip(!realBackend, '设置 GEOFORGE_E2E_REAL=1 后运行原生 PostgreSQL/PostGIS、Worker 与 API 全链路。')
-  const ncFolder = process.env.GEOFORGE_E2E_NC_FOLDER
-  test.skip(!ncFolder, '设置 GEOFORGE_E2E_NC_FOLDER 后运行真实 NC 文件夹上传与短临分析。')
+  test.skip(!realBackend, '设置 GEO_AGENT_PLATFORM_E2E_REAL=1 后运行原生 PostgreSQL/PostGIS、Worker 与 API 全链路。')
+  const ncFolder = process.env.GEO_AGENT_PLATFORM_E2E_NC_FOLDER
+  test.skip(!ncFolder, '设置 GEO_AGENT_PLATFORM_E2E_NC_FOLDER 后运行真实 NC 文件夹上传与短临分析。')
 
   await electronApp.evaluate(({ dialog }, selectedFolder) => {
     Object.defineProperty(dialog, 'showOpenDialog', {
@@ -302,7 +315,7 @@ test('uploads an NC folder and completes a natural-language nowcast workflow', a
   ).toBeGreaterThan(0)
   const terminalStatus = await waitForRunTerminalStatus(workspace, 240_000, {
     workflowApprovalScreenshotPath: testInfo.outputPath(
-      'geoforge-nowcast-workflow-approval.png',
+      'geo-agent-platform-nowcast-workflow-approval.png',
     ),
   })
   if (terminalStatus.includes('失败')) {
@@ -321,7 +334,7 @@ test('uploads an NC folder and completes a natural-language nowcast workflow', a
       .first(),
   ).toBeVisible()
   await workspace.screenshot({
-    path: testInfo.outputPath('geoforge-nowcast-natural-language.png'),
+    path: testInfo.outputPath('geo-agent-platform-nowcast-natural-language.png'),
     animations: 'disabled',
   })
 })
@@ -344,7 +357,7 @@ test('fits the workbench and initializes MapLibre at 150% display scale', async 
   await expectWorkbenchFitsViewport(workspace)
   await expectBackendNoticeAvoidsPrimaryControls(workspace)
   await workspace.screenshot({
-    path: testInfo.outputPath('geoforge-1366x768-scale-150.png'),
+    path: testInfo.outputPath('geo-agent-platform-1366x768-scale-150.png'),
     animations: 'disabled',
   })
 })
@@ -403,16 +416,16 @@ function desktopEnvironment(): NodeJS.ProcessEnv {
     ...process.env,
     NODE_ENV: 'development',
     APP_ENV: 'development',
-    GEOFORGE_ROOT: repositoryRoot,
+    GEO_AGENT_PLATFORM_ROOT: repositoryRoot,
     RUNTIME_ROOT: runtimeRoot,
     APP_BASE_URL: apiBaseUrl,
     API_PORT: new URL(apiBaseUrl).port || '8000',
-    GEOFORGE_DESKTOP_AUTO_AUTH: 'true',
+    GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH: 'true',
     BOOTSTRAP_ADMIN_EMAIL:
-      process.env.BOOTSTRAP_ADMIN_EMAIL ?? 'geoforge-e2e@example.com',
-    GEOFORGE_DESKTOP_AUTO_AUTH_EMAIL:
-      process.env.BOOTSTRAP_ADMIN_EMAIL ?? 'geoforge-e2e@example.com',
-    GEOFORGE_DESKTOP_AUTO_AUTH_NAME: 'GeoForge Electron 验收管理员',
+      process.env.BOOTSTRAP_ADMIN_EMAIL ?? 'geo-agent-platform-e2e@example.com',
+    GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_EMAIL:
+      process.env.BOOTSTRAP_ADMIN_EMAIL ?? 'geo-agent-platform-e2e@example.com',
+    GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_NAME: `${PRODUCT_CODENAME} Electron 验收管理员`,
     BETTER_AUTH_ALLOW_SIGN_UP: process.env.BETTER_AUTH_ALLOW_SIGN_UP ?? 'true',
   }
 }
@@ -476,10 +489,10 @@ async function invokeWindowCommand(
 ): Promise<void> {
   await page.evaluate(async input => {
     const bridge = (window as typeof window & {
-      geoforgeDesktop?: {
+      platformDesktop?: {
         window: { command(value: unknown): Promise<void> }
       }
-    }).geoforgeDesktop
+    }).platformDesktop
     if (!bridge) throw new Error('Electron Preload 桥未加载。')
     await bridge.window.command(input)
   }, command)
@@ -615,15 +628,19 @@ async function expectMapRuntimeReady(page: Page): Promise<void> {
   await expect.poll(() => {
     const workerUrls = page.workers().map(worker => worker.url())
     return workerUrls.some(url =>
-      /geoforge:\/\/app\/assets\/maplibre-gl-csp-worker-[^/]+\.js(?:[?#].*)?$/u.test(url),
+      new RegExp(
+        `^${PLATFORM_DESKTOP_PROTOCOL_SCHEME}`
+          + '://app/assets/maplibre-gl-csp-worker-[^/]+\\.js(?:[?#].*)?$',
+        'u',
+      ).test(url),
     )
   }, { timeout: 15_000 }).toBe(true)
 }
 
 async function expectWorkbenchFitsViewport(page: Page): Promise<void> {
-  const fit = await page.evaluate(() => {
+  const fit = await page.evaluate((productCodename) => {
     const required = [
-      document.querySelector('[aria-label="GeoForge 功能区"]'),
+      document.querySelector(`[aria-label="${productCodename} 功能区"]`),
       document.querySelector('[aria-label="内容"]'),
       document.querySelector('[aria-label="空间地图"]'),
       document.querySelector('[aria-label="智能对话"]'),
@@ -650,7 +667,7 @@ async function expectWorkbenchFitsViewport(page: Page): Promise<void> {
           : { visible: false, inside: false }
       }),
     }
-  })
+  }, PRODUCT_CODENAME)
   expect(fit.documentOverflowX).toBeLessThanOrEqual(1)
   expect(fit.documentOverflowY).toBeLessThanOrEqual(1)
   expect(fit.regions).toEqual(

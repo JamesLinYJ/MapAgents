@@ -11,7 +11,7 @@
 
 // 模块职责
 //
-// 把 GeoForge 运行时配置转换成 OpenAI Agents SDK 原生 MCP tools 与 sandbox
+// 把 平台 运行时配置转换成 OpenAI Agents SDK 原生 MCP tools 与 sandbox
 // skills capability。这里是 SDK 外部能力接入的唯一边界：运行时状态机不直接拼装
 // MCP server、技能目录或宿主路径授权。
 

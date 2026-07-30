@@ -1,4 +1,4 @@
--- GeoForge Agents SDK 原生运行时迁移
+-- 地理智能平台 Agents SDK 原生运行时迁移
 -- 文件:       004_agents_sdk_native_runtime.sql
 -- 日期: 2026年07月23日
 -- 作者:       JamesLinYJ

@@ -1,6 +1,6 @@
 # +-------------------------------------------------------------------------
 #
-#   GeoForge 地理智能平台 - WinSW 服务包生成器
+#   地理智能平台 - WinSW 服务包生成器
 #
 #   文件:       prepare-winsw-services.ps1
 #
@@ -11,8 +11,8 @@
 
 [CmdletBinding()]
 param(
-    [string]$ServiceRoot = (Join-Path $env:ProgramData 'GeoForge\services'),
-    [string]$SupervisorEnvironmentFile = (Join-Path $env:ProgramData 'GeoForge\supervisor.env')
+    [string]$ServiceRoot = (Join-Path $env:ProgramData 'GeoAgentPlatform\services'),
+    [string]$SupervisorEnvironmentFile = (Join-Path $env:ProgramData 'GeoAgentPlatform\supervisor.env')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -24,7 +24,7 @@ $WinSW = (& (Join-Path $Root 'scripts\install-winsw.ps1') | Select-Object -Last 
 if (-not $WinSW -or -not (Test-Path -LiteralPath $WinSW -PathType Leaf)) { throw 'WinSW 固定版本安装失败。' }
 
 $Services = @(
-    @{ Name = 'GeoForgeSupervisor'; Template = 'GeoForgeSupervisor.xml.template'; Environment = $SupervisorEnvironmentFile }
+    @{ Name = 'GeoAgentPlatformSupervisor'; Template = 'GeoAgentPlatformSupervisor.xml.template'; Environment = $SupervisorEnvironmentFile }
 )
 
 foreach ($Service in $Services) {
@@ -43,7 +43,7 @@ foreach ($Service in $Services) {
     $TemplatePath = Join-Path $Root "deploy\windows\$($Service.Template)"
     $Xml = Get-Content -LiteralPath $TemplatePath -Raw
     $Values = @{
-        '@@GEOFORGE_ROOT@@' = $Root
+        '@@GEO_AGENT_PLATFORM_ROOT@@' = $Root
         '@@PWSH_EXECUTABLE@@' = $PowerShell
         '@@SERVICE_ENV_FILE@@' = $EnvironmentFile
     }

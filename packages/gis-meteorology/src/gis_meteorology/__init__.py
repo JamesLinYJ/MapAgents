@@ -9,7 +9,7 @@
 #   协助:       OpenAI Codex:GPT-5.5
 # --------------------------------------------------------------------------
 
-"""Public domain services for GeoForge meteorological execution."""
+"""Public domain services for 平台 meteorological execution."""
 
 from .nowcast import (
     NowcastAnalysisService,

@@ -19,7 +19,7 @@ import { RunSteeringController } from './runSteeringController.js'
 
 describe('RunSteeringController', () => {
   it('queues idempotently, consumes in order, and rejects new input after close', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'geoforge-steering-'))
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-steering-'))
     const store = new PersistenceFacadeTestHarness().create(root)
     try {
       await store.initialize()

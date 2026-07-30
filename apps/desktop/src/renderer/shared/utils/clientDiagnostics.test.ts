@@ -22,7 +22,7 @@ describe('reportClientDiagnostic', () => {
   it('sends only sanitized, bounded fields through the diagnostic bridge', async () => {
     const report = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('window', {
-      geoforgeDesktop: {
+      platformDesktop: {
         diagnostics: { report },
       },
     })
@@ -32,8 +32,8 @@ describe('reportClientDiagnostic', () => {
       scope: 'MapErrorBoundary',
       error: new Error('无法加载 C:\\Users\\James\\private\\map.ts'),
       detail: {
-        componentStack: 'at MapPanel (/home/james/geoforge/MapPanel.tsx:12:3)',
-        customMount: 'at Loader (/data/geoforge/Loader.ts:9:2)',
+        componentStack: 'at MapPanel (/home/james/geo-agent-platform/MapPanel.tsx:12:3)',
+        customMount: 'at Loader (/data/geo-agent-platform/Loader.ts:9:2)',
         apiRoute: '/api/v1/layers',
         documentation: 'https://docs.example.com/maps/errors',
         accessToken: 'never-forward-this',
@@ -49,7 +49,7 @@ describe('reportClientDiagnostic', () => {
     expect(JSON.stringify(diagnostic)).toContain('[LOCAL_PATH]')
     expect(JSON.stringify(diagnostic)).not.toContain('C:\\Users\\James')
     expect(JSON.stringify(diagnostic)).not.toContain('/home/james')
-    expect(JSON.stringify(diagnostic)).not.toContain('/data/geoforge')
+    expect(JSON.stringify(diagnostic)).not.toContain('/data/geo-agent-platform')
     expect(JSON.stringify(diagnostic)).not.toContain('never-forward-this')
     expect(JSON.stringify(diagnostic)).toContain('/api/v1/layers')
     expect(JSON.stringify(diagnostic)).toContain('https://docs.example.com/maps/errors')

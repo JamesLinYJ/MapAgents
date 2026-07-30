@@ -32,7 +32,7 @@ describe('desktop runtime manifest', () => {
   it('accepts only the strict v1 contract and normalizes the API origin', () => {
     const runtimeRoot = path.resolve('runtime')
     const manifest = parseDesktopRuntimeManifest({
-      kind: 'geoforge.desktop-runtime',
+      kind: 'geo-agent-platform.desktop-runtime',
       schemaVersion: 1,
       projectRoot: path.resolve('project'),
       runtimeRoot,
@@ -56,7 +56,7 @@ describe('desktop runtime manifest', () => {
   it('rejects relative paths, API subpaths, duplicate overrides and token escape', () => {
     const runtimeRoot = path.resolve('runtime')
     const valid = {
-      kind: 'geoforge.desktop-runtime',
+      kind: 'geo-agent-platform.desktop-runtime',
       schemaVersion: 1,
       projectRoot: path.resolve('project'),
       runtimeRoot,
@@ -86,7 +86,7 @@ describe('desktop runtime manifest', () => {
   it('hard-fails inherited production variables unless the protected manifest authorizes them', () => {
     const runtimeRoot = path.resolve('runtime')
     const manifest = parseDesktopRuntimeManifest({
-      kind: 'geoforge.desktop-runtime',
+      kind: 'geo-agent-platform.desktop-runtime',
       schemaVersion: 1,
       projectRoot: path.resolve('project'),
       runtimeRoot,
@@ -99,8 +99,8 @@ describe('desktop runtime manifest', () => {
       APP_BASE_URL: 'https://api.example.com',
     }).apiBaseUrl).toBe('https://api.example.com')
     expect(() => applyControlledRuntimeEnvironment(manifest, {
-      GEOFORGE_ROOT: path.resolve('other-project'),
-    })).toThrow('未授权环境变量 GEOFORGE_ROOT')
+      GEO_AGENT_PLATFORM_ROOT: path.resolve('other-project'),
+    })).toThrow('未授权环境变量 GEO_AGENT_PLATFORM_ROOT')
   })
 
   it('loads a bounded ordinary manifest file', async () => {
@@ -108,7 +108,7 @@ describe('desktop runtime manifest', () => {
     const { projectRoot, runtimeRoot, supervisorTokenFile } = await createRuntimeTargets(directory)
     const manifestPath = path.join(directory, 'runtime-manifest.v1.json')
     await writeFile(manifestPath, JSON.stringify({
-      kind: 'geoforge.desktop-runtime',
+      kind: 'geo-agent-platform.desktop-runtime',
       schemaVersion: 1,
       projectRoot,
       runtimeRoot,
@@ -119,7 +119,7 @@ describe('desktop runtime manifest', () => {
 
     expect(loadDesktopRuntimeManifest(manifestPath, {
       platform: 'win32',
-    }).kind).toBe('geoforge.desktop-runtime')
+    }).kind).toBe('geo-agent-platform.desktop-runtime')
   })
 
   it.runIf(process.platform !== 'win32')('enforces POSIX ownership and write protection', async () => {
@@ -127,7 +127,7 @@ describe('desktop runtime manifest', () => {
     const { projectRoot, runtimeRoot, supervisorTokenFile } = await createRuntimeTargets(directory)
     const manifestPath = path.join(directory, 'runtime-manifest.v1.json')
     await writeFile(manifestPath, JSON.stringify({
-      kind: 'geoforge.desktop-runtime',
+      kind: 'geo-agent-platform.desktop-runtime',
       schemaVersion: 1,
       projectRoot,
       runtimeRoot,
@@ -150,7 +150,7 @@ describe('desktop runtime manifest', () => {
 })
 
 async function createTemporaryDirectory(): Promise<string> {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'geoforge-runtime-manifest-'))
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-runtime-manifest-'))
   temporaryDirectories.push(directory)
   return directory
 }

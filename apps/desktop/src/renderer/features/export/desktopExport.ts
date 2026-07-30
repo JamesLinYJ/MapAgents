@@ -24,8 +24,8 @@ export interface WorkspaceExportInput {
 }
 
 export async function exportWorkspaceResult(input: WorkspaceExportInput): Promise<DesktopExportResult> {
-  const bridge = window.geoforgeDesktop
-  if (!bridge) throw new Error('成果导出只允许在 GeoForge 桌面应用中使用。')
+  const bridge = window.platformDesktop
+  if (!bridge) throw new Error('成果导出只允许在平台桌面应用中使用。')
   return bridge.export.create({
     workspaceId: input.workspaceId,
     sessionId: input.sessionId,

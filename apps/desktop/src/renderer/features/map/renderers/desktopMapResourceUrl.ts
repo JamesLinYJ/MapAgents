@@ -9,6 +9,10 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
+import {
+  PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME,
+} from '@geo-agent-platform/shared-types/product-identity'
+
 const CONTROLLED_MAP_RESOURCE_PATH = /^\/api\/v1\/(?:map|results|artifacts)\//u
 
 /**
@@ -19,5 +23,5 @@ export function desktopMapResourceUrl(relativeUrl: string): string {
   if (!CONTROLLED_MAP_RESOURCE_PATH.test(relativeUrl)) {
     throw new Error(`地图资源地址不在桌面受控范围内：${relativeUrl}`)
   }
-  return `geoforge-resource://api${relativeUrl}`
+  return `${PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME}://api${relativeUrl}`
 }

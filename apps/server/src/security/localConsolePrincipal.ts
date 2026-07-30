@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本机 Console 服务主体标识
+//   地理智能平台 - 本机 Console 服务主体标识
 //
 //   文件:       localConsolePrincipal.ts
 //
@@ -11,7 +11,7 @@
 
 import { createHmac } from 'node:crypto'
 
-export const LOCAL_CONSOLE_EMAIL_DOMAIN = 'console.geoforge.invalid'
+export const LOCAL_CONSOLE_EMAIL_DOMAIN = 'console.geo-agent-platform.invalid'
 
 export interface LocalConsoleCredential {
   email: string
@@ -37,6 +37,6 @@ export function isLocalConsoleEmail(email: string): boolean {
 
 function derive(rootSecret: string, purpose: string): string {
   return createHmac('sha256', rootSecret)
-    .update(`geoforge-local-console:${purpose}:v1`)
+    .update(`geo-agent-platform-local-console:${purpose}:v1`)
     .digest('base64url')
 }

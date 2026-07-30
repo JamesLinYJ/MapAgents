@@ -10,6 +10,7 @@
 // --------------------------------------------------------------------------
 
 import { requestDesktopDownload } from '../../api/client'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 export interface DesktopDownloadArtifact {
   artifactId?: string | null
@@ -42,7 +43,7 @@ export function requestArtifactGeoJsonDownload(
 function suggestedArtifactName(artifact: DesktopDownloadArtifact): string {
   const stem = artifact.name?.trim()
     || artifact.artifactId?.trim()
-    || 'GeoForge-结果'
+    || `${PRODUCT_CODENAME}-结果`
   const extension = extensionForArtifactType(artifact.artifactType)
   return extension ? ensureExtension(stem, extension) : stem
 }

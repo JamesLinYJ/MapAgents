@@ -95,7 +95,7 @@ describe('microphone permission IPC', () => {
       isInPlace: boolean,
       isMainFrame: boolean,
     ) => void
-    navigated({}, 'geoforge://app/next', false, true)
+    navigated({}, 'geo-agent-platform://app/next', false, true)
     expect(gate.hasActiveGrant(61)).toBe(false)
     expect(gate.grant(61)).toBe(false)
     const destroyed = fixture.sender.once.mock.calls[0]?.[1] as (() => void) | undefined
@@ -136,7 +136,7 @@ describe('desktop IPC transport ownership', () => {
   })
 
   it('compresses large auth projections and keeps bulk logs off the control channel', async () => {
-    const frame = { url: 'geoforge://app/workspace' }
+    const frame = { url: 'geo-agent-platform://app/workspace' }
     const sender = {
       id: 62,
       isDestroyed: () => false,
@@ -214,7 +214,7 @@ describe('desktop IPC transport ownership', () => {
 })
 
 function installFixture(gate: MicrophonePermissionGate) {
-  const frame = { url: 'geoforge://app/workspace' }
+  const frame = { url: 'geo-agent-platform://app/workspace' }
   const sender = {
     id: 61,
     isDestroyed: () => false,

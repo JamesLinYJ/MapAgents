@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本地特权账户管理服务测试
+//   地理智能平台 - 本地特权账户管理服务测试
 //
 //   文件:       localAccountService.test.ts
 //
@@ -22,7 +22,7 @@ import {
 
 const authorization: LocalConsoleAuthorization = {
   authUserId: 'auth_console',
-  email: 'console-test@console.geoforge.invalid',
+  email: 'console-test@console.geo-agent-platform.invalid',
   keyVersion: 'test-key-version',
   headers: new Headers({ cookie: 'session=test' }),
 }

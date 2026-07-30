@@ -10,6 +10,7 @@
 // --------------------------------------------------------------------------
 
 import { BrowserWindow } from 'electron'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 import { buildStartupFailureDocument } from './startupFailureDocument.js'
 import { secureWebPreferences } from './secureWebPreferences.js'
@@ -23,7 +24,7 @@ export function showStartupFailureWindow(error: unknown): BrowserWindow {
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#eef3f5',
-    title: 'GeoForge 启动失败',
+    title: `${PRODUCT_CODENAME} 启动失败`,
     webPreferences: secureWebPreferences({
       devTools: false,
     }),

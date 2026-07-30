@@ -21,15 +21,15 @@ import {
 import path from 'node:path'
 import { z } from 'zod'
 
-export const DESKTOP_RUNTIME_MANIFEST_KIND = 'geoforge.desktop-runtime'
+export const DESKTOP_RUNTIME_MANIFEST_KIND = 'geo-agent-platform.desktop-runtime'
 export const DESKTOP_RUNTIME_MANIFEST_VERSION = 1
 export const DESKTOP_RUNTIME_MANIFEST_FILENAME = 'runtime-manifest.v1.json'
 
 const controlledEnvironmentNames = [
-  'GEOFORGE_ROOT',
+  'GEO_AGENT_PLATFORM_ROOT',
   'RUNTIME_ROOT',
   'APP_BASE_URL',
-  'GEOFORGE_SUPERVISOR_TOKEN_FILE',
+  'GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE',
 ] as const
 
 const absoluteLocalPathSchema = z.string()
@@ -162,10 +162,10 @@ export function applyControlledRuntimeEnvironment(
     supervisorTokenFile: manifest.supervisorTokenFile,
   }
   const fieldsByEnvironment = {
-    GEOFORGE_ROOT: 'projectRoot',
+    GEO_AGENT_PLATFORM_ROOT: 'projectRoot',
     RUNTIME_ROOT: 'runtimeRoot',
     APP_BASE_URL: 'apiBaseUrl',
-    GEOFORGE_SUPERVISOR_TOKEN_FILE: 'supervisorTokenFile',
+    GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE: 'supervisorTokenFile',
   } as const satisfies Record<typeof controlledEnvironmentNames[number], keyof DesktopRuntimeValues>
 
   for (const environmentName of controlledEnvironmentNames) {

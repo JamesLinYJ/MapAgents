@@ -82,7 +82,7 @@ class WorkerPathSandbox:
         """为依赖文件名和父目录语义的雷达算法重建临时输入视图。"""
 
         items = sequence_items({key: args.get(key)}) if key == "files" else file_reference_items(args, key)
-        with tempfile.TemporaryDirectory(prefix="geoforge-radar-input-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="geo-agent-platform-radar-input-") as tmp:
             root = Path(tmp)
             aliases: list[Path] = []
             for index, item in enumerate(items):

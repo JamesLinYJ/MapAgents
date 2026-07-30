@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 地图基线契约测试
+//   地理智能平台 - 地图基线契约测试
 //
 //   文件:       mapBaselineContract.test.ts
 //   日期:       2026年07月16日
@@ -18,7 +18,7 @@ describe('map database baseline contract', () => {
   it('keeps text feature identifiers as MVT attributes instead of numeric feature ids', async () => {
     const baseline = await readFile(baselinePath, 'utf8')
     const functionBody = baseline.match(
-      /CREATE OR REPLACE FUNCTION geoforge_layer_tiles[\s\S]+?\$\$;/u,
+      /CREATE OR REPLACE FUNCTION geo_agent_platform_layer_tiles[\s\S]+?\$\$;/u,
     )?.[0]
 
     expect(functionBody).toBeDefined()

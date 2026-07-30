@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本机 Agent 活动指示器
+//   地理智能平台 - 本机 Agent 活动指示器
 //
 //   文件:       localAgentActivity.tsx
 //
@@ -132,7 +132,7 @@ export function AgentActivityIndicator({
 }
 
 export function terminalMotionEnabled(environment: NodeJS.ProcessEnv): boolean {
-  const reduced = environment.GEOFORGE_REDUCED_MOTION?.trim().toLowerCase()
+  const reduced = environment.GEO_AGENT_PLATFORM_REDUCED_MOTION?.trim().toLowerCase()
   if (reduced === '1' || reduced === 'true') return false
   if (environment.CI?.trim().toLowerCase() === 'true') return false
   return environment.TERM?.trim().toLowerCase() !== 'dumb'

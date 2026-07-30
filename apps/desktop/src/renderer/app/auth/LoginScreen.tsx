@@ -159,7 +159,7 @@ export function LoginScreen({
           </div>
         </section>
 
-        <section className="dc-auth-panel" aria-labelledby="geoforge-login-panel-title">
+        <section className="dc-auth-panel" aria-labelledby="geo-agent-platform-login-panel-title">
           <div className="dc-auth-card-head">
             <span className="dc-auth-card-head__icon" aria-hidden="true">
               {step === 'signup' ? <UserRound size={21} /> : step === 'options' ? <KeyRound size={21} /> : <LockKeyhole size={21} />}
@@ -171,7 +171,7 @@ export function LoginScreen({
           </div>
 
           <div className="dc-auth-step">
-            <h2 id="geoforge-login-panel-title">{stepTitle(step)}</h2>
+            <h2 id="geo-agent-platform-login-panel-title">{stepTitle(step)}</h2>
             <p>{stepDescription(step)}</p>
           </div>
 

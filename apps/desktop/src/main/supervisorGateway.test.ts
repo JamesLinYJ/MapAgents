@@ -32,7 +32,7 @@ afterEach(async () => {
 
 describe('DesktopSupervisorGateway logs', () => {
   it('does not expose the local supervisor token path when the runtime is absent', async () => {
-    const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'geoforge-desktop-status-'))
+    const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-desktop-status-'))
     cleanupDirectories.push(projectRoot)
     const runtimeRoot = path.join(projectRoot, 'runtime')
     const gateway = new DesktopSupervisorGateway(runtimeConfig(projectRoot, runtimeRoot))
@@ -59,7 +59,7 @@ describe('DesktopSupervisorGateway logs', () => {
   })
 
   it('keeps local Main logs readable when the Supervisor is unavailable', async () => {
-    const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'geoforge-desktop-logs-'))
+    const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-desktop-logs-'))
     cleanupDirectories.push(projectRoot)
     const runtimeRoot = path.join(projectRoot, 'runtime')
     const localEntry: OperationsLogEntry = {
@@ -93,7 +93,7 @@ describe('DesktopSupervisorGateway logs', () => {
   })
 
   it('does not silently substitute local logs for a service-only query', async () => {
-    const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'geoforge-desktop-logs-'))
+    const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-desktop-logs-'))
     cleanupDirectories.push(projectRoot)
     const runtimeRoot = path.join(projectRoot, 'runtime')
     const gateway = new DesktopSupervisorGateway(runtimeConfig(projectRoot, runtimeRoot), {

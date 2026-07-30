@@ -30,7 +30,7 @@ class WorkerJsonFormatter(logging.Formatter):
         payload: dict[str, Any] = {
             "timestamp": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
             "level": record.levelname.lower(),
-            "service": "geoforge-worker",
+            "service": "geo-agent-platform-worker",
             "logger": record.name,
             "message": sanitize_log_text(record.getMessage()),
         }

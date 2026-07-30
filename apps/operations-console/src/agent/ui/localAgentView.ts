@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本机 Agent 对话终端投影
+//   地理智能平台 - 本机 Agent 对话终端投影
 //
 //   文件:       localAgentView.ts
 //
@@ -15,6 +15,7 @@ import {
   type ConversationEntry,
 } from '@geo-agent-platform/conversation-presentation'
 import type { ConversationItem, RunStatus } from '@geo-agent-platform/shared-types'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 import type { LocalAgentSessionSnapshot } from '../application/localAgentSession.js'
 import {
@@ -154,7 +155,7 @@ function appendMessageEntry(
       ? entry.status === 'running' ? '◈ 正在思考' : '◇ 思考过程'
       : commentary
         ? '· 过程说明'
-        : '◆ GeoForge 结论'
+        : `◆ ${PRODUCT_CODENAME} 结论`
   const titleTone: AgentLineTone = user
     ? 'info'
     : reasoning || commentary

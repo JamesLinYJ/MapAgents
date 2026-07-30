@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-// GeoForge HTTP/WS 传输投影协议。
+// 平台 HTTP/WS 传输投影协议。
 import { z } from 'zod'
 import {
   conversationItemSchema,

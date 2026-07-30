@@ -14,6 +14,7 @@ import {
   workspaceBootstrapSnapshotSchema,
   wsControlCommandSchema,
 } from '@geo-agent-platform/shared-types'
+import { PLATFORM_DESKTOP_APP_ORIGIN } from '@geo-agent-platform/shared-types/product-identity'
 import { z } from 'zod'
 
 import {
@@ -145,7 +146,7 @@ export class DesktopControlGateway {
     connection.connecting = new Promise<ElectronWebSocket>((resolve, reject) => {
       const socket = new net.WebSocket(wsUrl.toString(), {
         headers: cookie ? { cookie } : {},
-        origin: 'geoforge://app',
+        origin: PLATFORM_DESKTOP_APP_ORIGIN,
       })
       const timer = setTimeout(() => {
         socket.close()

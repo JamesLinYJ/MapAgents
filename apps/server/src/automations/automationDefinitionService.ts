@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-// GeoForge Automation 定义、修订和发布服务。
+// 平台 Automation 定义、修订和发布服务。
 // 内置 JSON 与工作区草稿通过同一图编译器验证，发布后执行器固定消费修订快照。
 
 import type { SecurityServices } from '../security/routes.js'

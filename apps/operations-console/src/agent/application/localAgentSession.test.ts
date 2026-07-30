@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本机 Agent 会话控制器测试
+//   地理智能平台 - 本机 Agent 会话控制器测试
 //
 //   文件:       localAgentSession.test.ts
 //
@@ -178,8 +178,8 @@ function bootstrap() {
       user: {
         userId: 'platform_local_agent',
         subject: 'auth_local_agent',
-        email: 'agent@local-agent.geoforge.invalid',
-        displayName: 'GeoForge Local Agent',
+        email: 'agent@local-agent.geo-agent-platform.invalid',
+        displayName: 'Platform Local Agent',
         status: 'active',
         lastLoginAt: null,
         createdAt: '2026-07-27T00:00:00.000Z',

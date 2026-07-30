@@ -9,6 +9,8 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
+import os from 'node:os'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -46,7 +48,7 @@ describe('desktop IPC contracts', () => {
     '/api/../secrets',
     '/api/%2e%2e/secrets',
     '/api/v1/files\\..\\secret',
-    'C:\\Projects\\Newmap\\.env',
+    path.join(os.tmpdir(), 'geo-agent-platform-ipc-fixture', '.env'),
   ])('rejects untrusted API target %s', path => {
     expect(desktopApiOperationSchema.safeParse({
       method: 'GET',
@@ -298,7 +300,7 @@ describe('desktop IPC contracts', () => {
         workspaceName: '气象分析',
         sessionId: null,
         threadId: null,
-        projectFile: 'C:\\work\\demo.geoforge',
+        projectFile: 'C:\\work\\demo.platform',
       },
     }).success).toBe(false)
   })
@@ -373,7 +375,7 @@ describe('desktop IPC contracts', () => {
       method: 'POST',
       path: '/api/v1/admin/users/user_1',
       body: '{}',
-      headers: { 'x-geoforge-csrf': 'renderer-controlled' },
+      headers: { 'x-geo-agent-platform-csrf': 'renderer-controlled' },
     }).success).toBe(false)
   })
 

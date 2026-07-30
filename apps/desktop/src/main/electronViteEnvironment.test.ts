@@ -19,14 +19,14 @@ describe('applyDesktopMainEnvironment', () => {
 
     applyDesktopMainEnvironment({
       BOOTSTRAP_ADMIN_EMAIL: 'admin@example.com',
-      RUNTIME_ROOT: 'C:\\GeoForge\\runtime',
+      RUNTIME_ROOT: 'C:\\PlatformFixture\\runtime',
       DEEPSEEK_API_KEY: 'must-not-enter-desktop-build',
       BETTER_AUTH_SECRET: 'must-not-enter-desktop-build',
     }, target)
 
     expect(target).toMatchObject({
       BOOTSTRAP_ADMIN_EMAIL: 'admin@example.com',
-      RUNTIME_ROOT: 'C:\\GeoForge\\runtime',
+      RUNTIME_ROOT: 'C:\\PlatformFixture\\runtime',
     })
     expect(target.DEEPSEEK_API_KEY).toBeUndefined()
     expect(target.BETTER_AUTH_SECRET).toBeUndefined()

@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本地账户管理查询仓储
+//   地理智能平台 - 本地账户管理查询仓储
 //
 //   文件:       localAccountRepository.ts
 //
@@ -19,7 +19,7 @@ import { LOCAL_CONSOLE_EMAIL_DOMAIN } from '../../security/localConsolePrincipal
 
 export type { LocalManagedAccount } from '@geo-agent-platform/shared-types/local-operations'
 
-/** 汇总 Better Auth 身份与 GeoForge 权限投影；只读，不成为新的账户事实源。 */
+/** 汇总 Better Auth 身份与 平台 权限投影；只读，不成为新的账户事实源。 */
 export class LocalAccountRepository {
   constructor(private readonly db: Database) {}
 

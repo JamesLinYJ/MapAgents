@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本机 Agent 命令行契约
+//   地理智能平台 - 本机 Agent 命令行契约
 //
 //   文件:       localAgentCli.ts
 //
@@ -10,6 +10,7 @@
 // --------------------------------------------------------------------------
 
 import type { AgentExecutionMode } from '@geo-agent-platform/shared-types'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 import { z } from 'zod'
 
 import type { LocalAgentSession, LocalAgentSessionSnapshot } from '../application/localAgentSession.js'
@@ -182,7 +183,7 @@ export function formatLocalAgentCliResult(result: LocalAgentCliResult, json: boo
 
 export function localAgentHelpText(): string {
   return [
-    'GeoForge 本机 Agent',
+    `${PRODUCT_CODENAME} 本机 Agent`,
     '',
     '用法：',
     '  .\\dev.ps1 agent',

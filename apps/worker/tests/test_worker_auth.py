@@ -47,7 +47,7 @@ def _sign(tool_name: str, body: bytes, secret: str, *, iat: int | None = None, e
     encoded = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).rstrip(b"=").decode("ascii")
     sig = hmac.new(secret.encode("utf-8"), encoded.encode("utf-8"), hashlib.sha256).digest()
     sig_b64 = base64.urlsafe_b64encode(sig).rstrip(b"=").decode("ascii")
-    return f"GeoForge-Worker {encoded}.{sig_b64}"
+    return f"GeoAgentPlatform-Worker {encoded}.{sig_b64}"
 
 
 class NonceReplayTests(unittest.TestCase):

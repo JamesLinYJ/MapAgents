@@ -197,7 +197,7 @@ function safeMessage(error: unknown): string {
     return '本机监督器尚未初始化或运行文件缺失，请从本机运维台启动后台服务。'
   }
   if (/\b(?:EACCES|EPERM)\b/iu.test(message)) {
-    return '当前账户无权访问本机监督器，请检查 GeoForge 运维权限。'
+    return '当前账户无权访问本机监督器，请检查平台运维权限。'
   }
   if (/\bECONNREFUSED\b|named pipe|unix socket/iu.test(message)) {
     return '本机监督器尚未运行，请从本机运维台启动后台服务。'

@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本机 Agent WebSocket 客户端测试
+//   地理智能平台 - 本机 Agent WebSocket 客户端测试
 //
 //   文件:       localAgentClient.test.ts
 //
@@ -112,7 +112,7 @@ describe('LocalAgentClient', () => {
 
   it('requires a session cookie and normalizes only HTTP(S) endpoints', async () => {
     expect(localAgentWsUrl('https://example.test:8443/api?secret=no')).toBe('wss://example.test:8443/ws')
-    expect(() => localAgentWsUrl('file:///tmp/geoforge')).toThrow('http 或 https')
+    expect(() => localAgentWsUrl('file:///tmp/geo-agent-platform')).toThrow('http 或 https')
 
     await expect(LocalAgentClient.connect({
       appBaseUrl: 'http://127.0.0.1:1',

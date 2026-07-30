@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本机 Agent 活动指示器测试
+//   地理智能平台 - 本机 Agent 活动指示器测试
 //
 //   文件:       localAgentActivity.test.tsx
 //
@@ -15,7 +15,7 @@ import { ThemeProvider } from '@inkjs/ui'
 import { cleanup, render } from 'ink-testing-library'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { geoForgeConsoleTheme } from '../../localConsoleTheme.js'
+import { platformConsoleTheme } from '../../localConsoleTheme.js'
 import {
   AgentActivityIndicator,
   terminalMotionEnabled,
@@ -27,7 +27,7 @@ afterEach(() => cleanup())
 describe('AgentActivityIndicator', () => {
   it('animates only while terminal motion is enabled', async () => {
     const instance = render(
-      <ThemeProvider theme={geoForgeConsoleTheme}>
+      <ThemeProvider theme={platformConsoleTheme}>
         <AgentActivityIndicator
           activity={activity()}
           animationsEnabled
@@ -47,7 +47,7 @@ describe('AgentActivityIndicator', () => {
 
   it('keeps a stable labelled fallback when motion is reduced', async () => {
     const instance = render(
-      <ThemeProvider theme={geoForgeConsoleTheme}>
+      <ThemeProvider theme={platformConsoleTheme}>
         <AgentActivityIndicator
           activity={activity()}
           animationsEnabled={false}
@@ -67,7 +67,7 @@ describe('AgentActivityIndicator', () => {
     expect(terminalMotionEnabled({ CI: 'true', TERM: 'xterm-256color' })).toBe(false)
     expect(terminalMotionEnabled({ TERM: 'dumb' })).toBe(false)
     expect(terminalMotionEnabled({
-      GEOFORGE_REDUCED_MOTION: '1',
+      GEO_AGENT_PLATFORM_REDUCED_MOTION: '1',
       TERM: 'xterm-256color',
     })).toBe(false)
   })

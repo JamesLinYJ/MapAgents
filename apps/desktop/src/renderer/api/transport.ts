@@ -20,6 +20,9 @@
 // 真实网络连接由 Electron Main 持有，业务 API 只描述资源语义。
 
 import type { WsControlCommand, WsControlResponse } from '@geo-agent-platform/shared-types'
+import {
+  PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME,
+} from '@geo-agent-platform/shared-types/product-identity'
 
 import type {
   DesktopAuthProjection,
@@ -29,7 +32,7 @@ import { wsClient } from '../ws/client'
 import {
   API_UNAVAILABLE_MESSAGE,
   formatApiError,
-  GeoForgeTransportError,
+  PlatformTransportError,
   isApiUnavailableMessage,
 } from './errors'
 
@@ -62,7 +65,7 @@ export function formatSchemaValidationError(context: string, issues: SchemaParse
 
 // Renderer 只能通过受控资源协议引用图片、瓦片和下载目标；真实 API 地址和
 // 认证 Cookie 均由 Electron Main 持有。
-export const apiBaseUrl = 'geoforge-resource://api'
+export const apiBaseUrl = `${PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME}://api`
 
 installDesktopEventRelay()
 
@@ -111,12 +114,12 @@ export async function requestJson<T>(
   } catch (error) {
     const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new GeoForgeTransportError(
+      throw new PlatformTransportError(
         formatApiErrorMessage(`请求超时（${path}），请检查 API 服务是否响应正常。`, detail),
         { transport: 'http', code: 'timeout', cause: error },
       )
     }
-    throw new GeoForgeTransportError(
+    throw new PlatformTransportError(
       formatApiErrorMessage(`暂时无法连接分析服务，请确认本地 API 已启动（接口：${path}，传输：Electron Main）`, detail),
       { transport: 'http', code: 'unavailable', cause: error },
     )
@@ -178,12 +181,12 @@ export async function requestFormJson<T>(
   } catch (error) {
     const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new GeoForgeTransportError(
+      throw new PlatformTransportError(
         formatApiErrorMessage(`${failurePrefix}超时（接口：${path}）。`, detail),
         { transport: 'http', code: 'timeout', cause: error },
       )
     }
-    throw new GeoForgeTransportError(
+    throw new PlatformTransportError(
       formatApiErrorMessage(`${failurePrefix}，请确认本地 API 已启动（接口：${path}，传输：Electron Main）`, detail),
       { transport: 'http', code: 'unavailable', cause: error },
     )
@@ -238,8 +241,8 @@ export async function requestControl<T>(
           },
     }
   } catch (error) {
-    if (error instanceof GeoForgeTransportError) throw error
-    throw new GeoForgeTransportError(
+    if (error instanceof PlatformTransportError) throw error
+    throw new PlatformTransportError(
       formatApiErrorMessage(`WebSocket 命令 ${type} 发送失败。`, error instanceof Error ? error.message : String(error)),
       { transport: 'websocket', code: 'unavailable', cause: error },
     )
@@ -248,7 +251,7 @@ export async function requestControl<T>(
     const error = message.payload.error
     const detail = typeof error === 'object' && error && 'message' in error ? String(error.message) : 'WebSocket 命令失败'
     const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : 'command_failed'
-    throw new GeoForgeTransportError(detail, { transport: 'websocket', code })
+    throw new PlatformTransportError(detail, { transport: 'websocket', code })
   }
 
   const data = message.payload.data
@@ -286,10 +289,10 @@ async function extractErrorDetail(response: Response): Promise<string> {
   return text.trim() || response.statusText || `HTTP ${response.status}`
 }
 
-async function httpResponseError(response: Response): Promise<GeoForgeTransportError> {
+async function httpResponseError(response: Response): Promise<PlatformTransportError> {
   const detail = await extractErrorDetail(response)
   const message = formatHttpError(response, detail)
-  return new GeoForgeTransportError(message, {
+  return new PlatformTransportError(message, {
     transport: 'http',
     code: httpStatusCode(response.status),
     status: response.status,
@@ -321,12 +324,12 @@ export function requestDesktopDownload(
 }
 
 function desktopBridge() {
-  return typeof window === 'undefined' ? undefined : window.geoforgeDesktop
+  return typeof window === 'undefined' ? undefined : window.platformDesktop
 }
 
 export function requireDesktopBridge() {
   const bridge = desktopBridge()
-  if (!bridge) throw new Error('GeoForge 产品界面只能在 Electron 桌面应用中运行。')
+  if (!bridge) throw new Error('产品界面只能在 Electron 桌面应用中运行。')
   return bridge
 }
 

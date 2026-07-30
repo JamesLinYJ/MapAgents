@@ -19,7 +19,7 @@ import sys
 
 
 def configure_science_package_path(current_file: Path) -> Path:
-    repository_root = Path(os.environ.get("GEOFORGE_REPOSITORY_ROOT", "")).resolve() if os.environ.get("GEOFORGE_REPOSITORY_ROOT") else find_repository_root(current_file.resolve())
+    repository_root = Path(os.environ.get("GEO_AGENT_PLATFORM_REPOSITORY_ROOT", "")).resolve() if os.environ.get("GEO_AGENT_PLATFORM_REPOSITORY_ROOT") else find_repository_root(current_file.resolve())
     source_root = repository_root / "packages" / "gis-meteorology" / "src"
     if source_root.is_dir() and str(source_root) not in sys.path:
         sys.path.insert(0, str(source_root))
@@ -32,4 +32,4 @@ def find_repository_root(start: Path) -> Path:
     for parent in (start, *start.parents):
         if (parent / "package.json").is_file() and (parent / "packages").is_dir():
             return parent
-    raise RuntimeError("无法定位 GeoForge 仓库根目录；请设置 GEOFORGE_REPOSITORY_ROOT")
+    raise RuntimeError("无法定位 平台 仓库根目录；请设置 GEO_AGENT_PLATFORM_REPOSITORY_ROOT")

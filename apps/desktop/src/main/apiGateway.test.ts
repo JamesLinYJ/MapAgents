@@ -47,8 +47,8 @@ describe('DesktopApiGateway authorization', () => {
     const request = fetchMock.mock.calls[0]
     const headers = new Headers(request?.[1]?.headers)
     expect(headers.get('cookie')).toBe('better-auth.session_token=main-only-cookie')
-    expect(headers.get('x-geoforge-csrf')).toBe('main-only-csrf')
-    expect(headers.get('origin')).toBe('geoforge://app')
+    expect(headers.get('x-geo-agent-platform-csrf')).toBe('main-only-csrf')
+    expect(headers.get('origin')).toBe('geo-agent-platform://app')
     expect(auth.requireAuthorizationContext).toHaveBeenCalledOnce()
   })
 
@@ -65,7 +65,7 @@ describe('DesktopApiGateway authorization', () => {
 
     const request = fetchMock.mock.calls[0]
     const headers = new Headers(request?.[1]?.headers)
-    expect(headers.get('x-geoforge-csrf')).toBeNull()
+    expect(headers.get('x-geo-agent-platform-csrf')).toBeNull()
     expect(auth.requireAuthorizationContext).not.toHaveBeenCalled()
   })
 

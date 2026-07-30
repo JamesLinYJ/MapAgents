@@ -2,7 +2,7 @@
 //
 //   地理智能平台 - Electron Forge 跨版本 ZIP 打包器
 //
-//   文件:       geoForgeZipMaker.mjs
+//   文件:       desktopZipMaker.mjs
 //
 //   日期:       2026年07月30日
 //   作者:       OpenAI Codex
@@ -14,8 +14,8 @@ import { createWriteStream } from 'node:fs'
 import { mkdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 
-export class GeoForgeZipMaker extends MakerBase {
-  name = 'geoforge-zip'
+export class DesktopZipMaker extends MakerBase {
+  name = 'desktop-zip'
   defaultPlatforms = ['win32']
 
   isSupportedOnCurrentPlatform() {

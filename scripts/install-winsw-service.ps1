@@ -1,6 +1,6 @@
 # +-------------------------------------------------------------------------
 #
-#   GeoForge 地理智能平台 - WinSW 专用账户服务注册器
+#   地理智能平台 - WinSW 专用账户服务注册器
 #
 #   文件:       install-winsw-service.ps1
 #
@@ -18,7 +18,7 @@ param(
     [Parameter(Mandatory = $true)]
     [switch]$CredentialPrompt,
 
-    [string]$ServiceRoot = (Join-Path $env:ProgramData 'GeoForge\services')
+    [string]$ServiceRoot = (Join-Path $env:ProgramData 'GeoAgentPlatform\services')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -29,7 +29,7 @@ if (-not $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 }
 if (-not $CredentialPrompt) { throw '必须显式使用 -CredentialPrompt，以专用非管理员账户注册服务。' }
 
-$BaseName = "GeoForge$Service"
+$BaseName = "GeoAgentPlatform$Service"
 $Executable = [IO.Path]::GetFullPath((Join-Path $ServiceRoot "$BaseName\$BaseName.exe"))
 $Configuration = [IO.Path]::ChangeExtension($Executable, '.xml')
 if (-not (Test-Path -LiteralPath $Executable -PathType Leaf) -or -not (Test-Path -LiteralPath $Configuration -PathType Leaf)) {

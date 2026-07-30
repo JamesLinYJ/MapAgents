@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 监督器命令行路径投影测试
+//   地理智能平台 - 监督器命令行路径投影测试
 //
 //   文件:       cliRuntimePaths.test.ts
 //
@@ -20,10 +20,10 @@ describe('resolveOperationsCliPathInput', () => {
     const result = resolveOperationsCliPathInput({
       arguments: {},
       environment: {
-        GEOFORGE_ROOT: path.resolve('deploy-root'),
+        GEO_AGENT_PLATFORM_ROOT: path.resolve('deploy-root'),
         RUNTIME_ROOT: path.resolve('deploy-runtime'),
-        GEOFORGE_SUPERVISOR_TOKEN_FILE: path.resolve('secrets', 'supervisor.token'),
-        GEOFORGE_LOCAL_ROOT_SECRET_FILE: path.resolve('secrets', 'local-root.secret'),
+        GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE: path.resolve('secrets', 'supervisor.token'),
+        GEO_AGENT_PLATFORM_LOCAL_ROOT_SECRET_FILE: path.resolve('secrets', 'local-root.secret'),
       },
       defaultProjectRoot: path.resolve('fallback-root'),
       profile: 'production',
@@ -46,9 +46,9 @@ describe('resolveOperationsCliPathInput', () => {
         tokenFile: path.resolve('flag-token'),
       },
       environment: {
-        GEOFORGE_ROOT: path.resolve('env-root'),
+        GEO_AGENT_PLATFORM_ROOT: path.resolve('env-root'),
         RUNTIME_ROOT: path.resolve('env-runtime'),
-        GEOFORGE_SUPERVISOR_TOKEN_FILE: path.resolve('env-token'),
+        GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE: path.resolve('env-token'),
       },
       defaultProjectRoot: path.resolve('fallback-root'),
       profile: 'development',

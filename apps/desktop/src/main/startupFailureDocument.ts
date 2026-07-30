@@ -9,6 +9,11 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
+import {
+  PRODUCT_CODENAME,
+  PRODUCT_DESKTOP_NAME,
+} from '@geo-agent-platform/shared-types/product-identity'
+
 export function buildStartupFailureDocument(error: unknown): string {
   const message = escapeHtml(safeStartupMessage(error))
   return `<!doctype html>
@@ -17,7 +22,7 @@ export function buildStartupFailureDocument(error: unknown): string {
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>GeoForge 启动失败</title>
+  <title>${escapeHtml(PRODUCT_CODENAME)} 启动失败</title>
   <style>
     :root { color-scheme: light; font-family: "Segoe UI Variable", "Microsoft YaHei UI", sans-serif; }
     * { box-sizing: border-box; }
@@ -39,14 +44,14 @@ export function buildStartupFailureDocument(error: unknown): string {
   <main>
     <header>
       <span class="brand" aria-hidden="true">G</span>
-      <div><strong>GeoForge 地理智能工作台</strong><small>桌面启动诊断</small></div>
+      <div><strong>${escapeHtml(PRODUCT_DESKTOP_NAME)}</strong><small>桌面启动诊断</small></div>
     </header>
     <h1>工作台未能完成启动</h1>
     <p>桌面壳没有进入伪成功状态。请先修复以下配置或本机运行时问题，再重新启动。</p>
     <div class="error" role="alert">${message}</div>
     <ul>
       <li>从项目目录运行 <code>.\\dev.ps1 desktop</code>。</li>
-      <li>生产安装检查 <code>runtime-manifest.v1.json</code>；开发环境检查 <code>GEOFORGE_ROOT</code>。</li>
+      <li>生产安装检查 <code>runtime-manifest.v1.json</code>；开发环境检查 <code>GEO_AGENT_PLATFORM_ROOT</code>。</li>
       <li>确认本机 Supervisor 令牌、服务状态和系统日志。</li>
       <li>关闭本窗口不会停止已经运行的后台服务。</li>
     </ul>

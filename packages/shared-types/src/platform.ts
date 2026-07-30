@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-// GeoForge 平台资源协议：身份、会话、线程、运行与气象数据索引。
+// 平台资源协议：身份、会话、线程、运行与气象数据索引。
 import { z } from 'zod'
 import type { AgentRuntimeConfig } from './runtime.js'
 import { agentStateSchema, runStatusSchema, toolValueRefSchema } from './core.js'

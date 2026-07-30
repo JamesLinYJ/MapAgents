@@ -31,7 +31,7 @@ PROJECT_ROOT = BASE_DIR.parent
 DEFAULT_SHAPEFILE = str(PROJECT_ROOT / "前期培训" / "前期培训" / "任务一" /
                          "shapefile" / "浙江省县边界.shp")
 
-WORK_DIR = Path(os.environ.get("GEOFORGE_THIRD_PARTY_WORK_DIR", str(BASE_DIR / ".cache")))
+WORK_DIR = Path(os.environ.get("GEO_AGENT_PLATFORM_THIRD_PARTY_WORK_DIR", str(BASE_DIR / ".cache")))
 WORK_DIR.mkdir(parents=True, exist_ok=True)
 
 SHP_CACHE_DIR = WORK_DIR / "shapefiles"

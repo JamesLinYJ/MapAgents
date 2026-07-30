@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
-// GeoForge WS 直接工具执行命令。
+// 平台 WS 直接工具执行命令。
 // 管理员调试入口和 Automation 工具节点共享 executePersistedTool；这里只拥有权限、运行创建和终态。
 
 import { z } from 'zod'

@@ -10,7 +10,7 @@
 #   协助:       OpenAI Codex:GPT-5.6 Sol
 # --------------------------------------------------------------------------
 
-# GeoForge 的跨平台开发语义由 TypeScript 启动器统一拥有；本文件只保留 Bash 进程入口。
+# 平台的跨系统开发语义由 TypeScript 启动器统一拥有；本文件只保留 Bash 进程入口。
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"

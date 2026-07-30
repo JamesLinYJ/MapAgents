@@ -13,6 +13,10 @@ import { electronClient } from '@better-auth/electron/client'
 import { ensureSecretFile } from '@geo-agent-platform/operations-supervisor'
 import { authMeSchema } from '@geo-agent-platform/shared-types'
 import type { PlatformRole } from '@geo-agent-platform/shared-types'
+import {
+  PLATFORM_DESKTOP_APP_ORIGIN,
+  PLATFORM_DESKTOP_AUTH_PROTOCOL_SCHEME,
+} from '@geo-agent-platform/shared-types/product-identity'
 import { createAuthClient } from 'better-auth/client'
 import type { BetterAuthClientPlugin } from 'better-auth'
 import { net } from 'electron'
@@ -193,7 +197,7 @@ export class DesktopAuthGateway {
   private async refreshProjection(): Promise<DesktopAuthProjection> {
     const headers = new Headers({
       accept: 'application/json',
-      origin: 'geoforge://app',
+      origin: PLATFORM_DESKTOP_APP_ORIGIN,
     })
     const cookie = this.cookieHeader()
     if (cookie) headers.set('cookie', cookie)
@@ -262,7 +266,7 @@ export class DesktopAuthGateway {
 function createDesktopAuthClient(apiBaseUrl: string) {
   const plugin = electronClient({
     signInURL: `${apiBaseUrl}/desktop/sign-in`,
-    protocol: 'com.geoforge.desktop',
+    protocol: PLATFORM_DESKTOP_AUTH_PROTOCOL_SCHEME,
     storage: new SecureAuthStorage(),
     userImageProxy: { enabled: false },
   })

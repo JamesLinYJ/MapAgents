@@ -10,6 +10,7 @@
 // --------------------------------------------------------------------------
 
 import { createHash, createHmac, randomUUID } from 'node:crypto'
+import { PLATFORM_WORKER_AUTHORIZATION_SCHEME } from '@geo-agent-platform/shared-types/product-identity'
 import { z } from 'zod'
 
 const WORKER_TOKEN_TTL_SECONDS = 60
@@ -39,5 +40,5 @@ export function signWorkerRequest(secret: string, toolName: string, body: string
   }
   const encodedPayload = Buffer.from(JSON.stringify(workerTokenPayloadSchema.parse(payload)), 'utf8').toString('base64url')
   const signature = createHmac('sha256', secret).update(encodedPayload).digest('base64url')
-  return `GeoForge-Worker ${encodedPayload}.${signature}`
+  return `${PLATFORM_WORKER_AUTHORIZATION_SCHEME} ${encodedPayload}.${signature}`
 }

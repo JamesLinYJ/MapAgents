@@ -49,7 +49,7 @@ export interface OpenAIAgentsRuntimeOptions {
 
 // OpenAIAgentsRuntime
 //
-// Runner 是单次 run 内编排的唯一状态机；本类只投影 SDK 事件并维护 GeoForge
+// Runner 是单次 run 内编排的唯一状态机；本类只投影 SDK 事件并维护 平台
 // 内容载荷存储、审批边界和通用工具/Automation 入口。
 export class OpenAIAgentsRuntime {
   private readonly abortControllers = new Map<string, AbortController>()

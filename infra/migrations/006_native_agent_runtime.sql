@@ -1,4 +1,4 @@
--- GeoForge 原生运行时配置迁移
+-- 地理智能平台 原生运行时配置迁移
 -- 文件:       006_native_agent_runtime.sql
 -- 日期: 2026年07月29日
 -- 作者:       JamesLinYJ

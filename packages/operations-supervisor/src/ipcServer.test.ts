@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 本机监督 IPC 集成测试
+//   地理智能平台 - 本机监督 IPC 集成测试
 //
 //   文件:       ipcServer.test.ts
 //
@@ -30,7 +30,7 @@ afterEach(async () => {
 
 describe('OperationsIpcServer', () => {
   it('rejects a wrong token and returns a flushed shutdown result for an authenticated client', async () => {
-    const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'geoforge-ipc-'))
+    const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-ipc-'))
     cleanupPaths.push(projectRoot)
     const paths = await resolveOperationsPaths({ projectRoot, profile: 'development' })
     const logger = pino({ enabled: false })

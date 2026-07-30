@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 中文本机 Agent 终端测试
+//   地理智能平台 - 中文本机 Agent 终端测试
 //
 //   文件:       localAgentConsole.test.tsx
 //
@@ -10,6 +10,8 @@
 // --------------------------------------------------------------------------
 
 import { EventEmitter } from 'node:events'
+import os from 'node:os'
+import path from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
 
 import {
@@ -20,12 +22,13 @@ import {
   type AnalysisRun,
   type DecisionRequest,
 } from '@geo-agent-platform/shared-types'
+import { PRODUCT_CODENAME_UPPER } from '@geo-agent-platform/shared-types/product-identity'
 import { ThemeProvider } from '@inkjs/ui'
 import { cleanup, render } from 'ink-testing-library'
 import stringWidth from 'string-width'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { geoForgeConsoleTheme } from '../../localConsoleTheme.js'
+import { platformConsoleTheme } from '../../localConsoleTheme.js'
 import type { TerminalMouseEvent, TerminalMouseSource } from '../../terminalMouse.js'
 import type { LocalAgentSessionSnapshot } from '../application/localAgentSession.js'
 import {
@@ -38,7 +41,7 @@ afterEach(() => cleanup())
 
 describe('LocalAgentConsoleApp', () => {
   it.each([
-    [80, 'GEOFORGE'],
+    [80, PRODUCT_CODENAME_UPPER],
     [100, '输入消息'],
     [140, '运行检查器'],
     [180, '本次运行尚未生成工作流'],
@@ -388,7 +391,7 @@ class TestMouseSource implements TerminalMouseSource {
 
 function renderConsole(session: LocalAgentConsoleSession, mouse?: TerminalMouseSource) {
   return render(
-    <ThemeProvider theme={geoForgeConsoleTheme}>
+    <ThemeProvider theme={platformConsoleTheme}>
       <LocalAgentConsoleApp session={session} identity={identity} {...(mouse ? { mouse } : {})} />
     </ThemeProvider>,
   )
@@ -437,8 +440,8 @@ function bootstrapWithWeatherTool() {
       user: {
         userId: 'platform_local_agent',
         subject: 'auth_local_agent',
-        email: 'agent@local-agent.geoforge.invalid',
-        displayName: 'GeoForge Local Agent',
+        email: 'agent@local-agent.geo-agent-platform.invalid',
+        displayName: 'Platform Local Agent',
         status: 'active',
         lastLoginAt: null,
         createdAt: '2026-07-27T00:00:00.000Z',
@@ -553,7 +556,7 @@ function mouseEvent(kind: TerminalMouseEvent['kind'], column: number, row: numbe
 
 const identity: LocalAgentConsoleIdentity = {
   version: '0.1.0',
-  projectRoot: 'C:\\Projects\\Newmap',
+  projectRoot: path.join(os.tmpdir(), 'geo-agent-platform-console-fixture'),
   osUser: 'James',
   hostname: '杭州开发机',
   keyVersion: 'v1',

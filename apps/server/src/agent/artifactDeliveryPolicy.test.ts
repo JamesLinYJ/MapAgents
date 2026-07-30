@@ -181,7 +181,7 @@ describe('Artifact delivery authorization', () => {
 })
 
 async function createFixture() {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'geoforge-artifact-authorization-'))
+  const root = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-artifact-authorization-'))
   const store = createTestPersistenceFacade(root)
   await store.initialize()
   const session = await store.createSession({

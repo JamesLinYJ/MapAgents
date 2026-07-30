@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-// GeoForge 内置 Automation 注册表。
+// 平台 内置 Automation 注册表。
 // 一个 JSON 文件对应一个完整图定义；加载失败只形成诊断，不阻断其它定义和服务启动。
 
 import { readdir, readFile } from 'node:fs/promises'

@@ -25,7 +25,7 @@ afterEach(async () => {
 
 describe('DurableJsonlStore', () => {
   it('serializes records for the same file in declaration order', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'geoforge-jsonl-order-'))
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-jsonl-order-'))
     roots.push(root)
     const filePath = path.join(root, 'events.jsonl')
     const store = new DurableJsonlStore()
@@ -42,7 +42,7 @@ describe('DurableJsonlStore', () => {
   })
 
   it('poisons only the failed file queue and never continues after a missing write', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'geoforge-jsonl-failure-'))
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-jsonl-failure-'))
     roots.push(root)
     const failedPath = path.join(root, 'failed.jsonl')
     const healthyPath = path.join(root, 'healthy.jsonl')

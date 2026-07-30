@@ -60,7 +60,7 @@ const TEST_CSRF = 'csrf_test'
 const TEST_AUTH: AuthContext = {
   userId: 'user_test',
   subject: 'auth_user_test',
-  email: 'tester@geoforge.local',
+  email: 'tester@geo-agent-platform.local',
   displayName: '测试用户',
   authSessionId: 'session_test',
   authSessionExpiresAt: '2099-01-01T00:00:00.000Z',

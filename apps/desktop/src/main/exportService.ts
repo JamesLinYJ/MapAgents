@@ -22,6 +22,8 @@ import {
   desktopExportAuditRequestSchema,
   desktopExportAuditResultSchema,
   desktopExportSourceSchema,
+  PLATFORM_DESKTOP_APP_ORIGIN,
+  PRODUCT_CODENAME,
   type DesktopExportSource,
 } from '@geo-agent-platform/shared-types'
 
@@ -56,7 +58,7 @@ export class DesktopExportService {
     }
     const exportedFiles: DesktopExportResult['exportedFiles'] = []
     const createdOutputPaths: string[] = []
-    const staging = await mkdtemp(path.join(os.tmpdir(), 'geoforge-export-'))
+    const staging = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-export-'))
     try {
       const [source, mapImage] = await Promise.all([
         this.fetchExportSource(request),
@@ -222,13 +224,13 @@ export class DesktopExportService {
 
   private async fetchApi(relativePath: string, init?: RequestInit): Promise<Response> {
     const headers = new Headers(init?.headers)
-    headers.set('origin', 'geoforge://app')
+    headers.set('origin', PLATFORM_DESKTOP_APP_ORIGIN)
     const cookie = this.auth.cookieHeader()
     if (cookie) headers.set('cookie', cookie)
     const method = (init?.method ?? 'GET').toUpperCase()
     if (method !== 'GET' && method !== 'HEAD') {
       headers.set(
-        'x-geoforge-csrf',
+        'x-geo-agent-platform-csrf',
         this.auth.requireAuthorizationContext().csrfToken,
       )
     }
@@ -256,7 +258,7 @@ export type DesktopReportPrinter = (
 async function captureMap(window: BrowserWindow) {
   const rawViewport = await window.webContents.executeJavaScript(`
     (() => {
-      const element = document.querySelector('[data-geoforge-export-map]')
+      const element = document.querySelector('[data-geo-agent-platform-export-map]')
       if (!(element instanceof HTMLElement)) return null
       const rectangle = element.getBoundingClientRect()
       if (rectangle.width < 2 || rectangle.height < 2) return null
@@ -307,7 +309,7 @@ async function printDesktopReport(
   source: DesktopExportSource,
   mapPreview: Buffer,
 ): Promise<Buffer> {
-  const reportDirectory = await mkdtemp(path.join(os.tmpdir(), 'geoforge-report-'))
+  const reportDirectory = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-report-'))
   const reportPath = path.join(reportDirectory, 'report.html')
   const reportWindow = new BrowserWindow({
     show: false,
@@ -393,7 +395,7 @@ export function buildDesktopReportHtml(
 <body>
   <header>
     <h1>${title}</h1>
-    <div class="meta">GeoForge 可核验分析报告 · 工作区 ${escapeHtml(source.workspaceId)} · 对话 ${escapeHtml(source.threadId)}</div>
+    <div class="meta">${escapeHtml(PRODUCT_CODENAME)} 可核验分析报告 · 工作区 ${escapeHtml(source.workspaceId)} · 对话 ${escapeHtml(source.threadId)}</div>
   </header>
   <section>
     <h2>当前地图</h2>
@@ -403,7 +405,7 @@ export function buildDesktopReportHtml(
     <h2>对话与结论</h2>
     <pre>${transcript}</pre>
   </section>
-  <footer>本报告由 GeoForge 桌面端从服务器权威对话与地图场景生成，不包含工作台界面或认证信息。</footer>
+  <footer>本报告由 ${escapeHtml(PRODUCT_CODENAME)} 桌面端从服务器权威对话与地图场景生成，不包含工作台界面或认证信息。</footer>
 </body>
 </html>`
 }
@@ -445,8 +447,8 @@ async function chooseOutputPaths(
   const primaryExtension = extensionForKind(primaryKind)
   const choice = await dialog.showSaveDialog(window, {
     title: request.formats.length > 1
-      ? '保存 GeoForge 成果（其他格式将保存到同一目录）'
-      : '保存 GeoForge 成果',
+      ? `保存 ${PRODUCT_CODENAME} 成果（其他格式将保存到同一目录）`
+      : `保存 ${PRODUCT_CODENAME} 成果`,
     defaultPath: `${safeTitle}${primaryExtension}`,
     filters: [{
       name: labelForKind(primaryKind),
@@ -574,7 +576,7 @@ function sanitizeFileName(value: string): string {
   const normalized = sanitized
     .replace(/[.\s]+$/gu, '')
     .slice(0, 120)
-    || 'GeoForge-成果'
+    || `${PRODUCT_CODENAME}-成果`
   const stem = path.parse(normalized).name
   return /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/iu.test(stem)
     ? `_${normalized}`

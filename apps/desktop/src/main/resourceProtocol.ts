@@ -10,6 +10,11 @@
 // --------------------------------------------------------------------------
 
 import { net, protocol } from 'electron'
+import {
+  PLATFORM_DESKTOP_APP_ORIGIN,
+  PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME,
+  PRODUCT_CODENAME,
+} from '@geo-agent-platform/shared-types/product-identity'
 
 import type { DesktopAuthGateway } from './authGateway.js'
 import {
@@ -23,7 +28,7 @@ export async function installResourceProtocol(
   apiBaseUrl: string,
   auth: DesktopAuthGateway,
 ): Promise<void> {
-  await protocol.handle('geoforge-resource', async (request) => {
+  await protocol.handle(PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME, async (request) => {
     if (request.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
     const url = new URL(request.url)
     if (url.username || url.password || url.hash) {
@@ -47,7 +52,7 @@ async function fetchAuthenticatedApiResource(
   }
   const headers = new Headers({
     accept: '*/*',
-    origin: 'geoforge://app',
+    origin: PLATFORM_DESKTOP_APP_ORIGIN,
   })
   const cookie = auth.cookieHeader()
   if (cookie) headers.set('cookie', cookie)
@@ -77,7 +82,7 @@ async function fetchBasemapTile(pathname: string): Promise<Response> {
   const response = await net.fetch(`https://tile.openstreetmap.org/${z}/${x}/${y}.png`, {
     headers: {
       accept: 'image/png',
-      'user-agent': 'GeoForge Desktop/1.0 (local GIS workbench)',
+      'user-agent': `${PRODUCT_CODENAME} Desktop/1.0 (local GIS workbench)`,
     },
   })
   return withResourceCors(response)

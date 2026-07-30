@@ -1,7 +1,7 @@
 {
-  "title": "GeoForge 架构设计与演进分析报告",
+  "title": "地理智能平台 架构设计与演进分析报告",
   "subtitle": "面向技术交流的完整版本｜设计动机、关键链路、权衡与门禁精简建议",
-  "projectName": "GeoForge",
+  "projectName": "地理智能平台",
   "version": "0.1.0",
   "generatedAt": "2026-07-30T14:00:00+08:00",
   "sections": [
@@ -11,7 +11,7 @@
       "content": [
         {
           "kind": "paragraph",
-          "data": "GeoForge 是一个 Windows 优先、中文优先的桌面 GIS Agent 平台。它不是普通地图查看器，也不是给模型套一层聊天界面，而是把地图交互、Agent 编排、科学计算、结构化事实和本机运维组合成一个可恢复、可审计、可继续扩展的工作台。"
+          "data": "地理智能平台 是一个 Windows 优先、中文优先的桌面 GIS Agent 平台。它不是普通地图查看器，也不是给模型套一层聊天界面，而是把地图交互、Agent 编排、科学计算、结构化事实和本机运维组合成一个可恢复、可审计、可继续扩展的工作台。"
         },
         {
           "kind": "paragraph",
@@ -224,7 +224,7 @@
       "content": [
         {
           "kind": "paragraph",
-          "data": "GeoForge 按能力责任分层，而不是简单按“前端、后端、数据库”分三层。这样做是因为 Agent 运行、科学计算和本机运维都有独立生命周期，不能被压缩成普通 CRUD。"
+          "data": "地理智能平台 按能力责任分层，而不是简单按“前端、后端、数据库”分三层。这样做是因为 Agent 运行、科学计算和本机运维都有独立生命周期，不能被压缩成普通 CRUD。"
         },
         {
           "kind": "table",
@@ -308,7 +308,7 @@
       "content": [
         {
           "kind": "paragraph",
-          "data": "GeoForge Desktop 不是把网页直接套入 Electron。Main 被设计为本机能力代理，Renderer 只是低权限驾驶舱。它可以表达“上传、分析、导出、打开工作区”等业务意图，但不能任意读取文件、提取凭据或访问系统网络。"
+          "data": "地理智能平台 Desktop 不是把网页直接套入 Electron。Main 被设计为本机能力代理，Renderer 只是低权限驾驶舱。它可以表达“上传、分析、导出、打开工作区”等业务意图，但不能任意读取文件、提取凭据或访问系统网络。"
         },
         {
           "kind": "sub_heading",
@@ -357,7 +357,7 @@
           "kind": "code_block",
           "data": {
             "language": "text",
-            "code": "React Feature\n  → requestJson / requestControl\n  → window.geoforgeDesktop\n  → Preload schema\n  → IPC\n  → Main Gateway\n  → Cookie / CSRF / Origin\n  → Node API 或 /ws\n  → Main 限制响应体并校验\n  → Preload 再校验\n  → Renderer 业务 schema\n  → Store / Query / Component"
+            "code": "React Feature\n  → requestJson / requestControl\n  → window.platformDesktop\n  → Preload schema\n  → IPC\n  → Main Gateway\n  → Cookie / CSRF / Origin\n  → Node API 或 /ws\n  → Main 限制响应体并校验\n  → Preload 再校验\n  → Renderer 业务 schema\n  → Store / Query / Component"
           }
         },
         {
@@ -576,7 +576,7 @@
       "content": [
         {
           "kind": "paragraph",
-          "data": "GeoForge 把模型判断与平台事实分开。OpenAI Agents SDK Runner 负责单次运行内部的模型循环、工具、多轮、审批中断、handoff 和流；GeoForge Runtime 负责 Thread、Run、权限、工具策略、Artifact、valueRef、持久化、恢复和 UI 投影。"
+          "data": "地理智能平台 把模型判断与平台事实分开。OpenAI Agents SDK Runner 负责单次运行内部的模型循环、工具、多轮、审批中断、handoff 和流；地理智能平台 Runtime 负责 Thread、Run、权限、工具策略、Artifact、valueRef、持久化、恢复和 UI 投影。"
         },
         {
           "kind": "sub_heading",
@@ -608,7 +608,7 @@
                 "采用成熟状态机，避免自研隐式循环"
               ],
               [
-                "GeoForge Runtime",
+                "地理智能平台 Runtime",
                 "平台 Run、Thread、权限、工具策略、恢复、审计和投影",
                 "这些是平台事实，不应交给模型供应商会话"
               ],
@@ -1202,7 +1202,7 @@
       "content": [
         {
           "kind": "paragraph",
-          "data": "GeoForge 采用本机原生服务拓扑。Supervisor 只管理 infra、worker、api 三个固定后台服务；Electron 是用户应用，不进入后台状态机。窗口关闭不会停止后台服务，只有显式 shutdown 才按反向依赖顺序关闭。"
+          "data": "地理智能平台 采用本机原生服务拓扑。Supervisor 只管理 infra、worker、api 三个固定后台服务；Electron 是用户应用，不进入后台状态机。窗口关闭不会停止后台服务，只有显式 shutdown 才按反向依赖顺序关闭。"
         },
         {
           "kind": "sub_heading",
@@ -1248,7 +1248,7 @@
             "rows": [
               [
                 "Windows 日常开发",
-                "GeoForge.ps1 / dev.ps1 desktop",
+                "desktop.ps1 / dev.ps1 desktop",
                 "选择 Node 24、启动 Supervisor、立即进入桌面"
               ],
               [
@@ -1297,7 +1297,7 @@
       "content": [
         {
           "kind": "paragraph",
-          "data": "GeoForge 的测试不只检查函数返回值，还用架构测试证明边界没有回流。测试文件数量只能反映覆盖面，不能等同于当前全部通过；本报告生成阶段重点核对测试结构，没有把未重跑的全量套件描述成绿色。"
+          "data": "地理智能平台 的测试不只检查函数返回值，还用架构测试证明边界没有回流。测试文件数量只能反映覆盖面，不能等同于当前全部通过；本报告生成阶段重点核对测试结构，没有把未重跑的全量套件描述成绿色。"
         },
         {
           "kind": "sub_heading",
@@ -1407,7 +1407,7 @@
       "content": [
         {
           "kind": "paragraph",
-          "data": "GeoForge 的架构选择围绕五个优先级：用户结果真实、权限与资源隔离、结构化事实一致、失败可观察、能力可扩展。性能和局部简洁排在这些不变量之后。"
+          "data": "地理智能平台 的架构选择围绕五个优先级：用户结果真实、权限与资源隔离、结构化事实一致、失败可观察、能力可扩展。性能和局部简洁排在这些不变量之后。"
         },
         {
           "kind": "sub_heading",
@@ -1443,7 +1443,7 @@
                 "必须维护统一授权和错误语义"
               ],
               [
-                "Runner + GeoForge Runtime",
+                "Runner + 地理智能平台 Runtime",
                 "复用成熟 Agent 状态机，平台事实仍可控",
                 "checkpoint、投影和兼容性较复杂"
               ],
@@ -1669,7 +1669,7 @@
           "data": {
             "ordered": true,
             "items": [
-              "定位：GeoForge 是持续执行 GIS/气象任务的桌面 Agent 平台，不只是地图或聊天框。",
+              "定位：地理智能平台 是持续执行 GIS/气象任务的桌面 Agent 平台，不只是地图或聊天框。",
               "六个角色：桌面是驾驶舱，Node 是调度中心，Python 是计算实验室，数据库是账本，对象存储是仓库，Supervisor 是运维台。",
               "唯一事实源：Run、Thread、审批和 MapScene 只认服务端结构化事实，UI 与文件只是投影或内容载荷。",
               "扩展方式：新命令、工具、Worker 能力和地图 source 通过 registry 与 schema 接入，不修改中央 switch。",
@@ -1683,7 +1683,7 @@
         },
         {
           "kind": "paragraph",
-          "data": "GeoForge 当前是一个平台型本机桌面架构。最有价值的三个决定是：结构化事实只认 PostgreSQL/PostGIS；Agent 编排与 Python 科学计算分开；Desktop 与 CLI 共用服务端 Runtime 和对话投影。下一阶段的目标可以概括为一句话：关键边界足够硬，普通扩展足够轻。"
+          "data": "地理智能平台 当前是一个平台型本机桌面架构。最有价值的三个决定是：结构化事实只认 PostgreSQL/PostGIS；Agent 编排与 Python 科学计算分开；Desktop 与 CLI 共用服务端 Runtime 和对话投影。下一阶段的目标可以概括为一句话：关键边界足够硬，普通扩展足够轻。"
         }
       ]
     }

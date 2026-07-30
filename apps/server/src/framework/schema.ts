@@ -98,7 +98,7 @@ export function ensureToolSchemas(tool: {
 // Zod v4 内置 JSON Schema → Zod 转换。
 // runtime 模式下 optional 字段仅允许省略；agents 模式下额外接受 null。
 // JSON Schema 规范：未设置 additionalProperties 时默认允许额外字段。
-// GeoForge 约定相反：未设置时默认拒绝未识别参数。
+// 平台 约定相反：未设置时默认拒绝未识别参数。
 export function parametersFromJsonSchema(schema: Record<string, unknown>): ToolParameterSchema {
   const result = z.fromJSONSchema(schema)
   if (!(result instanceof z.ZodObject)) throw new Error('工具 parameters 顶层必须是 object')

@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   GeoForge 地理智能平台 - 中文本地运维台测试
+//   地理智能平台 - 中文本地运维台测试
 //
 //   文件:       localConsole.test.tsx
 //
@@ -19,13 +19,14 @@ import { stripVTControlCharacters } from 'node:util'
 
 import type { OperationsClient } from '@geo-agent-platform/operations-supervisor/client'
 import type { OperationsLogEntry, OperationsSnapshot } from '@geo-agent-platform/shared-types/operations'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 import { ThemeProvider } from '@inkjs/ui'
 import { cleanup, render } from 'ink-testing-library'
 import stringWidth from 'string-width'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { LocalConsoleApp } from './localConsole.js'
-import { geoForgeConsoleTheme } from './localConsoleTheme.js'
+import { platformConsoleTheme } from './localConsoleTheme.js'
 import type { LocalConsoleDataPlane, LocalConsoleOptions } from './localConsoleTypes.js'
 import type { TerminalMouseEvent, TerminalMouseSource } from './terminalMouse.js'
 
@@ -33,7 +34,7 @@ afterEach(() => cleanup())
 
 describe('LocalConsoleApp', () => {
   it.each([
-    [80, 'GeoForge 本地运维台'],
+    [80, `${PRODUCT_CODENAME} 本地运维台`],
     [100, '杭州基础设施'],
     [140, '服务检查器'],
     [180, '实时日志'],
@@ -90,7 +91,7 @@ describe('LocalConsoleApp', () => {
     const client = createClient()
     const options = createOptions(client, vi.fn().mockRejectedValue(new Error('database offline')))
     const instance = render(
-      <ThemeProvider theme={geoForgeConsoleTheme}><LocalConsoleApp options={options} /></ThemeProvider>,
+      <ThemeProvider theme={platformConsoleTheme}><LocalConsoleApp options={options} /></ThemeProvider>,
     )
     resize(instance.stdout, 140, 36)
     await vi.waitFor(() => expect(instance.lastFrame()).toContain('杭州基础设施'))
@@ -98,7 +99,7 @@ describe('LocalConsoleApp', () => {
     instance.stdin.write('3')
 
     await vi.waitFor(() => expect(instance.lastFrame()).toContain('账户数据不可用：database offline'))
-    expect(instance.lastFrame()).toContain('GeoForge 本地运维台')
+    expect(instance.lastFrame()).toContain(`${PRODUCT_CODENAME} 本地运维台`)
   })
 
   it('q detaches the client without issuing a shutdown operation', async () => {
@@ -163,7 +164,7 @@ function renderConsole(
   openDataPlane: LocalConsoleOptions['openDataPlane'] = async () => createDataPlane(),
 ) {
   return render(
-    <ThemeProvider theme={geoForgeConsoleTheme}>
+    <ThemeProvider theme={platformConsoleTheme}>
       <LocalConsoleApp options={createOptions(client, openDataPlane)} {...(mouse ? { mouse } : {})} />
     </ThemeProvider>,
   )

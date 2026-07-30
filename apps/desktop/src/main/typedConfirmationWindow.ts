@@ -90,7 +90,7 @@ export function parseConfirmationNavigation(
     return null
   }
   if (
-    url.protocol !== 'geoforge-confirm:'
+    url.protocol !== 'geo-agent-platform-confirm:'
     || url.pathname !== `/${nonce}`
     || (url.hostname !== 'submit' && url.hostname !== 'cancel')
   ) {
@@ -115,7 +115,7 @@ export function confirmationDocumentUrl(
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; form-action geoforge-confirm:">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; form-action geo-agent-platform-confirm:">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(input.title)}</title>
   <style>
@@ -137,7 +137,7 @@ export function confirmationDocumentUrl(
     <h1>${escapeHtml(input.title)}</h1>
     <p>${escapeHtml(input.message)}</p>
     <p class="detail">${escapeHtml(input.detail)}</p>
-    <form action="geoforge-confirm://submit/${escapeHtml(nonce)}" method="get">
+    <form action="geo-agent-platform-confirm://submit/${escapeHtml(nonce)}" method="get">
       <label>请输入“${expected}”确认
         <input name="confirmation" type="text" required autocomplete="off" pattern="${expected}" autofocus>
       </label>
@@ -145,7 +145,7 @@ export function confirmationDocumentUrl(
         <button class="danger" type="submit">停止全部并退出</button>
       </div>
     </form>
-    <form action="geoforge-confirm://cancel/${escapeHtml(nonce)}" method="get">
+    <form action="geo-agent-platform-confirm://cancel/${escapeHtml(nonce)}" method="get">
       <div class="actions"><button type="submit">取消</button></div>
     </form>
   </main>

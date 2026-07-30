@@ -12,6 +12,10 @@
 import { app } from 'electron'
 import path from 'node:path'
 import { z } from 'zod'
+import {
+  PLATFORM_TECHNICAL_ID,
+  PRODUCT_CODENAME,
+} from '@geo-agent-platform/shared-types/product-identity'
 
 import {
   applyControlledRuntimeEnvironment,
@@ -82,7 +86,7 @@ export function resolveDesktopRuntimeConfig(
   })
   const supervisorTokenFile = productionValues?.supervisorTokenFile ?? absolutePathSchema.parse(
     path.resolve(
-      environment.GEOFORGE_SUPERVISOR_TOKEN_FILE?.trim()
+      environment.GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE?.trim()
         || path.join(runtimeRoot, 'ops', 'supervisor.token'),
     ),
   )
@@ -104,8 +108,8 @@ export function resolveDesktopAutoAuthConfig(input: {
   apiBaseUrl: string
 }): DesktopAutoAuthConfig | null {
   const enabled = parseBoolean(
-    input.environment.GEOFORGE_DESKTOP_AUTO_AUTH,
-    'GEOFORGE_DESKTOP_AUTO_AUTH',
+    input.environment.GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH,
+    'GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH',
     input.profile === 'development',
   )
   if (!enabled) return null
@@ -121,17 +125,18 @@ export function resolveDesktopAutoAuthConfig(input: {
     input.environment.BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase(),
   )
   const email = z.string().email().max(320).parse(
-    (input.environment.GEOFORGE_DESKTOP_AUTO_AUTH_EMAIL ?? bootstrapEmail).trim().toLowerCase(),
+    (input.environment.GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_EMAIL ?? bootstrapEmail).trim().toLowerCase(),
   )
   if (email !== bootstrapEmail) {
     throw new Error('自动认证账户必须与 BOOTSTRAP_ADMIN_EMAIL 一致，权限仍由服务端 RBAC 投影。')
   }
 
   const displayName = z.string().trim().min(1).max(160).parse(
-    input.environment.GEOFORGE_DESKTOP_AUTO_AUTH_NAME ?? 'GeoForge 本机演示管理员',
+    input.environment.GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_NAME
+      ?? `${PRODUCT_CODENAME} 本机演示管理员`,
   )
   const credentialFile = absolutePathSchema.parse(path.resolve(
-    input.environment.GEOFORGE_DESKTOP_AUTO_AUTH_SECRET_FILE?.trim()
+    input.environment.GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_SECRET_FILE?.trim()
       || path.join(input.runtimeRoot, 'desktop', 'auto-auth.secret'),
   ))
   const allowAccountCreation = parseBoolean(
@@ -146,7 +151,7 @@ function resolveDevelopmentProjectRoot(
   environment: NodeJS.ProcessEnv,
   applicationPath: string,
 ): string {
-  const configured = environment.GEOFORGE_ROOT?.trim()
+  const configured = environment.GEO_AGENT_PLATFORM_ROOT?.trim()
   if (configured) return absolutePathSchema.parse(path.resolve(configured))
   return absolutePathSchema.parse(path.resolve(applicationPath, '..', '..'))
 }
@@ -185,15 +190,19 @@ export function defaultDesktopRuntimeManifestPath(
     if (!programData || !path.win32.isAbsolute(programData)) {
       throw new Error('生产桌面环境缺少有效的 Windows ProgramData 系统目录。')
     }
-    return path.win32.join(programData, 'GeoForge', DESKTOP_RUNTIME_MANIFEST_FILENAME)
+    return path.win32.join(programData, PLATFORM_TECHNICAL_ID, DESKTOP_RUNTIME_MANIFEST_FILENAME)
   }
   if (platform === 'linux') {
-    return path.posix.join('/etc/geoforge', DESKTOP_RUNTIME_MANIFEST_FILENAME)
+    return path.posix.join('/etc/geo-agent-platform', DESKTOP_RUNTIME_MANIFEST_FILENAME)
   }
   if (platform === 'darwin') {
-    return path.posix.join('/Library/Application Support/GeoForge', DESKTOP_RUNTIME_MANIFEST_FILENAME)
+    return path.posix.join(
+      '/Library/Application Support',
+      PLATFORM_TECHNICAL_ID,
+      DESKTOP_RUNTIME_MANIFEST_FILENAME,
+    )
   }
-  throw new Error(`GeoForge Desktop 不支持当前生产平台：${platform}`)
+  throw new Error(`${PRODUCT_CODENAME} Desktop 不支持当前生产平台：${platform}`)
 }
 
 function parsePort(value: string | undefined): number | null {

@@ -6,19 +6,19 @@
 
 1920×1080 工作台：
 
-![GeoForge 桌面 GIS 工作台 1920×1080](artifacts/desktop-acceptance/desktop-1920x1080.png)
+![地理智能平台 桌面 GIS 工作台 1920×1080](artifacts/desktop-acceptance/desktop-1920x1080.png)
 
 1440×900 紧凑布局：
 
-![GeoForge 桌面 GIS 工作台 1440×900](artifacts/desktop-acceptance/desktop-1440x900.png)
+![地理智能平台 桌面 GIS 工作台 1440×900](artifacts/desktop-acceptance/desktop-1440x900.png)
 
 1366×768、Windows 150% 缩放：
 
-![GeoForge 桌面 GIS 工作台 1366×768 150% 缩放](artifacts/desktop-acceptance/desktop-1366x768-scale-150.png)
+![地理智能平台 桌面 GIS 工作台 1366×768 150% 缩放](artifacts/desktop-acceptance/desktop-1366x768-scale-150.png)
 
 离线启动与自动认证恢复状态：
 
-![GeoForge 桌面离线启动与自动认证恢复状态](artifacts/desktop-acceptance/desktop-auto-auth-offline.png)
+![地理智能平台 桌面离线启动与自动认证恢复状态](artifacts/desktop-acceptance/desktop-auto-auth-offline.png)
 
 其它分辨率、文件哈希和验收说明见 [桌面视觉验收材料](artifacts/desktop-acceptance/README.md)。
 
@@ -47,7 +47,7 @@ HTTP 只保留 `/health`、文件/图层上传替换、artifact 元数据/GeoJSO
 首次运行建议安装 `.node-version` 指定的 Node.js 24 LTS（当前为 24.14.0）；项目同时支持 Node.js 22.13 及以上的 Node 22 LTS，以及 Node.js 24 及后续版本。Node 23 不在当前 Vitest 依赖声明的支持范围内。复制 `.env.example` 为 `.env` 并执行 `npm install`。Supervisor 只管理 `infra`、`worker` 和 `api` 三个后台服务；Electron 是本地交互应用，不作为后台服务监督。
 
 ```powershell
-.\GeoForge.ps1
+.\desktop.ps1
 .\dev.ps1 desktop
 .\dev.ps1
 .\dev.ps1 restart -Service api
@@ -61,9 +61,9 @@ HTTP 只保留 `/health`、文件/图层上传替换、artifact 元数据/GeoJSO
 .\dev.ps1 stop
 ```
 
-`GeoForge.ps1` 是面向日常使用和演示的一键入口：它按 `package.json` 的引擎范围选择已安装的 Node 22 LTS 或 Node 24 以上版本，复用 `dev.ps1 desktop` 装配本机安全配置、启动 Supervisor，并立即进入桌面工作台；Renderer 不等待后端才挂载，三项原生后台服务会在旁路恢复。也可以使用 `npm run desktop:windows`、`npm run dev:windows:status` 和 `npm run dev:windows:stop`。关闭桌面窗口不会停止后台服务；使用 `.\dev.ps1 shutdown` 才会停止三项后台服务并关闭 Supervisor。
+`desktop.ps1` 是面向日常使用和演示的一键入口：它按 `package.json` 的引擎范围选择已安装的 Node 22 LTS 或 Node 24 以上版本，复用 `dev.ps1 desktop` 装配本机安全配置、启动 Supervisor，并立即进入桌面工作台；Renderer 不等待后端才挂载，三项原生后台服务会在旁路恢复。也可以使用 `npm run desktop:windows`、`npm run dev:windows:status` 和 `npm run dev:windows:stop`。关闭桌面窗口不会停止后台服务；使用 `.\dev.ps1 shutdown` 才会停止三项后台服务并关闭 Supervisor。
 
-`agent` 会打开无需输入平台账号密码的本机 Agent 终端。它使用操作系统 ACL 保护的本机根密钥建立短期、仅 loopback 可用的保留服务主体，并复用主 API 的 Agent Runner、工作流、审批和会话事实源。使用说明见 [GeoForge 本机 Agent CLI](docs/operations/local-agent-cli.md)。
+`agent` 会打开无需输入平台账号密码的本机 Agent 终端。它使用操作系统 ACL 保护的本机根密钥建立短期、仅 loopback 可用的保留服务主体，并复用主 API 的 Agent Runner、工作流、审批和会话事实源。使用说明见 [地理智能平台 本机 Agent CLI](docs/operations/local-agent-cli.md)。
 
 ### Bash / macOS / Linux
 
@@ -78,7 +78,7 @@ npm install
 
 PostgreSQL/PostGIS、Python 科学计算 Worker 与 Node Server 全部作为宿主机原生进程运行，无需容器运行时。矢量瓦片由 Node 调用 PostGIS 的固定 MVT 函数生成，GeoTIFF 栅格瓦片由 TypeScript 服务使用 GeoTIFF.js 与 sharp 本地渲染，不再运行独立地图服务。桌面 Renderer 会立即挂载；Supervisor 和后端在旁路恢复，因此后端尚未就绪时仍能进入离线工作台并查看本机系统日志。`./dev.sh desktop` 与 `.\dev.ps1 desktop` 不会以同步等待后端的方式阻塞 Electron 窗口。
 
-主要配置为 `API_HOST`、`API_PORT`、`WORKER_URL`、`DATABASE_URL`、`RUNTIME_ROOT`、`ENABLED_TOOL_PROVIDERS` 和 `DEVELOPER_TOOL_ALLOWED_ROOTS`。安装到仓库的 Provider 不会自动启用。`geo-platform-developer-tools` 只用于维护 GeoForge GIS/气象 Agent，必须显式配置允许访问的绝对根目录；缺失时 Provider 会在 DebugPage 显示不可用原因。
+主要配置为 `API_HOST`、`API_PORT`、`WORKER_URL`、`DATABASE_URL`、`RUNTIME_ROOT`、`ENABLED_TOOL_PROVIDERS` 和 `DEVELOPER_TOOL_ALLOWED_ROOTS`。安装到仓库的 Provider 不会自动启用。`geo-platform-developer-tools` 只用于维护 地理智能平台 GIS/气象 Agent，必须显式配置允许访问的绝对根目录；缺失时 Provider 会在 DebugPage 显示不可用原因。
 
 开发数据结构变更后使用 `npm run reset:conversations` 显式清空旧会话、上传、artifact 与对象文件。该命令保留 PostGIS 图层、工具目录和运行配置，不做旧 payload 兼容回填。
 

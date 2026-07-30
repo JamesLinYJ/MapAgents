@@ -10,6 +10,7 @@
 // --------------------------------------------------------------------------
 
 import { Span, Trace } from '@openai/agents'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 import { describe, expect, it } from 'vitest'
 
 import type { RunEvent } from '../schemas/types.js'
@@ -26,7 +27,7 @@ describe('LocalAgentTracing', () => {
     try {
       const trace = new Trace({
         traceId: 'trace_0123456789abcdef0123456789abcdef',
-        name: 'GeoForge Agent Workflow',
+        name: `${PRODUCT_CODENAME} Agent Workflow`,
         groupId: 'thread_trace',
         metadata: { runId: 'run_trace', threadId: 'thread_trace' },
       }, tracing)
@@ -74,7 +75,7 @@ describe('LocalAgentTracing', () => {
     }
   })
 
-  it('ignores traces that do not declare a registered GeoForge runId', async () => {
+  it('ignores traces that do not declare a registered platform runId', async () => {
     const tracing = new LocalAgentTracing()
     tracing.install()
     const events: RunEvent[] = []

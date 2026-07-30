@@ -13,7 +13,7 @@ import type { DesktopBridge } from '../../contracts/desktopBridge.js'
 
 declare global {
   interface Window {
-    readonly geoforgeDesktop?: DesktopBridge
+    readonly platformDesktop?: DesktopBridge
   }
 }
 
