@@ -14,7 +14,6 @@
       "tags": ["plan", "system"],
       "isReadOnly": true,
       "isDestructive": false,
-      "planModeAccess": "control",
       "agentResultMode": "return_direct",
       "jsonSchema": {
         "type": "object",
@@ -42,12 +41,11 @@
     {
       "name": "enter_plan_mode",
       "label": "进入计划模式",
-      "description": "进入规划阶段，只允许显式声明的目录、元数据发现与计划控制工具，不能提前执行待审批的业务步骤。",
+      "description": "进入规划阶段；可以使用无副作用读取形成计划，写入和外部影响仍需先结束规划阶段。",
       "group": "系统",
       "tags": ["plan", "system"],
       "isReadOnly": true,
       "isDestructive": false,
-      "planModeAccess": "control",
       "jsonSchema": {
         "type": "object",
         "properties": { "reason": { "type": "string", "description": "进入计划模式的原因" } },
@@ -57,13 +55,11 @@
     {
       "name": "submit_agent_workflow",
       "label": "提交智能体工作流",
-      "description": "提交结构化智能体工作流并请求用户批准；批准后在同一运行中开始执行。",
+      "description": "记录结构化智能体工作流、结束规划阶段并在同一运行中继续执行。",
       "group": "系统",
       "tags": ["plan", "system"],
       "isReadOnly": true,
       "isDestructive": false,
-      "planModeAccess": "control",
-      "requiresApproval": true,
       "jsonSchema": {
         "type": "object",
         "properties": {
@@ -102,13 +98,11 @@
     {
       "name": "revise_agent_workflow",
       "label": "调整智能体工作流",
-      "description": "根据新证据、工具失败或用户引导提交完整修订，并再次请求用户批准后才执行新路径。",
+      "description": "根据新证据、工具失败或用户引导更新工作流进度投影。",
       "group": "系统",
       "tags": ["plan", "workflow", "system"],
       "isReadOnly": true,
       "isDestructive": false,
-      "planModeAccess": "control",
-      "requiresApproval": true,
       "jsonSchema": {
         "type": "object",
         "properties": {

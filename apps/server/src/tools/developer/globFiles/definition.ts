@@ -22,7 +22,6 @@ export const globFilesTool: ToolDef = {
   tags: ['developer', 'file', 'search'],
   isReadOnly: true,
   isDestructive: false,
-  planModeAccess: 'discovery',
   jsonSchema: {
     type: 'object',
     properties: {

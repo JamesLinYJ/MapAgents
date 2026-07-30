@@ -74,7 +74,6 @@ export function createMeteorologyTools(env: Env): ToolDef[] {
     },
     listMeteorologicalFiles,
     [],
-    { planModeAccess: 'discovery' },
   ),
   ...createRadarMeteorologyTools(deps),
   ...createDatasetMeteorologyTools(deps),

@@ -121,7 +121,7 @@ export function buildRuntimeSdkSandboxIntegration(
   })
   return {
     capabilities: [
-      new ExecutionGatedCapability(
+      new SkillLoadingCapability(
         createSkillsCapability,
         options.executionGate ?? new RunToolConcurrencyGate(),
       ),
@@ -198,10 +198,10 @@ export async function createRuntimeSdkIntegration(
   }
 }
 
-// Capability 是 SDK 的公开扩展边界。Skill 的 load_skill 工具由 Capability
-// 在 sandbox 绑定后生成，因此要在这一层同时包住可见性与执行，而不是在
-// Agent 装配后修改 SDK 内部对象。这样运行中切入计划模式也会立即失效。
-class ExecutionGatedCapability extends Capability {
+// load_skill 只把已配置的 Skill 快照物化到当前 run 沙箱，不访问外部系统，
+// 也不授予 Skill 后续工具权限。它应在规划和执行阶段保持可用；Skill 内真正
+// 产生副作用的操作仍由平台工具、MCP 与沙箱各自的执行边界决定。
+class SkillLoadingCapability extends Capability {
   readonly type: string
   private modelName = ''
 
@@ -226,7 +226,7 @@ class ExecutionGatedCapability extends Capability {
   }
 
   override tools(): Tool<unknown>[] {
-    return gateSdkExtensionTools(this.boundCapability().tools(), this.executionGate)
+    return serializeSkillLoading(this.boundCapability().tools(), this.executionGate)
   }
 
   override processManifest(
@@ -262,27 +262,16 @@ class ExecutionGatedCapability extends Capability {
   }
 }
 
-function gateSdkExtensionTools<TContext>(
+function serializeSkillLoading<TContext>(
   tools: Tool<TContext>[],
   executionGate: RunToolConcurrencyGate,
 ): Tool<TContext>[] {
   return tools.map(tool => {
     if (tool.type !== 'function') return tool
-    const isEnabled: typeof tool.isEnabled = async (runContext, agent) => {
-      const context = runContext.context as unknown as Partial<AgentsExecutionContext>
-      const enabled = typeof context.isSdkExtensionEnabled === 'function'
-        && context.isSdkExtensionEnabled()
-      if (!enabled) return false
-      return tool.isEnabled(runContext, agent)
-    }
     const invoke: typeof tool.invoke = async (runContext, input, details) => {
-      const context = runContext.context as unknown as Partial<AgentsExecutionContext>
-      const enabled = typeof context.isSdkExtensionEnabled === 'function'
-        && context.isSdkExtensionEnabled()
-      if (!enabled) throw new Error(`当前规划或结构化工作流边界禁止调用 SDK Skill 工具 '${tool.name}'。`)
       return executionGate.run('exclusive', () => tool.invoke(runContext, input, details))
     }
-    return { ...tool, isEnabled, invoke }
+    return { ...tool, invoke }
   })
 }
 

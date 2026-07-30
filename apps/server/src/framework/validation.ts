@@ -26,7 +26,6 @@ export function validateToolDefinition(tool: ToolDef): void {
     if (typeof tool.handler !== 'function') {
         throw new Error(`工具 "${tool.name}" 缺少 handler`);
     }
-    validatePlanModeAccess(tool, tool.name);
     validateJsonSchema(jsonSchema, `${tool.name}.jsonSchema`);
 }
 export function validateToolProvider(provider: ToolProvider): void {
@@ -69,7 +68,6 @@ function validateManifestParity(manifestTool: ToolManifestEntry, runtimeTool: To
         'tags',
         'executionSurfaces',
         'agentResultMode',
-        'planModeAccess',
         'jsonSchema',
     ];
     for (const field of fields) {
@@ -99,16 +97,7 @@ function validateManifest(manifest: ToolManifest): void {
         if (tool.executionSurfaces?.length === 0) {
             throw new Error(`Provider "${manifest.id}" 的工具 "${tool.name}" executionSurfaces 不能为空`);
         }
-        validatePlanModeAccess(tool, `${manifest.id}.${tool.name}`);
         validateJsonSchema(tool.jsonSchema, `${manifest.id}.${tool.name}.jsonSchema`);
-    }
-}
-function validatePlanModeAccess(
-    tool: Pick<ToolManifestEntry, 'isReadOnly' | 'isDestructive' | 'planModeAccess'>,
-    field: string,
-): void {
-    if (tool.planModeAccess && (!tool.isReadOnly || tool.isDestructive)) {
-        throw new Error(`${field}.planModeAccess 只能授予无破坏性的只读工具`);
     }
 }
 function validateJsonSchema(schema: Record<string, unknown>, field: string): void {

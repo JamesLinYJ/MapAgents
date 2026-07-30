@@ -53,6 +53,7 @@ describe('RunToolConcurrencyGate', () => {
       requiresApproval: false,
     }
     expect(toolExecutionLane(safe, false)).toBe('shared')
+    expect(toolExecutionLane({ ...safe, parallelSafe: undefined }, false)).toBe('shared')
     expect(toolExecutionLane({ ...safe, parallelSafe: false }, false)).toBe('exclusive')
     expect(toolExecutionLane({ ...safe, isReadOnly: false }, false)).toBe('exclusive')
     expect(toolExecutionLane({ ...safe, isDestructive: true }, false)).toBe('exclusive')

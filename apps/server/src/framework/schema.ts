@@ -16,7 +16,6 @@ export type ToolParameterSchema = z.ZodObject
 
 const toolExecutionSurfaceSchema = z.enum(['agent', 'automation', 'debug'])
 const agentToolResultModeSchema = z.enum(['continue', 'return_direct'])
-const toolPlanModeAccessSchema = z.enum(['discovery', 'control'])
 
 export const toolManifestSchema = z.object({
   id: z.string().min(1),
@@ -36,11 +35,10 @@ export const toolManifestSchema = z.object({
     tags: z.array(z.string()),
     isReadOnly: z.boolean(),
     isDestructive: z.boolean(),
-    parallelSafe: z.boolean().default(false),
+    parallelSafe: z.boolean().optional(),
     requiresApproval: z.boolean().default(false),
     executionSurfaces: z.array(toolExecutionSurfaceSchema).min(1).optional(),
     agentResultMode: agentToolResultModeSchema.optional(),
-    planModeAccess: toolPlanModeAccessSchema.optional(),
     jsonSchema: z.record(z.string(), z.unknown()),
   })).min(1),
 })
@@ -66,11 +64,10 @@ export function parseToolManifest(value: unknown): ToolManifest {
       tags: tool.tags,
       isReadOnly: tool.isReadOnly,
       isDestructive: tool.isDestructive,
-      parallelSafe: tool.parallelSafe,
+      ...(tool.parallelSafe === undefined ? {} : { parallelSafe: tool.parallelSafe }),
       requiresApproval: tool.requiresApproval,
       ...(tool.executionSurfaces ? { executionSurfaces: tool.executionSurfaces } : {}),
       ...(tool.agentResultMode ? { agentResultMode: tool.agentResultMode } : {}),
-      ...(tool.planModeAccess ? { planModeAccess: tool.planModeAccess } : {}),
       jsonSchema: tool.jsonSchema,
     })),
   }

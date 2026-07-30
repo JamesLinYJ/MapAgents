@@ -57,9 +57,9 @@ describe('agentWorkflowState', () => {
     expect(findRunnableAgentWorkflowStep(afterB, invocation('tool_c'))?.stepId).toBe('c')
   })
 
-  it('matches approved argument scope and sub-agent ownership before claiming a step', () => {
+  it('matches workflow identity and ownership without treating predicted arguments as authorization', () => {
     const workflow = createAgentWorkflow({
-      goal: '按批准范围执行',
+      goal: '按工作流身份执行',
       steps: [{
         ...step('inspect', 'inspect_dataset'),
         args: { datasetId: 'dataset_1', options: { variable: 'QPF' } },
@@ -70,15 +70,7 @@ describe('agentWorkflowState', () => {
       }],
     })
 
-    expect(findRunnableAgentWorkflowStep(workflow, invocation('inspect_dataset', {
-      datasetId: 'dataset_1',
-      options: { variable: 'QPF', level: 0 },
-      traceId: 'trace_1',
-    }))?.stepId).toBe('inspect')
-    expect(findRunnableAgentWorkflowStep(workflow, invocation('inspect_dataset', {
-      datasetId: 'dataset_2',
-      options: { variable: 'QPF' },
-    }))).toBeNull()
+    expect(findRunnableAgentWorkflowStep(workflow, invocation('inspect_dataset'))?.stepId).toBe('inspect')
 
     const inspected = completeAgentWorkflowStep(
       startAgentWorkflowStep(workflow, { stepId: 'inspect' }),
@@ -197,6 +189,6 @@ function step(stepId: string, toolName: string, dependsOn: string[] = []) {
   }
 }
 
-function invocation(toolName: string, args: Record<string, unknown> = {}) {
-  return { toolName, args }
+function invocation(toolName: string) {
+  return { toolName }
 }

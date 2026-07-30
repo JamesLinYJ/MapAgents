@@ -51,7 +51,7 @@ export async function persistToolExecutionResult(
   await store.mutateRunState(runId, state => ({
     toolValueRefs: dedupeValueRefs([...state.toolValueRefs, ...refs]),
     artifacts: dedupeArtifacts([...state.artifacts, ...artifacts]),
-    ...agentWorkflowControlState(result.payload, state.agentWorkflow),
+    ...agentWorkflowControlState(result.payload, state.agentWorkflow, state.todos),
     ...clarificationControlState(result.payload, state.decisions),
     ...todoControlState(result.payload),
     toolResults: [...state.toolResults, {
@@ -85,20 +85,46 @@ export async function persistToolExecutionResult(
 function agentWorkflowControlState(
   payload: Record<string, unknown>,
   current: AgentWorkflow | null,
+  currentTodos: TodoItem[],
 ): Partial<{
   planMode: boolean
   agentWorkflow: AgentWorkflow
+  todos: TodoItem[]
 }> {
-  const updates: Partial<{ planMode: boolean; agentWorkflow: AgentWorkflow }> = {}
+  const updates: Partial<{ planMode: boolean; agentWorkflow: AgentWorkflow; todos: TodoItem[] }> = {}
   if (typeof payload.planMode === 'boolean') updates.planMode = payload.planMode
   if (isRecord(payload.agentWorkflowDraft)) {
-    updates.agentWorkflow = createAgentWorkflow(payload.agentWorkflowDraft)
+    const workflow = createAgentWorkflow(payload.agentWorkflowDraft)
+    updates.agentWorkflow = workflow
+    updates.todos = projectWorkflowTodos(workflow, currentTodos)
   }
   if (isRecord(payload.agentWorkflowRevision)) {
     if (!current) throw new Error('当前运行没有可以调整的智能体工作流。')
-    updates.agentWorkflow = reviseAgentWorkflow(current, payload.agentWorkflowRevision)
+    const workflow = reviseAgentWorkflow(current, payload.agentWorkflowRevision)
+    updates.agentWorkflow = workflow
+    updates.todos = projectWorkflowTodos(workflow, currentTodos)
   }
   return updates
+}
+
+function projectWorkflowTodos(workflow: AgentWorkflow, currentTodos: TodoItem[]): TodoItem[] {
+  const existingByStep = new Map(currentTodos
+    .filter(todo => todo.stepId)
+    .map(todo => [todo.stepId as string, todo]))
+  const independentTodos = currentTodos.filter(todo => !todo.stepId)
+  const workflowTodos = workflow.steps.map(step => {
+    const existing = existingByStep.get(step.stepId)
+    return {
+      todoId: existing?.todoId ?? makeId('todo'),
+      title: step.title,
+      status: step.status === 'skipped' ? 'completed' as const : step.status,
+      description: step.reason,
+      activeForm: step.status === 'running' ? `正在${step.title}` : null,
+      ownerAgentId: step.ownerAgentId,
+      stepId: step.stepId,
+    }
+  })
+  return [...independentTodos, ...workflowTodos]
 }
 
 // 澄清是单次 run 的显式终止原因，不等于退出计划模式。

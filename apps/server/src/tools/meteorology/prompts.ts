@@ -109,7 +109,7 @@ export const METEOROLOGY_TOOL_PROMPTS: Record<string, string> = {
 使用规则：
 - dataset_ref 必须来自已检查数据集，interpretation_ref 必须来自 interpret_meteorological_dataset。
 - 不能用元数据摘要或手写长文本替代 interpretation_ref。
-- 这是报告生成动作，应按审批敏感工具处理。
+- 报告写入当前 run 的可回收 Artifact 存储，不额外请求审批；不得覆盖用户原文件。
 - 报告事实必须来自数据集检查、统计、渲染和模型解读引用，不要补写未验证结论。`,
 
   meteorological_nowcast_report: `用于从一条已经完成的短临自动化运行生成确定性 DOCX 报告。
@@ -118,7 +118,7 @@ export const METEOROLOGY_TOOL_PROMPTS: Record<string, string> = {
 - 先调用 list_automation_runs，再调用 read_automation_run，automation_run_ref 只能使用后者返回的 automation_run_output valueRef。
 - 本工具直接读取自动化输出中的全部时次统计、诊断、移动信息和关联地图产物，不需要也不接受单帧数据集或模型解读。
 - 峰值、代表时次和 36 帧明细由报告生成器确定性计算；不要先手工抄写或改写数值。
-- 这是文件生成动作，应按审批敏感工具处理。`,
+- 报告写入当前 run 的可回收 Artifact 存储，不额外请求审批；不得覆盖自动化输入或既有产物。`,
 
   define_rainfall_risk_thresholds: `用于保存短时强降水风险区划图使用的阈值和调色板。
 

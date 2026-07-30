@@ -68,7 +68,6 @@ export function findRunnableAgentWorkflowStep(
   workflow: AgentWorkflow,
   invocation: {
     toolName: string
-    args: Record<string, unknown>
     ownerAgentId?: string | null
   },
   excludedStepIds: ReadonlySet<string> = new Set(),
@@ -82,19 +81,9 @@ export function findRunnableAgentWorkflowStep(
     step.status === 'pending'
     && step.toolName === invocation.toolName
     && step.ownerAgentId === (invocation.ownerAgentId ?? 'supervisor')
-    && plannedArgumentsMatch(step.args, invocation.args)
     && !excludedStepIds.has(step.stepId)
     && step.dependsOn.every(dependency => completed.has(dependency))
   )) ?? null
-}
-
-export function plannedArgumentsMatch(
-  planned: Record<string, unknown>,
-  actual: Record<string, unknown>,
-): boolean {
-  return Object.entries(planned).every(([name, expected]) => (
-    Object.hasOwn(actual, name) && plannedValueMatches(expected, actual[name])
-  ))
 }
 
 export function startAgentWorkflowStep(
@@ -219,21 +208,6 @@ function sameExecutionContract(
     && previous.ownerAgentId === next.ownerAgentId
     && isDeepStrictEqual(previous.args, next.args)
     && isDeepStrictEqual(previous.dependsOn, next.dependsOn)
-}
-
-function plannedValueMatches(expected: unknown, actual: unknown): boolean {
-  if (Array.isArray(expected)) return isDeepStrictEqual(expected, actual)
-  if (isRecord(expected)) {
-    if (!isRecord(actual)) return false
-    return Object.entries(expected).every(([name, value]) => (
-      Object.hasOwn(actual, name) && plannedValueMatches(value, actual[name])
-    ))
-  }
-  return isDeepStrictEqual(expected, actual)
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function updateStep(

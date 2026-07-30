@@ -159,14 +159,14 @@ describe('system prompt', () => {
     expect(prompt).toContain('当前工具注册表、执行能力目录、Automation 清单和参数 Schema 是能力契约')
   })
 
-  it('asks for the rejection reason without discovery or policy bypasses', () => {
+  it('keeps tool rejection scoped to the rejected side effect', () => {
     const prompt = buildSystemPrompt(defaultRuntimeConfig(), null, '', '', '')
-    const rejection = approvalRejectionMessage('submit_agent_workflow')
+    const rejection = approvalRejectionMessage('write_file')
 
-    expect(prompt).toContain('不要先调用其它发现或业务工具')
+    expect(prompt).toContain('如果用户拒绝有副作用的工具，不要重试同一个动作')
     expect(prompt).toContain('不得建议绕过 Automation、审批、权限、真实数据')
     expect(REQUEST_CLARIFICATION_PROMPT).toContain('用户退回工作流但没有提供原因')
-    expect(rejection).toContain('请立即调用 request_clarification')
+    expect(rejection).toContain('不要重试同一个动作')
   })
 
   it('describes exact planning parameters and subagent permission boundaries', () => {

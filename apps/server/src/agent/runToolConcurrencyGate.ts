@@ -25,7 +25,7 @@ interface WaitingLease {
 }
 
 // SDK 决定同一轮哪些 function call 并发启动；本闸门只实施平台安全约束。
-// 显式安全的只读调用共享通道，其它调用互斥。独占子智能体内部的工具调用
+// 无副作用只读调用默认共享通道，可用 parallelSafe=false 显式退出；其它调用互斥。独占子智能体内部的工具调用
 // 使用同一租约内的串行队列，既避免重入死锁，也不向其它调用释放独占权。
 export class RunToolConcurrencyGate {
   private readonly context = new AsyncLocalStorage<ExecutionLease>()
@@ -115,7 +115,7 @@ export function toolExecutionLane(
   definition: Pick<ToolDef, 'parallelSafe' | 'isReadOnly' | 'isDestructive' | 'requiresApproval'>,
   approvalRequired: boolean,
 ): ToolExecutionLane {
-  return definition.parallelSafe === true
+  return definition.parallelSafe !== false
     && definition.isReadOnly
     && !definition.isDestructive
     && definition.requiresApproval !== true

@@ -51,7 +51,6 @@ export const developerManifest: ToolManifest = {
       isReadOnly: tool.isReadOnly,
       isDestructive: tool.isDestructive,
       requiresApproval: tool.requiresApproval ?? false,
-      ...(tool.planModeAccess ? { planModeAccess: tool.planModeAccess } : {}),
       jsonSchema,
     }
   }),

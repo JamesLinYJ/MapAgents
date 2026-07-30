@@ -58,7 +58,7 @@ describe('formatToolResultForModel', () => {
     expect(JSON.stringify(formatted)).not.toContain('lead_059.nc')
   })
 
-  it('keeps the planning terminal contract visible in summarized tool results', () => {
+  it('keeps non-blocking planning guidance visible in summarized tool results', () => {
     const result: ToolResult = {
       message: '计划发现完成',
       payload: { rows: Array.from({ length: 100 }, (_, index) => ({ index, value: 'x'.repeat(50) })) },
@@ -71,12 +71,12 @@ describe('formatToolResultForModel', () => {
     const formatted = JSON.parse(formatToolResultForModel(result, 400, true)) as Record<string, unknown>
 
     expect(formatted).toMatchObject({
-      planningContract: {
+      planningContext: {
         status: 'active',
-        terminalTools: ['request_clarification', 'submit_agent_workflow'],
+        actions: ['继续无副作用读取', 'request_clarification', 'submit_agent_workflow', '直接说明计划'],
       },
     })
-    expect(JSON.stringify(formatted)).toContain('普通 assistant 正文不能结束规划')
+    expect(JSON.stringify(formatted)).toContain('计划本身不会替代有副作用工具各自的审批')
   })
 
   it('keeps GeoJSON feature properties while removing oversized coordinates', () => {
@@ -366,54 +366,53 @@ describe('ToolExecutionCoordinator', () => {
     expect(failedTool).toBe('inspect_dataset')
   })
 
-  it('blocks unmarked read-only business tools before a plan is approved', async () => {
+  it('derives planning access from the tool read/write contract', async () => {
     const { coordinator } = coordinatorHarness(testProvider(), true)
-
-    expect(coordinator.isToolEnabled('inspect_dataset')).toBe(false)
-    await expect(coordinator.executeDirect('inspect_dataset', { datasetId: 'dataset_1' }))
-      .rejects.toThrow("计划模式禁止执行未声明为规划发现或计划控制的工具 'inspect_dataset'")
-  })
-
-  it('allows only explicitly declared discovery tools while planning', async () => {
-    const provider = testProvider()
-    const base = provider.tools()[0]
-    if (!base) throw new Error('测试工具缺失')
-    const discoveryTool = { ...base, planModeAccess: 'discovery' as const }
-    const { coordinator } = coordinatorHarness({
-      ...provider,
-      manifest: {
-        ...provider.manifest,
-        tools: [{
-          ...provider.manifest.tools[0]!,
-          planModeAccess: 'discovery',
-        }],
-      },
-      tools: () => [discoveryTool],
-    }, true)
 
     expect(coordinator.isToolEnabled('inspect_dataset')).toBe(true)
     await expect(coordinator.executeDirect('inspect_dataset', { datasetId: 'dataset_1' }))
       .resolves.toMatchObject({ message: '检查完成' })
   })
 
-  it('hides discovery tools after an unexplained workflow rejection', () => {
+  it('blocks write tools while planning without a second allowlist', async () => {
     const provider = testProvider()
     const base = provider.tools()[0]
     if (!base) throw new Error('测试工具缺失')
-    const discoveryTool = { ...base, planModeAccess: 'discovery' as const }
+    const writeTool = { ...base, isReadOnly: false }
+    const { coordinator } = coordinatorHarness({
+      ...provider,
+      manifest: {
+        ...provider.manifest,
+        tools: [{
+          ...provider.manifest.tools[0]!,
+          isReadOnly: false,
+        }],
+      },
+      tools: () => [writeTool],
+    }, true)
+
+    expect(coordinator.isToolEnabled('inspect_dataset')).toBe(false)
+    await expect(coordinator.executeDirect('inspect_dataset', { datasetId: 'dataset_1' }))
+      .rejects.toThrow("计划模式只允许无副作用的读取工具")
+  })
+
+  it('does not disable read-only discovery after an unrelated rejection', () => {
+    const provider = testProvider()
+    const base = provider.tools()[0]
+    if (!base) throw new Error('测试工具缺失')
+    const discoveryTool = { ...base }
     const clarificationTool = {
       ...base,
       name: 'request_clarification',
       label: '请求澄清',
-      planModeAccess: 'control' as const,
     }
     const { coordinator } = coordinatorHarness({
       ...provider,
       manifest: {
         ...provider.manifest,
         tools: [
-          { ...provider.manifest.tools[0]!, planModeAccess: 'discovery' },
-          { ...provider.manifest.tools[0]!, name: 'request_clarification', label: '请求澄清', planModeAccess: 'control' },
+          { ...provider.manifest.tools[0]! },
+          { ...provider.manifest.tools[0]!, name: 'request_clarification', label: '请求澄清' },
         ],
       },
       tools: () => [discoveryTool, clarificationTool],
@@ -423,7 +422,7 @@ describe('ToolExecutionCoordinator', () => {
       payload: { consumed: false },
     }])
 
-    expect(coordinator.isToolEnabled('inspect_dataset')).toBe(false)
+    expect(coordinator.isToolEnabled('inspect_dataset')).toBe(true)
     expect(coordinator.isToolEnabled('request_clarification')).toBe(true)
   })
 
@@ -439,7 +438,6 @@ describe('ToolExecutionCoordinator', () => {
       ...base,
       name: name!,
       label: label!,
-      planModeAccess: 'control' as const,
     }))
     const workflow = createAgentWorkflow({
       goal: '检查数据集',
@@ -468,7 +466,6 @@ describe('ToolExecutionCoordinator', () => {
             tags: tool.tags,
             isReadOnly: tool.isReadOnly,
             isDestructive: tool.isDestructive,
-            planModeAccess: tool.planModeAccess,
             jsonSchema: tool.jsonSchema!,
           })),
         ],
@@ -482,7 +479,7 @@ describe('ToolExecutionCoordinator', () => {
     expect(coordinator.isToolEnabled('todo_write')).toBe(false)
   })
 
-  it('gives the model an explicit recovery contract after a workflow step fails', async () => {
+  it('keeps read-only diagnostics available after a workflow step fails', async () => {
     const provider = testProvider()
     const base = provider.tools()[0]
     if (!base) throw new Error('测试工具缺失')
@@ -510,10 +507,11 @@ describe('ToolExecutionCoordinator', () => {
     await expect(coordinator.executeDirect('inspect_dataset', { datasetId: 'broken' }))
       .rejects.toThrow('数据集缺少预报时效')
 
+    expect(coordinator.isToolEnabled('inspect_dataset')).toBe(true)
     expect(coordinator.formatToolFailureForModel('inspect_dataset', '数据集缺少预报时效'))
-      .toContain('必须调用 revise_agent_workflow')
+      .toContain('可以调用已注册的无副作用读取工具诊断原因')
     expect(coordinator.formatUnavailableToolForModel('meteorological_inspect'))
-      .toContain('不得猜测工具名、绕过失败步骤或调用 Automation 内部工具')
+      .toContain('只能使用已注册的无副作用读取工具诊断')
   })
 
   it('opens a subagent internal tool only while its approved agent step is running', async () => {
@@ -541,40 +539,6 @@ describe('ToolExecutionCoordinator', () => {
     )
     expect(coordinator.isExternalAgentEnabled('spatial_analyst')).toBe(false)
     expect(coordinator.isToolEnabledForSubAgent('spatial_analyst', 'inspect_dataset')).toBe(true)
-  })
-
-  it('rejects artifacts returned by a planning discovery tool', async () => {
-    const provider = testProvider()
-    const base = provider.tools()[0]
-    if (!base) throw new Error('测试工具缺失')
-    const discoveryTool = {
-      ...base,
-      planModeAccess: 'discovery' as const,
-      handler: async () => ({
-        message: '错误地产生了业务结果',
-        payload: {},
-        warnings: [],
-        resultId: 'result_unsafe_discovery',
-        source: 'test',
-        valueRefs: [{
-          refId: 'ref_unsafe_geojson',
-          kind: 'feature_collection',
-          label: '不应生成的结果',
-          value: { type: 'FeatureCollection', features: [] },
-        }],
-      }),
-    }
-    const { coordinator } = coordinatorHarness({
-      ...provider,
-      manifest: {
-        ...provider.manifest,
-        tools: [{ ...provider.manifest.tools[0]!, planModeAccess: 'discovery' }],
-      },
-      tools: () => [discoveryTool],
-    }, true)
-
-    await expect(coordinator.executeDirect('inspect_dataset', { datasetId: 'dataset_1' }))
-      .rejects.toThrow("规划发现工具 'inspect_dataset' 返回了业务结果或 Artifact")
   })
 
   it('blocks subagents until the submitted workflow is approved', async () => {

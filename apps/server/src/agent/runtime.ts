@@ -35,7 +35,6 @@ import { RuntimeTranscriptProjector } from './runtimeTranscriptProjector.js'
 import { RuntimeApprovalPersistence } from './runtimeApprovalPersistence.js'
 import { RunSteeringController } from './runSteeringController.js'
 import type { RunOptions } from './runtimeTypes.js'
-import { planModeTerminalGuardrailMessage } from './runtimeOutputGuardrails.js'
 import { runtimeFailureMessage } from './runtimeErrors.js'
 import { RuntimeSdkExecutor } from './runtimeSdkExecutor.js'
 import { RuntimeAssemblyFactory } from './runtimeAssembly.js'
@@ -153,7 +152,7 @@ export class OpenAIAgentsRuntime {
       await this.maybeExtractLongTermMemories(options, threadId, eventSink)
       return this.store.getRun(options.runId)
     } catch (error) {
-      const message = planModeTerminalGuardrailMessage(error) ?? runtimeFailureMessage(error)
+      const message = runtimeFailureMessage(error)
       logger.error({ error: errorLogPayload(error) }, 'run failed')
       if (abort.signal.aborted) {
         await finalizer.cancel()
@@ -307,7 +306,7 @@ export class OpenAIAgentsRuntime {
       await this.maybeExtractLongTermMemories(options, run.threadId, eventSink)
       return this.store.getRun(runId)
     } catch (error) {
-      const message = planModeTerminalGuardrailMessage(error) ?? runtimeFailureMessage(error)
+      const message = runtimeFailureMessage(error)
       logger.error({ error: errorLogPayload(error) }, 'approval continuation failed')
       if (abort.signal.aborted) {
         await finalizer.cancel()

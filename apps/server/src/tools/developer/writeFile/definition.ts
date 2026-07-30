@@ -22,7 +22,6 @@ export const writeFileTool: ToolDef = {
   tags: ['developer', 'file', 'write'],
   isReadOnly: false,
   isDestructive: true,
-  requiresApproval: true,
   jsonSchema: {
     type: 'object',
     properties: {

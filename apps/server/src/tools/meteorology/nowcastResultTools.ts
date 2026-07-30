@@ -107,7 +107,7 @@ export function createNowcastResultTools(deps: MeteorologyToolDeps): ToolDef[] {
       },
       withMeteorologyDeps(deps, generateNowcastReport),
       ['automation_run_ref'],
-      { isReadOnly: false, requiresApproval: true },
+      { isReadOnly: false },
     ),
   ]
 }

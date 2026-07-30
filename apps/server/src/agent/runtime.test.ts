@@ -273,7 +273,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     }
   })
 
-  it('exposes only declared discovery tools in explicit plan mode', async () => {
+  it('exposes all read-only tools and hides write tools in explicit plan mode', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-boundary-'))
     try {
       const store = createTestPersistenceFacade(root)
@@ -291,7 +291,6 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       tools.register(providerFromTools('plan-boundary-tools', [
         {
           ...toolDefinition('lookup_context', ['query']),
-          planModeAccess: 'discovery',
           handler: async () => result('lookup', [], { ok: true }),
         },
         {
@@ -324,7 +323,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       expect(executions).toBe(0)
       expect(completed.state.planMode).toBe(true)
       expect(visibleTools).toContain('lookup_context')
-      expect(visibleTools).not.toContain('query_layer')
+      expect(visibleTools).toContain('query_layer')
       expect(visibleTools).not.toContain('write_layer')
     } finally {
       await removeTempRoot(root)
@@ -364,7 +363,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     }
   })
 
-  it('records a dynamically unavailable platform tool as an SDK rejection and lets the model recover', async () => {
+  it('executes a read-only platform tool in plan mode without a duplicate allowlist', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-tool-not-found-'))
     try {
       const store = createTestPersistenceFacade(root)
@@ -388,7 +387,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       }]))
       const model = scriptedModel(request => {
         if (hasToolResultNamed(request, 'query_layer')) {
-          return { text: '当前模式不能直接查询，我会先形成计划。' }
+          return { text: '已核实图层事实，我会据此形成计划。' }
         }
         return {
           toolCalls: [{
@@ -406,23 +405,21 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       })
 
       expect(completed.status).toBe('completed')
-      expect(executions).toBe(0)
+      expect(executions).toBe(1)
       const transcript = await store.activeTranscript(thread.id)
       expect(transcript).toContainEqual(expect.objectContaining({
         kind: 'tool_call',
         payload: expect.objectContaining({
           callId: 'call_unavailable_query',
           name: 'query_layer',
-          ledgerStatus: 'rejected',
-          source: 'openai_agents_sdk',
+          ledgerStatus: 'prepared',
         }),
       }))
       expect(transcript).toContainEqual(expect.objectContaining({
         kind: 'tool_result',
         payload: expect.objectContaining({
           callId: 'call_unavailable_query',
-          ledgerStatus: 'rejected',
-          source: 'openai_agents_sdk',
+          ledgerStatus: 'completed',
         }),
       }))
     } finally {
@@ -483,7 +480,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     }
   })
 
-  it('rejects a plain-text terminal after dynamically entering plan mode', async () => {
+  it('allows a plain-text plan after dynamically entering plan mode', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-dynamic-plan-terminal-'))
     try {
       const store = createTestPersistenceFacade(root)
@@ -514,15 +511,15 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         return { text: '请先上传数据，我再继续。' }
       })
 
-      const failed = await testRuntime(store, tools, registryWith(fakeAdapter(model))).run(runOptions(run, thread.id))
+      const completed = await testRuntime(store, tools, registryWith(fakeAdapter(model))).run(runOptions(run, thread.id))
 
-      expect(failed.status).toBe('failed')
-      expect(failed.state.planMode).toBe(true)
-      expect(failed.state.agentWorkflow).toBeNull()
-      expect(failed.state.errors.at(-1)).toContain('计划模式不能以普通正文结束')
+      expect(completed.status).toBe('completed')
+      expect(completed.state.planMode).toBe(true)
+      expect(completed.state.agentWorkflow).toBeNull()
+      expect(completed.state.errors).toEqual([])
       expect(requests).toHaveLength(2)
-      expect(requests[1]?.systemInstructions).toContain('必须调用 request_clarification')
-      expect(JSON.stringify(requests[1])).toContain('planningContract')
+      expect(requests[1]?.systemInstructions).toContain('用户只要求计划时可以直接交付正文计划')
+      expect(JSON.stringify(requests[1])).toContain('planningContext')
     } finally {
       await removeTempRoot(root)
     }
@@ -652,7 +649,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     }
   })
 
-  it('reviews submit_agent_workflow through approval and persists the approved execution plan', async () => {
+  it('records and executes a workflow without a duplicate plan approval', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-approval-'))
     try {
       const harness = new PersistenceFacadeTestHarness()
@@ -661,7 +658,6 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '计划审批')
       const config = testRuntimeConfig()
-      config.supervisor.approvalInterruptTools = []
       const run = await store.createRun(session.id, '给我做一个风险区划图', {
         threadId: thread.id,
         modelProvider: 'fake',
@@ -700,45 +696,11 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         }
       })
 
-      const waiting = await testRuntime(store, tools, registryWith(fakeAdapter(model))).run({
+      const completed = await testRuntime(store, tools, registryWith(fakeAdapter(model))).run({
         ...runOptions(run, thread.id),
         runtimeConfig: config,
         executionMode: 'plan',
       })
-
-      expect(waiting.status).toBe('waiting_approval')
-      expect(waiting.state.planMode).toBe(true)
-      expect(waiting.state.agentWorkflow).toBeNull()
-      expect(waiting.state.approvals).toHaveLength(1)
-      expect(waiting.state.approvals[0]).toMatchObject({
-        action: 'submit_agent_workflow',
-        title: '批准这个智能体工作流？',
-        status: 'pending',
-      })
-      expect(waiting.state.decisions).toContainEqual(expect.objectContaining({
-        decisionId: waiting.state.approvals[0].approvalId,
-        kind: 'approval',
-        status: 'pending',
-        title: '批准这个智能体工作流？',
-      }))
-      expect(waiting.state.approvals[0].payload.args).toMatchObject({ workflow })
-      await store.updateRunState(run.id, {
-        todos: [{
-          todoId: 'todo_step_1',
-          title: '交付风险区划说明',
-          status: 'pending',
-          description: null,
-          activeForm: '正在交付风险区划说明',
-          ownerAgentId: 'supervisor',
-          stepId: 'step_1',
-        }],
-      })
-      await store.flushConversationStore()
-
-      const restoredStore = harness.create(root)
-      await restoredStore.initialize()
-      const completed = await testRuntime(restoredStore, tools, registryWith(fakeAdapter(model)))
-        .resolveApproval(run.id, waiting.state.approvals[0].approvalId, true)
 
       expect(completed.status).toBe('completed')
       expect(completed.state.planMode).toBe(false)
@@ -751,15 +713,10 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       expect(completed.state.todos).toEqual([
         expect.objectContaining({ stepId: 'step_1', status: 'completed' }),
       ])
-      expect(completed.state.approvals[0].payload.consumed).toBe(true)
-      expect(completed.state.decisions).toContainEqual(expect.objectContaining({
-        decisionId: waiting.state.approvals[0].approvalId,
-        kind: 'approval',
-        status: 'approved',
-        resolvedAt: expect.any(String),
-      }))
-      const items = await restoredStore.listItems(run.id)
-      expect(items.some(item => item.itemType === 'result' && item.metadata?.resultType === 'waiting_approval')).toBe(true)
+      expect(completed.state.approvals).toEqual([])
+      expect(completed.state.decisions).toEqual([])
+      const items = await store.listItems(run.id)
+      expect(items.some(item => item.itemType === 'result' && item.metadata?.resultType === 'waiting_approval')).toBe(false)
     } finally {
       await removeTempRoot(root)
     }
@@ -773,6 +730,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '计划退回后重新审批')
       const config = testRuntimeConfig()
+      config.supervisor.approvalInterruptTools = ['submit_agent_workflow', 'revise_agent_workflow']
       const run = await store.createRun(session.id, '生成杭州市行政区划地图', {
         threadId: thread.id,
         modelProvider: 'fake',
@@ -854,6 +812,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '计划工具契约护栏')
       const config = testRuntimeConfig()
+      config.supervisor.approvalInterruptTools = ['submit_agent_workflow', 'revise_agent_workflow']
       const run = await store.createRun(session.id, '生成可审批地图计划', {
         threadId: thread.id,
         modelProvider: 'fake',
@@ -893,7 +852,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         workflow: { steps: [expect.objectContaining({ toolName: 'deliver_test_response' })] },
       })
       expect(firstRequest?.systemInstructions).toContain('deliver_test_response')
-      expect(firstRequest?.tools.map(tool => tool.name)).not.toContain('deliver_test_response')
+      expect(firstRequest?.tools.map(tool => tool.name)).toContain('deliver_test_response')
       expect((await store.getRunCheckpoint(run.id)).pendingToolCallIds).toEqual([])
       expect(waiting.state.errors).toEqual([])
     } finally {
@@ -981,6 +940,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '并行智能体工作流')
       const config = testRuntimeConfig()
+      config.supervisor.approvalInterruptTools = ['submit_agent_workflow', 'revise_agent_workflow']
       config.maxFunctionToolConcurrency = 4
       const run = await store.createRun(session.id, '并行检查两类数据', {
         threadId: thread.id,
@@ -1054,6 +1014,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '失败后调整智能体工作流')
       const config = testRuntimeConfig()
+      config.supervisor.approvalInterruptTools = ['submit_agent_workflow', 'revise_agent_workflow']
       const run = await store.createRun(session.id, '检查数据并交付结论', {
         threadId: thread.id,
         modelProvider: 'fake',
@@ -1173,6 +1134,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '失败后未知工具恢复')
       const config = testRuntimeConfig()
+      config.supervisor.approvalInterruptTools = ['submit_agent_workflow', 'revise_agent_workflow']
       const run = await store.createRun(session.id, '检查数据并在缺少输入时询问用户', {
         threadId: thread.id,
         modelProvider: 'fake',
@@ -1251,6 +1213,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '运行中引导智能体工作流')
       const config = testRuntimeConfig()
+      config.supervisor.approvalInterruptTools = ['submit_agent_workflow', 'revise_agent_workflow']
       const run = await store.createRun(session.id, '检查数据并给出结论', {
         threadId: thread.id,
         modelProvider: 'fake',
@@ -1666,6 +1629,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '子 Agent 测试')
       const config = testRuntimeConfig()
+      config.supervisor.approvalInterruptTools = ['submit_agent_workflow', 'revise_agent_workflow']
       config.subAgents = [{
         agentId: 'spatial_analyst',
         name: '空间分析助手',
@@ -1809,7 +1773,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '子智能体审批恢复')
       const config = testRuntimeConfig()
-      config.supervisor.approvalInterruptTools = ['sensitive_tool']
+      config.supervisor.approvalInterruptTools = ['submit_agent_workflow', 'revise_agent_workflow', 'sensitive_tool']
       config.subAgents = [{
         agentId: 'sensitive_analyst',
         name: '敏感分析助手',
@@ -1942,6 +1906,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '并行子智能体测试')
       const config = testRuntimeConfig()
+      config.supervisor.approvalInterruptTools = ['submit_agent_workflow', 'revise_agent_workflow']
       config.subAgents = [
         {
           agentId: 'parallel_alpha',
@@ -2365,6 +2330,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '子智能体超时测试')
       const config = testRuntimeConfig()
+      config.supervisor.approvalInterruptTools = ['submit_agent_workflow', 'revise_agent_workflow']
       config.subAgents = [{
         agentId: 'slow_analyst',
         name: '慢速分析助手',
@@ -2459,6 +2425,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '子 Agent 轮次上限测试')
       const config = testRuntimeConfig()
+      config.supervisor.approvalInterruptTools = ['submit_agent_workflow', 'revise_agent_workflow']
       config.subAgents = [{
         agentId: 'looping_analyst',
         name: '循环分析助手',

@@ -19,7 +19,6 @@
       ],
       "isReadOnly": true,
       "isDestructive": false,
-      "planModeAccess": "discovery",
       "jsonSchema": {
         "type": "object",
         "properties": {
@@ -621,7 +620,6 @@
       ],
       "isReadOnly": false,
       "isDestructive": false,
-      "requiresApproval": true,
       "jsonSchema": {
         "type": "object",
         "properties": {
@@ -750,7 +748,6 @@
       ],
       "isReadOnly": false,
       "isDestructive": false,
-      "requiresApproval": true,
       "jsonSchema": {
         "type": "object",
         "properties": {

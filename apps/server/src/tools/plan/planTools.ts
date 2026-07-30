@@ -9,8 +9,8 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
-// 计划模式只改变运行约束，不执行业务写入。
-// submit_agent_workflow 必须先经过 Agents SDK approval，批准后才会写回 agentWorkflow。
+// 计划模式只改变运行约束，不执行业务写入。结构化工作流是进度投影，
+// 不是额外审批层；真正有副作用的工具在各自执行边界请求审批。
 import type { ToolDef } from '../../framework/types.js'
 import { makeId } from '../../utils/ids.js'
 import {
@@ -30,7 +30,6 @@ export const requestClarificationTool: ToolDef = {
   prompt: REQUEST_CLARIFICATION_PROMPT,
   group: '系统', tags: ['plan', 'system'],
   isReadOnly: true, isDestructive: false,
-  planModeAccess: 'control',
   agentResultMode: 'return_direct',
 
   jsonSchema: {
@@ -95,7 +94,6 @@ export const enterPlanModeTool: ToolDef = {
   prompt: ENTER_PLAN_MODE_PROMPT,
   group: '系统',  tags: ['plan', 'system'],
   isReadOnly: true, isDestructive: false,
-  planModeAccess: 'control',
 
   jsonSchema: {
     type: 'object',
@@ -123,8 +121,6 @@ export const submitAgentWorkflowTool: ToolDef = {
   prompt: SUBMIT_AGENT_WORKFLOW_PROMPT,
   group: '系统',  tags: ['plan', 'system'],
   isReadOnly: true, isDestructive: false,
-  planModeAccess: 'control',
-  requiresApproval: true,
 
   jsonSchema: {
     type: 'object',
@@ -163,7 +159,7 @@ export const submitAgentWorkflowTool: ToolDef = {
 
   async handler(args, runtime) {
     return {
-      message: '智能体工作流已批准并开始执行。',
+      message: '智能体工作流已记录并开始执行。',
       payload: {
         planMode: false,
         agentWorkflowDraft: args.workflow,
@@ -181,8 +177,6 @@ export const reviseAgentWorkflowTool: ToolDef = {
   prompt: REVISE_AGENT_WORKFLOW_PROMPT,
   group: '系统', tags: ['plan', 'workflow', 'system'],
   isReadOnly: true, isDestructive: false,
-  planModeAccess: 'control',
-  requiresApproval: true,
   jsonSchema: {
     type: 'object',
     properties: {

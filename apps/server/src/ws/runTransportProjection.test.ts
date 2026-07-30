@@ -145,4 +145,30 @@ describe('run realtime transport projection', () => {
     expect(Buffer.byteLength(JSON.stringify(projectRunEventForTransport(event)), 'utf8'))
       .toBeLessThan(16 * 1024)
   })
+
+  it('charges string budgets by actual content instead of the per-field cap', () => {
+    const artifact = {
+      artifactId: 'artifact_preview',
+      artifactType: 'raster_png',
+      name: '风险图预览',
+      uri: '/api/v1/results/artifact_preview',
+      display: {
+        primarySurface: 'mini_app',
+        surfaces: ['mini_app', 'download'],
+        map: null,
+      },
+    }
+    const item = conversationItemSchema.parse({
+      itemId: 'item_artifact',
+      itemType: 'function_call_output',
+      runId: 'run_1',
+      output: '{}',
+      metadata: { artifacts: [artifact] },
+      timestamp: new Date(0).toISOString(),
+    })
+
+    expect(projectConversationItemForTransport(item).metadata).toMatchObject({
+      artifacts: [artifact],
+    })
+  })
 })

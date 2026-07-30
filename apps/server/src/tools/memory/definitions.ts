@@ -72,7 +72,6 @@ export const memoryTools: ToolDef[] = [
     tags: ['memory', 'read'],
     isReadOnly: true,
     isDestructive: false,
-    planModeAccess: 'discovery',
     parameters: listMemoriesParameters,
     handler: async (args, context) => {
       const scope = typeof args.scope === 'string' ? memoryScopeSchema.parse(args.scope) : undefined
@@ -89,7 +88,6 @@ export const memoryTools: ToolDef[] = [
     tags: ['memory', 'read'],
     isReadOnly: true,
     isDestructive: false,
-    planModeAccess: 'discovery',
     parameters: readMemoryParameters,
     handler: async (args, context) => {
       const record = await readMemory(
@@ -109,7 +107,6 @@ export const memoryTools: ToolDef[] = [
     tags: ['memory', 'search'],
     isReadOnly: true,
     isDestructive: false,
-    planModeAccess: 'discovery',
     parameters: searchMemoryParameters,
     handler: async (args, context) => {
       const matches = await searchMemories(memoryRuntime(context), String(args.query), context.invokeStructuredModel)
@@ -174,7 +171,6 @@ export const memoryManifest: ToolManifest = {
     tags: tool.tags,
     isReadOnly: tool.isReadOnly,
     isDestructive: tool.isDestructive,
-    ...(tool.planModeAccess ? { planModeAccess: tool.planModeAccess } : {}),
     jsonSchema: tool.jsonSchema ?? deriveJsonSchema(tool.parameters!),
   })),
 }

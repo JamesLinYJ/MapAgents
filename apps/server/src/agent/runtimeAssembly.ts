@@ -44,9 +44,6 @@ import { createHandoffAgents } from './handoffAgentFactory.js'
 import { buildPlanningCapabilityCatalog, buildSystemPrompt } from './prompts.js'
 import { RunToolConcurrencyGate } from './runToolConcurrencyGate.js'
 import {
-  createPlanModeTerminalGuardrail,
-} from './runtimeOutputGuardrails.js'
-import {
   buildSandboxManifest,
   buildSandboxRunConfig,
   prepareRunArtifactDirectory,
@@ -373,17 +370,6 @@ export class RuntimeAssemblyFactory {
       toolUseBehavior: { stopAtToolNames: returnDirectToolNames },
       outputType: supervisorDeliverySchema,
       handoffs: handoffIntegration.handoffs,
-      outputGuardrails: [createPlanModeTerminalGuardrail({
-        hasTerminalViolation: () => {
-          const state = store.getRun(options.runId).state
-          const pendingClarification = state.clarification !== null
-            && !state.clarification.selectedOptionId
-          return coordinator.enteredPlanModeDuringRun()
-            && state.planMode
-            && !pendingClarification
-            && state.agentWorkflow === null
-        },
-      })],
     }
     const agent: Agent<AgentsExecutionContext, typeof supervisorDeliverySchema> = sandboxManifest
       ? new SandboxAgent<AgentsExecutionContext, typeof supervisorDeliverySchema>({

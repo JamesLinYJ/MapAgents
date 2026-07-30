@@ -512,9 +512,9 @@ WS 控制面必须使用命令注册表，而不是单个 `handleMessage()` 大�
 
 ### 6.4 计划模式
 
-- 计划模式是硬运行时边界——不仅在 prompt 层面，在 `ToolExecutionCoordinator` 层面强制
-- 计划模式期间，只允许只读工具、`enter_plan_mode`、`request_clarification` 和 `submit_agent_workflow`。其他一切工具调用被拒绝并给出明确错误
-- 计划模式必须通过 `request_clarification` 或 `submit_agent_workflow` 结束，否则 run 失败；`submit_agent_workflow` 只有在用户批准后才退出计划模式并执行步骤
+- 计划模式只禁止会产生写入、破坏性操作或外部影响的能力；所有 `isReadOnly=true` 且非破坏性的工具均可用于核实事实，不得另设逐工具白名单
+- 用户只要求计划时可以直接交付正文计划；需要在同一 run 中继续执行时，使用 `submit_agent_workflow` 记录结构化步骤并退出计划模式。不得因模型没有调用特定收口工具而把有效正文判为运行失败
+- 结构化工作流是执行进度和依赖投影，不是额外审批层。工作流提交与修订本身不请求审批；真正的写入、删除、调度或外部影响由对应工具在 SDK 执行边界独立审批
 
 ### 6.5 确定性旁路
 
@@ -527,7 +527,7 @@ WS 控制面必须使用命令注册表，而不是单个 `handleMessage()` 大�
 ### 6.6 多智能体与工具并发
 
 - 返回主智能体的子智能体使用 SDK `Agent.asTool()`，转交所有权使用 SDK `handoff()`；不得增加自定义 batch 工具、手动并行 Runner 或第二套工具调度队列
-- 工具和 Agent-as-tool 默认进入独占执行通道。只有显式声明 `parallelSafe`，并且完整调用闭包均为只读、非破坏、免审批能力时，才允许进入共享并发通道
+- 无副作用、非破坏、免审批的只读工具默认进入共享并发通道；确有线程不安全实现时用 `parallelSafe=false` 显式退出。写工具、审批工具和无法证明只读的能力进入独占通道
 - 写工具、审批工具、MCP 工具和不能证明安全的子智能体始终独占执行；安全声明不是对权限、审批和审计的豁免
 - 并发数量由 SDK Runner 的工具并发上限约束；GeoForge 执行闸门只实施业务安全约束，不负责重新调度模型返回的调用
 - 工具 `customDataExtractor` 只保存经过 schema 校验的结果引用、valueRef、Artifact 和展示元数据。自定义元数据可进入 RunState 和平台投影，但不得取代数据库结果账本或注入模型上下文
@@ -767,6 +767,7 @@ TypeScript ToolProvider、OpenAI tool schema、Python Worker catalog、Pydantic 
 - **硬失败**：未知 valueRef、无效参数、缺失依赖、Worker 错误必须直接失败——不允许 fallback 成功文案
 - **Artifact 展示面**：工具必须通过 `displaySurfaces` 显式声明 artifact 展示面（`map`、`mini_app`、`download`）。前端不得通过类型名或 artifact 名猜测展示意图
 - **参数校验**：每个工具定义在执行前通过 `validate_tool_definition()` 校验。参数经过 Zod schema 验证后传入 handler
+- **读写语义单一**：审批、并发与计划模式都依据工具级契约判断。不得在一个静态 `requiresApproval` 工具中混合查询和变更操作；只读查询与创建、更新、删除必须拆成独立工具，共享同一个领域服务
 - **契约漂移检测**：Node 启动时拉取 Worker `/tools/catalog`，校验工具名、schema hash、timeout、valueRef、只读/破坏性声明。漂移直接失败，不降级为不可用假状态
 - **统一错误模型**：工具失败返回稳定分类，如 `invalid_request`、`dependency_missing`、`worker_failed`、`timeout`、`schema_mismatch`。前端展示中文原因，日志记录 traceId 和脱敏上下文
 
@@ -795,6 +796,7 @@ OpenAI Agents SDK Skill 是可选扩展能力，不能和 GeoForge 内置工具�
 - Skill 目录的入口文件名必须严格为 `SKILL.md`。`skill.md`、`sKilL.md`、`Skill.md` 都是配置错误，系统必须返回明确中文错误，不得隐式兼容为合法 Skill，也不得继续执行后抛底层异常。
 - Skill 目录只能通过运行时配置显式启用。安装到本机目录不等于进入 GeoForge run。
 - GeoForge 只负责验证目录、读取 `SKILL.md` 以及可选的 `scripts/`、`references/`、`assets/`，再交给 SDK 的 `skills()` capability。不要把宿主绝对路径、用户主目录或产品旧名写进 prompt、manifest 或日志。
+- `load_skill` 只把已配置 Skill 的不可变快照物化到当前 run 沙箱，应在规划和执行阶段可用，不得与任意 MCP、Shell 或文件写入共用总开关。
 - Skill 是运行时上下文扩展，不是权限绕过入口。Skill 中的脚本和引用文件只进入 sandbox workspace，仍受工具权限、文件沙箱和审批边界约束。
 
 ### 11.5 Provider ID 生命周期

@@ -111,6 +111,7 @@ describe('runtime SDK integrations', () => {
       const capability = integration.capabilities[0]
       if (!capability) throw new Error('Skills capability missing')
       capability.bind({
+        state: { manifest: processed },
         pathExists: async () => false,
         materializeEntry: async () => {},
       } as never)
@@ -140,10 +141,11 @@ describe('runtime SDK integrations', () => {
       })
       await expect(loadSkill.isEnabled(runContext, {} as never)).resolves.toBe(true)
       extensionEnabled = false
-      await expect(loadSkill.isEnabled(runContext, {} as never)).resolves.toBe(false)
-      await expect(loadSkill.invoke(runContext, '{"skill_name":"geo-skill"}')).rejects.toThrow(
-        '当前规划或结构化工作流边界禁止调用 SDK Skill',
-      )
+      await expect(loadSkill.isEnabled(runContext, {} as never)).resolves.toBe(true)
+      await expect(loadSkill.invoke(runContext, '{"skill_name":"geo-skill"}')).resolves.toMatchObject({
+        status: 'loaded',
+        skill_name: 'geo-skill',
+      })
     } finally {
       await rm(root, { recursive: true, force: true })
     }

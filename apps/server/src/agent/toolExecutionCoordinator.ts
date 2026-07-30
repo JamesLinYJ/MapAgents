@@ -68,7 +68,6 @@ export class ToolExecutionCoordinator {
   private workflowMutation: Promise<void> = Promise.resolve()
   private resultMutation: Promise<void> = Promise.resolve()
   private checkpointMutation: Promise<void> = Promise.resolve()
-  private enteredPlanMode = false
   private activeHandoffAgentId: string | null = null
 
   constructor(private readonly options: CoordinatorOptions) {}
@@ -77,18 +76,13 @@ export class ToolExecutionCoordinator {
     return !this.options.store.getRun(this.options.runId).state.planMode
   }
 
-  enteredPlanModeDuringRun(): boolean {
-    return this.enteredPlanMode
-  }
-
   formatToolFailureForModel(toolName: string, message: string): string {
     const state = this.options.store.getRun(this.options.runId).state
     if (state.agentWorkflow?.status === 'adjusting' && state.failedTool === toolName) {
       return [
         `工具“${this.toolLabel(toolName)}”执行失败：${message}`,
-        '当前智能体工作流已进入调整状态。',
-        '不得重试失败步骤、绕过 Automation，或调用未批准的内部及替代工具。',
-        '若有错误证据支持的新路径，必须调用 revise_agent_workflow 提交完整修订并重新审批；若缺少用户数据或选择，必须调用 request_clarification。',
+        '工作流进度已记录该步骤失败。',
+        '可以调用已注册的无副作用读取工具诊断原因；路径实质变化时用 revise_agent_workflow 更新工作流，缺少用户数据或选择时请求澄清。',
       ].join(' ')
     }
     return `工具调用失败：${message}。请检查参数类型和必需字段后重试。`
@@ -99,15 +93,15 @@ export class ToolExecutionCoordinator {
     if (workflow?.status === 'adjusting') {
       return [
         `工具 '${toolName}' 不在当前可用工具列表中。`,
-        '当前智能体工作流正在等待调整，不得猜测工具名、绕过失败步骤或调用 Automation 内部工具。',
-        '下一步只能调用 revise_agent_workflow 提交完整修订并重新审批，或调用 request_clarification 请求必要的用户输入。',
+        '当前智能体工作流正在调整；只能使用已注册的无副作用读取工具诊断，或更新工作流、请求澄清。',
       ].join(' ')
     }
     return `工具 '${toolName}' 不在当前可用工具列表中。请只使用本轮公开的确切工具名；不存在合适能力时如实说明限制。`
   }
 
-  // MCP、Skill 与沙箱工具还没有进入结构化工作流的步骤契约。普通执行可用，
-  // 但规划阶段和已批准工作流期间必须关闭，避免审批后绕过步骤/参数边界。
+  // 任意 MCP 与沙箱执行还没有统一的读写语义契约，因此不能在规划或结构化
+  // 工作流中按名称猜测其副作用。load_skill 不走此开关：它只物化配置快照，
+  // 不授予 Skill 中后续操作的执行权限。
   isSdkExtensionEnabled(): boolean {
     const state = this.options.store.getRun(this.options.runId).state
     return !state.planMode && state.agentWorkflow === null
@@ -118,14 +112,14 @@ export class ToolExecutionCoordinator {
     if (!tool) return false
     const state = this.options.store.getRun(this.options.runId).state
     if (state.planMode) {
-      if (hasUnconsumedWorkflowRejection(state.approvals)) {
-        return tool.planModeAccess === 'control'
-      }
-      return tool.planModeAccess !== undefined
+      return tool.isReadOnly && !tool.isDestructive
     }
     if (!state.agentWorkflow) return true
     if (state.agentWorkflow.status === 'completed' || state.agentWorkflow.status === 'cancelled') return false
     if (ACTIVE_WORKFLOW_CONTROL_TOOLS.has(toolName)) return true
+    if (state.agentWorkflow.status === 'adjusting') {
+      return tool.isReadOnly && !tool.isDestructive
+    }
     return this.hasReadyWorkflowStep(toolName, 'supervisor')
   }
 
@@ -299,11 +293,11 @@ export class ToolExecutionCoordinator {
 
   async beginExternalAgentStep(
     agentId: string,
-    args: Record<string, unknown>,
+    _args: Record<string, unknown>,
     callId: string,
   ): Promise<string | null> {
     this.assertExecutionPhaseAllowsExternalAgent(agentId)
-    const stepId = await this.claimAgentWorkflowStep(agentId, args, callId, agentId)
+    const stepId = await this.claimAgentWorkflowStep(agentId, callId, agentId)
     this.externalAgentCalls.set(callId, agentId)
     return stepId
   }
@@ -388,7 +382,7 @@ export class ToolExecutionCoordinator {
     try {
       this.assertPlanModeAllows(toolName)
       if (ownerAgentId) this.assertExternalAgentIsRunning(ownerAgentId)
-      else await this.claimAgentWorkflowStep(toolName, args, callId)
+      else await this.claimAgentWorkflowStep(toolName, callId)
       await this.appendLedger(callId, toolName, 'started')
       const toolLabel = this.toolLabel(toolName)
       this.options.eventSink.emit('tool.started', toolLabel, { tool: toolName, toolLabel, callId })
@@ -396,7 +390,6 @@ export class ToolExecutionCoordinator {
         this.options.store.getRun(this.options.runId).state.artifacts.map(artifact => artifact.artifactId),
       )
       const result = await this.options.registry.execute(toolName, args, this.createToolContext())
-      this.assertPlanModeDiscoveryResult(toolName, result)
       await this.enqueueResultMutation(async () => {
         await persistToolExecutionResult(
           this.options.store,
@@ -407,9 +400,6 @@ export class ToolExecutionCoordinator {
           result,
         )
         if (typeof result.payload.planMode === 'boolean') {
-          if (toolName === 'enter_plan_mode' && result.payload.planMode) {
-            this.enteredPlanMode = true
-          }
           this.options.onPlanModeChanged?.(result.payload.planMode)
         }
         this.emitAgentWorkflowControlEvent(toolName)
@@ -502,15 +492,15 @@ export class ToolExecutionCoordinator {
     }
   }
 
-  // 计划模式是能力白名单，不再把“只读”误当成“只用于规划”。查询完整要素、
-  // 空间计算和图表生成即使不修改外部事实，也属于待审批的业务执行。
+  // 计划模式不再维护第二份逐工具白名单。工具定义中的读写语义是唯一事实源：
+  // 无副作用读取可用于形成计划，写入和破坏性能力必须先结束规划阶段。
   private assertPlanModeAllows(toolName: string): void {
     const run = this.options.store.getRun(this.options.runId)
     if (!run.state.planMode) return
     const tool = this.options.registry.get(toolName)
     if (!tool) throw new Error(`工具 '${toolName}' 未注册`)
-    if (tool.planModeAccess !== undefined) return
-    throw new Error(`计划模式禁止执行未声明为规划发现或计划控制的工具 '${toolName}'。请先用 submit_agent_workflow 提交计划并等待批准。`)
+    if (tool.isReadOnly && !tool.isDestructive) return
+    throw new Error(`计划模式只允许无副作用的读取工具，工具 '${toolName}' 会产生写入或外部影响。请先提交工作流结束规划阶段。`)
   }
 
   async executeForHandoff(
@@ -540,19 +530,7 @@ export class ToolExecutionCoordinator {
 
   private assertExecutionPhaseAllowsExternalAgent(agentId: string): void {
     if (this.isExecutionEnabled()) return
-    throw new Error(`计划模式禁止调用子智能体 '${agentId}'。请先用 submit_agent_workflow 提交计划并等待批准。`)
-  }
-
-  private assertPlanModeDiscoveryResult(toolName: string, result: ToolResult): void {
-    const run = this.options.store.getRun(this.options.runId)
-    const tool = this.options.registry.get(toolName)
-    if (!run.state.planMode || tool?.planModeAccess !== 'discovery') return
-    const createsArtifact = Boolean(result.artifacts?.length)
-      || (result.valueRefs ?? []).some(ref => ['geojson', 'route', 'feature_collection'].includes(ref.kind))
-      || Object.values(result.payload).some(isGeoJsonLike)
-    if (createsArtifact) {
-      throw new Error(`规划发现工具 '${toolName}' 返回了业务结果或 Artifact，违反计划模式契约。`)
-    }
+    throw new Error(`计划模式禁止调用子智能体 '${agentId}'。请先用 submit_agent_workflow 记录工作流并开始执行。`)
   }
 
   private assertExternalAgentIsRunning(agentId: string): void {
@@ -564,7 +542,6 @@ export class ToolExecutionCoordinator {
 
   private claimAgentWorkflowStep(
     toolName: string,
-    args: Record<string, unknown>,
     callId: string,
     ownerAgentId?: string,
   ): Promise<string | null> {
@@ -575,13 +552,15 @@ export class ToolExecutionCoordinator {
         const workflow = state.agentWorkflow
         if (!workflow) return {}
         if (workflow.status === 'adjusting') {
+          const tool = this.options.registry.get(toolName)
+          if (tool?.isReadOnly && !tool.isDestructive) return {}
           throw new Error('智能体工作流正在等待调整。请先调用 revise_agent_workflow，再执行后续工具。')
         }
         if (workflow.status === 'completed' || workflow.status === 'cancelled' || workflow.status === 'failed') {
           throw new Error(`智能体工作流已经处于 ${workflow.status} 状态，不能继续调用工具。`)
         }
         const claimed = new Set(this.claimedWorkflowSteps.values())
-        const invocation = { toolName, args, ...(ownerAgentId ? { ownerAgentId } : {}) }
+        const invocation = { toolName, ...(ownerAgentId ? { ownerAgentId } : {}) }
         const step = findRunnableAgentWorkflowStep(workflow, invocation, claimed)
         if (!step) {
           const planned = workflow.steps.filter(item => item.toolName === toolName && item.status === 'pending')
@@ -593,9 +572,6 @@ export class ToolExecutionCoordinator {
           )))
           if (ownerAgentId && dependenciesSatisfied.some(item => item.ownerAgentId !== ownerAgentId)) {
             throw new Error(`子智能体 '${ownerAgentId}' 不能领取分配给其他负责人的步骤。请先调用 revise_agent_workflow 调整负责人。`)
-          }
-          if (dependenciesSatisfied.length) {
-            throw new Error(`工具 '${toolName}' 的实际参数超出当前工作流步骤声明。请按已批准参数执行，或先调用 revise_agent_workflow 显式调整工作流。`)
           }
           if (planned.length) {
             throw new Error(`工具 '${toolName}' 对应的计划步骤依赖尚未完成，不能提前执行。`)
@@ -904,16 +880,6 @@ function projectWorkflowStepToTodos(todos: TodoItem[], step: AgentWorkflowStep):
   return todos.map(todo => todo.stepId === step.stepId ? { ...todo, status } : todo)
 }
 
-function hasUnconsumedWorkflowRejection(
-  approvals: ReadonlyArray<{ action: string; status: string; payload: Record<string, unknown> }>,
-): boolean {
-  return approvals.some(approval => (
-    (approval.action === 'submit_agent_workflow' || approval.action === 'revise_agent_workflow')
-    && approval.status === 'rejected'
-    && approval.payload.consumed !== true
-  ))
-}
-
 const AGENT_WORKFLOW_CONTROL_TOOLS = new Set([
   'request_clarification',
   'enter_plan_mode',
@@ -1060,10 +1026,10 @@ export function formatToolResultForModel(result: ToolResult, maxChars: number, p
       uri: artifact.uri,
     })),
     ...(planMode ? {
-      planningContract: {
+      planningContext: {
         status: 'active',
-        terminalTools: ['request_clarification', 'submit_agent_workflow'],
-        requirement: '存在待执行目标时，本轮必须调用一个 terminalTools 工具；普通 assistant 正文不能结束规划。',
+        actions: ['继续无副作用读取', 'request_clarification', 'submit_agent_workflow', '直接说明计划'],
+        guidance: '结构化工作流用于后续进度投影；计划本身不会替代有副作用工具各自的审批。',
       },
     } : {}),
   }
@@ -1164,12 +1130,4 @@ function errorMessage(error: unknown): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function isGeoJsonLike(value: unknown): boolean {
-  if (!isRecord(value)) return false
-  return [
-    'FeatureCollection', 'Feature', 'LineString', 'Point', 'Polygon',
-    'MultiLineString', 'MultiPoint', 'MultiPolygon', 'GeometryCollection',
-  ].includes(String(value.type))
 }

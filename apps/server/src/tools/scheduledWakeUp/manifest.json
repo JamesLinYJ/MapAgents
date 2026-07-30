@@ -3,13 +3,27 @@
   "name": "ScheduledWakeUp",
   "version": "1.0.0",
   "author": "系统内置",
-  "description": "系统定时唤醒工具，用于创建、查看、更新和删除定时任务。",
+  "description": "系统定时任务 Provider，分别提供只读查询和受审批的变更能力。",
   "language": "typescript",
   "tools": [
     {
+      "name": "list_scheduled_tasks",
+      "label": "查看定时任务",
+      "description": "读取当前工作区的定时任务及其自动化运行记录。",
+      "group": "system",
+      "tags": ["scheduler", "automation", "system"],
+      "isReadOnly": true,
+      "isDestructive": false,
+      "jsonSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      }
+    },
+    {
       "name": "ScheduledWakeUp",
-      "label": "定时唤醒",
-      "description": "管理系统定时任务。当前版本支持将自动化流程作为定时目标。",
+      "label": "管理定时任务",
+      "description": "创建、更新或删除系统定时任务。当前版本支持将自动化流程作为定时目标。",
       "group": "system",
       "tags": ["scheduler", "automation", "system"],
       "isReadOnly": false,
@@ -21,7 +35,7 @@
         "properties": {
           "operation": {
             "type": "string",
-            "enum": ["list", "create", "update", "delete"],
+            "enum": ["create", "update", "delete"],
             "description": "操作类型。"
           },
           "taskId": {

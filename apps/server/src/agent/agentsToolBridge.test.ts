@@ -106,7 +106,7 @@ describe('createAgentsTools', () => {
   it('uses Agents SDK dynamic enablement to expose only planning-safe tools before approval', async () => {
     const registry = new ToolRegistry()
     registry.register(providerFromTools([
-      { ...testTool('catalog_lookup', ['agent']), planModeAccess: 'discovery' },
+      { ...testTool('catalog_lookup', ['agent']) },
       testTool('query_layer', ['agent']),
     ]))
     const tools = createAgentsTools(registry, new Set(), { schemaMode: 'compatible' })

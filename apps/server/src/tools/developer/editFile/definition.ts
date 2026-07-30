@@ -22,7 +22,6 @@ export const editFileTool: ToolDef = {
   tags: ['developer', 'file', 'edit'],
   isReadOnly: false,
   isDestructive: true,
-  requiresApproval: true,
   jsonSchema: {
     type: 'object',
     properties: {

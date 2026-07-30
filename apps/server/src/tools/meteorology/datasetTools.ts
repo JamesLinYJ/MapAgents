@@ -83,7 +83,6 @@ export function createDatasetMeteorologyTools(deps: MeteorologyToolDeps): ToolDe
       interpretation_ref: refParameter('模型解读引用', ['meteorological_interpretation']),
     }, withMeteorologyDeps(deps, generateReport), ['dataset_ref', 'interpretation_ref'], {
       isReadOnly: false,
-      requiresApproval: true,
     }),
   ]
 }

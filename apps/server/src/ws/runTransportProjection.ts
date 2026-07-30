@@ -169,7 +169,7 @@ function projectUnknown(
 ): unknown {
   if (value === null || typeof value === 'boolean' || typeof value === 'number') return value
   if (typeof value === 'string') {
-    const allowed = Math.max(0, Math.min(4_000, budget.stringCharacters))
+    const allowed = Math.max(0, Math.min(value.length, 4_000, budget.stringCharacters))
     budget.stringCharacters -= allowed
     return value.length <= allowed
       ? value
