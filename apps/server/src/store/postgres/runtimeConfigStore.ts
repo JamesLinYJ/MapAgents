@@ -19,7 +19,7 @@ import { decodeRequiredRecord } from '../../db/valueDecoders.js'
 export class RuntimeConfigStore {
   constructor(private readonly db: Database) {}
 
-  async get(configKey: string): Promise<Record<string, unknown> | null> {
+  async getRuntimeConfig(configKey: string): Promise<Record<string, unknown> | null> {
     const rows = await this.db
       .select({ payloadJson: platformRuntimeConfig.payloadJson })
       .from(platformRuntimeConfig)
@@ -31,7 +31,7 @@ export class RuntimeConfigStore {
       : null
   }
 
-  async upsert(configKey: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async upsertRuntimeConfig(configKey: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
     await this.db
       .insert(platformRuntimeConfig)
       .values({

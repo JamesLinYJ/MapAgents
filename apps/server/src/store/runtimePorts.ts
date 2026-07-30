@@ -16,7 +16,6 @@ import type {
   CompactionRecord,
   ContentRef,
   ConversationItem,
-  MeteorologicalDatasetRecord,
   RunCheckpoint,
   RunEvent,
   RunSteeringRecord,
@@ -27,6 +26,8 @@ import type {
   TranscriptEntryKind,
 } from '../schemas/types.js'
 import type { VisibleArtifactResource } from './postgres/artifactRepository.js'
+import type { StoredFileEntry } from './fileStore.js'
+import type { MeteorologicalStore } from './postgres/meteorologicalStore.js'
 
 export interface AppendTranscriptInput {
   threadId: string
@@ -41,6 +42,13 @@ export interface AppendTranscriptInput {
 
 export interface AgentRuntimeStore {
   readonly runtimeRoot: string
+  readonly runtimeFiles: {
+    list(threadId: string): Promise<StoredFileEntry[]>
+  }
+  readonly meteorology: Pick<MeteorologicalStore,
+    | 'listMeteorologicalDatasets'
+    | 'resolveMeteorologicalDataset'
+  >
   getRun(runId: string): AnalysisRun
   listRunsForThread(threadId: string): AnalysisRun[]
   mutateRunState(runId: string, mutation: (state: AgentState) => Partial<AgentState>): Promise<AnalysisRun>
@@ -90,26 +98,13 @@ export interface AgentRuntimeStore {
     runId: string,
     options?: { artifactIds?: readonly string[]; limit?: number },
   ): Promise<VisibleArtifactResource[]>
-  listMeteorologicalDatasets(filters: {
-    sessionId?: string | null
-    threadId?: string | null
-    filename?: string | null
-    workspaceId?: string | null
-    limit?: number
-  }): Promise<MeteorologicalDatasetRecord[]>
-  resolveMeteorologicalDataset(filters: {
-    sessionId: string
-    threadId?: string | null
-    datasetId?: string | null
-    filename?: string | null
-    workspaceId?: string | null
-  }): Promise<MeteorologicalDatasetRecord | null>
 }
 
 export type RunLookupStore = Pick<AgentRuntimeStore, 'getRun'>
 
 export type ThreadContextStore = Pick<AgentRuntimeStore,
   | 'runtimeRoot'
+  | 'runtimeFiles'
   | 'activeTranscript'
   | 'appendCompaction'
   | 'appendTranscript'
@@ -133,12 +128,16 @@ export type ToolExecutionStore = Pick<AgentRuntimeStore,
   | 'appendToolValue'
   | 'appendTranscript'
   | 'getRun'
-  | 'listMeteorologicalDatasets'
+  | 'meteorology'
   | 'persistArtifact'
   | 'putConversationObject'
-  | 'resolveMeteorologicalDataset'
   | 'runtimeRoot'
   | 'saveRunCheckpoint'
   | 'mutateRunState'
   | 'updateRunState'
+>
+
+export type PersistentToolStore = ToolExecutionStore & Pick<AgentRuntimeStore,
+  | 'appendEvent'
+  | 'appendItem'
 >

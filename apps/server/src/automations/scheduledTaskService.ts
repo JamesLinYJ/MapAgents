@@ -17,7 +17,8 @@ import { z } from 'zod'
 import type { RunTaskManager } from '../agent/runTaskManager.js'
 import type { SecurityServices } from '../security/routes.js'
 import type { AuthContext } from '../security/types.js'
-import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
+import type { AnalysisRun } from '../schemas/types.js'
+import type { AutomationStore } from '../store/postgres/automationStore.js'
 import type { UsageStatsService } from '../usage/usageStatsService.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 import { automationRunsTotal } from '../observability/metrics.js'
@@ -78,9 +79,27 @@ export interface ScheduledTaskSnapshot {
   automationRuns: AutomationRunRecord[]
 }
 
+export interface ScheduledTaskConversationPort {
+  getRun(runId: string): AnalysisRun
+  completeRun(runId: string, status: string): Promise<AnalysisRun>
+}
+
 export class ScheduledTaskService {
   constructor(private readonly deps: {
-    store: PlatformPersistenceFacade
+    automations: Pick<AutomationStore,
+      | 'createAutomationRunRecord'
+      | 'createScheduledTask'
+      | 'deleteScheduledTask'
+      | 'getAutomationRunRecord'
+      | 'getScheduledTask'
+      | 'listActiveScheduledTasks'
+      | 'listAutomationRuns'
+      | 'listQueuedAutomationRuns'
+      | 'listScheduledTasks'
+      | 'updateAutomationRunRecord'
+      | 'updateScheduledTask'
+    >
+    conversations: ScheduledTaskConversationPort
     definitions: AutomationDefinitionService
     compiler: AutomationCompiler
     jobQueue: JobQueueService
@@ -91,12 +110,12 @@ export class ScheduledTaskService {
   }) {}
 
   async reconcileSchedules(): Promise<void> {
-    const tasks = await this.deps.store.listActiveScheduledTasks()
+    const tasks = await this.deps.automations.listActiveScheduledTasks()
     for (const task of tasks) {
       try {
         if (isMissedOneShot(task)) {
           await this.deps.jobQueue.unscheduleTask(task.taskId, task.queueJobId)
-          await this.deps.store.updateScheduledTask(task.taskId, {
+          await this.deps.automations.updateScheduledTask(task.taskId, {
             enabled: false,
             status: 'missed',
             queueJobId: null,
@@ -113,7 +132,7 @@ export class ScheduledTaskService {
   }
 
   async reconcileQueuedAutomationRuns(): Promise<void> {
-    const queuedRuns = await this.deps.store.listQueuedAutomationRuns()
+    const queuedRuns = await this.deps.automations.listQueuedAutomationRuns()
     for (const automationRun of queuedRuns) {
       if (automationRun.triggerKind === 'agent') {
         await this.failUndispatchableRun(
@@ -189,7 +208,7 @@ export class ScheduledTaskService {
     const automationRunId = makeId('automation_run')
     const dispatchId = makeId('automation_dispatch')
     const queueJobId = randomUUID()
-    const automationRun = await this.deps.store.createAutomationRunRecord({
+    const automationRun = await this.deps.automations.createAutomationRunRecord({
       automationRunId,
       automationId: definition.automationId,
       automationRevision: definition.revision,
@@ -235,9 +254,9 @@ export class ScheduledTaskService {
     const state = parseAutomationExecutionState(automationRun.metadata)
     if (state.currentAgentRunId) await this.deps.runTasks.cancel(state.currentAgentRunId)
     if (state.orchestrationRunId) {
-      const run = this.deps.store.getRun(state.orchestrationRunId)
+      const run = this.deps.conversations.getRun(state.orchestrationRunId)
       if (!['completed', 'failed', 'cancelled'].includes(run.status)) {
-        await this.deps.store.completeRun(run.id, 'cancelled')
+        await this.deps.conversations.completeRun(run.id, 'cancelled')
       }
     }
     const nodeRuns = state.nodeRuns.map(node => (
@@ -245,7 +264,7 @@ export class ScheduledTaskService {
         ? { ...node, status: 'cancelled' as const, completedAt: nowUtc() }
         : node
     ))
-    const cancelled = await this.deps.store.updateAutomationRunRecord(automationRunId, {
+    const cancelled = await this.deps.automations.updateAutomationRunRecord(automationRunId, {
       status: 'cancelled',
       currentStep: null,
       pendingApproval: null,
@@ -312,7 +331,7 @@ export class ScheduledTaskService {
           errorMessage: '用户拒绝执行工具。',
           output: { error: '用户拒绝执行工具。' },
         })
-        const failed = await this.deps.store.updateAutomationRunRecord(automationRunId, {
+        const failed = await this.deps.automations.updateAutomationRunRecord(automationRunId, {
           status: 'failed',
           currentStep: node.nodeId,
           errorMessage: '用户拒绝执行工具，且该节点没有错误分支。',
@@ -343,7 +362,7 @@ export class ScheduledTaskService {
     }
     const dispatchId = makeId('automation_dispatch')
     const queueJobId = randomUUID()
-    const resumed = await this.deps.store.updateAutomationRunRecord(automationRunId, {
+    const resumed = await this.deps.automations.updateAutomationRunRecord(automationRunId, {
       status: 'queued',
       currentStep: node.nodeId,
       pendingApproval: state.pendingApproval,
@@ -377,8 +396,8 @@ export class ScheduledTaskService {
       workspaceId: auth.defaultWorkspaceId,
     })
     return {
-      tasks: await this.deps.store.listScheduledTasks(auth.defaultWorkspaceId),
-      automationRuns: await this.deps.store.listAutomationRuns(auth.defaultWorkspaceId),
+      tasks: await this.deps.automations.listScheduledTasks(auth.defaultWorkspaceId),
+      automationRuns: await this.deps.automations.listAutomationRuns(auth.defaultWorkspaceId),
     }
   }
 
@@ -396,7 +415,7 @@ export class ScheduledTaskService {
     const nextFireAt = normalized.enabled
       ? computeNextFireAt({ cron: normalized.cron, timezone: normalized.timezone })
       : null
-    let task = await this.deps.store.createScheduledTask({
+    let task = await this.deps.automations.createScheduledTask({
       taskId,
       targetKind: normalized.targetKind,
       targetId: definition.automationId,
@@ -450,7 +469,7 @@ export class ScheduledTaskService {
     compiled.validateParameters({ ...definition.defaultParameters, ...merged.parameters })
     assertSupportedCronExpression(merged.cron)
     const nextFireAt = merged.enabled ? computeNextFireAt({ cron: merged.cron, timezone: merged.timezone }) : null
-    let task = await this.deps.store.updateScheduledTask(taskId, {
+    let task = await this.deps.automations.updateScheduledTask(taskId, {
       targetKind: merged.targetKind,
       targetId: definition.automationId,
       title: merged.title ?? definition.name,
@@ -474,7 +493,7 @@ export class ScheduledTaskService {
     }
     else {
       await this.deps.jobQueue.unscheduleTask(task.taskId, existing.queueJobId)
-      task = await this.deps.store.updateScheduledTask(task.taskId, { queueJobId: null })
+      task = await this.deps.automations.updateScheduledTask(task.taskId, { queueJobId: null })
     }
     return task
   }
@@ -486,7 +505,7 @@ export class ScheduledTaskService {
       resourceId: existing.taskId,
     })
     await this.deps.jobQueue.unscheduleTask(taskId, existing.queueJobId)
-    const deleted = await this.deps.store.deleteScheduledTask(taskId)
+    const deleted = await this.deps.automations.deleteScheduledTask(taskId)
     await this.deps.security.authorization.audit(auth, 'scheduled_task', 'delete', {
       workspaceId: existing.workspaceId,
       resourceId: taskId,
@@ -533,7 +552,7 @@ export class ScheduledTaskService {
   }
 
   private async requireAutomationRunInWorkspace(auth: AuthContext, automationRunId: string): Promise<AutomationRunRecord> {
-    const automationRun = await this.deps.store.getAutomationRunRecord(automationRunId)
+    const automationRun = await this.deps.automations.getAutomationRunRecord(automationRunId)
     if (!automationRun || automationRun.workspaceId !== auth.defaultWorkspaceId) {
       throw new Error(`自动化流程运行 '${automationRunId}' 不存在。`)
     }
@@ -541,7 +560,7 @@ export class ScheduledTaskService {
   }
 
   private async requireTaskInWorkspace(auth: AuthContext, taskId: string): Promise<ScheduledTask> {
-    const task = await this.deps.store.getScheduledTask(taskId)
+    const task = await this.deps.automations.getScheduledTask(taskId)
     if (!task || task.status === 'deleted' || task.workspaceId !== auth.defaultWorkspaceId) {
       throw new Error(`定时任务 '${taskId}' 不存在。`)
     }
@@ -569,7 +588,7 @@ export class ScheduledTaskService {
         parameters: {},
       },
     })
-    return this.deps.store.updateScheduledTask(task.taskId, { queueJobId })
+    return this.deps.automations.updateScheduledTask(task.taskId, { queueJobId })
   }
 
   private async markScheduleRegistrationFailed(task: ScheduledTask): Promise<ScheduledTask> {
@@ -581,7 +600,7 @@ export class ScheduledTaskService {
         taskId: task.taskId,
       }, 'failed to remove uncertain scheduled task registration')
     }
-    return this.deps.store.updateScheduledTask(task.taskId, {
+    return this.deps.automations.updateScheduledTask(task.taskId, {
       enabled: false,
       status: 'failed',
       queueJobId: null,
@@ -607,7 +626,7 @@ export class ScheduledTaskService {
         automationRunId: automationRun.automationRunId,
         queueJobId,
       }, 'automation dispatch failed')
-      const latest = await this.deps.store.getAutomationRunRecord(automationRun.automationRunId)
+      const latest = await this.deps.automations.getAutomationRunRecord(automationRun.automationRunId)
       if (latest && latest.status !== 'queued') return latest
       if (latest) {
         await this.failUndispatchableRun(
@@ -632,7 +651,7 @@ export class ScheduledTaskService {
     automationRun: AutomationRunRecord,
     message: string,
   ): Promise<AutomationRunRecord> {
-    return this.deps.store.updateAutomationRunRecord(automationRun.automationRunId, {
+    return this.deps.automations.updateAutomationRunRecord(automationRun.automationRunId, {
       status: 'failed',
       errorMessage: message,
       completedAt: nowUtc(),

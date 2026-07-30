@@ -33,7 +33,7 @@ export function registerThreadContextCommands(registry: WsCommandRegistry): void
     auth: 'required',
     csrf: false,
     handler: async (payload, context) => {
-      const config = await resolveRuntimeConfig(context.dependencies.store, context.dependencies.defaultRuntimeConfig)
+      const config = await resolveRuntimeConfig(context.dependencies.store.runtimeConfiguration, context.dependencies.defaultRuntimeConfig)
       const tools = context.dependencies.toolRegistry
         .list()
         .map(tool => `- ${tool.name}: ${tool.description}`)
@@ -49,7 +49,7 @@ export function registerThreadContextCommands(registry: WsCommandRegistry): void
     auth: 'required',
     csrf: true,
     handler: async (payload, context) => {
-      const config = await resolveRuntimeConfig(context.dependencies.store, context.dependencies.defaultRuntimeConfig)
+      const config = await resolveRuntimeConfig(context.dependencies.store.runtimeConfiguration, context.dependencies.defaultRuntimeConfig)
       return compactThreadIfNeeded(
         context.dependencies.store,
         payload.threadId,

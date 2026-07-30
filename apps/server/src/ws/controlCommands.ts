@@ -32,8 +32,8 @@ const runtimeConfigUpdateSchema = z.object({
 }).passthrough()
 const fileDeleteSchema = z.object({
   fileId: z.string().min(1),
-  threadId: z.string().min(1).nullable().optional(),
-}).passthrough()
+  threadId: z.string().min(1),
+}).strict()
 const layerListSchema = z.object({
   sessionId: z.string().min(1).nullable().optional(),
   threadId: z.string().min(1).nullable().optional(),
@@ -52,7 +52,7 @@ export function registerControlCommands(registry: WsCommandRegistry): void {
     payloadSchema: emptyPayloadSchema,
     auth: 'required',
     csrf: false,
-    handler: (_payload, context) => context.dependencies.store.listToolCatalogEntries(),
+    handler: (_payload, context) => context.dependencies.store.toolCatalog.listToolCatalogEntries(),
   })
 
   registry.register({
@@ -60,7 +60,7 @@ export function registerControlCommands(registry: WsCommandRegistry): void {
     payloadSchema: toolCatalogUpsertSchema,
     auth: 'required',
     csrf: true,
-    handler: (payload, context) => context.dependencies.store.upsertToolCatalogEntry({
+    handler: (payload, context) => context.dependencies.store.toolCatalog.upsertToolCatalogEntry({
       toolKind: payload.toolKind,
       toolName: payload.toolName,
       payload: payload.payload,
@@ -74,7 +74,7 @@ export function registerControlCommands(registry: WsCommandRegistry): void {
     auth: 'required',
     csrf: true,
     handler: async (payload, context) => {
-      await context.dependencies.store.deleteToolCatalogEntry(payload.toolKind, payload.toolName)
+      await context.dependencies.store.toolCatalog.deleteToolCatalogEntry(payload.toolKind, payload.toolName)
       return { deleted: true }
     },
   })
@@ -85,7 +85,7 @@ export function registerControlCommands(registry: WsCommandRegistry): void {
     auth: 'required',
     csrf: true,
     handler: async (payload, context) => {
-      await context.dependencies.store.upsertRuntimeConfig('agent-runtime', payload.config)
+      await context.dependencies.store.runtimeConfiguration.upsertRuntimeConfig('agent-runtime', payload.config)
       return payload.config
     },
   })
@@ -104,10 +104,10 @@ export function registerControlCommands(registry: WsCommandRegistry): void {
     auth: 'required',
     csrf: true,
     handler: async (payload, context) => {
-      const existing = (await context.files.list(payload.threadId ?? null)).find(file => file.id === payload.fileId)
-      const deleted = await context.files.delete(payload.fileId, payload.threadId ?? null)
+      const existing = (await context.files.list(payload.threadId)).find(file => file.id === payload.fileId)
+      const deleted = await context.files.delete(payload.fileId, payload.threadId)
       if (!deleted) throw new StoreNotFoundError(`文件 '${payload.fileId}' 不存在`)
-      if (payload.threadId && existing) {
+      if (existing) {
         await context.dependencies.store.recordAttachment(payload.threadId, existing, 'deleted')
       }
       return { deleted: true, id: payload.fileId }

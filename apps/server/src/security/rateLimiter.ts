@@ -53,6 +53,10 @@ export class SlidingWindowRateLimiter {
     return Math.floor(bucket.tokens)
   }
 
+  delete(key: string): void {
+    this.buckets.delete(key)
+  }
+
   private prune(): void {
     const cutoff = Date.now() - this.windowMs * 2
     for (const [key, bucket] of this.buckets) {
@@ -110,5 +114,10 @@ export class WsMessageRateLimiter {
       this.commandLimiters.set(commandType, cmdLimiter)
     }
     return cmdLimiter.consume(connectionId)
+  }
+
+  releaseConnection(connectionId: string): void {
+    this.connectionLimiter.delete(connectionId)
+    for (const limiter of this.commandLimiters.values()) limiter.delete(connectionId)
   }
 }

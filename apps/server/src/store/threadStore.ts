@@ -23,7 +23,7 @@ import type { ConversationProjectionIndex } from './conversationProjectionIndex.
 import type { InMemoryEventBus } from './eventBus.js'
 import type { ConversationPayloadStore } from './conversationPayloadStore.js'
 import { estimateTokens } from './conversationEncoding.js'
-import { RuntimeFileStore } from './fileStore.js'
+import type { RuntimeFileStore } from './fileStore.js'
 import { splitThreadMemoryDocument } from './threadMemoryDocument.js'
 import type { SessionStore } from './sessionStore.js'
 import type {
@@ -61,7 +61,7 @@ export class ThreadStore {
     private readonly repositories: ThreadPersistencePorts,
     private readonly runReader: Pick<RunRepository, 'listRunsForThread'>,
     private readonly objectReferences: ObjectReferenceRepository,
-    private readonly runtimeRoot: string,
+    private readonly files: Pick<RuntimeFileStore, 'cloneThreadFiles'>,
     private readonly events: ThreadStoreEvents,
   ) {}
 
@@ -166,7 +166,7 @@ export class ThreadStore {
     const source = this.get(sourceThreadId)
     const target = await this.create(source.sessionId, title ?? `${source.title} · 分支`)
     const mapping = await this.repositories.transcript.forkConversation(sourceThreadId, target.id, sourceEntryId)
-    await new RuntimeFileStore(this.runtimeRoot).cloneThreadFiles(sourceThreadId, target.id)
+    await this.files.cloneThreadFiles(sourceThreadId, target.id)
     const sourceMemory = await this.getMemory(sourceThreadId)
     if (sourceMemory.version > 0 || sourceMemory.content.trim()) {
       await this.updateMemory(

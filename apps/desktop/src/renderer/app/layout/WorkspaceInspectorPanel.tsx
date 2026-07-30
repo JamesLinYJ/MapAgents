@@ -16,11 +16,20 @@ import { motionSpring } from '../../shared/motion'
 import { WorkbenchProgressCard, type WorkbenchProgressCardProps } from './WorkbenchProgressCard'
 
 const DetailPanel = lazy(() => import('../../features/artifacts/DetailPanel').then((module) => ({ default: module.DetailPanel })))
+export type WorkspaceInspectorDetail = DetailPanelProps
 
-export interface WorkspaceInspectorPanelProps extends DetailPanelProps {
+export interface WorkspaceInspectorProgress {
+  runStatus: WorkbenchProgressCardProps['runStatus']
+  progressItems: WorkbenchProgressCardProps['progressItems']
   tasks: WorkbenchProgressCardProps['tasks']
-  onOpenHistory: () => void
-  showProgress?: boolean
+  events: WorkbenchProgressCardProps['events']
+  artifactCount: WorkbenchProgressCardProps['artifactCount']
+  onOpenHistory: WorkbenchProgressCardProps['onOpenHistory']
+}
+
+export interface WorkspaceInspectorPanelProps {
+  detail: WorkspaceInspectorDetail
+  progress?: WorkspaceInspectorProgress
 }
 
 function DetailPanelFallback() {
@@ -37,29 +46,27 @@ function DetailPanelFallback() {
 }
 
 export function WorkspaceInspectorPanel({
-  tasks,
-  onOpenHistory,
-  showProgress = true,
-  ...detailProps
+  detail,
+  progress,
 }: WorkspaceInspectorPanelProps) {
   return (
     <>
-      {showProgress ? (
+      {progress ? (
         <m.div layout transition={motionSpring.gentle}>
           <WorkbenchProgressCard
-            runStatus={detailProps.runStatus}
-            progressItems={detailProps.progressItems}
-            tasks={tasks}
-            events={detailProps.events}
-            artifactCount={detailProps.artifacts.length}
-            onOpenHistory={onOpenHistory}
+            runStatus={progress.runStatus}
+            progressItems={progress.progressItems}
+            tasks={progress.tasks}
+            events={progress.events}
+            artifactCount={progress.artifactCount}
+            onOpenHistory={progress.onOpenHistory}
           />
         </m.div>
       ) : null}
       <m.div className="workbench-inspector-detail" layout transition={motionSpring.gentle}>
         <Suspense fallback={<DetailPanelFallback />}>
           <m.div layout transition={motionSpring.gentle}>
-            <DetailPanel {...detailProps} />
+            <DetailPanel {...detail} />
           </m.div>
         </Suspense>
       </m.div>

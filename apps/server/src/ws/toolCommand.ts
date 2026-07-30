@@ -76,7 +76,7 @@ export async function executeTool(
     const created = await store.createRun(sessionId, `执行工具：${tool.label}`, {
       threadId,
       modelProvider: modelRegistry.defaultProvider || null,
-      runtimeConfigSnapshot: await resolveRuntimeConfig(store, runtimeConfigDefaults),
+      runtimeConfigSnapshot: await resolveRuntimeConfig(store.runtimeConfiguration, runtimeConfigDefaults),
     })
     runId = created.id
     directRun = true
@@ -90,6 +90,7 @@ export async function executeTool(
       auth,
     }, {
       store,
+      runtimeConfiguration: store.runtimeConfiguration,
       registry,
       modelRegistry,
       ...(modelCompletions ? { modelCompletions } : {}),

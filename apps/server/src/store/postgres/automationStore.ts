@@ -51,46 +51,46 @@ export class AutomationStore {
     this.runs = new AutomationRunRepository(db)
   }
 
-  syncDefinitions(definitions: AutomationDefinition[]): Promise<void> {
+  syncAutomationDefinitions(definitions: AutomationDefinition[]): Promise<void> {
     return this.definitions.syncDefinitions(definitions)
   }
 
-  listDefinitions(workspaceId: string): Promise<AutomationDefinition[]> {
+  listAutomationDefinitions(workspaceId: string): Promise<AutomationDefinition[]> {
     return this.definitions.listDefinitions(workspaceId)
   }
 
-  getDefinition(automationId: string): Promise<AutomationDefinition | null> {
+  getAutomationDefinition(automationId: string): Promise<AutomationDefinition | null> {
     return this.definitions.getDefinition(automationId)
   }
 
-  getDefinitionVersion(automationId: string, revision: number): Promise<AutomationDefinition | null> {
+  getAutomationDefinitionVersion(automationId: string, revision: number): Promise<AutomationDefinition | null> {
     return this.definitions.getDefinitionVersion(automationId, revision)
   }
 
-  getPublishedDefinition(automationId: string): Promise<AutomationDefinition | null> {
+  getPublishedAutomationDefinition(automationId: string): Promise<AutomationDefinition | null> {
     return this.definitions.getPublishedDefinition(automationId)
   }
 
-  listDefinitionVersions(automationId: string): Promise<AutomationVersionRecord[]> {
+  listAutomationDefinitionVersions(automationId: string): Promise<AutomationVersionRecord[]> {
     return this.definitions.listDefinitionVersions(automationId)
   }
 
-  createDefinition(definition: AutomationDefinition): Promise<AutomationDefinition> {
+  createAutomationDefinition(definition: AutomationDefinition): Promise<AutomationDefinition> {
     return this.definitions.createDefinition(definition)
   }
 
-  saveDefinitionRevision(
+  saveAutomationDefinitionRevision(
     definition: AutomationDefinition,
     expectedRevision: number,
   ): Promise<AutomationDefinition> {
     return this.definitions.saveDefinitionRevision(definition, expectedRevision)
   }
 
-  publishDefinition(automationId: string, revision: number): Promise<AutomationDefinition> {
+  publishAutomationDefinition(automationId: string, revision: number): Promise<AutomationDefinition> {
     return this.definitions.publishDefinition(automationId, revision)
   }
 
-  disableDefinition(automationId: string): Promise<AutomationDefinition> {
+  disableAutomationDefinition(automationId: string): Promise<AutomationDefinition> {
     return this.definitions.disableDefinition(automationId)
   }
 
@@ -114,19 +114,19 @@ export class AutomationStore {
     return this.schedules.updateScheduledTask(taskId, input)
   }
 
-  markScheduledTaskDeleted(taskId: string): Promise<ScheduledTask> {
+  deleteScheduledTask(taskId: string): Promise<ScheduledTask> {
     return this.schedules.markScheduledTaskDeleted(taskId)
   }
 
-  createAutomationRun(input: CreateAutomationRunInput): Promise<AutomationRunRecord> {
+  createAutomationRunRecord(input: CreateAutomationRunInput): Promise<AutomationRunRecord> {
     return this.runs.createAutomationRun(input)
   }
 
-  getAutomationRun(automationRunId: string): Promise<AutomationRunRecord | null> {
+  getAutomationRunRecord(automationRunId: string): Promise<AutomationRunRecord | null> {
     return this.runs.getAutomationRun(automationRunId)
   }
 
-  updateAutomationRun(
+  updateAutomationRunRecord(
     automationRunId: string,
     input: UpdateAutomationRunInput,
   ): Promise<AutomationRunRecord> {

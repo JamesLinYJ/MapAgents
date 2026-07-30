@@ -10,22 +10,14 @@
 // --------------------------------------------------------------------------
 
 import { and, asc, eq, ilike, inArray, not, sql } from 'drizzle-orm'
+import type { LocalManagedAccount } from '@geo-agent-platform/shared-types/local-operations'
 
 import type { Database } from '../../db/connection.js'
 import { authUser, platformMemberships, platformUsers } from '../../db/schema.js'
 import { LOCAL_AGENT_EMAIL_DOMAIN } from '../../security/localAgentPrincipal.js'
 import { LOCAL_CONSOLE_EMAIL_DOMAIN } from '../../security/localConsolePrincipal.js'
 
-export interface LocalManagedAccount {
-  authUserId: string
-  email: string
-  displayName: string
-  authRole: string
-  banned: boolean
-  platformUserId: string | null
-  platformStatus: 'active' | 'disabled' | null
-  platformRoles: Array<{ workspaceId: string; role: string }>
-}
+export type { LocalManagedAccount } from '@geo-agent-platform/shared-types/local-operations'
 
 /** 汇总 Better Auth 身份与 GeoForge 权限投影；只读，不成为新的账户事实源。 */
 export class LocalAccountRepository {

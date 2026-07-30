@@ -86,6 +86,47 @@ describe('agentWorkflowState', () => {
     })?.stepId).toBe('delegate')
   })
 
+  it('requires explicit identity for ambiguous same-tool steps and honors reverse execution order', () => {
+    const workflow = createAgentWorkflow({
+      goal: '分别检查两个数据集',
+      steps: [
+        step('inspect_a', 'inspect_dataset'),
+        step('inspect_b', 'inspect_dataset'),
+      ],
+    })
+
+    expect(findRunnableAgentWorkflowStep(workflow, invocation('inspect_dataset'))).toBeNull()
+    expect(findRunnableAgentWorkflowStep(workflow, {
+      ...invocation('inspect_dataset'),
+      workflowStepId: 'inspect_b',
+    })?.stepId).toBe('inspect_b')
+    expect(findRunnableAgentWorkflowStep(workflow, {
+      ...invocation('inspect_dataset'),
+      workflowStepId: 'missing',
+    })).toBeNull()
+  })
+
+  it('binds repeated same-tool steps across dependency boundaries', () => {
+    const workflow = createAgentWorkflow({
+      goal: '依次检查同一数据集',
+      steps: [
+        step('inspect_first', 'inspect_dataset'),
+        step('inspect_second', 'inspect_dataset', ['inspect_first']),
+      ],
+    })
+
+    expect(findRunnableAgentWorkflowStep(workflow, invocation('inspect_dataset'))?.stepId)
+      .toBe('inspect_first')
+    const afterFirst = completeAgentWorkflowStep(
+      startAgentWorkflowStep(workflow, { stepId: 'inspect_first' }),
+      { stepId: 'inspect_first', resultSummary: '第一次完成' },
+    )
+    expect(findRunnableAgentWorkflowStep(afterFirst, {
+      ...invocation('inspect_dataset'),
+      workflowStepId: 'inspect_second',
+    })?.stepId).toBe('inspect_second')
+  })
+
   it('rejects invalid execution contracts for automation and sub-agent steps', () => {
     expect(() => createAgentWorkflow({
       goal: '执行自动化流程',

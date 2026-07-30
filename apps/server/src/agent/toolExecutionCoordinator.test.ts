@@ -514,6 +514,54 @@ describe('ToolExecutionCoordinator', () => {
       .toContain('只能使用已注册的无副作用读取工具诊断')
   })
 
+  it('binds reverse and concurrent same-tool calls to explicit workflow step ids', async () => {
+    const workflow = createAgentWorkflow({
+      goal: '分别检查两个数据集',
+      steps: [
+        {
+          stepId: 'inspect_a',
+          title: '检查数据集 A',
+          kind: 'tool',
+          toolName: 'inspect_dataset',
+          ownerAgentId: 'supervisor',
+          args: { datasetId: 'dataset_a' },
+          reason: '检查 A',
+          dependsOn: [],
+        },
+        {
+          stepId: 'inspect_b',
+          title: '检查数据集 B',
+          kind: 'tool',
+          toolName: 'inspect_dataset',
+          ownerAgentId: 'supervisor',
+          args: { datasetId: 'dataset_b' },
+          reason: '检查 B',
+          dependsOn: [],
+        },
+      ],
+    })
+    const { coordinator, getState } = coordinatorHarness(testProvider(), false, [], workflow)
+
+    await expect(coordinator.executeDirect('inspect_dataset', { datasetId: 'dataset_b' }))
+      .rejects.toThrow('必须通过 workflowStepId 指定')
+
+    await Promise.all([
+      coordinator.executeDirect('inspect_dataset', {
+        datasetId: 'dataset_b',
+        workflowStepId: 'inspect_b',
+      }),
+      coordinator.executeDirect('inspect_dataset', {
+        datasetId: 'dataset_a',
+        workflowStepId: 'inspect_a',
+      }),
+    ])
+
+    expect(getState().agentWorkflow?.steps.map(step => [step.stepId, step.status])).toEqual([
+      ['inspect_a', 'completed'],
+      ['inspect_b', 'completed'],
+    ])
+  })
+
   it('opens a subagent internal tool only while its approved agent step is running', async () => {
     const workflow = createAgentWorkflow({
       goal: '委托检查数据集',
@@ -560,6 +608,9 @@ function coordinatorHarness(
   agentWorkflow: AgentWorkflow | null = null,
 ): {
   coordinator: ToolExecutionCoordinator
+  getState: () => {
+    agentWorkflow: AgentWorkflow | null
+  }
 } {
   let state = {
     planMode,
@@ -609,11 +660,13 @@ function coordinatorHarness(
       valueState: new Map(),
       signal: new AbortController().signal,
     }),
+    getState: () => state,
   }
 }
 
 function subAgentArgs(objective: string) {
   return {
+    workflowStepId: 'step_agent',
     objective,
     expectedDeliverables: ['可核验分析结论'],
     contextRefs: [],

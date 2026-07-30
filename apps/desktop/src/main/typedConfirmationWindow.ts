@@ -11,6 +11,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { BrowserWindow } from 'electron'
+import { secureWebPreferences } from './secureWebPreferences.js'
 
 import type { DesktopShutdownConfirmation } from './desktopShutdownCoordinator.js'
 
@@ -46,12 +47,7 @@ export class DesktopTypedConfirmationWindow implements DesktopShutdownConfirmati
       resizable: false,
       title: input.title,
       backgroundColor: '#f7f9fc',
-      webPreferences: {
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        webSecurity: true,
-      },
+      webPreferences: secureWebPreferences(),
     })
     window.removeMenu()
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))

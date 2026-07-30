@@ -9,7 +9,8 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -160,10 +161,10 @@ describe('conversation repository', () => {
         runtimeConfigDigest: 'test-runtime-digest',
       })
       await store.updateThreadMemory(protectedThread.id, '需要长期保留的线程记忆', 0)
-      const uploaded = await new RuntimeFileStore(root).save({
-        name: 'sample.nc',
-        arrayBuffer: async () => Uint8Array.from([1, 2, 3, 4]).buffer,
-      }, protectedThread.id)
+      const uploaded = await new RuntimeFileStore(root).save(
+        await stageTestFile(root, 'sample.nc', Buffer.from([1, 2, 3, 4])),
+        protectedThread.id,
+      )
 
       const disposable = await store.createThread(session.id, '触发垃圾回收')
       await store.deleteThread(disposable.id)
@@ -178,6 +179,19 @@ describe('conversation repository', () => {
   })
 
 })
+
+async function stageTestFile(root: string, name: string, content: Buffer) {
+  const tempPath = path.join(root, 'test-staging', `${randomUUID()}.upload`)
+  await mkdir(path.dirname(tempPath), { recursive: true })
+  await writeFile(tempPath, content)
+  return {
+    name,
+    tempPath,
+    sizeBytes: content.byteLength,
+    contentHash: createHash('sha256').update(content).digest('hex'),
+    mediaType: 'application/octet-stream',
+  }
+}
 
 async function createStore(root: string, harness = new PersistenceFacadeTestHarness()): Promise<PlatformPersistenceFacade> {
   const store = harness.create(root)

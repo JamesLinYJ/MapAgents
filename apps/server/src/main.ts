@@ -41,6 +41,11 @@ import {
 import { installLifecycleManager } from './lifecycle.js'
 import { createAppContainer } from './app/container.js'
 import { platformNotFoundHandler } from './app/httpNotFound.js'
+import {
+  ServiceAdmission,
+  serviceAdmissionMiddleware,
+  shuttingDownHealth,
+} from './app/serviceAdmission.js'
 
 const env = getEnv()
 // SDK tracing 使用进程级 provider。这里只安装本地结构化处理器，不注册
@@ -48,6 +53,7 @@ const env = getEnv()
 const agentTracing = new LocalAgentTracing()
 agentTracing.install()
 const container = await createAppContainer({ env, projectRoot, agentTracing })
+const admission = new ServiceAdmission()
 
 const app = new Hono()
 // 匿名分享已永久退役。该边界必须先于全局 CORS 注册，确保预检请求也稳定
@@ -59,7 +65,6 @@ const trustedOrigins = new Set([
   ...container.security.auth.trustedOrigins(),
   env.APP_BASE_URL.replace(/\/+$/u, ''),
 ])
-let isShuttingDown = false
 app.use('*', cors({
   origin: origin => origin && trustedOrigins.has(origin.replace(/\/+$/u, '')) ? origin : '',
   credentials: true,
@@ -92,11 +97,10 @@ app.use('*', async (c, next) => {
   })
 })
 app.use('*', observeHttpMetrics)
-app.use('*', async (c, next) => {
-  if (isShuttingDown && c.req.path !== '/health' && c.req.path !== '/metrics') return c.json({ detail: '服务正在关闭，请稍后重试。' }, 503)
-  await next()
-})
+app.use('*', serviceAdmissionMiddleware(admission))
 app.get('/health', async c => {
+  const shutdown = shuttingDownHealth(admission)
+  if (shutdown) return c.json(shutdown, 503)
   const health = await container.checkReadiness()
   return c.json(health, health.status === 'ok' ? 200 : 503)
 })
@@ -106,8 +110,8 @@ app.get('/metrics', async () => {
 app.on(['GET', 'POST'], '/api/auth/*', authRateLimitMiddleware, c => container.security.auth.handler(c.req.raw))
 app.use('/api/v1/*', apiRateLimitMiddleware(container.security), (c, next) => requireHttpAuth(container.security, c, next))
 app.route('/', securityRoutes(container.security))
-app.route('/', fileRoutes(container.runtimeRoot, container.store, container.security, env))
-app.route('/', layerRoutes(container.managedLayers, container.store, container.security, env))
+app.route('/', fileRoutes(container.runtimeRoot, container.runtimeFiles, container.store, container.security, env))
+app.route('/', layerRoutes(container.runtimeRoot, container.managedLayers, container.store, container.security, env))
 app.route('/', artifactRoutes(container.artifactRepository, container.runtimeRoot, container.security))
 app.route('/', desktopExportRoutes({
   artifacts: container.artifactRepository,
@@ -121,7 +125,7 @@ app.route('/', mapRoutes({
   tileGateway: container.mapTileGateway,
   security: container.security,
 }))
-app.route('/', meteorologyRoutes(container.runtimeRoot, container.store, container.security, env))
+app.route('/', meteorologyRoutes(container.runtimeRoot, container.runtimeFiles, container.store, container.security, env))
 app.onError((error, c) => {
   if (error instanceof AuthorizationError) return c.json({ detail: error.message }, 403)
   if (error.message === '未登录。') return c.json({ detail: '未登录' }, 401)
@@ -134,11 +138,13 @@ const server = createServer(getRequestListener(app.fetch))
 const wsServer = createWsHandler(server, {
   env,
   store: container.store,
+  events: container.events,
   toolRegistry: container.toolRegistry,
   modelRegistry: container.modelRegistry,
   modelCompletions: container.modelCompletions,
   managedLayers: container.managedLayers,
   runtimeRoot: container.runtimeRoot,
+  runtimeFiles: container.runtimeFiles,
   defaultRuntimeConfig: container.defaultRuntimeConfig,
   runtime: container.runtime,
   runTasks: container.runTasks,
@@ -148,6 +154,7 @@ const wsServer = createWsHandler(server, {
   usageStats: container.usageStats,
   mapStore: container.mapStore,
   security: container.security,
+  admission,
 })
 installLifecycleManager({
   server,
@@ -155,7 +162,7 @@ installLifecycleManager({
   store: container.store,
   db: container.db,
   instanceLock: container.instanceLock,
-  onShutdownStart: () => { isShuttingDown = true },
+  onShutdownStart: () => { admission.beginShutdown() },
   beforeDrain: () => container.shutdown(),
 })
 

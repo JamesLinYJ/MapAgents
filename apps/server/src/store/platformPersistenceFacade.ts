@@ -14,18 +14,16 @@ import type {
   SessionRecord, AgentThreadRecord, AnalysisRun, RunSummary, AgentState,
   RunEvent, ConversationItem, AgentRuntimeConfig, ArtifactRef, ContentRef,
   RunCheckpoint, RunSteeringRecord, TranscriptEntry, TranscriptEntryKind, ThreadManifest,
-  ThreadMemoryDocument, CompactionRecord, MeteorologicalDatasetRecord,
-  MeteorologicalJobRecord, ToolValueRef,
-  MapScene,
+  ThreadMemoryDocument, CompactionRecord, ToolValueRef,
 } from '../schemas/types.js'
 import { ArtifactStore, type VisibleArtifactOptions } from './artifactStore.js'
 import { ConversationProjectionIndex } from './conversationProjectionIndex.js'
 import { ContentObjectGateway } from './contentObjectGateway.js'
-import { InMemoryEventBus } from './eventBus.js'
 import { ConversationPayloadStore } from './conversationPayloadStore.js'
 import { RunStore } from './runStore.js'
 import { DEFAULT_SESSION_ID, SessionStore, type ResourceOwner } from './sessionStore.js'
 import { ThreadStore } from './threadStore.js'
+import { RuntimeFileStore } from './fileStore.js'
 import path from 'node:path'
 import { ArtifactPublicationRepository } from './postgres/artifactPublicationRepository.js'
 import type {
@@ -34,15 +32,9 @@ import type {
 } from './postgres/artifactRepository.js'
 import { MeteorologicalStore } from './postgres/meteorologicalStore.js'
 import { RuntimeConfigStore } from './postgres/runtimeConfigStore.js'
-import { ToolCatalogStore, type ToolCatalogEntry } from './postgres/toolCatalogStore.js'
-import {
-  AutomationStore,
-  type CreateScheduledTaskInput,
-  type CreateAutomationRunInput,
-  type UpdateScheduledTaskInput,
-  type UpdateAutomationRunInput,
-} from './postgres/automationStore.js'
-import type { ScheduledTask, AutomationDefinition, AutomationRunRecord, AutomationVersionRecord } from '../automations/schemas.js'
+import { ToolCatalogStore } from './postgres/toolCatalogStore.js'
+import { AutomationStore } from './postgres/automationStore.js'
+import { PlatformEventHub } from './platformEventHub.js'
 import {
   PostgresConversationPersistence,
 } from './postgres/conversationPersistence.js'
@@ -53,23 +45,18 @@ import type {
   RunInputRepository,
 } from './postgres/conversationPersistencePorts.js'
 
-export type { ToolCatalogEntry } from './postgres/toolCatalogStore.js'
-
 export type { ResourceOwner } from './sessionStore.js'
 
 export class PlatformPersistenceFacade {
   static readonly DEFAULT_SESSION_ID = DEFAULT_SESSION_ID
 
-  readonly eventBus = new InMemoryEventBus<RunEvent>()
-  readonly itemBus = new InMemoryEventBus<ConversationItem>()
-  readonly runBus = new InMemoryEventBus<AnalysisRun>()
-  readonly threadEntryBus = new InMemoryEventBus<TranscriptEntry>()
-  readonly threadUpdateBus = new InMemoryEventBus<{ thread: AgentThreadRecord; manifest: ThreadManifest }>()
-  readonly threadCompactionBus = new InMemoryEventBus<CompactionRecord>()
-  readonly threadMemoryBus = new InMemoryEventBus<ThreadMemoryDocument>()
-  readonly mapSceneBus = new InMemoryEventBus<MapScene>()
   readonly payloadStoreRoot: string
   readonly runtimeRoot: string
+  readonly runtimeFiles: RuntimeFileStore
+  readonly meteorology: MeteorologicalStore
+  readonly runtimeConfiguration: RuntimeConfigStore
+  readonly toolCatalog: ToolCatalogStore
+  readonly automations: AutomationStore
 
   private readonly index = new ConversationProjectionIndex()
   private readonly payloadStore: ConversationPayloadStore
@@ -78,21 +65,20 @@ export class PlatformPersistenceFacade {
   private readonly runStore: RunStore
   private readonly artifactStore: ArtifactStore
   private readonly objectStore: ContentObjectGateway
-  private readonly meteorologicalStore: MeteorologicalStore
-  private readonly runtimeConfigStore: RuntimeConfigStore
-  private readonly toolCatalogStore: ToolCatalogStore
-  private readonly automationStore: AutomationStore
   private readonly snapshotRepository: ConversationSnapshotRepository
   private readonly runInputRepository: RunInputRepository
 
   constructor(db: Database, storageRoot: string, options: {
     conversationPersistence?: ConversationPersistence
     artifactRepository?: ArtifactRepository
+    events?: PlatformEventHub
   } = {}) {
+    const events = options.events ?? new PlatformEventHub()
     this.payloadStoreRoot = storageRoot
     this.runtimeRoot = ['sessions', 'conversations'].includes(path.basename(storageRoot))
       ? path.dirname(storageRoot)
       : storageRoot
+    this.runtimeFiles = new RuntimeFileStore(this.runtimeRoot)
     this.payloadStore = new ConversationPayloadStore(storageRoot)
     const persistence = options.conversationPersistence ?? new PostgresConversationPersistence(db)
     this.snapshotRepository = persistence
@@ -110,12 +96,12 @@ export class PlatformPersistenceFacade {
       },
       persistence,
       persistence,
-      this.runtimeRoot,
+      this.runtimeFiles,
       {
-        threadUpdateBus: this.threadUpdateBus,
-        threadEntryBus: this.threadEntryBus,
-        threadCompactionBus: this.threadCompactionBus,
-        threadMemoryBus: this.threadMemoryBus,
+        threadUpdateBus: events.threadUpdates,
+        threadEntryBus: events.threadEntries,
+        threadCompactionBus: events.threadCompactions,
+        threadMemoryBus: events.threadMemories,
       },
     )
     this.runStore = new RunStore(
@@ -125,9 +111,9 @@ export class PlatformPersistenceFacade {
       persistence,
       persistence,
       {
-        runBus: this.runBus,
-        eventBus: this.eventBus,
-        itemBus: this.itemBus,
+        runBus: events.runs,
+        eventBus: events.runEvents,
+        itemBus: events.conversationItems,
       },
     )
     this.artifactStore = new ArtifactStore(
@@ -136,10 +122,10 @@ export class PlatformPersistenceFacade {
       this.runtimeRoot,
     )
     this.objectStore = new ContentObjectGateway(this.payloadStore)
-    this.meteorologicalStore = new MeteorologicalStore(db)
-    this.runtimeConfigStore = new RuntimeConfigStore(db)
-    this.toolCatalogStore = new ToolCatalogStore(db)
-    this.automationStore = new AutomationStore(db)
+    this.meteorology = new MeteorologicalStore(db)
+    this.runtimeConfiguration = new RuntimeConfigStore(db)
+    this.toolCatalog = new ToolCatalogStore(db)
+    this.automations = new AutomationStore(db)
   }
 
   // --- Sessions ---
@@ -170,146 +156,6 @@ export class PlatformPersistenceFacade {
 
   async updateSession(sessionId: string, fields: Partial<SessionRecord>): Promise<SessionRecord> {
     return this.sessionStore.update(sessionId, fields)
-  }
-
-  async getRuntimeConfig(configKey: string): Promise<Record<string, unknown> | null> {
-    return this.runtimeConfigStore.get(configKey)
-  }
-
-  async upsertRuntimeConfig(configKey: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.runtimeConfigStore.upsert(configKey, payload)
-  }
-
-  async listToolCatalogEntries(): Promise<ToolCatalogEntry[]> {
-    return this.toolCatalogStore.list()
-  }
-
-  async upsertToolCatalogEntry(entry: ToolCatalogEntry): Promise<ToolCatalogEntry> {
-    return this.toolCatalogStore.upsert(entry)
-  }
-
-  async deleteToolCatalogEntry(toolKind: string, toolName: string): Promise<void> {
-    await this.toolCatalogStore.delete(toolKind, toolName)
-  }
-
-  async syncAutomationDefinitions(definitions: AutomationDefinition[]): Promise<void> {
-    await this.automationStore.syncDefinitions(definitions)
-  }
-
-  async listAutomationDefinitions(workspaceId: string): Promise<AutomationDefinition[]> {
-    return this.automationStore.listDefinitions(workspaceId)
-  }
-
-  async getAutomationDefinition(automationId: string): Promise<AutomationDefinition | null> {
-    return this.automationStore.getDefinition(automationId)
-  }
-
-  async getAutomationDefinitionVersion(automationId: string, revision: number): Promise<AutomationDefinition | null> {
-    return this.automationStore.getDefinitionVersion(automationId, revision)
-  }
-
-  async getPublishedAutomationDefinition(automationId: string): Promise<AutomationDefinition | null> {
-    return this.automationStore.getPublishedDefinition(automationId)
-  }
-
-  async listAutomationDefinitionVersions(automationId: string): Promise<AutomationVersionRecord[]> {
-    return this.automationStore.listDefinitionVersions(automationId)
-  }
-
-  async createAutomationDefinition(definition: AutomationDefinition): Promise<AutomationDefinition> {
-    return this.automationStore.createDefinition(definition)
-  }
-
-  async saveAutomationDefinitionRevision(definition: AutomationDefinition, expectedRevision: number): Promise<AutomationDefinition> {
-    return this.automationStore.saveDefinitionRevision(definition, expectedRevision)
-  }
-
-  async publishAutomationDefinition(automationId: string, revision: number): Promise<AutomationDefinition> {
-    return this.automationStore.publishDefinition(automationId, revision)
-  }
-
-  async disableAutomationDefinition(automationId: string): Promise<AutomationDefinition> {
-    return this.automationStore.disableDefinition(automationId)
-  }
-
-  async listScheduledTasks(workspaceId: string): Promise<ScheduledTask[]> {
-    return this.automationStore.listScheduledTasks(workspaceId)
-  }
-
-  async listActiveScheduledTasks(): Promise<ScheduledTask[]> {
-    return this.automationStore.listActiveScheduledTasks()
-  }
-
-  async getScheduledTask(taskId: string): Promise<ScheduledTask | null> {
-    return this.automationStore.getScheduledTask(taskId)
-  }
-
-  async createScheduledTask(input: CreateScheduledTaskInput): Promise<ScheduledTask> {
-    return this.automationStore.createScheduledTask(input)
-  }
-
-  async updateScheduledTask(taskId: string, input: UpdateScheduledTaskInput): Promise<ScheduledTask> {
-    return this.automationStore.updateScheduledTask(taskId, input)
-  }
-
-  async deleteScheduledTask(taskId: string): Promise<ScheduledTask> {
-    return this.automationStore.markScheduledTaskDeleted(taskId)
-  }
-
-  async createAutomationRunRecord(input: CreateAutomationRunInput): Promise<AutomationRunRecord> {
-    return this.automationStore.createAutomationRun(input)
-  }
-
-  async getAutomationRunRecord(automationRunId: string): Promise<AutomationRunRecord | null> {
-    return this.automationStore.getAutomationRun(automationRunId)
-  }
-
-  async updateAutomationRunRecord(automationRunId: string, input: UpdateAutomationRunInput): Promise<AutomationRunRecord> {
-    return this.automationStore.updateAutomationRun(automationRunId, input)
-  }
-
-  async listAutomationRuns(workspaceId: string, scheduledTaskId?: string | null): Promise<AutomationRunRecord[]> {
-    return this.automationStore.listAutomationRuns(workspaceId, scheduledTaskId)
-  }
-
-  async listQueuedAutomationRuns(): Promise<AutomationRunRecord[]> {
-    return this.automationStore.listQueuedAutomationRuns()
-  }
-
-  async listMeteorologicalDatasets(filters: {
-    sessionId?: string | null
-    threadId?: string | null
-    filename?: string | null
-    workspaceId?: string | null
-    limit?: number
-  } = {}): Promise<MeteorologicalDatasetRecord[]> {
-    return this.meteorologicalStore.list(filters)
-  }
-
-  async resolveMeteorologicalDataset(filters: {
-    sessionId: string
-    threadId?: string | null
-    datasetId?: string | null
-    filename?: string | null
-    workspaceId?: string | null
-  }): Promise<MeteorologicalDatasetRecord | null> {
-    return this.meteorologicalStore.resolve(filters)
-  }
-
-  async getMeteorologicalDataset(datasetId: string): Promise<MeteorologicalDatasetRecord | null> {
-    return this.meteorologicalStore.get(datasetId)
-  }
-
-  async createMeteorologicalDataset(dataset: MeteorologicalDatasetRecord): Promise<void> {
-    await this.meteorologicalStore.create(dataset)
-  }
-
-  async getMeteorologicalJob(jobId: string): Promise<MeteorologicalJobRecord | null> {
-    return this.meteorologicalStore.getJob(jobId)
-  }
-
-  async createMeteorologicalJob(job: MeteorologicalJobRecord): Promise<void> {
-    await this.meteorologicalStore.createJob(job)
   }
 
   async persistArtifact(artifact: ArtifactRef): Promise<void> {

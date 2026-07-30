@@ -30,15 +30,20 @@ import type { AutomationDefinitionService } from '../automations/automationDefin
 import type { BackgroundTaskRegistry } from '../automations/backgroundTaskRegistry.js'
 import type { UsageStatsService } from '../usage/usageStatsService.js'
 import type { MapStore } from '../store/postgres/mapStore.js'
+import type { RuntimeFileStore } from '../store/fileStore.js'
+import type { ServiceAdmission } from '../app/serviceAdmission.js'
+import type { PlatformEventHub } from '../store/platformEventHub.js'
 
 export interface WsDependencies {
   env: Env
   store: PlatformPersistenceFacade
+  events: PlatformEventHub
   toolRegistry: ToolRegistry
   modelRegistry: ModelAdapterRegistry
   modelCompletions?: ModelCompletionService
   managedLayers: ManagedLayerService
   runtimeRoot: string
+  runtimeFiles: RuntimeFileStore
   defaultRuntimeConfig?: AgentRuntimeConfig
   createSandboxClient?: SandboxClientFactory
   runtime: OpenAIAgentsRuntime
@@ -49,4 +54,5 @@ export interface WsDependencies {
   usageStats: UsageStatsService
   mapStore: MapStore
   security: SecurityServices
+  admission: Pick<ServiceAdmission, 'isAccepting'>
 }

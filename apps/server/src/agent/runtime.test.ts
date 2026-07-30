@@ -31,7 +31,11 @@ import {
   type ConversationItem,
 } from '../schemas/types.js'
 import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
-import { createTestPersistenceFacade, PersistenceFacadeTestHarness } from '../../test-support/persistenceFacadeHarness.js'
+import {
+  createTestPersistenceFacade,
+  PersistenceFacadeTestHarness,
+  testPlatformEventHub,
+} from '../../test-support/persistenceFacadeHarness.js'
 import planProvider from '../tools/plan/index.js'
 import { defaultRuntimeConfig } from './defaultRuntimeConfig.js'
 import { OpenAIAgentsRuntime } from './runtime.js'
@@ -1701,7 +1705,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         runtimeConfigSnapshot: config,
       })
       const liveItems: ConversationItem[] = []
-      store.itemBus.subscribe(run.id, item => liveItems.push(item))
+      testPlatformEventHub(store).conversationItems.subscribe(run.id, item => liveItems.push(item))
       const runtime = testRuntime(store, tools, registryWith(fakeAdapter(model)))
       const waiting = await runtime.run({
         ...runOptions(run, thread.id), runtimeConfig: config, executionMode: 'plan',
@@ -2386,7 +2390,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         runtimeConfigSnapshot: config,
       })
       const liveItems: ConversationItem[] = []
-      store.itemBus.subscribe(run.id, item => liveItems.push(item))
+      testPlatformEventHub(store).conversationItems.subscribe(run.id, item => liveItems.push(item))
       const runtime = testRuntime(store, tools, registryWith(fakeAdapter(model)))
       const waiting = await runtime.run({
         ...runOptions(run, thread.id), runtimeConfig: config, executionMode: 'plan',
@@ -2672,21 +2676,40 @@ function outputItems(response: ScriptedResponse, responseId: string): AgentOutpu
 }
 
 function structuredResponse(response: ScriptedResponse, request: ModelRequest): ScriptedResponse {
-  if (!response.text || response.toolCalls?.length || request.outputType === 'text') return response
+  const normalized = withStrictWorkflowStepIdentity(response, request)
+  if (!normalized.text || normalized.toolCalls?.length || request.outputType === 'text') return normalized
   const properties = request.outputType.schema.properties
   if ('markdown' in properties) {
     return {
-      ...response,
-      text: JSON.stringify({ markdown: response.text, summary: response.text, artifactIds: [], warnings: [] }),
+      ...normalized,
+      text: JSON.stringify({ markdown: normalized.text, summary: normalized.text, artifactIds: [], warnings: [] }),
     }
   }
   if ('evidence' in properties) {
     return {
-      ...response,
-      text: JSON.stringify({ status: 'completed', summary: response.text, evidence: [], artifactIds: [], warnings: [], error: null }),
+      ...normalized,
+      text: JSON.stringify({ status: 'completed', summary: normalized.text, evidence: [], artifactIds: [], warnings: [], error: null }),
     }
   }
-  return response
+  return normalized
+}
+
+function withStrictWorkflowStepIdentity(response: ScriptedResponse, request: ModelRequest): ScriptedResponse {
+  if (!response.toolCalls?.length) return response
+  return {
+    ...response,
+    toolCalls: response.toolCalls.map(call => {
+      const definition = request.tools.find(tool => tool.name === call.name)
+      const properties = definition && isRecord(definition.parameters)
+        && isRecord(definition.parameters.properties)
+        ? definition.parameters.properties
+        : {}
+      if (!('workflowStepId' in properties)) return call
+      const parsed: unknown = JSON.parse(call.arguments)
+      if (!isRecord(parsed) || 'workflowStepId' in parsed) return call
+      return { ...call, arguments: JSON.stringify({ ...parsed, workflowStepId: null }) }
+    }),
+  }
 }
 
 async function executeTextRun(model: Model, tools = new ToolRegistry(), query = '回答测试问题') {

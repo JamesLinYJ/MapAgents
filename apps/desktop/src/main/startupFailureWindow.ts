@@ -12,6 +12,7 @@
 import { BrowserWindow } from 'electron'
 
 import { buildStartupFailureDocument } from './startupFailureDocument.js'
+import { secureWebPreferences } from './secureWebPreferences.js'
 
 export function showStartupFailureWindow(error: unknown): BrowserWindow {
   const window = new BrowserWindow({
@@ -23,13 +24,9 @@ export function showStartupFailureWindow(error: unknown): BrowserWindow {
     autoHideMenuBar: true,
     backgroundColor: '#eef3f5',
     title: 'GeoForge 启动失败',
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-      webSecurity: true,
+    webPreferences: secureWebPreferences({
       devTools: false,
-    },
+    }),
   })
   window.setMenuBarVisibility(false)
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))

@@ -3,11 +3,12 @@
   "private": true,
   "version": "0.1.0",
   "engines": {
-    "node": ">=24"
+    "node": "^22.13.0 || >=24.0.0"
   },
   "workspaces": [
     "apps/server",
     "apps/desktop",
+    "apps/operations-console",
     "packages/shared-types",
     "packages/conversation-presentation",
     "packages/operations-supervisor"
@@ -26,12 +27,12 @@
     "dev:server": "npm run dev --workspace geo-agent-server",
     "dev:desktop": "npm run dev --workspace @geo-agent-platform/desktop",
     "dev:worker": "python -m uvicorn worker_app.sidecar:app --app-dir apps/worker/src --host 127.0.0.1 --port 8012 --reload",
-    "build": "npm run build --workspace @geo-agent-platform/shared-types && npm run build --workspace @geo-agent-platform/conversation-presentation && npm run build --workspace @geo-agent-platform/operations-supervisor && npm run build --workspace geo-agent-server && npm run build --workspace @geo-agent-platform/desktop",
+    "build": "npm run build --workspace @geo-agent-platform/shared-types && npm run build --workspace @geo-agent-platform/conversation-presentation && npm run build --workspace @geo-agent-platform/operations-supervisor && npm run build --workspace geo-agent-server && npm run build --workspace @geo-agent-platform/operations-console && npm run build --workspace @geo-agent-platform/desktop",
     "build:presentation": "npm run build --workspace @geo-agent-platform/conversation-presentation",
     "build:supervisor": "npm run build --workspace @geo-agent-platform/operations-supervisor",
     "build:server": "npm run build --workspace geo-agent-server",
     "build:desktop": "npm run build --workspace @geo-agent-platform/shared-types && npm run build --workspace @geo-agent-platform/conversation-presentation && npm run build --workspace @geo-agent-platform/operations-supervisor && npm run build --workspace @geo-agent-platform/desktop",
-    "test": "npm run build --workspace @geo-agent-platform/shared-types && npm run test --workspace @geo-agent-platform/conversation-presentation && npm run test --workspace @geo-agent-platform/operations-supervisor && npm run test --workspace geo-agent-server && npm run test --workspace @geo-agent-platform/desktop",
+    "test": "npm run build --workspace @geo-agent-platform/shared-types && npm run test --workspace @geo-agent-platform/conversation-presentation && npm run test --workspace @geo-agent-platform/operations-supervisor && npm run test --workspace geo-agent-server && npm run test --workspace @geo-agent-platform/operations-console && npm run test --workspace @geo-agent-platform/desktop",
     "test:presentation": "npm run test --workspace @geo-agent-platform/conversation-presentation",
     "test:supervisor": "npm run test --workspace @geo-agent-platform/operations-supervisor",
     "test:server": "npm run test --workspace geo-agent-server",

@@ -14,6 +14,7 @@
 
 import { collectDefaultMetrics, Counter, Gauge, Histogram, register } from 'prom-client'
 import type { Context, Next } from 'hono'
+import { routePath } from 'hono/route'
 
 collectDefaultMetrics({ prefix: 'geoforge_', labels: { service: 'geoforge-api' } })
 
@@ -21,13 +22,13 @@ collectDefaultMetrics({ prefix: 'geoforge_', labels: { service: 'geoforge-api' }
 export const httpRequestsTotal = new Counter({
   name: 'geoforge_http_requests_total',
   help: 'HTTP 请求总数',
-  labelNames: ['method', 'path', 'status'],
+  labelNames: ['method', 'route', 'status'],
 })
 
 export const httpRequestDurationMs = new Histogram({
   name: 'geoforge_http_request_duration_ms',
   help: 'HTTP 请求耗时 (ms)',
-  labelNames: ['method', 'path'],
+  labelNames: ['method', 'route'],
   buckets: [10, 50, 100, 250, 500, 1000, 2500, 5000, 10000],
 })
 
@@ -147,10 +148,15 @@ export async function observeHttpMetrics(c: Context, next: Next): Promise<void> 
   try {
     await next()
   } finally {
-    const pathname = new URL(c.req.url).pathname
+    const route = normalizedRouteLabel(c)
     const status = String(c.res.status || 200)
     const method = c.req.method
-    httpRequestsTotal.inc({ method, path: pathname, status })
-    httpRequestDurationMs.observe({ method, path: pathname }, performance.now() - started)
+    httpRequestsTotal.inc({ method, route, status })
+    httpRequestDurationMs.observe({ method, route }, performance.now() - started)
   }
+}
+
+function normalizedRouteLabel(c: Context): string {
+  const matched = routePath(c, -1)
+  return matched && matched !== '*' && matched !== '/*' ? matched : 'unmatched'
 }

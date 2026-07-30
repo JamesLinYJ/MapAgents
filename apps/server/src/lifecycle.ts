@@ -13,13 +13,12 @@ import type { Server } from 'node:http'
 import type { WebSocketServer } from 'ws'
 import type { Database } from './db/connection.js'
 import type { ApplicationInstanceLock } from './db/applicationInstanceLock.js'
-import type { PlatformPersistenceFacade } from './store/platformPersistenceFacade.js'
 import { errorLogPayload, logger } from './observability/logger.js'
 
 interface LifecycleOptions {
   server: Server
   wsServer: WebSocketServer
-  store: PlatformPersistenceFacade
+  store: { closeConversationStore(): Promise<void> }
   db: Database
   instanceLock: ApplicationInstanceLock
   onShutdownStart: () => void
@@ -36,7 +35,7 @@ export function installLifecycleManager(options: LifecycleOptions): void {
     component: 'main-api',
     onShutdownStart: options.onShutdownStart,
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-    drain: () => drain(options),
+    drain: () => drainApplicationLifecycle(options),
   })
 }
 
@@ -72,15 +71,17 @@ export function installStandaloneLifecycleManager(options: StandaloneLifecycleOp
   process.once('SIGTERM', signal => { void shutdown(signal) })
 }
 
-async function drain(options: LifecycleOptions): Promise<void> {
-  await options.beforeDrain?.()
+export async function drainApplicationLifecycle(options: LifecycleOptions): Promise<void> {
+  // 先同步启动所有传输边界关闭，确保排空阶段不会再接收新任务。
+  const httpClosed = new Promise<void>((resolve, reject) => {
+    options.server.close(error => error ? reject(error) : resolve())
+  })
   for (const socket of options.wsServer.clients) {
     socket.close(1001, 'server shutting down')
   }
-  await Promise.all([
-    new Promise<void>((resolve, reject) => options.server.close(error => error ? reject(error) : resolve())),
-    new Promise<void>(resolve => options.wsServer.close(() => resolve())),
-  ])
+  const wsClosed = new Promise<void>(resolve => options.wsServer.close(() => resolve()))
+  await options.beforeDrain?.()
+  await Promise.all([httpClosed, wsClosed])
   await options.store.closeConversationStore()
   await options.instanceLock.release()
   await options.db.close()

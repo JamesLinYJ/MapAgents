@@ -189,13 +189,11 @@ async function memoryExecute(_payload: Record<string, unknown>, context: WsComma
 }
 
 async function authorizeFileList(payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {
-  if (optionalString(payload.threadId)) return authorizeThread(context.dependencies, auth, requiredString(payload, 'threadId'), 'read')
-  await context.dependencies.security.authorization.enforce(auth, 'thread', 'read', { workspaceId: auth.defaultWorkspaceId })
+  await authorizeThread(context.dependencies, auth, requiredString(payload, 'threadId'), 'read')
 }
 
 async function authorizeFileDelete(payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {
-  if (optionalString(payload.threadId)) return authorizeThread(context.dependencies, auth, requiredString(payload, 'threadId'), 'update')
-  await context.dependencies.security.authorization.enforce(auth, 'thread', 'update', { workspaceId: auth.defaultWorkspaceId })
+  await authorizeThread(context.dependencies, auth, requiredString(payload, 'threadId'), 'update')
 }
 
 function noop(): void {
@@ -287,7 +285,7 @@ async function authorizeScheduledTask(
   taskId: string,
   action: 'update' | 'delete',
 ): Promise<void> {
-  const task = await dependencies.store.getScheduledTask(taskId)
+  const task = await dependencies.store.automations.getScheduledTask(taskId)
   if (!task) throw new StoreNotFoundError(`定时任务 '${taskId}' 不存在`)
   await dependencies.security.authorization.assertResourceWorkspace(auth, 'scheduled_task', action, {
     workspaceId: task.workspaceId,
@@ -303,7 +301,7 @@ async function authorizeAutomationRun(
   automationRunId: string,
   action: 'read' | 'execute' | 'approve',
 ): Promise<void> {
-  const automationRun = await dependencies.store.getAutomationRunRecord(automationRunId)
+  const automationRun = await dependencies.store.automations.getAutomationRunRecord(automationRunId)
   if (!automationRun) throw new StoreNotFoundError(`自动化流程运行 '${automationRunId}' 不存在`)
   await dependencies.security.authorization.assertResourceWorkspace(auth, 'automation', action, {
     workspaceId: automationRun.workspaceId,

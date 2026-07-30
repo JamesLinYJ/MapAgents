@@ -140,14 +140,14 @@ export async function uploadLayer(
 export async function uploadMeteorologicalDataset(
   sessionId: string,
   file: DesktopFileSelectionHandle,
-  threadId?: string | null,
+  threadId: string,
   sourceRelativePath?: string | null,
 ): Promise<{ dataset: MeteorologicalDatasetRecord; job: MeteorologicalJobRecord | null }> {
   return requestFormJson(
     '/api/v1/meteorology/datasets',
     uploadBody(file, [
       { name: 'sessionId', value: sessionId },
-      ...(threadId ? [{ name: 'threadId', value: threadId }] : []),
+      { name: 'threadId', value: threadId },
       ...(sourceRelativePath ? [{ name: 'sourceRelativePath', value: sourceRelativePath }] : []),
     ]),
     '气象数据上传请求失败',
@@ -228,20 +228,20 @@ export async function replaceManagedLayer(
   )
 }
 
-export function listAllFiles(threadId?: string | null): Promise<FileListResponse> {
+export function listAllFiles(threadId: string): Promise<FileListResponse> {
   return requestControl('file:list', { threadId }, fileListResponseSchema)
 }
 
 export async function uploadAnyFile(
   file: DesktopFileSelectionHandle,
-  threadId?: string | null,
+  threadId: string,
   requestId?: string,
   sourceRelativePath?: string | null,
 ): Promise<z.infer<typeof uploadedFileSchema>> {
   return requestFormJson(
     '/api/v1/files/upload',
     uploadBody(file, [
-      ...(threadId ? [{ name: 'threadId', value: threadId }] : []),
+      { name: 'threadId', value: threadId },
       ...(requestId ? [{ name: 'requestId', value: requestId }] : []),
       ...(sourceRelativePath ? [{ name: 'sourceRelativePath', value: sourceRelativePath }] : []),
     ]),
@@ -251,7 +251,7 @@ export async function uploadAnyFile(
   )
 }
 
-export function deleteAnyFile(fileId: string, threadId?: string | null): Promise<z.infer<typeof deletedFileSchema>> {
+export function deleteAnyFile(fileId: string, threadId: string): Promise<z.infer<typeof deletedFileSchema>> {
   return requestControl('file:delete', { fileId, threadId }, deletedFileSchema)
 }
 

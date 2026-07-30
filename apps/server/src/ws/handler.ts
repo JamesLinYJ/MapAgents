@@ -11,8 +11,7 @@
 
 import type { Server, IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
-import { WebSocketServer } from 'ws'
-import { RuntimeFileStore } from '../store/fileStore.js'
+import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import { StoreNotFoundError } from '../store/storeErrors.js'
 import { AuthorizationError } from '../security/authorizationService.js'
 import { makeId } from '../utils/ids.js'
@@ -31,16 +30,28 @@ import { wsConnectionsActive, wsMessagesTotal } from '../observability/metrics.j
 export function createWsHandler(server: Server, dependencies: WsDependencies) {
   const runtime = dependencies.runtime
   const runTasks = dependencies.runTasks
-  const files = new RuntimeFileStore(dependencies.runtimeRoot)
+  const files = dependencies.runtimeFiles
   const commandRegistry = createDefaultCommandRegistry()
   const wss = new WebSocketServer({ noServer: true })
   const wsRateLimiter = new WsMessageRateLimiter()
 
-  server.on('upgrade', async (request, socket, head) => {
+  server.on('upgrade', (request, socket, head) => {
     if (!isWsPath(request)) return
-    const auth = await authenticateWsRequest(request, socket, dependencies.security)
-    if (!auth) return
-    wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws, request, auth))
+    const onSocketError = (error: Error) => {
+      logger.warn({ error: errorLogPayload(error) }, 'ws upgrade socket failed')
+      if (!socket.destroyed) socket.destroy()
+    }
+    socket.once('error', onSocketError)
+    void handleWsUpgrade(request, socket, head, wss, dependencies)
+      .catch(error => {
+        logger.error({ error: errorLogPayload(error) }, 'ws upgrade failed')
+        if (!socket.destroyed) rejectUpgrade(socket, 503, 'Service Unavailable')
+      })
+      .finally(() => socket.removeListener('error', onSocketError))
+  })
+
+  wss.on('error', error => {
+    logger.error({ error: errorLogPayload(error) }, 'ws server transport failed')
   })
 
   wss.on('connection', (ws, _request, authContext?: AuthContext) => {
@@ -50,7 +61,28 @@ export function createWsHandler(server: Server, dependencies: WsDependencies) {
     wsConnectionsActive.inc()
     logger.info({ wsConnectionId: connectionId, userId: authContext?.userId ?? null }, 'ws connected')
 
-    ws.on('message', async (data) => {
+    let cleaned = false
+    const cleanup = (reason: 'close' | 'error', error?: Error) => {
+      if (cleaned) return
+      cleaned = true
+      clearInterval(keepalive)
+      subscriptions.forEach(unsubscribe => unsubscribe())
+      subscriptions.clear()
+      wsRateLimiter.releaseConnection(connectionId)
+      wsConnectionsActive.dec()
+      if (error) {
+        logger.warn({
+          error: errorLogPayload(error),
+          wsConnectionId: connectionId,
+          userId: authContext?.userId ?? null,
+        }, 'ws connection transport failed')
+      } else {
+        logger.info({ wsConnectionId: connectionId, userId: authContext?.userId ?? null }, 'ws disconnected')
+      }
+      if (reason === 'error' && ws.readyState !== WebSocket.CLOSED) ws.terminate()
+    }
+
+    const handleData = async (data: RawData) => {
       for (const line of data.toString().split('\n').filter(Boolean)) {
         await withLogContext({
           traceId: traceId(),
@@ -69,6 +101,15 @@ export function createWsHandler(server: Server, dependencies: WsDependencies) {
           }
           await withLogContext({ wsCommand: msg.type, wsRequestId: msg.id }, async () => {
             wsMessagesTotal.inc({ type: msg.type, direction: 'inbound' })
+            if (!dependencies.admission.isAccepting()) {
+              sendWs(ws, failure(
+                msg.id,
+                'service_unavailable',
+                '服务正在关闭，已停止接收新命令。请稍后重试。',
+              ))
+              wsMessagesTotal.inc({ type: msg.type, direction: 'outbound' })
+              return
+            }
             if (!wsRateLimiter.consume(connectionId, msg.type)) {
               logger.warn({ command: msg.type }, 'ws rate limited')
               sendWs(ws, failure(msg.id, 'command_failed', '请求过于频繁，请稍后重试。'))
@@ -93,18 +134,44 @@ export function createWsHandler(server: Server, dependencies: WsDependencies) {
           })
         })
       }
+    }
+
+    ws.on('message', data => {
+      void handleData(data).catch(error => {
+        logger.error({
+          error: errorLogPayload(error),
+          wsConnectionId: connectionId,
+          userId: authContext?.userId ?? null,
+        }, 'ws message boundary failed')
+        sendWs(ws, failure(null, 'internal_error', 'WebSocket 消息处理失败。'))
+      })
     })
 
-    ws.on('close', () => {
-      clearInterval(keepalive)
-      subscriptions.forEach(unsubscribe => unsubscribe())
-      subscriptions.clear()
-      wsConnectionsActive.dec()
-      logger.info({ wsConnectionId: connectionId, userId: authContext?.userId ?? null }, 'ws disconnected')
+    ws.once('error', error => {
+      cleanup('error', error)
     })
+    ws.once('close', () => cleanup('close'))
   })
 
   return wss
+}
+
+async function handleWsUpgrade(
+  request: IncomingMessage,
+  socket: Duplex,
+  head: Buffer,
+  wss: WebSocketServer,
+  dependencies: WsDependencies,
+): Promise<void> {
+  if (!dependencies.admission.isAccepting()) {
+    rejectUpgrade(socket, 503, 'Service Unavailable')
+    return
+  }
+  const auth = await authenticateWsRequest(request, socket, dependencies.security)
+  if (!auth || socket.destroyed) return
+  wss.handleUpgrade(request, socket, head, ws => {
+    wss.emit('connection', ws, request, auth)
+  })
 }
 
 function assertRegisteredCommandCsrf(

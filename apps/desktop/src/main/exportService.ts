@@ -16,6 +16,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { finished } from 'node:stream/promises'
 import { BrowserWindow, dialog, net } from 'electron'
+import { secureWebPreferences } from './secureWebPreferences.js'
 import {
   artifactHttpMetadataSchema,
   desktopExportAuditRequestSchema,
@@ -313,15 +314,10 @@ async function printDesktopReport(
     width: 794,
     height: 1_123,
     backgroundColor: '#ffffff',
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
+    webPreferences: secureWebPreferences({
       javascript: false,
-      webSecurity: true,
-      webviewTag: false,
       spellcheck: false,
-    },
+    }),
   })
   reportWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   try {

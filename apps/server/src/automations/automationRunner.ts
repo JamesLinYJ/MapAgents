@@ -14,12 +14,22 @@
 
 import type { RunTaskManager } from '../agent/runTaskManager.js'
 import type { ToolRegistry } from '../framework/registry.js'
-import type { AgentRuntimeConfig } from '../schemas/types.js'
+import type {
+  AgentRuntimeConfig,
+  AgentState,
+  AgentThreadRecord,
+  AnalysisRun,
+  SessionRecord,
+  TranscriptEntry,
+} from '../schemas/types.js'
 import type { ModelAdapterRegistry } from '../model/registry.js'
 import type { ModelCompletionService } from '../model/modelResultCache.js'
 import type { SecurityServices } from '../security/routes.js'
 import type { AuthContext } from '../security/types.js'
-import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
+import type { AutomationStore } from '../store/postgres/automationStore.js'
+import type { ResourceOwner } from '../store/sessionStore.js'
+import type { PersistentToolStore } from '../store/runtimePorts.js'
+import type { RuntimeConfigStore } from '../store/postgres/runtimeConfigStore.js'
 import type { UsageStatsService } from '../usage/usageStatsService.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 import { resolveRuntimeConfig } from '../ws/runtimeConfig.js'
@@ -48,7 +58,16 @@ import {
 import type { AutomationNode, AutomationNodeRun, AutomationRunRecord } from './schemas.js'
 
 export interface AutomationRunnerOptions {
-  store: PlatformPersistenceFacade
+  automations: Pick<AutomationStore,
+    | 'createAutomationRunRecord'
+    | 'getAutomationRunRecord'
+    | 'getScheduledTask'
+    | 'updateAutomationRunRecord'
+    | 'updateScheduledTask'
+  >
+  conversations: AutomationConversationPort
+  toolExecutionStore: PersistentToolStore
+  runtimeConfiguration: Pick<RuntimeConfigStore, 'getRuntimeConfig'>
   definitions: AutomationDefinitionService
   compiler: AutomationCompiler
   toolRegistry: ToolRegistry
@@ -60,6 +79,22 @@ export interface AutomationRunnerOptions {
   backgroundTasks: BackgroundTaskRegistry
   defaultRuntimeConfig?: AgentRuntimeConfig
   unscheduleTask?: (taskId: string) => Promise<void>
+}
+
+export interface AutomationConversationPort {
+  activeTranscript(threadId: string): Promise<TranscriptEntry[]>
+  completeRun(runId: string, status: string): Promise<AnalysisRun>
+  createRun(sessionId: string, query: string, options?: {
+    threadId?: string | null
+    modelProvider?: string | null
+    modelName?: string | null
+    runtimeConfigSnapshot?: AgentRuntimeConfig | null
+  }): Promise<AnalysisRun>
+  createThread(sessionId: string, title?: string | null): Promise<AgentThreadRecord>
+  getOrCreateUserDefaultSession(owner: ResourceOwner): Promise<SessionRecord>
+  getRun(runId: string): AnalysisRun
+  updateRunState(runId: string, updates: Partial<AgentState>): Promise<AnalysisRun>
+  updateRunStatus(runId: string, status: AnalysisRun['status']): Promise<AnalysisRun>
 }
 
 export class AutomationRunner {
@@ -120,12 +155,12 @@ export class AutomationRunner {
 
   private async executeScheduled(payload: AutomationJobPayload, queueJobId: string): Promise<void> {
     if (!payload.scheduledTaskId) throw new Error('定时任务 job 缺少 scheduledTaskId。')
-    const task = await this.options.store.getScheduledTask(payload.scheduledTaskId)
+    const task = await this.options.automations.getScheduledTask(payload.scheduledTaskId)
     if (!task || task.status === 'deleted') throw new Error(`定时任务 '${payload.scheduledTaskId}' 不存在或已删除。`)
     if (!task.enabled || task.status !== 'active') throw new Error('定时任务当前未启用。')
     if (!task.recurring && task.nextFireAt && Date.now() - new Date(task.nextFireAt).getTime() > 60_000) {
       await this.options.unscheduleTask?.(task.taskId)
-      await this.options.store.updateScheduledTask(task.taskId, {
+      await this.options.automations.updateScheduledTask(task.taskId, {
         enabled: false,
         status: 'missed',
         queueJobId: null,
@@ -138,11 +173,11 @@ export class AutomationRunner {
     const parameters = { ...definition.defaultParameters, ...task.parameters }
     compiled.validateParameters(parameters)
     const automationRunId = `automation_run_${queueJobId}`
-    const existing = await this.options.store.getAutomationRunRecord(automationRunId)
+    const existing = await this.options.automations.getAutomationRunRecord(automationRunId)
     if (existing?.status === 'completed' || existing?.status === 'cancelled' || existing?.status === 'waiting_approval') return
     if (existing?.status === 'failed') throw new Error('该次定时自动化流程运行已经失败，不会创建重复运行。')
     const executionState = createAutomationExecutionState({ definition, prompt: task.prompt, parameters })
-    const automationRun = existing ?? await this.options.store.createAutomationRunRecord({
+    const automationRun = existing ?? await this.options.automations.createAutomationRunRecord({
       automationRunId,
       automationId: definition.automationId,
       automationRevision: definition.revision,
@@ -195,7 +230,7 @@ export class AutomationRunner {
           ? { ...node, status: 'failed' as const, completedAt: nowUtc(), errorMessage: message }
           : node),
       }
-      await this.options.store.updateAutomationRunRecord(record.automationRunId, {
+      await this.options.automations.updateAutomationRunRecord(record.automationRunId, {
         currentStep: interrupted[0]?.nodeId ?? null,
         errorMessage: message,
         nodeRuns: state.nodeRuns,
@@ -250,7 +285,7 @@ export class AutomationRunner {
       state = outcome.state
       record = await this.persistState(latest, state, outcome.paused ? 'waiting_approval' : 'running')
       if (outcome.paused) {
-        if (state.orchestrationRunId) await this.options.store.updateRunStatus(state.orchestrationRunId, 'waiting_approval')
+        if (state.orchestrationRunId) await this.options.conversations.updateRunStatus(state.orchestrationRunId, 'waiting_approval')
         return
       }
     }
@@ -349,7 +384,8 @@ export class AutomationRunner {
           auth,
           signal,
         }, {
-          store: this.options.store,
+          store: this.options.toolExecutionStore,
+          runtimeConfiguration: this.options.runtimeConfiguration,
           registry: this.options.toolRegistry,
           modelRegistry: this.options.modelRegistry,
           ...(this.options.modelCompletions ? { modelCompletions: this.options.modelCompletions } : {}),
@@ -396,7 +432,7 @@ export class AutomationRunner {
         currentAgentRunId: null,
       }
       if (errorEdges.length) return { state: nextState, paused: false }
-      await this.options.store.updateAutomationRunRecord(record.automationRunId, {
+      await this.options.automations.updateAutomationRunRecord(record.automationRunId, {
         status: 'failed',
         currentStep: node.nodeId,
         errorMessage: message,
@@ -420,10 +456,10 @@ export class AutomationRunner {
   ): Promise<Record<string, unknown>> {
     const sessionId = requireString(state.sessionId, '自动化流程会话 ID')
     const threadId = requireString(state.threadId, '自动化流程线程 ID')
-    const runtimeConfig = await resolveRuntimeConfig(this.options.store, this.options.defaultRuntimeConfig)
+    const runtimeConfig = await resolveRuntimeConfig(this.options.runtimeConfiguration, this.options.defaultRuntimeConfig)
     const provider = this.options.modelRegistry.defaultProvider
     if (!provider) throw new Error('必须配置默认模型提供方，自动化流程的智能体节点才能执行。')
-    const run = await this.options.store.createRun(sessionId, prompt, {
+    const run = await this.options.conversations.createRun(sessionId, prompt, {
       threadId,
       modelProvider: provider,
       modelName: null,
@@ -457,7 +493,7 @@ export class AutomationRunner {
     if (completedRun.status !== 'completed') {
       throw new Error(completedRun.state.errors.at(-1) ?? `Agent 节点 '${nodeId}' 状态为 ${completedRun.status}。`)
     }
-    const response = await latestAssistantResponse(this.options.store, threadId, completedRun.id)
+    const response = await latestAssistantResponse(this.options.conversations, threadId, completedRun.id)
     return { runId: completedRun.id, threadId, response }
   }
 
@@ -468,24 +504,24 @@ export class AutomationRunner {
   ): Promise<AutomationExecutionState> {
     if (state.sessionId && state.threadId && state.orchestrationRunId) {
       if (state.orchestrationRunOwnership === 'automation'
-        && this.options.store.getRun(state.orchestrationRunId).status === 'waiting_approval') {
-        await this.options.store.updateRunStatus(state.orchestrationRunId, 'running')
+        && this.options.conversations.getRun(state.orchestrationRunId).status === 'waiting_approval') {
+        await this.options.conversations.updateRunStatus(state.orchestrationRunId, 'running')
       }
       return state
     }
-    const session = await this.options.store.getOrCreateUserDefaultSession({
+    const session = await this.options.conversations.getOrCreateUserDefaultSession({
       workspaceId: record.workspaceId,
       userId: record.createdByUserId,
     })
-    const thread = await this.options.store.createThread(session.id, state.definitionSnapshot.name)
-    const config = await resolveRuntimeConfig(this.options.store, this.options.defaultRuntimeConfig)
-    const run = await this.options.store.createRun(session.id, state.prompt || state.definitionSnapshot.name, {
+    const thread = await this.options.conversations.createThread(session.id, state.definitionSnapshot.name)
+    const config = await resolveRuntimeConfig(this.options.runtimeConfiguration, this.options.defaultRuntimeConfig)
+    const run = await this.options.conversations.createRun(session.id, state.prompt || state.definitionSnapshot.name, {
       threadId: thread.id,
       modelProvider: this.options.modelRegistry.defaultProvider || null,
       modelName: null,
       runtimeConfigSnapshot: config,
     })
-    await this.options.store.updateRunStatus(run.id, 'running')
+    await this.options.conversations.updateRunStatus(run.id, 'running')
     this.options.backgroundTasks.updateInfo(`automation:${record.automationRunId}`, {
       runId: run.id,
       metadata: {
@@ -513,7 +549,7 @@ export class AutomationRunner {
     status: AutomationRunRecord['status'],
   ): Promise<AutomationRunRecord> {
     const current = state.nodeRuns.find(node => node.status === 'running' || node.status === 'waiting_approval')
-    return this.options.store.updateAutomationRunRecord(record.automationRunId, {
+    return this.options.automations.updateAutomationRunRecord(record.automationRunId, {
       runId: state.orchestrationRunId,
       status,
       currentStep: current?.nodeId ?? null,
@@ -533,9 +569,9 @@ export class AutomationRunner {
       throw new Error(`自动化流程“${state.definitionSnapshot.name}”没有生成可交付的回答。`)
     }
     if (state.orchestrationRunId && state.orchestrationRunOwnership === 'automation') {
-      await this.options.store.completeRun(state.orchestrationRunId, 'completed')
+      await this.options.conversations.completeRun(state.orchestrationRunId, 'completed')
     }
-    await this.options.store.updateAutomationRunRecord(record.automationRunId, {
+    await this.options.automations.updateAutomationRunRecord(record.automationRunId, {
       status: 'completed',
       currentStep: null,
       outputs,
@@ -553,18 +589,18 @@ export class AutomationRunner {
   }
 
   private async failAutomationRun(automationRunId: string, error: unknown): Promise<void> {
-    const record = await this.options.store.getAutomationRunRecord(automationRunId)
+    const record = await this.options.automations.getAutomationRunRecord(automationRunId)
     if (!record || record.status === 'cancelled' || record.status === 'completed') return
     const message = formatAutomationError(error)
     const state = parseAutomationExecutionState(record.metadata)
     if (state.orchestrationRunId && state.orchestrationRunOwnership === 'automation') {
-      const run = this.options.store.getRun(state.orchestrationRunId)
+      const run = this.options.conversations.getRun(state.orchestrationRunId)
       if (!['completed', 'failed', 'cancelled'].includes(run.status)) {
-        await this.options.store.updateRunState(run.id, { errors: [...run.state.errors, message] })
-        await this.options.store.completeRun(run.id, 'failed')
+        await this.options.conversations.updateRunState(run.id, { errors: [...run.state.errors, message] })
+        await this.options.conversations.completeRun(run.id, 'failed')
       }
     }
-    await this.options.store.updateAutomationRunRecord(automationRunId, {
+    await this.options.automations.updateAutomationRunRecord(automationRunId, {
       status: 'failed',
       errorMessage: message,
       completedAt: nowUtc(),
@@ -578,13 +614,13 @@ export class AutomationRunner {
   private async cancelOrchestrationRun(state: AutomationExecutionState): Promise<void> {
     if (state.currentAgentRunId) await this.options.runTasks.cancel(state.currentAgentRunId)
     if (state.orchestrationRunId && state.orchestrationRunOwnership === 'automation') {
-      const run = this.options.store.getRun(state.orchestrationRunId)
-      if (!['completed', 'failed', 'cancelled'].includes(run.status)) await this.options.store.completeRun(run.id, 'cancelled')
+      const run = this.options.conversations.getRun(state.orchestrationRunId)
+      if (!['completed', 'failed', 'cancelled'].includes(run.status)) await this.options.conversations.completeRun(run.id, 'cancelled')
     }
   }
 
   private async requireAutomationRun(automationRunId: string): Promise<AutomationRunRecord> {
-    const run = await this.options.store.getAutomationRunRecord(automationRunId)
+    const run = await this.options.automations.getAutomationRunRecord(automationRunId)
     if (!run) throw new Error(`自动化流程运行 '${automationRunId}' 不存在。`)
     return run
   }
@@ -597,11 +633,11 @@ export class AutomationRunner {
     automationRunId: string,
     error: unknown,
   ): Promise<void> {
-    const task = await this.options.store.getScheduledTask(taskId)
+    const task = await this.options.automations.getScheduledTask(taskId)
     const failureCount = (task?.failureCount ?? 0) + (error ? 1 : 0)
     if (!recurring) {
       await this.options.unscheduleTask?.(taskId)
-      await this.options.store.updateScheduledTask(taskId, {
+      await this.options.automations.updateScheduledTask(taskId, {
         enabled: false,
         status: error ? 'failed' : 'paused',
         lastFiredAt: nowUtc(),
@@ -613,7 +649,7 @@ export class AutomationRunner {
       })
       return
     }
-    await this.options.store.updateScheduledTask(taskId, {
+    await this.options.automations.updateScheduledTask(taskId, {
       status: 'active',
       lastFiredAt: nowUtc(),
       nextFireAt: computeNextFireAt({ cron, timezone, from: new Date() }),
@@ -743,7 +779,11 @@ async function abortableDelay(milliseconds: number, signal: AbortSignal): Promis
   })
 }
 
-async function latestAssistantResponse(store: PlatformPersistenceFacade, threadId: string, runId: string): Promise<string> {
+async function latestAssistantResponse(
+  store: Pick<AutomationConversationPort, 'activeTranscript'>,
+  threadId: string,
+  runId: string,
+): Promise<string> {
   const entries = await store.activeTranscript(threadId)
   const entry = [...entries].reverse().find(item => (
     item.runId === runId

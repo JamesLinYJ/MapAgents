@@ -17,7 +17,7 @@ import type { Database } from '../db/connection.js'
 import * as schema from '../db/schema.js'
 import { PlatformPersistenceFacade } from './platformPersistenceFacade.js'
 
-describe('PlatformPersistenceFacade meteorological datasets', () => {
+describe('MeteorologicalStore domain port', () => {
   it('scopes dataset lists by threadId even when sessionId is not provided', async () => {
     const fixture = createMeteorologicalDb([
       datasetRow('dataset-a', 'session-a', 'thread-a', 'alpha.nc', '2026-07-01T00:00:00.000Z'),
@@ -25,7 +25,7 @@ describe('PlatformPersistenceFacade meteorological datasets', () => {
     ])
     const store = new PlatformPersistenceFacade(fixture.db, path.join(os.tmpdir(), 'geo-store-meteorology-thread'))
 
-    const rows = await store.listMeteorologicalDatasets({ threadId: 'thread-b' })
+    const rows = await store.meteorology.listMeteorologicalDatasets({ threadId: 'thread-b' })
 
     expect(rows.map(row => row.datasetId)).toEqual(['dataset-b'])
     expect(fixture.queries[0]?.text).toContain('"thread_id" =')
@@ -39,7 +39,7 @@ describe('PlatformPersistenceFacade meteorological datasets', () => {
     ])
     const store = new PlatformPersistenceFacade(fixture.db, path.join(os.tmpdir(), 'geo-store-meteorology-filename'))
 
-    const rows = await store.listMeteorologicalDatasets({ threadId: 'thread-b', filename: 'target.nc' })
+    const rows = await store.meteorology.listMeteorologicalDatasets({ threadId: 'thread-b', filename: 'target.nc' })
 
     expect(rows.map(row => row.datasetId)).toEqual(['dataset-b'])
     expect(fixture.queries[0]?.text).toContain('"thread_id" =')
@@ -53,7 +53,7 @@ describe('PlatformPersistenceFacade meteorological datasets', () => {
     ])
     const store = new PlatformPersistenceFacade(fixture.db, path.join(os.tmpdir(), 'geo-store-meteorology-workspace'))
 
-    const rows = await store.listMeteorologicalDatasets({
+    const rows = await store.meteorology.listMeteorologicalDatasets({
       workspaceId: 'workspace-b',
       threadId: 'thread-a',
       filename: 'target.nc',

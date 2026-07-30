@@ -46,6 +46,8 @@ export const runtimeSubAgentConfigSchema = z.object({
 })
 
 export const subAgentInvocationSchema = z.object({
+  workflowStepId: z.string().trim().min(1).nullable().optional()
+    .describe('存在智能体工作流时填写本次调用对应的 stepId；Handoff 调用填 null'),
   objective: z.string().trim().min(1),
   expectedDeliverables: z.array(z.string().trim().min(1)).min(1),
   contextRefs: z.array(z.string().trim().min(1)),

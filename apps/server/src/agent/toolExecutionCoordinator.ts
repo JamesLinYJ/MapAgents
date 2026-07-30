@@ -208,6 +208,7 @@ export class ToolExecutionCoordinator {
     if (this.preparedCalls.has(callId)) return
     const tool = this.options.registry.get(toolName)
     if (!tool) throw new Error(`工具 '${toolName}' 未注册`)
+    const invocation = splitWorkflowStepIdentity(args)
     const existing = (await this.options.store.activeTranscript(this.options.threadId))
       .some(entry => entry.kind === 'tool_call' && entry.payload.callId === callId)
     if (existing) {
@@ -223,7 +224,8 @@ export class ToolExecutionCoordinator {
         callId,
         name: toolName,
         label: tool.label,
-        arguments: args,
+        arguments: invocation.toolArgs,
+        workflowStepId: invocation.workflowStepId,
         ledgerStatus: 'prepared',
       },
     })
@@ -231,7 +233,7 @@ export class ToolExecutionCoordinator {
     const item = this.options.itemSink.startItem('function_call', {
       name: toolName,
       callId,
-      arguments: JSON.stringify(args),
+      arguments: JSON.stringify(invocation.toolArgs),
       metadata: { toolLabel: tool.label },
     })
     this.preparedCalls.add(callId)
@@ -245,6 +247,7 @@ export class ToolExecutionCoordinator {
     callId: string,
   ): Promise<void> {
     if (this.preparedCalls.has(callId)) return
+    const invocation = splitWorkflowStepIdentity(args)
     const existing = (await this.options.store.activeTranscript(this.options.threadId))
       .some(entry => entry.kind === 'tool_call' && entry.payload.callId === callId)
     if (existing) {
@@ -260,7 +263,8 @@ export class ToolExecutionCoordinator {
         callId,
         name: agentId,
         label: agentName,
-        arguments: args,
+        arguments: invocation.toolArgs,
+        workflowStepId: invocation.workflowStepId,
         ledgerStatus: 'prepared',
       },
     })
@@ -293,11 +297,12 @@ export class ToolExecutionCoordinator {
 
   async beginExternalAgentStep(
     agentId: string,
-    _args: Record<string, unknown>,
+    args: Record<string, unknown>,
     callId: string,
   ): Promise<string | null> {
     this.assertExecutionPhaseAllowsExternalAgent(agentId)
-    const stepId = await this.claimAgentWorkflowStep(agentId, callId, agentId)
+    const { workflowStepId } = splitWorkflowStepIdentity(args)
+    const stepId = await this.claimAgentWorkflowStep(agentId, callId, agentId, workflowStepId)
     this.externalAgentCalls.set(callId, agentId)
     return stepId
   }
@@ -378,25 +383,26 @@ export class ToolExecutionCoordinator {
   ): Promise<ToolResult> {
     this.options.signal.throwIfAborted()
     await this.prepare(toolName, args, callId)
+    const invocation = splitWorkflowStepIdentity(args)
     const itemId = this.callItems.get(callId)
     try {
       this.assertPlanModeAllows(toolName)
       if (ownerAgentId) this.assertExternalAgentIsRunning(ownerAgentId)
-      else await this.claimAgentWorkflowStep(toolName, callId)
+      else await this.claimAgentWorkflowStep(toolName, callId, undefined, invocation.workflowStepId)
       await this.appendLedger(callId, toolName, 'started')
       const toolLabel = this.toolLabel(toolName)
       this.options.eventSink.emit('tool.started', toolLabel, { tool: toolName, toolLabel, callId })
       const existingArtifactIds = new Set(
         this.options.store.getRun(this.options.runId).state.artifacts.map(artifact => artifact.artifactId),
       )
-      const result = await this.options.registry.execute(toolName, args, this.createToolContext())
+      const result = await this.options.registry.execute(toolName, invocation.toolArgs, this.createToolContext())
       await this.enqueueResultMutation(async () => {
         await persistToolExecutionResult(
           this.options.store,
           this.options.runId,
           toolName,
           this.toolLabel(toolName),
-          args,
+          invocation.toolArgs,
           result,
         )
         if (typeof result.payload.planMode === 'boolean') {
@@ -544,6 +550,7 @@ export class ToolExecutionCoordinator {
     toolName: string,
     callId: string,
     ownerAgentId?: string,
+    workflowStepId?: string | null,
   ): Promise<string | null> {
     if (AGENT_WORKFLOW_CONTROL_TOOLS.has(toolName)) return Promise.resolve(null)
     return this.enqueueWorkflowMutation(async () => {
@@ -560,7 +567,11 @@ export class ToolExecutionCoordinator {
           throw new Error(`智能体工作流已经处于 ${workflow.status} 状态，不能继续调用工具。`)
         }
         const claimed = new Set(this.claimedWorkflowSteps.values())
-        const invocation = { toolName, ...(ownerAgentId ? { ownerAgentId } : {}) }
+        const invocation = {
+          toolName,
+          ...(ownerAgentId ? { ownerAgentId } : {}),
+          ...(workflowStepId ? { workflowStepId } : {}),
+        }
         const step = findRunnableAgentWorkflowStep(workflow, invocation, claimed)
         if (!step) {
           const planned = workflow.steps.filter(item => item.toolName === toolName && item.status === 'pending')
@@ -572,6 +583,30 @@ export class ToolExecutionCoordinator {
           )))
           if (ownerAgentId && dependenciesSatisfied.some(item => item.ownerAgentId !== ownerAgentId)) {
             throw new Error(`子智能体 '${ownerAgentId}' 不能领取分配给其他负责人的步骤。请先调用 revise_agent_workflow 调整负责人。`)
+          }
+          if (workflowStepId) {
+            const requested = workflow.steps.find(item => item.stepId === workflowStepId)
+            if (!requested) throw new Error(`工作流步骤 '${workflowStepId}' 不存在。`)
+            if (requested.toolName !== toolName) {
+              throw new Error(`工作流步骤 '${workflowStepId}' 声明的工具是 '${requested.toolName}'，不能绑定到 '${toolName}'。`)
+            }
+            if (requested.ownerAgentId !== (ownerAgentId ?? 'supervisor')) {
+              throw new Error(`工作流步骤 '${workflowStepId}' 不属于当前执行者。`)
+            }
+            if (requested.status !== 'pending' || claimed.has(requested.stepId)) {
+              throw new Error(`工作流步骤 '${workflowStepId}' 当前不可领取。`)
+            }
+            throw new Error(`工作流步骤 '${workflowStepId}' 的依赖尚未完成，不能提前执行。`)
+          }
+          const readyForOwner = dependenciesSatisfied.filter(item => (
+            item.ownerAgentId === (ownerAgentId ?? 'supervisor')
+            && !claimed.has(item.stepId)
+          ))
+          if (readyForOwner.length > 1) {
+            throw new Error(
+              `工具 '${toolName}' 同时对应多个可执行步骤（${readyForOwner.map(item => item.stepId).join('、')}），`
+              + '必须通过 workflowStepId 指定本次执行步骤。',
+            )
           }
           if (planned.length) {
             throw new Error(`工具 '${toolName}' 对应的计划步骤依赖尚未完成，不能提前执行。`)
@@ -737,14 +772,14 @@ export class ToolExecutionCoordinator {
       auth: this.options.auth ?? null,
       state: this.options.valueState,
       resolveValueRef: refId => resolveRuntimeValueRef(this.options.valueState, refId),
-      listMeteorologicalDatasets: input => this.options.store.listMeteorologicalDatasets({
+      listMeteorologicalDatasets: input => this.options.store.meteorology.listMeteorologicalDatasets({
         sessionId: this.options.sessionId,
         threadId: input?.scope === 'thread' ? this.options.threadId : null,
         workspaceId: run.workspaceId,
         filename: input?.filename ?? null,
         ...(input?.limit === undefined ? {} : { limit: input.limit }),
       }),
-      resolveMeteorologicalDataset: input => this.options.store.resolveMeteorologicalDataset({
+      resolveMeteorologicalDataset: input => this.options.store.meteorology.resolveMeteorologicalDataset({
         sessionId: this.options.sessionId,
         threadId: null,
         workspaceId: run.workspaceId,
@@ -1122,6 +1157,22 @@ async function invokeStructuredModel(
   const parsed: unknown = JSON.parse(cleaned)
   if (!isRecord(parsed)) throw new Error('模型结构化输出必须是 JSON object')
   return parsed
+}
+
+function splitWorkflowStepIdentity(args: Record<string, unknown>): {
+  workflowStepId: string | null
+  toolArgs: Record<string, unknown>
+} {
+  const raw = args.workflowStepId
+  if (raw !== undefined && raw !== null && (typeof raw !== 'string' || !raw.trim())) {
+    throw new Error('workflowStepId 必须是非空字符串或 null。')
+  }
+  const toolArgs = { ...args }
+  delete toolArgs.workflowStepId
+  return {
+    workflowStepId: typeof raw === 'string' ? raw.trim() : null,
+    toolArgs,
+  }
 }
 
 function errorMessage(error: unknown): string {

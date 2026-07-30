@@ -145,7 +145,13 @@ export function registerThreadCommands(registry: WsCommandRegistry): void {
     auth: 'required',
     csrf: false,
     handler: async (payload, context) => {
-      subscribeToThread(context.ws, payload.threadId, context.dependencies.store, context.subscriptions)
+      subscribeToThread(
+        context.ws,
+        payload.threadId,
+        context.dependencies.store,
+        context.dependencies.events,
+        context.subscriptions,
+      )
       return {
         thread: context.dependencies.store.getThread(payload.threadId),
         manifest: await context.dependencies.store.getThreadManifest(payload.threadId),

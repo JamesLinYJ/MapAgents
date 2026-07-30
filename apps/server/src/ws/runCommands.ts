@@ -76,7 +76,7 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
       if (!sessionId) throw new Error('sessionId 不能为空')
       context.dependencies.usageStats.assertWorkspaceCanStartModelRun(auth)
       if (!threadId) threadId = (await context.dependencies.store.createThread(sessionId, payload.query.slice(0, 32))).id
-      const config = await resolveRuntimeConfig(context.dependencies.store, context.dependencies.defaultRuntimeConfig)
+      const config = await resolveRuntimeConfig(context.dependencies.store.runtimeConfiguration, context.dependencies.defaultRuntimeConfig)
       const selectedProvider = payload.provider
         ?? payload.modelProvider
         ?? context.dependencies.modelRegistry.defaultProvider
@@ -87,7 +87,7 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
         modelName: payload.modelName ?? null,
         runtimeConfigSnapshot: config,
       })
-      subscribeToRun(context.ws, run.id, context.dependencies.store, context.subscriptions)
+      subscribeToRun(context.ws, run.id, context.dependencies.store, context.dependencies.events, context.subscriptions)
       context.runTasks.startDetached({
         runId: run.id,
         threadId,
@@ -147,7 +147,7 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
       }
       if (!run.runtimeConfigSnapshot) throw new Error(`运行 '${payload.runId}' 缺少 runtimeConfigSnapshot`)
       context.dependencies.usageStats.assertWorkspaceCanStartModelRun(auth)
-      subscribeToRun(context.ws, payload.runId, context.dependencies.store, context.subscriptions)
+      subscribeToRun(context.ws, payload.runId, context.dependencies.store, context.dependencies.events, context.subscriptions)
       context.runTasks.startDetached({
         runId: payload.runId,
         threadId: run.threadId,
@@ -184,7 +184,7 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
     auth: 'required',
     csrf: false,
     handler: (payload, context) => {
-      subscribeToRun(context.ws, payload.runId, context.dependencies.store, context.subscriptions)
+      subscribeToRun(context.ws, payload.runId, context.dependencies.store, context.dependencies.events, context.subscriptions)
       return snapshotRun(payload.runId, context.dependencies.store)
     },
   })

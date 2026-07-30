@@ -61,6 +61,13 @@ interface ToolingControllerOptions {
   setUiError: (error?: string) => void
 }
 
+export function shouldLoadToolingDiagnostics(pathname: string, panelMode: string): boolean {
+  return pathname === '/debug'
+    || panelMode === 'compute'
+    || panelMode === 'config'
+    || panelMode === 'tools'
+}
+
 // 工具控制器持有工具目录、运行时配置和调试状态。
 //
 // 各事实源独立吸收，单个持久化组件失败不会清空已经成功加载的工具描述。

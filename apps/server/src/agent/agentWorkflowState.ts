@@ -69,6 +69,7 @@ export function findRunnableAgentWorkflowStep(
   invocation: {
     toolName: string
     ownerAgentId?: string | null
+    workflowStepId?: string | null
   },
   excludedStepIds: ReadonlySet<string> = new Set(),
 ): AgentWorkflowStep | null {
@@ -77,13 +78,17 @@ export function findRunnableAgentWorkflowStep(
       .filter(step => step.status === 'completed' || step.status === 'skipped')
       .map(step => step.stepId),
   )
-  return workflow.steps.find(step => (
+  const runnable = workflow.steps.filter(step => (
     step.status === 'pending'
     && step.toolName === invocation.toolName
     && step.ownerAgentId === (invocation.ownerAgentId ?? 'supervisor')
     && !excludedStepIds.has(step.stepId)
     && step.dependsOn.every(dependency => completed.has(dependency))
-  )) ?? null
+  ))
+  if (invocation.workflowStepId) {
+    return runnable.find(step => step.stepId === invocation.workflowStepId) ?? null
+  }
+  return runnable.length === 1 ? runnable[0] ?? null : null
 }
 
 export function startAgentWorkflowStep(

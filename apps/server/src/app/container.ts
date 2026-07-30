@@ -16,6 +16,7 @@ import { defaultRuntimeConfig } from '../agent/defaultRuntimeConfig.js'
 import { OpenAIAgentsRuntime } from '../agent/runtime.js'
 import { RunTaskManager } from '../agent/runTaskManager.js'
 import { createDb, type Database } from '../db/connection.js'
+import { verifyDatabaseSchemaCompatibility } from '../db/schemaCompatibility.js'
 import { ApplicationInstanceLock } from '../db/applicationInstanceLock.js'
 import type { Env } from '../framework/env.js'
 import { discoverAndLoad } from '../framework/loader.js'
@@ -37,6 +38,11 @@ import { AuthorizationService } from '../security/authorizationService.js'
 import { PlatformIdentityService } from '../security/platformIdentityService.js'
 import type { SecurityServices } from '../security/routes.js'
 import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
+import {
+  PostgresRuntimeIntegrityCatalog,
+  RuntimeIntegrityChecker,
+} from '../store/runtimeIntegrityChecker.js'
+import type { RuntimeFileStore } from '../store/fileStore.js'
 import { ArtifactPublicationRepository } from '../store/postgres/artifactPublicationRepository.js'
 import { AuthSessionRepository } from '../store/postgres/authSessionRepository.js'
 import { MembershipRepository } from '../store/postgres/membershipRepository.js'
@@ -56,13 +62,16 @@ import { createAutomationRegistryFromDirectory, type AutomationRegistry } from '
 import { AutomationCompiler } from '../automations/automationCompiler.js'
 import { AutomationDefinitionService } from '../automations/automationDefinitionService.js'
 import { AutomationInvocationService } from '../automations/automationInvocationService.js'
+import { PlatformEventHub } from '../store/platformEventHub.js'
 
 export interface AppContainer {
   env: Env
   db: Database
   instanceLock: ApplicationInstanceLock
   runtimeRoot: string
+  runtimeFiles: RuntimeFileStore
   store: PlatformPersistenceFacade
+  events: PlatformEventHub
   managedLayers: ManagedLayerService
   artifactRepository: ArtifactPublicationRepository
   mapStore: MapStore
@@ -95,10 +104,12 @@ export async function createAppContainer(input: {
   const db = createDb(env.DATABASE_URL)
   const instanceLock = new ApplicationInstanceLock(db)
   const runtimeRoot = path.resolve(env.RUNTIME_ROOT)
-  const store = new PlatformPersistenceFacade(db, path.join(runtimeRoot, 'conversations'))
+  const events = new PlatformEventHub()
+  const store = new PlatformPersistenceFacade(db, path.join(runtimeRoot, 'conversations'), { events })
+  const runtimeFiles = store.runtimeFiles
   const managedLayers = new ManagedLayerService(db)
   const artifactRepository = new ArtifactPublicationRepository(db)
-  const mapStore = new MapStore(db, store.mapSceneBus)
+  const mapStore = new MapStore(db, events.mapScenes)
   const mapTileGateway = new MapTileGateway(
     new PostgisVectorTileSource(db.pool, env.MAP_TILE_TIMEOUT_MS),
     new LocalRasterTileRenderer({
@@ -141,10 +152,16 @@ export async function createAppContainer(input: {
 
   try {
     await instanceLock.acquire()
+    await verifyDatabaseSchemaCompatibility(db)
     await ensureMeteorologicalTables(db)
     await ensureSecurityTables(db)
     await ensureModelResultCacheTable(db)
     await store.initialize()
+    await new RuntimeIntegrityChecker(
+      new PostgresRuntimeIntegrityCatalog(db),
+      runtimeFiles,
+      runtimeRoot,
+    ).verify()
 
   if (env.SEED_LAYERS_DIR) {
     const seedDirectory = path.resolve(projectRoot, env.SEED_LAYERS_DIR)
@@ -170,14 +187,15 @@ export async function createAppContainer(input: {
   const automationRegistry = await createAutomationRegistryFromDirectory(path.join(projectRoot, 'apps', 'server', 'config', 'automations'))
   const automationCompiler = new AutomationCompiler(toolRegistry)
   const automationDefinitionService = new AutomationDefinitionService({
-    store,
+    automations: store.automations,
     registry: automationRegistry,
     compiler: automationCompiler,
     security,
   })
   const jobQueue = new JobQueueService(env)
   const scheduledTaskService = new ScheduledTaskService({
-    store,
+    automations: store.automations,
+    conversations: store,
     definitions: automationDefinitionService,
     compiler: automationCompiler,
     jobQueue,
@@ -187,7 +205,10 @@ export async function createAppContainer(input: {
     security,
   })
   const automationRunner = new AutomationRunner({
-    store,
+    automations: store.automations,
+    conversations: store,
+    toolExecutionStore: store,
+    runtimeConfiguration: store.runtimeConfiguration,
     definitions: automationDefinitionService,
     compiler: automationCompiler,
     toolRegistry,
@@ -199,12 +220,17 @@ export async function createAppContainer(input: {
     backgroundTasks,
     defaultRuntimeConfig: runtimeConfigDefaults,
     unscheduleTask: async taskId => {
-      const task = await store.getScheduledTask(taskId)
+      const task = await store.automations.getScheduledTask(taskId)
       await jobQueue.unscheduleTask(taskId, task?.queueJobId)
     },
   })
   const automationInvocationService = new AutomationInvocationService({
-    store,
+    store: {
+      getRun: runId => store.getRun(runId),
+      createAutomationRunRecord: input => store.automations.createAutomationRunRecord(input),
+      getAutomationRunRecord: automationRunId => store.automations.getAutomationRunRecord(automationRunId),
+      listAutomationRuns: workspaceId => store.automations.listAutomationRuns(workspaceId),
+    },
     definitions: automationDefinitionService,
     compiler: automationCompiler,
     runner: automationRunner,
@@ -223,7 +249,9 @@ export async function createAppContainer(input: {
     db,
     instanceLock,
     runtimeRoot,
+    runtimeFiles,
     store,
+    events,
     managedLayers,
     artifactRepository,
     mapStore,

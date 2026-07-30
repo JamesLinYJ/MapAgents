@@ -12,6 +12,11 @@
 #     作者: JamesLinYJ
 #     协助: OpenAI Codex:GPT-5.6 Sol
 #     说明: 一键入口接受所有 Node 24 及以上版本，Node 24 仅作为推荐开发版本。
+#
+#   维护记录 (2026-07-31):
+#     作者: JamesLinYJ
+#     协助: OpenAI Codex:GPT-5.6 Sol
+#     说明: 依据实际依赖引擎范围接纳 Node 22 LTS，并排除依赖未声明支持的 Node 23。
 # --------------------------------------------------------------------------
 
 [CmdletBinding()]
@@ -28,8 +33,10 @@ function Test-GeoForgeNode {
     if (-not (Test-Path -LiteralPath $LiteralPath -PathType Leaf)) { return $false }
     try {
         $Version = (& $LiteralPath --version 2>$null).Trim()
-        if ($Version -notmatch '^v(?<Major>\d+)\.') { return $false }
-        return [int]$Matches.Major -ge 24
+        if ($Version -notmatch '^v(?<Major>\d+)\.(?<Minor>\d+)\.') { return $false }
+        $Major = [int]$Matches.Major
+        $Minor = [int]$Matches.Minor
+        return ($Major -eq 22 -and $Minor -ge 13) -or $Major -ge 24
     } catch {
         return $false
     }
@@ -107,7 +114,7 @@ function Resolve-GeoForgeNode {
     }
 
     throw @'
-未找到 Node.js 24 或更高版本。可安装 .node-version 推荐的版本，或将
+未找到受支持的 Node.js（22.13 以上的 Node 22 LTS，或 Node 24 及以上版本）。可安装 .node-version 推荐的版本，或将
 GEOFORGE_NODE_EXECUTABLE 设置为 node.exe 的绝对路径后重新运行 GeoForge.ps1。
 '@
 }

@@ -10,21 +10,25 @@
 // --------------------------------------------------------------------------
 
 import type { AuditEvent } from '@geo-agent-platform/shared-types/platform'
+import type { LocalManagedAccount } from '@geo-agent-platform/shared-types/local-operations'
 import type { OperationsClient } from '@geo-agent-platform/operations-supervisor/client'
-
-import type { LocalAccountService } from './localAccountService.js'
 
 export type LocalConsoleTab = 'services' | 'logs' | 'accounts' | 'audit'
 
 export interface LocalConsoleDataPlane {
-  accounts: Pick<LocalAccountService,
-    | 'listAccounts'
-    | 'createPlatformAdmin'
-    | 'grantPlatformAdmin'
-    | 'revokePlatformAdmin'
-    | 'setAccountEnabled'
-    | 'resetPassword'
-    | 'revokeSessions'>
+  accounts: {
+    listAccounts(): Promise<LocalManagedAccount[]>
+    createPlatformAdmin(input: {
+      email: string
+      password: string
+      displayName: string
+    }): Promise<LocalManagedAccount>
+    grantPlatformAdmin(email: string): Promise<LocalManagedAccount>
+    revokePlatformAdmin(email: string): Promise<LocalManagedAccount>
+    setAccountEnabled(email: string, enabled: boolean): Promise<LocalManagedAccount>
+    resetPassword(email: string, password: string): Promise<void>
+    revokeSessions(email: string): Promise<void>
+  }
   listAuditEvents: (limit?: number) => Promise<AuditEvent[]>
   close: () => Promise<void>
 }

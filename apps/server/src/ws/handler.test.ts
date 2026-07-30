@@ -7,6 +7,11 @@
 //   日期:       2026年06月08日
 //   作者:       JamesLinYJ
 //   协助:       OpenAI Codex:GPT-5.5
+//
+//   维护记录 (2026-07-31):
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
+//     说明: 补齐重连、关闭接入、传输错误与 Worker 工具失败的控制面集成回归。
 // --------------------------------------------------------------------------
 
 import { createServer } from 'node:http'
@@ -34,7 +39,10 @@ import type { ConversationItem, RunEvent } from '../schemas/types.js'
 import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import type { ToolProvider } from '../framework/types.js'
 import { defaultRuntimeConfig } from '../agent/defaultRuntimeConfig.js'
-import { createTestPersistenceFacade } from '../../test-support/persistenceFacadeHarness.js'
+import {
+  createTestPersistenceFacade,
+  testPlatformEventHub,
+} from '../../test-support/persistenceFacadeHarness.js'
 import { OpenAIAgentsRuntime } from '../agent/runtime.js'
 import { testSandboxClientFactory } from '../../test-support/agentsSandboxClient.js'
 import { RunTaskManager } from '../agent/runTaskManager.js'
@@ -43,6 +51,9 @@ import { createWsHandler as createWsHandlerBase } from './handler.js'
 import type { WsDependencies } from './dependencies.js'
 import type { SecurityServices } from '../security/routes.js'
 import type { AuthContext } from '../security/types.js'
+import { RuntimeFileStore } from '../store/fileStore.js'
+import { ServiceAdmission } from '../app/serviceAdmission.js'
+import { wsConnectionsActive } from '../observability/metrics.js'
 
 const TEST_ORIGIN = 'http://127.0.0.1:5173'
 const TEST_CSRF = 'csrf_test'
@@ -58,9 +69,9 @@ const TEST_AUTH: AuthContext = {
   roles: [{ workspaceId: 'workspace_test', role: 'platform_admin' }],
 }
 
-type TestWsDependencies = Omit<WsDependencies, 'env' | 'runtime' | 'runTasks' | 'scheduledTaskService' | 'backgroundTasks' | 'usageStats'> & Partial<Pick<
+type TestWsDependencies = Omit<WsDependencies, 'admission' | 'env' | 'events' | 'runtime' | 'runTasks' | 'runtimeFiles' | 'scheduledTaskService' | 'backgroundTasks' | 'usageStats'> & Partial<Pick<
   WsDependencies,
-  'env' | 'runtime' | 'runTasks' | 'scheduledTaskService' | 'backgroundTasks' | 'usageStats'
+  'admission' | 'env' | 'events' | 'runtime' | 'runTasks' | 'runtimeFiles' | 'scheduledTaskService' | 'backgroundTasks' | 'usageStats'
 >>
 
 async function removeTempRoot(root: string): Promise<void> {
@@ -77,6 +88,9 @@ function createWsHandler(server: Parameters<typeof createWsHandlerBase>[0], depe
   return createWsHandlerBase(server, {
     ...dependencies,
     env: dependencies.env ?? testEnv(),
+    events: dependencies.events ?? testPlatformEventHub(dependencies.store),
+    admission: dependencies.admission ?? new ServiceAdmission(),
+    runtimeFiles: dependencies.runtimeFiles ?? new RuntimeFileStore(dependencies.runtimeRoot),
     runtime,
     runTasks: dependencies.runTasks ?? new RunTaskManager(runtime, dependencies.store),
     scheduledTaskService: dependencies.scheduledTaskService ?? ({} as WsDependencies['scheduledTaskService']),
@@ -132,6 +146,142 @@ describe('WebSocket run subscriptions', () => {
     const second = payloadData(await request(ws, 'run:list', { sessionId: session.id, limit: 3, cursor }, 'runs_2'))
     expect(isRecord(second) && Array.isArray(second.items) ? second.items : []).toHaveLength(1)
     await close(ws)
+  })
+
+  it('requires an explicit authorized thread for file list commands', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-file-scope-'))
+    const store = createTestPersistenceFacade(root, noOpDb())
+    await store.initialize()
+    const ownSession = await store.createSession({
+      workspaceId: TEST_AUTH.defaultWorkspaceId,
+      userId: TEST_AUTH.userId,
+    })
+    const ownThread = await store.createThread(ownSession.id, '当前工作区')
+    const otherSession = await store.createSession({
+      workspaceId: 'workspace_other',
+      userId: 'user_other',
+    })
+    const otherThread = await store.createThread(otherSession.id, '其它工作区')
+
+    const server = createServer((_request, response) => response.end())
+    const wss = createWsHandler(server, {
+      store,
+      toolRegistry: new ToolRegistry(),
+      modelRegistry: new ModelAdapterRegistry(testEnv()),
+      managedLayers: {} as unknown as ManagedLayerService,
+      runtimeRoot: root,
+      security: testSecurity('workspace_other'),
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('测试服务未监听 TCP 地址')
+    cleanups.push(async () => {
+      await new Promise<void>(resolve => wss.close(() => resolve()))
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      await store.flushConversationStore()
+      await removeTempRoot(root)
+    })
+
+    const ws = await connect(`ws://127.0.0.1:${address.port}/ws`)
+    const missingScope = await request(ws, 'file:list', {}, 'file_missing_scope')
+    expect(missingScope.ok).toBe(false)
+
+    const denied = await request(ws, 'file:list', { threadId: otherThread.id }, 'file_other_workspace')
+    expect(denied.ok).toBe(false)
+    expect(isRecord(denied.error) ? denied.error.message : '').toContain('跨工作区')
+
+    const ownFiles = payloadData(await request(ws, 'file:list', { threadId: ownThread.id }, 'file_own_workspace'))
+    expect(ownFiles).toEqual({ files: [], total: 0 })
+    await close(ws)
+  })
+
+  it('rejects upgrades and commands immediately after shutdown admission closes', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-shutdown-'))
+    const store = createTestPersistenceFacade(root, noOpDb())
+    await store.initialize()
+    const admission = new ServiceAdmission()
+    const server = createServer((_request, response) => response.end())
+    const wss = createWsHandler(server, {
+      store,
+      toolRegistry: new ToolRegistry(),
+      modelRegistry: new ModelAdapterRegistry(testEnv()),
+      managedLayers: {} as unknown as ManagedLayerService,
+      runtimeRoot: root,
+      security: testSecurity(),
+      admission,
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('测试服务未监听 TCP 地址')
+    const url = `ws://127.0.0.1:${address.port}/ws`
+    cleanups.push(async () => {
+      await new Promise<void>(resolve => wss.close(() => resolve()))
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      await store.flushConversationStore()
+      await removeTempRoot(root)
+    })
+
+    const ws = await connect(url)
+    admission.beginShutdown()
+    const rejectedCommand = await request(ws, 'run:start', {}, 'run_after_shutdown')
+    expect(rejectedCommand).toMatchObject({
+      ok: false,
+      error: {
+        code: 'service_unavailable',
+      },
+    })
+    await expect(rejectedUpgradeStatus(url)).resolves.toBe(503)
+    await close(ws)
+  })
+
+  it('contains upgrade authentication and connected socket errors', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-errors-'))
+    const store = createTestPersistenceFacade(root, noOpDb())
+    await store.initialize()
+    const security = testSecurity()
+    let failAuthentication = true
+    security.auth.authenticateHeaders = async () => {
+      if (failAuthentication) {
+        failAuthentication = false
+        throw new Error('认证仓储暂时不可用')
+      }
+      return TEST_AUTH
+    }
+    const server = createServer((_request, response) => response.end())
+    const wss = createWsHandler(server, {
+      store,
+      toolRegistry: new ToolRegistry(),
+      modelRegistry: new ModelAdapterRegistry(testEnv()),
+      managedLayers: {} as unknown as ManagedLayerService,
+      runtimeRoot: root,
+      security,
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('测试服务未监听 TCP 地址')
+    const url = `ws://127.0.0.1:${address.port}/ws`
+    cleanups.push(async () => {
+      await new Promise<void>(resolve => wss.close(() => resolve()))
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      await store.flushConversationStore()
+      await removeTempRoot(root)
+    })
+
+    await expect(rejectedUpgradeStatus(url)).resolves.toBe(503)
+    const baseline = gaugeValue(await wsConnectionsActive.get())
+    const ws = await connect(url)
+    expect(gaugeValue(await wsConnectionsActive.get())).toBe(baseline + 1)
+    const serverSocket = [...wss.clients][0]
+    if (!serverSocket) throw new Error('测试 WebSocket 服务端连接不存在')
+    const clientClosed = new Promise<void>(resolve => ws.once('close', () => resolve()))
+    serverSocket.emit('error', new Error('测试传输错误'))
+    await clientClosed
+    await waitFor(() => gaugeValuePromise(wsConnectionsActive.get()), baseline)
+    expect(ws.readyState).toBe(WebSocket.CLOSED)
+
+    wss.emit('error', new Error('测试 WebSocketServer 错误'))
+    const subsequent = await connect(url)
+    await close(subsequent)
   })
 
   it('replays a full snapshot after reconnect and resubscribe', async () => {
@@ -412,6 +562,64 @@ describe('WebSocket run subscriptions', () => {
     await close(ws)
   })
 
+  it('persists a Worker tool failure as a failed run and replays it after reconnect', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-worker-failure-'))
+    const store = createTestPersistenceFacade(root, noOpDb())
+    await store.initialize()
+    const session = await store.createSession()
+    const thread = await store.createThread(session.id, 'Worker 失败传播')
+    const registry = new ToolRegistry()
+    registry.register(failingWorkerToolProvider())
+
+    const server = createServer((_request, response) => response.end())
+    const wss = createWsHandler(server, {
+      store,
+      toolRegistry: registry,
+      modelRegistry: new ModelAdapterRegistry(testEnv()),
+      managedLayers: {} as unknown as ManagedLayerService,
+      runtimeRoot: root,
+      security: testSecurity(),
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('测试服务未监听 TCP 地址')
+    const url = `ws://127.0.0.1:${address.port}/ws`
+    cleanups.push(async () => {
+      await new Promise<void>(resolve => wss.close(() => resolve()))
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      await store.flushConversationStore()
+      await removeTempRoot(root)
+    })
+
+    const first = await connect(url)
+    const failed = await request(first, 'tool:run', {
+      sessionId: session.id,
+      threadId: thread.id,
+      toolName: 'worker_failure_probe',
+      args: {},
+    }, 'worker_failure')
+    expect(failed).toMatchObject({
+      ok: false,
+      error: {
+        message: 'Python Worker 连接已中断',
+      },
+    })
+    const failedRun = store.listRunsForThread(thread.id).at(-1)
+    expect(failedRun).toMatchObject({
+      status: 'failed',
+      state: {
+        failedTool: 'worker_failure_probe',
+        errors: ['Python Worker 连接已中断'],
+      },
+    })
+    await close(first)
+
+    const second = await connect(url)
+    const replay = await request(second, 'run:subscribe', { runId: failedRun?.id }, 'worker_failure_replay')
+    expect(snapshotRunStatus(replay)).toBe('failed')
+    await close(second)
+  })
+
   it('serves thread history, context, memory, fork and trash commands with correlated envelopes', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-thread-kernel-'))
     const store = createTestPersistenceFacade(root, noOpDb())
@@ -479,7 +687,7 @@ describe('WebSocket run subscriptions', () => {
     config.context.privateMemoryDir = path.join(root, 'private-memory')
     config.context.teamMemoryDir = path.join(root, 'team-memory')
     config.context.memoryBaseDir = root
-    await store.upsertRuntimeConfig('agent-runtime', config)
+    await store.runtimeConfiguration.upsertRuntimeConfig('agent-runtime', config)
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '记忆控制面')
     await store.appendTranscript({ threadId: thread.id, runId: 'run_previous', kind: 'message', payload: { role: 'user', content: '历史目标' } })
@@ -816,21 +1024,77 @@ function outputItems(response: ScriptedResponse, responseId: string): AgentOutpu
 }
 
 function structuredResponse(response: ScriptedResponse, request: ModelRequest): ScriptedResponse {
-  if (!response.text || response.toolCalls?.length || request.outputType === 'text') return response
+  const normalized = withStrictWorkflowStepIdentity(response, request)
+  if (!normalized.text || normalized.toolCalls?.length || request.outputType === 'text') return normalized
   const properties = request.outputType.schema.properties
   if ('markdown' in properties) {
     return {
-      ...response,
-      text: JSON.stringify({ markdown: response.text, summary: response.text, artifactIds: [], warnings: [] }),
+      ...normalized,
+      text: JSON.stringify({ markdown: normalized.text, summary: normalized.text, artifactIds: [], warnings: [] }),
     }
   }
   if ('evidence' in properties) {
     return {
-      ...response,
-      text: JSON.stringify({ status: 'completed', summary: response.text, evidence: [], artifactIds: [], warnings: [], error: null }),
+      ...normalized,
+      text: JSON.stringify({ status: 'completed', summary: normalized.text, evidence: [], artifactIds: [], warnings: [], error: null }),
     }
   }
-  return response
+  return normalized
+}
+
+function rejectedUpgradeStatus(url: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url, { headers: { Origin: TEST_ORIGIN } })
+    ws.once('unexpected-response', (_request, response) => {
+      resolve(response.statusCode)
+      response.resume()
+    })
+    ws.once('open', () => {
+      ws.close()
+      reject(new Error('预期 WebSocket upgrade 被拒绝，但连接成功。'))
+    })
+    ws.once('error', error => {
+      if ((error as Error).message.includes('Unexpected server response')) return
+      reject(error)
+    })
+  })
+}
+
+function gaugeValue(metric: Awaited<ReturnType<typeof wsConnectionsActive.get>>): number {
+  return metric.values[0]?.value ?? 0
+}
+
+async function gaugeValuePromise(
+  metric: Promise<Awaited<ReturnType<typeof wsConnectionsActive.get>>>,
+): Promise<number> {
+  return gaugeValue(await metric)
+}
+
+async function waitFor(read: () => Promise<number>, expected: number): Promise<void> {
+  const deadline = Date.now() + 2_000
+  while (Date.now() < deadline) {
+    if (await read() === expected) return
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  throw new Error(`等待指标恢复到 ${expected} 超时。`)
+}
+
+function withStrictWorkflowStepIdentity(response: ScriptedResponse, request: ModelRequest): ScriptedResponse {
+  if (!response.toolCalls?.length) return response
+  return {
+    ...response,
+    toolCalls: response.toolCalls.map(call => {
+      const definition = request.tools.find(tool => tool.name === call.name)
+      const properties = definition && isRecord(definition.parameters)
+        && isRecord(definition.parameters.properties)
+        ? definition.parameters.properties
+        : {}
+      if (!('workflowStepId' in properties)) return call
+      const parsed: unknown = JSON.parse(call.arguments)
+      if (!isRecord(parsed) || 'workflowStepId' in parsed) return call
+      return { ...call, arguments: JSON.stringify({ ...parsed, workflowStepId: null }) }
+    }),
+  }
 }
 
 function fakeAdapter(model: Model): ModelAdapter {
@@ -953,6 +1217,41 @@ function previewToolProvider(): ToolProvider {
   }
 }
 
+function failingWorkerToolProvider(): ToolProvider {
+  const definition = {
+    name: 'worker_failure_probe',
+    label: 'Worker 失败探针',
+    description: '验证 Python Worker 失败通过工具运行状态传播。',
+    prompt: '仅用于控制面集成测试。',
+    group: '测试',
+    tags: ['worker'],
+    isReadOnly: true,
+    isDestructive: false,
+    jsonSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+  }
+  return {
+    manifest: {
+      id: 'test-worker-failure-provider',
+      name: '测试 Worker 失败传播',
+      version: '1.0.0',
+      author: 'tests',
+      description: '测试 Worker 失败运行终态',
+      language: 'typescript',
+      tools: [definition],
+    },
+    tools: () => [{
+      ...definition,
+      handler: async () => {
+        throw new Error('Python Worker 连接已中断')
+      },
+    }],
+  }
+}
+
 function noOpDb(): Database {
   const runtimeConfig = new Map<string, Record<string, unknown>>()
   const client = {
@@ -983,7 +1282,7 @@ function parseJsonRecord(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {}
 }
 
-function testSecurity(): SecurityServices {
+function testSecurity(deniedWorkspaceId?: string): SecurityServices {
   return {
     auth: {
       authenticateRequest: async () => TEST_AUTH,
@@ -1018,7 +1317,14 @@ function testSecurity(): SecurityServices {
     authorization: {
       enforce: async () => {},
       can: async () => true,
-      assertResourceWorkspace: async () => {},
+      assertResourceWorkspace: async (
+        _auth: AuthContext,
+        _object: string,
+        _action: string,
+        resource: { workspaceId?: string | null },
+      ) => {
+        if (resource.workspaceId === deniedWorkspaceId) throw new Error('跨工作区资源访问被拒绝。')
+      },
       audit: async () => {},
       reload: async () => {},
     },

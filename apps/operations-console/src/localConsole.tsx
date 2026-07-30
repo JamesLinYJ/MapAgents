@@ -21,9 +21,9 @@ import type {
   OperationsSnapshot,
 } from '@geo-agent-platform/shared-types/operations'
 import type { AuditEvent } from '@geo-agent-platform/shared-types/platform'
+import type { LocalManagedAccount } from '@geo-agent-platform/shared-types/local-operations'
 import { Box, Text, render, useApp, useInput, usePaste, useWindowSize } from 'ink'
 
-import type { LocalManagedAccount } from '../store/postgres/localAccountRepository.js'
 import { LocalConsoleMouseProvider, MouseRegion, type MouseRegionState } from './localConsoleMouse.js'
 import { consolePalette, geoForgeConsoleTheme } from './localConsoleTheme.js'
 import type { LocalConsoleDataPlane, LocalConsoleOptions, LocalConsoleTab } from './localConsoleTypes.js'

@@ -14,7 +14,7 @@
 
 import type { SecurityServices } from '../security/routes.js'
 import type { AuthContext } from '../security/types.js'
-import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
+import type { AutomationStore } from '../store/postgres/automationStore.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 import {
   automationDefinitionSchema,
@@ -47,7 +47,18 @@ export interface AutomationDraftInput {
 
 export class AutomationDefinitionService {
   constructor(private readonly deps: {
-    store: PlatformPersistenceFacade
+    automations: Pick<AutomationStore,
+      | 'createAutomationDefinition'
+      | 'disableAutomationDefinition'
+      | 'getAutomationDefinition'
+      | 'getAutomationDefinitionVersion'
+      | 'getPublishedAutomationDefinition'
+      | 'listAutomationDefinitions'
+      | 'listAutomationDefinitionVersions'
+      | 'publishAutomationDefinition'
+      | 'saveAutomationDefinitionRevision'
+      | 'syncAutomationDefinitions'
+    >
     registry: AutomationRegistry
     compiler: AutomationCompiler
     security: SecurityServices
@@ -70,14 +81,14 @@ export class AutomationDefinitionService {
       }
       return { ...definition, requiredTools: validation.requiredTools }
     })
-    await this.deps.store.syncAutomationDefinitions(definitions)
+    await this.deps.automations.syncAutomationDefinitions(definitions)
   }
 
   async list(auth: AuthContext): Promise<AutomationListResult> {
     await this.deps.security.authorization.enforce(auth, 'automation', 'read', {
       workspaceId: auth.defaultWorkspaceId,
     })
-    const definitions = await this.deps.store.listAutomationDefinitions(auth.defaultWorkspaceId)
+    const definitions = await this.deps.automations.listAutomationDefinitions(auth.defaultWorkspaceId)
     return {
       definitions,
       diagnostics: this.deps.registry.loadDiagnostics(),
@@ -102,7 +113,7 @@ export class AutomationDefinitionService {
     const definition = this.toDraftDefinition(auth, { ...input, automationId: undefined }, 1)
     const validation = this.deps.compiler.validate(definition)
     assertValidation(validation)
-    const saved = await this.deps.store.createAutomationDefinition({
+    const saved = await this.deps.automations.createAutomationDefinition({
       ...definition,
       requiredTools: validation.requiredTools,
     })
@@ -123,7 +134,7 @@ export class AutomationDefinitionService {
     const definition = this.toDraftDefinition(auth, { ...input, automationId }, expectedRevision + 1, existing.createdAt, existing.publishedRevision)
     const validation = this.deps.compiler.validate(definition)
     assertValidation(validation)
-    const saved = await this.deps.store.saveAutomationDefinitionRevision({
+    const saved = await this.deps.automations.saveAutomationDefinitionRevision({
       ...definition,
       requiredTools: validation.requiredTools,
     }, expectedRevision)
@@ -136,10 +147,10 @@ export class AutomationDefinitionService {
 
   async publish(auth: AuthContext, automationId: string, revision: number): Promise<AutomationDefinition> {
     await this.requireWorkspaceDefinition(auth, automationId, 'update')
-    const version = await this.deps.store.getAutomationDefinitionVersion(automationId, revision)
+    const version = await this.deps.automations.getAutomationDefinitionVersion(automationId, revision)
     if (!version) throw new Error(`Automation '${automationId}' 修订 ${revision} 不存在。`)
     const compiled = this.deps.compiler.compile(version)
-    const published = await this.deps.store.publishAutomationDefinition(automationId, revision)
+    const published = await this.deps.automations.publishAutomationDefinition(automationId, revision)
     await this.deps.security.authorization.audit(auth, 'automation', 'update', {
       workspaceId: auth.defaultWorkspaceId,
       resourceId: automationId,
@@ -149,7 +160,7 @@ export class AutomationDefinitionService {
 
   async disable(auth: AuthContext, automationId: string): Promise<AutomationDefinition> {
     await this.requireWorkspaceDefinition(auth, automationId, 'delete')
-    const disabled = await this.deps.store.disableAutomationDefinition(automationId)
+    const disabled = await this.deps.automations.disableAutomationDefinition(automationId)
     await this.deps.security.authorization.audit(auth, 'automation', 'delete', {
       workspaceId: auth.defaultWorkspaceId,
       resourceId: automationId,
@@ -159,13 +170,13 @@ export class AutomationDefinitionService {
 
   async history(auth: AuthContext, automationId: string): Promise<AutomationVersionRecord[]> {
     const definition = await this.requireVisibleDefinition(auth, automationId, 'read')
-    return this.deps.store.listAutomationDefinitionVersions(definition.automationId)
+    return this.deps.automations.listAutomationDefinitionVersions(definition.automationId)
   }
 
   async requirePublished(workspaceId: string, automationId: string, revision?: number): Promise<AutomationDefinition> {
     const definition = revision
-      ? await this.deps.store.getAutomationDefinitionVersion(automationId, revision)
-      : await this.deps.store.getPublishedAutomationDefinition(automationId)
+      ? await this.deps.automations.getAutomationDefinitionVersion(automationId, revision)
+      : await this.deps.automations.getPublishedAutomationDefinition(automationId)
     if (!definition) throw new Error(`Automation '${automationId}' 不存在。`)
     if (definition.source === 'workspace' && definition.workspaceId !== workspaceId) {
       throw new Error('无权访问该 Automation。')
@@ -195,7 +206,7 @@ export class AutomationDefinitionService {
     automationId: string,
     action: 'read' | 'update' | 'delete',
   ): Promise<AutomationDefinition> {
-    const definition = await this.deps.store.getAutomationDefinition(automationId)
+    const definition = await this.deps.automations.getAutomationDefinition(automationId)
     if (!definition) throw new Error(`Automation '${automationId}' 不存在。`)
     if (definition.source === 'workspace' && definition.workspaceId !== auth.defaultWorkspaceId) {
       throw new Error('无权访问该 Automation。')

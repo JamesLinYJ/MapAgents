@@ -12,7 +12,10 @@
 import type { AuthContext } from '../security/types.js'
 import type { Env } from '../framework/env.js'
 import type { AnalysisRun, RunStatus } from '../schemas/types.js'
-import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
+
+export interface UsageRunReader {
+  listRunsForWorkspace(workspaceId: string): AnalysisRun[]
+}
 
 interface UsageTotals {
   runCount: number
@@ -86,7 +89,7 @@ export interface TokenUsageSummary {
 
 export class UsageStatsService {
   constructor(
-    private readonly store: PlatformPersistenceFacade,
+    private readonly store: UsageRunReader,
     private readonly env: Env,
   ) {}
 

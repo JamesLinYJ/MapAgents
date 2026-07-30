@@ -10,6 +10,7 @@
 // --------------------------------------------------------------------------
 
 import { Hono } from 'hono'
+import { readFile } from 'node:fs/promises'
 import type { ManagedLayerService } from '../gis/managedLayers/managedLayerService.js'
 import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import type { Env } from '../framework/env.js'
@@ -18,6 +19,7 @@ import { requireAuth } from '../security/routes.js'
 import type { GeoJsonFeatureCollection } from '../gis/geojson.js'
 import { parseGeoJsonEntity, toFeatureCollection } from '../gis/geojson.js'
 import { HttpClientError, routeErrorResponse } from './errors.js'
+import { parseStreamingMultipart, type StreamingMultipartForm } from './streamingMultipart.js'
 
 interface ImportOptions {
   sourceType: string
@@ -35,17 +37,16 @@ interface ImportOptions {
 }
 
 export function layerRoutes(
+  runtimeRoot: string,
   managedLayers: ManagedLayerService,
   store: PlatformPersistenceFacade,
   security: SecurityServices,
-  env?: Env,
+  env: Pick<Env, 'MAX_FILE_UPLOAD_BYTES' | 'MAX_GEOJSON_UPLOAD_BYTES' | 'MAX_GEOJSON_FEATURES' | 'MAX_GEOJSON_COORDINATES'>,
 ) {
   return new Hono()
     .post('/api/v1/layers/register', async (c) => {
-      const tooLarge = checkContentLength(c.req.header('content-length'), env?.MAX_GEOJSON_UPLOAD_BYTES ?? env?.MAX_FILE_UPLOAD_BYTES)
-      if (tooLarge) return c.json({ detail: tooLarge }, 413)
       const auth = requireAuth(c)
-      const result = await importLayerFromForm(c.req.raw, managedLayers, env, {
+      const result = await importLayerFromForm(c.req.raw, runtimeRoot, managedLayers, env, {
         sourceType: 'upload',
         defaultCategory: 'upload',
         requireSession: true,
@@ -65,11 +66,9 @@ export function layerRoutes(
       return c.json(result.layer)
     })
     .post('/api/v1/layers/import', async (c) => {
-      const tooLarge = checkContentLength(c.req.header('content-length'), env?.MAX_GEOJSON_UPLOAD_BYTES ?? env?.MAX_FILE_UPLOAD_BYTES)
-      if (tooLarge) return c.json({ detail: tooLarge }, 413)
       const auth = requireAuth(c)
       await security.authorization.enforce(auth, 'layer', 'create', { workspaceId: auth.defaultWorkspaceId })
-      const result = await importLayerFromForm(c.req.raw, managedLayers, env, {
+      const result = await importLayerFromForm(c.req.raw, runtimeRoot, managedLayers, env, {
         sourceType: 'managed',
         defaultCategory: 'managed',
         requireSession: false,
@@ -80,8 +79,6 @@ export function layerRoutes(
       return c.json(result.layer)
     })
     .post('/api/v1/layers/:layerKey/replace', async (c) => {
-      const tooLarge = checkContentLength(c.req.header('content-length'), env?.MAX_GEOJSON_UPLOAD_BYTES ?? env?.MAX_FILE_UPLOAD_BYTES)
-      if (tooLarge) return c.json({ detail: tooLarge }, 413)
       const existing = await managedLayers.getLayer(c.req.param('layerKey'))
       if (!existing) return c.json({ detail: '图层不存在' }, { status: 404 })
       if (existing.readonly) return c.json({ detail: '系统图层为只读，不能替换。' }, { status: 403 })
@@ -92,7 +89,7 @@ export function layerRoutes(
         visibility: existing.visibility,
         resourceId: existing.layerKey,
       })
-      const result = await importLayerFromForm(c.req.raw, managedLayers, env, {
+      const result = await importLayerFromForm(c.req.raw, runtimeRoot, managedLayers, env, {
         layerKey: existing.layerKey,
         sourceType: existing.sourceType,
         defaultCategory: existing.category,
@@ -113,31 +110,32 @@ export function layerRoutes(
 
 async function importLayerFromForm(
   request: Request,
+  runtimeRoot: string,
   managedLayers: ManagedLayerService,
-  env: Env | undefined,
+  env: Pick<Env, 'MAX_FILE_UPLOAD_BYTES' | 'MAX_GEOJSON_UPLOAD_BYTES' | 'MAX_GEOJSON_FEATURES' | 'MAX_GEOJSON_COORDINATES'>,
   opts: ImportOptions,
   resolveOwner?: (sessionId: string) => Promise<{ workspaceId: string; createdByUserId: string } | null>,
 ) {
+  let form: StreamingMultipartForm | null = null
   try {
-    const form = await request.formData()
-    const file = form.get('file')
-    if (!isFileLike(file)) return { error: '缺少上传文件。', status: 400 }
+    form = await parseStreamingMultipart(request, runtimeRoot, env.MAX_GEOJSON_UPLOAD_BYTES)
+    const file = form.requireFile('file')
     if (!isSupportedGeoJsonFilename(file.name)) {
       return { error: `当前导入器只支持 GeoJSON/JSON 文件：${file.name}`, status: 415 }
     }
-    const sessionId = formString(form, 'sessionId') ?? formString(form, 'session_id') ?? opts.sessionId ?? null
+    const sessionId = form.field('sessionId') ?? form.field('session_id') ?? opts.sessionId ?? null
     if (opts.requireSession && !sessionId) return { error: 'sessionId 不能为空。', status: 400 }
     const owner = sessionId && resolveOwner ? await resolveOwner(sessionId) : null
-    const threadId = formString(form, 'threadId') ?? formString(form, 'thread_id') ?? opts.threadId ?? null
-    const collection = parseGeoJsonPayload(await parseJsonFile(file), env)
+    const threadId = form.field('threadId') ?? form.field('thread_id') ?? opts.threadId ?? null
+    const collection = parseGeoJsonPayload(await parseJsonFile(file.tempPath), env)
     const layer = await managedLayers.importGeoJsonLayer({
       layerKey: opts.layerKey ?? null,
-      name: formString(form, 'name') ?? opts.defaultName ?? stripExtension(file.name),
-      description: formString(form, 'description') ?? opts.defaultDescription ?? '',
+      name: form.field('name') ?? opts.defaultName ?? stripExtension(file.name),
+      description: form.field('description') ?? opts.defaultDescription ?? '',
       sourceType: opts.sourceType,
-      category: formString(form, 'category') ?? opts.defaultCategory,
-      status: formString(form, 'status') ?? 'active',
-      tags: parseTags(form.get('tags')) ?? opts.defaultTags ?? [],
+      category: form.field('category') ?? opts.defaultCategory,
+      status: form.field('status') ?? 'active',
+      tags: parseTags(form.field('tags')) ?? opts.defaultTags ?? [],
       sessionId,
       threadId,
       sourceFilename: file.name,
@@ -150,10 +148,15 @@ async function importLayerFromForm(
   } catch (error) {
     const response = routeErrorResponse(error, 'GeoJSON 导入失败。')
     return { error: response.detail, status: response.status }
+  } finally {
+    await form?.dispose()
   }
 }
 
-function parseGeoJsonPayload(value: unknown, env?: Env): GeoJsonFeatureCollection {
+function parseGeoJsonPayload(
+  value: unknown,
+  env: Pick<Env, 'MAX_GEOJSON_FEATURES' | 'MAX_GEOJSON_COORDINATES'>,
+): GeoJsonFeatureCollection {
   let collection: GeoJsonFeatureCollection
   try {
     collection = toFeatureCollection(parseGeoJsonEntity(value, 'GeoJSON'))
@@ -161,29 +164,22 @@ function parseGeoJsonPayload(value: unknown, env?: Env): GeoJsonFeatureCollectio
     throw new HttpClientError('GeoJSON 内容格式无效。', 422)
   }
   const features = collection.features
-  if (env?.MAX_GEOJSON_FEATURES && features.length > env.MAX_GEOJSON_FEATURES) {
+  if (features.length > env.MAX_GEOJSON_FEATURES) {
     throw new HttpClientError(`GeoJSON feature 数量超过限制：${features.length}/${env.MAX_GEOJSON_FEATURES}`, 413)
   }
   const coordinateCount = features.reduce((sum, feature) => sum + countCoordinates(feature.geometry), 0)
-  if (env?.MAX_GEOJSON_COORDINATES && coordinateCount > env.MAX_GEOJSON_COORDINATES) {
+  if (coordinateCount > env.MAX_GEOJSON_COORDINATES) {
     throw new HttpClientError(`GeoJSON 坐标数量超过限制：${coordinateCount}/${env.MAX_GEOJSON_COORDINATES}`, 413)
   }
   return collection
 }
 
-async function parseJsonFile(file: { text(): Promise<string> }): Promise<unknown> {
+async function parseJsonFile(filePath: string): Promise<unknown> {
   try {
-    return JSON.parse(await file.text())
+    return JSON.parse(await readFile(filePath, 'utf8'))
   } catch {
     throw new HttpClientError('GeoJSON 文件不是有效 JSON。', 422)
   }
-}
-
-function checkContentLength(value: string | undefined, limit?: number): string | null {
-  if (!limit || !value) return null
-  const parsed = Number(value)
-  if (Number.isFinite(parsed) && parsed > limit) return `上传文件过大，限制为 ${Math.round(limit / 1024 / 1024)}MB。`
-  return null
 }
 
 function countCoordinates(geometry: unknown): number {
@@ -209,11 +205,6 @@ function normalizeVisibility(value: unknown): 'private' | 'workspace' | 'public'
   return value === 'private' || value === 'public' ? value : 'workspace'
 }
 
-function formString(form: FormData, key: string): string | null {
-  const value = form.get(key)
-  return typeof value === 'string' && value.trim() ? value.trim() : null
-}
-
 function parseTags(value: unknown): string[] | null {
   if (typeof value !== 'string') return null
   return value.split(',').map(item => item.trim()).filter(Boolean)
@@ -221,15 +212,6 @@ function parseTags(value: unknown): string[] | null {
 
 function stripExtension(name: string): string {
   return name.replace(/\.[^.]+$/u, '') || name
-}
-
-function isFileLike(value: unknown): value is { name: string; text(): Promise<string> } {
-  return typeof value === 'object'
-    && value !== null
-    && 'name' in value
-    && typeof (value as { name?: unknown }).name === 'string'
-    && 'text' in value
-    && typeof (value as { text?: unknown }).text === 'function'
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

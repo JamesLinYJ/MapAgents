@@ -9,6 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -84,10 +85,10 @@ describe('thread context management', () => {
       const session = await store.createSession()
       const thread = await store.createThread(session.id, '资源恢复')
       const run = await store.createRun(session.id, '沿用已上传文件继续分析', { threadId: thread.id })
-      await new RuntimeFileStore(root).save({
-        name: 'sample.nc',
-        async arrayBuffer() { return Uint8Array.from([1, 2, 3]).buffer },
-      }, thread.id)
+      await new RuntimeFileStore(root).save(
+        await stageTestFile(root, 'sample.nc', Buffer.from([1, 2, 3])),
+        thread.id,
+      )
       await store.appendTranscript({
         threadId: thread.id,
         runId: run.id,
@@ -279,6 +280,19 @@ describe('thread context management', () => {
     }
   })
 })
+
+async function stageTestFile(root: string, name: string, content: Buffer) {
+  const tempPath = path.join(root, 'test-staging', `${randomUUID()}.upload`)
+  await mkdir(path.dirname(tempPath), { recursive: true })
+  await writeFile(tempPath, content)
+  return {
+    name,
+    tempPath,
+    sizeBytes: content.byteLength,
+    contentHash: createHash('sha256').update(content).digest('hex'),
+    mediaType: 'application/octet-stream',
+  }
+}
 
 async function createStore(root: string): Promise<PlatformPersistenceFacade> {
   const store = createTestPersistenceFacade(root)

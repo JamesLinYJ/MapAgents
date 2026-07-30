@@ -18,7 +18,7 @@
 //
 // 负责装配桌面文档、工作区布局和领域控制器的 UI 投影。
 
-import { Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, useCallback, useDeferredValue, useMemo } from 'react'
 import { domAnimation, LazyMotion, MotionConfig } from 'framer-motion'
 import { useQuery } from '@tanstack/react-query'
 
@@ -31,12 +31,13 @@ import './styles/layers.css'
 import './styles/layout.css'
 import './styles/tools-debug.css'
 import './styles/desktop.css'
-import { listAdminWorkspaces, logout, requestDesktopDownload } from '../api/client'
-import { requireDesktopBridge } from '../api/transport'
+import { listAdminWorkspaces } from '../api/client'
 import { TopBar } from './layout/TopBar'
 import { WorkspaceConversationPanel } from './layout/WorkspaceConversationPanel'
-import type { DesktopDocument } from './layout/WorkspaceLayout'
-import { WorkspaceInspectorPanel } from './layout/WorkspaceInspectorPanel'
+import {
+  WorkspaceInspectorPanel,
+  type WorkspaceInspectorDetail,
+} from './layout/WorkspaceInspectorPanel'
 import { WorkspaceMapPanel } from './layout/WorkspaceMapPanel'
 import { WorkspaceToolPanel } from './layout/WorkspaceToolPanel'
 import { WorkspaceWorkflowPanel } from './layout/WorkspaceWorkflowPanel'
@@ -49,14 +50,9 @@ import { AccountCenterPage, LegalPolicyPage, WorkspaceRouteHost } from './layout
 import { useWorkspaceMapActivation } from './layout/useWorkspaceMapActivation'
 import {
   formatUiError,
-  reportNonBlockingError,
 } from './bootstrap'
 import { projectTimeline } from '../features/conversation/timelineProjector'
-import { exportWorkspaceResult } from '../features/export/desktopExport'
-import {
-  ExportWizard,
-  type ExportWizardSelection,
-} from '../features/export/ExportWizard'
+import { ExportWizard } from '../features/export/ExportWizard'
 import {
   useConnectionController,
   useNavigationController,
@@ -87,7 +83,15 @@ import { useWorkspaceRunProjection } from './controllers/useWorkspaceRunProjecti
 import { useThreadLifecycleActions } from './controllers/useThreadLifecycleActions'
 import { useRunLifecycleActions } from './controllers/useRunLifecycleActions'
 import { useToolExecutionAction } from './controllers/useToolExecutionAction'
-import { subscribeDesktopDocument } from './desktopNavigation'
+import {
+  useDesktopDocumentCoordinator,
+  useDesktopWindowCoordinator,
+} from './controllers/useDesktopWindowCoordinator'
+import { useWorkspaceExportCoordinator } from './controllers/useWorkspaceExportCoordinator'
+import { useWorkspaceResourceLoader } from './controllers/useWorkspaceResourceLoader'
+import { useRunHistoryLoader } from './controllers/useRunHistoryLoader'
+import { useWorkspaceAuthenticationCoordinator } from './controllers/useWorkspaceAuthenticationCoordinator'
+import { shouldLoadToolingDiagnostics } from './controllers/toolingController'
 import { useBackendAvailabilityStore } from './stores/backendAvailabilityStore'
 import {
   deriveDesktopWorkspaceAccess,
@@ -104,10 +108,10 @@ function AppShell() {
   // 装配会话、运行、资源、工具和导航控制器的页面投影。
   // 网络语义和实时订阅分别由控制器与 useRunState 所有。
   const desktopPathname = '/'
-  const [activeDesktopDocument, setActiveDesktopDocument] = useState<DesktopDocument>('map')
-  const [exportWizardOpen, setExportWizardOpen] = useState(false)
-  const [exportBusy, setExportBusy] = useState(false)
-  useEffect(() => subscribeDesktopDocument(setActiveDesktopDocument), [])
+  const {
+    activeDesktopDocument,
+    setActiveDesktopDocument,
+  } = useDesktopDocumentCoordinator()
   const {
     activateMap,
     isMapActivated,
@@ -178,22 +182,6 @@ function AppShell() {
     setProvider,
   } = useConnectionController()
   const currentThreadId = run?.threadId ?? agentState?.threadId ?? activeThreadId
-  useEffect(() => {
-    void requireDesktopBridge().window.command({
-      action: 'set-taskbar-progress',
-      progress: taskbarProgressForRun(run?.status),
-    }).catch(error => {
-      reportNonBlockingError('taskbarProgress', error)
-    })
-  }, [run?.status])
-  useEffect(() => {
-    return () => {
-      void requireDesktopBridge().window.command({
-        action: 'set-taskbar-progress',
-        progress: { state: 'none', value: null },
-      }).catch(() => undefined)
-    }
-  }, [])
   const {
     changeWorkspaceMode,
     focusQueryInput,
@@ -249,7 +237,7 @@ function AppShell() {
     disableAutomationDefinition: handleDisableAutomation,
     respondToAutomationApproval: handleRespondAutomationApproval,
   } = useToolingController({
-    loadDiagnostics: location.pathname === '/debug' || panelMode === 'compute' || panelMode === 'config' || panelMode === 'tools',
+    loadDiagnostics: shouldLoadToolingDiagnostics(location.pathname, panelMode),
     setUiError,
   })
   const ensureActiveThread = useCallback(
@@ -267,7 +255,6 @@ function AppShell() {
     clearUploads,
     exportLayer: handleExportLayer,
     importLayer: handleImportManagedLayer,
-    isFileSubmitting,
     layerManager,
     layers,
     loadBasemaps,
@@ -381,139 +368,67 @@ function AppShell() {
     backendError,
     uiError,
   ])
-  const previousBackendOnlineRevision = useRef(backendOnlineRevision)
-  useEffect(() => {
-    if (
-      backendOnlineRevision > previousBackendOnlineRevision.current
-      && authStatus === 'error'
-    ) {
-      retryAuth()
-    }
-    previousBackendOnlineRevision.current = backendOnlineRevision
-  }, [authStatus, backendOnlineRevision, retryAuth])
+  const { handleLogout } = useWorkspaceAuthenticationCoordinator({
+    hasAuthenticatedIdentity: Boolean(authMe),
+    authMode,
+    authStatus,
+    backendOnlineRevision,
+    clearAuth,
+    retryAuth,
+    setUiError,
+  })
   const visibleWorkspacesQuery = useQuery({
     queryKey: ['desktop', 'visible-workspaces', authMe?.user.userId],
     queryFn: listAdminWorkspaces,
     enabled: workspaceAccess.backendActionsEnabled,
     staleTime: 60_000,
   })
-  const handleExportResults = useCallback(() => {
-    const workspaceId = session?.workspaceId ?? authMe?.defaultWorkspace?.workspaceId
-    if (!workspaceId || !session?.id || !currentThreadId) {
-      setUiError('当前工作区或对话尚未就绪，无法导出成果。')
-      return
-    }
-    setExportWizardOpen(true)
-  }, [
-    authMe?.defaultWorkspace?.workspaceId,
-    currentThreadId,
-    session?.id,
-    session?.workspaceId,
-    setUiError,
-  ])
-  const handleConfirmExport = useCallback(async (selection: ExportWizardSelection) => {
-    const workspaceId = session?.workspaceId ?? authMe?.defaultWorkspace?.workspaceId
-    if (!workspaceId || !session?.id || !currentThreadId) {
-      setUiError('当前工作区或对话尚未就绪，无法导出成果。')
-      return
-    }
-    setExportBusy(true)
-    try {
-      setActiveDesktopDocument('map')
-      activateMap()
-      await waitForDesktopPaint()
-      const result = await exportWorkspaceResult({
-        workspaceId,
-        sessionId: session.id,
-        threadId: currentThreadId,
-        title: currentThreadTitle || 'GeoForge 分析成果',
-        formats: selection.formats,
-        artifactIds: selection.artifactIds,
-      })
-      if (!result.canceled) setExportWizardOpen(false)
-    } catch (error) {
-      setUiError(formatUiError(error, '成果导出失败。'))
-    } finally {
-      setExportBusy(false)
-    }
-  }, [
+  const { openWorkspace: openDesktopWorkspace } = useDesktopWindowCoordinator({
+    runStatus: run?.status,
+    session: session?.workspaceId
+      ? { id: session.id, workspaceId: session.workspaceId }
+      : undefined,
+    threadId: currentThreadId,
+    defaultWorkspace: authMe?.defaultWorkspace,
+    visibleWorkspaces: visibleWorkspacesQuery.data,
+  })
+  const {
+    closeExportWizard,
+    confirmExport: handleConfirmExport,
+    downloadArtifact: handleDownloadArtifact,
+    exportBusy,
+    exportWizardOpen,
+    openExportWizard: handleExportResults,
+  } = useWorkspaceExportCoordinator({
+    session,
+    defaultWorkspaceId: authMe?.defaultWorkspace?.workspaceId,
+    threadId: currentThreadId,
+    threadTitle: currentThreadTitle,
+    selectedArtifact,
     activateMap,
-    authMe?.defaultWorkspace?.workspaceId,
-    currentThreadId,
-    currentThreadTitle,
-    session?.id,
-    session?.workspaceId,
+    setActiveDesktopDocument,
     setUiError,
-  ])
-  const handleDownloadArtifact = useCallback(async () => {
-    if (!selectedArtifact) {
-      setUiError('请先选择需要下载的结果。')
-      return
-    }
-    const extension = selectedArtifact.artifactType === 'geojson' ? 'geojson' : 'bin'
-    try {
-      await requestDesktopDownload(
-        `/api/v1/results/${encodeURIComponent(selectedArtifact.artifactId)}/${selectedArtifact.artifactType === 'geojson' ? 'geojson' : 'file'}`,
-        `${selectedArtifact.name}.${extension}`,
-      )
-    } catch (error) {
-      setUiError(formatUiError(error, '结果文件下载失败。'))
-    }
-  }, [selectedArtifact, setUiError])
-  useEffect(() => {
-    const desktopBridge = window.geoforgeDesktop
-    if (!session?.workspaceId || !desktopBridge) return
-    const defaultWorkspace = authMe?.defaultWorkspace
-    const workspaceName = defaultWorkspace?.workspaceId === session.workspaceId
-      ? defaultWorkspace.name
-      : `工作区 ${session.workspaceId.slice(0, 12)}`
-    void desktopBridge.window.command({
-      action: 'bind-workspace',
-      workspace: {
-        workspaceId: session.workspaceId,
-        workspaceName,
-        sessionId: session.id,
-        threadId: currentThreadId ?? null,
-      },
-    })
-  }, [
-    authMe?.defaultWorkspace,
-    currentThreadId,
-    session?.id,
-    session?.workspaceId,
-  ])
+  })
   const { memoryEntries, refreshMemoryEntries } = useMemoryEntries(
     workspaceAccess.backendActionsEnabled && runtimeConfig?.context.memoryEnabled !== false,
   )
 
-  useEffect(() => {
-    if (!workspaceAccess.backendActionsEnabled || !session?.id) return
-    if (panelMode !== 'history') return
-    void loadRunHistory(session.id).catch(error => {
-      setUiError(formatUiError(error, '运行历史加载失败。'))
-    })
-  }, [loadRunHistory, panelMode, session?.id, setUiError, workspaceAccess.backendActionsEnabled])
+  useRunHistoryLoader({
+    enabled: workspaceAccess.backendActionsEnabled && panelMode === 'history',
+    sessionId: session?.id,
+    loadRunHistory,
+    setUiError,
+  })
 
   const panelNeedsWorkspaceResources = panelMode === 'layers' || panelMode === 'sources' || panelMode === 'layerManager'
   const shouldLoadWorkspaceResources = isMapActivated || panelNeedsWorkspaceResources
-
-  useEffect(() => {
-    if (!workspaceAccess.backendActionsEnabled || !session?.id || !shouldLoadWorkspaceResources) return
-    void Promise.allSettled([
-      loadBasemaps(),
-      refreshLayers(session.id, currentThreadId),
-    ]).then(results => {
-      const rejected = results.find(result => result.status === 'rejected')
-      if (rejected?.status === 'rejected') reportNonBlockingError('workspaceResources', rejected.reason)
-    })
-  }, [
-    currentThreadId,
+  useWorkspaceResourceLoader({
+    enabled: workspaceAccess.backendActionsEnabled && shouldLoadWorkspaceResources,
+    sessionId: session?.id,
+    threadId: currentThreadId,
     loadBasemaps,
     refreshLayers,
-    session?.id,
-    shouldLoadWorkspaceResources,
-    workspaceAccess.backendActionsEnabled,
-  ])
+  })
 
   const { handleInterruptRun, handleRespondDecision, handleSubmit } = useRunLifecycleActions({
     session,
@@ -613,33 +528,11 @@ function AppShell() {
     syncUrl,
   })
   const handleOpenWorkspace = useCallback((workspaceId: string) => {
-    const workspace = visibleWorkspacesQuery.data?.find(item => item.workspaceId === workspaceId)
-    const desktopBridge = window.geoforgeDesktop
-    if (!workspace || !desktopBridge) return
-    void desktopBridge.window.command({
-      action: 'open-workspace',
-      workspace: {
-        workspaceId: workspace.workspaceId,
-        workspaceName: workspace.name,
-        sessionId: null,
-        threadId: null,
-      },
+    void openDesktopWorkspace(workspaceId).catch(error => {
+      setUiError(formatUiError(error, '工作区窗口打开失败。'))
     })
-  }, [visibleWorkspacesQuery.data])
+  }, [openDesktopWorkspace, setUiError])
 
-  const handleLogout = async () => {
-    if (!authMe) {
-      retryAuth()
-      return
-    }
-    try {
-      await logout()
-    } finally {
-      clearAuth()
-      setUiError(undefined)
-      if (authMode === 'local_auto') retryAuth()
-    }
-  }
   const remoteUnavailableReason = workspaceAccess.unavailableReason
     ?? '远程服务当前不可用。地图与本地布局仍可使用。'
   const showInteractiveLogin = shouldShowDesktopLogin({
@@ -649,101 +542,157 @@ function AppShell() {
     hasAuthenticatedIdentity: Boolean(authMe),
   })
 
+  const createLayerManagerDetail = (closeable: boolean): WorkspaceInspectorDetail => ({
+    panelMode: 'layerManager',
+    runStatus: run?.status,
+    tree: layerManager.tree,
+    selectedId: layerManager.selectedId,
+    searchQuery: layerManager.searchQuery,
+    totalCount: layerManager.totalCount,
+    visibleCount: layerManager.visibleCount,
+    selectedNode: layerManager.selectedNode,
+    activeView: layerManager.activeView,
+    visibilityFilter: layerManager.visibilityFilter,
+    referenceLayers: layers,
+    errorMessage: layerManager.operationError,
+    onSelectLayer: layerManager.selectLayer,
+    onToggleVisibility: layerManager.toggleVisibility,
+    onToggleAllVisibility: layerManager.toggleAllVisibility,
+    onSetOpacity: layerManager.setOpacity,
+    onSetColor: layerManager.setColor,
+    onRenameLayer: layerManager.renameLayer,
+    onMoveUp: layerManager.moveUp,
+    onMoveDown: layerManager.moveDown,
+    onMoveLayer: layerManager.moveTo,
+    onRemoveLayer: layerManager.removeLayer,
+    onCreateGroup: layerManager.createGroup,
+    onToggleGroup: layerManager.toggleGroup,
+    onSetSearchQuery: layerManager.setSearchQuery,
+    onZoomToLayer: handleLayerZoomTo,
+    onExportLayer: handleExportLayer,
+    onSetActiveView: layerManager.setActiveView,
+    onSetVisibilityFilter: layerManager.setVisibilityFilter,
+    onSetLabelEnabled: layerManager.setLabelEnabled,
+    onSetLabelField: layerManager.setLabelField,
+    onImportManagedLayer: (file) => { void handleImportManagedLayer(file) },
+    onReplaceManagedLayer: (layerKey, file) => { void handleReplaceManagedLayer(layerKey, file) },
+    onToggleReferenceLayerStatus: (layerKey, nextStatus) => { void handleToggleLayerStatus(layerKey, nextStatus) },
+    onDeleteReferenceLayer: (layerKey) => { void handleDeleteLayer(layerKey) },
+    onRefreshReferenceLayers: () => { void refreshLayers(session?.id, currentThreadId) },
+    sceneManagedLayerKeys: layerManager.sceneManagedLayerKeys,
+    onAddReferenceLayer: layerManager.addReferenceLayer,
+    onRemoveReferenceLayer: layerManager.removeReferenceLayer,
+    onClose: closeable ? () => setPanelMode('summary') : undefined,
+  })
+  const createResultDetail = (): WorkspaceInspectorDetail => {
+    const common = { runStatus: run?.status }
+    switch (panelMode) {
+      case 'summary':
+        return {
+          ...common,
+          panelMode,
+          agentState,
+          items: deferredItems,
+          artifacts,
+          artifactData,
+          mapLayers,
+          layers,
+          selectedArtifactId,
+          onSelectArtifact: setSelectedArtifactId,
+          onDownloadArtifact: () => { void handleDownloadArtifact() },
+          onExportResults: () => { void handleExportResults() },
+        }
+      case 'layers':
+        return {
+          ...common,
+          panelMode,
+          artifacts,
+          artifactData,
+          mapLayers,
+          layers,
+          selectedArtifactId,
+          onSelectArtifact: setSelectedArtifactId,
+          onToggleArtifactVisibility: handleToggleArtifactVisibility,
+          onChangeArtifactOpacity: handleArtifactOpacityChange,
+        }
+      case 'history':
+        return {
+          ...common,
+          panelMode,
+          currentRunId: run?.id,
+          agentState,
+          events: deferredEvents,
+          sessionRuns,
+          hasMoreHistory: hasMoreRunHistory,
+          isHistoryLoading: isRunHistoryLoading,
+          progressItems,
+          onSelectHistoryRun: (runId) => {
+            void hydrateRunState(runId)
+            setPanelMode('history')
+            setActiveNav('history')
+          },
+          onLoadMoreHistory: handleLoadMoreHistory,
+        }
+      case 'compute':
+        return {
+          ...common,
+          panelMode,
+          artifacts,
+          artifactData,
+          mapLayers,
+          selectedArtifactId,
+          isToolSubmitting,
+          onSelectArtifact: setSelectedArtifactId,
+          onToggleArtifactVisibility: handleToggleArtifactVisibility,
+          onExportResults: () => { void handleExportResults() },
+        }
+      case 'sources':
+        return {
+          ...common,
+          panelMode,
+          allFiles,
+          onUploadFile: (file) => { void handleUploadAnyFile(file) },
+          onDeleteFile: (fileId) => { void handleDeleteAnyFile(fileId) },
+        }
+      case 'export':
+        return {
+          ...common,
+          panelMode,
+          artifacts,
+          selectedArtifactId,
+          onDownloadArtifact: () => { void handleDownloadArtifact() },
+          onExportResults: () => { void handleExportResults() },
+        }
+      case 'config':
+        return {
+          ...common,
+          panelMode,
+          provider,
+          model,
+          providers,
+          systemComponents,
+          onProviderChange: handleProviderChange,
+          onModelChange: setModel,
+        }
+      case 'layerManager':
+        return createLayerManagerDetail(true)
+      case 'tools':
+        return { ...common, panelMode }
+    }
+  }
   const renderInspectorPanel = (variant: 'contents' | 'results') => (
     <WorkspaceInspectorPanel
-      panelMode={variant === 'contents' ? 'layerManager' : panelMode}
-      showProgress={variant === 'results'}
-      currentRunId={run?.id}
-      runStatus={run?.status}
-      agentState={agentState}
-      items={deferredItems}
-      artifacts={artifacts}
-      artifactData={artifactData}
-      mapLayers={mapLayers}
-      layers={layers}
-      events={deferredEvents}
-      sessionRuns={sessionRuns}
-      hasMoreHistory={hasMoreRunHistory}
-      isHistoryLoading={isRunHistoryLoading}
-      progressItems={progressItems}
-      selectedArtifactId={selectedArtifactId}
-      uploadedLayerName={uploadedLayerName}
-      selectedBasemapName={selectedBasemap.name}
-      provider={provider}
-      model={model}
-      providers={providers}
-      systemComponents={systemComponents}
-      isToolSubmitting={isToolSubmitting}
-      onSelectArtifact={setSelectedArtifactId}
-      onToggleArtifactVisibility={handleToggleArtifactVisibility}
-      onChangeArtifactOpacity={handleArtifactOpacityChange}
-      onSelectHistoryRun={(runId) => {
-        void hydrateRunState(runId)
-        setPanelMode('history')
-        setActiveNav('history')
-      }}
-      onLoadMoreHistory={handleLoadMoreHistory}
-      onDownloadArtifact={() => {
-        void handleDownloadArtifact()
-      }}
-      onExportResults={() => {
-        void handleExportResults()
-      }}
-      onProviderChange={handleProviderChange}
-      onModelChange={setModel}
-      onImportManagedLayer={(file) => {
-        void handleImportManagedLayer(file)
-      }}
-      onReplaceManagedLayer={(layerKey, file) => {
-        void handleReplaceManagedLayer(layerKey, file)
-      }}
-      onToggleLayerStatus={(layerKey, nextStatus) => {
-        void handleToggleLayerStatus(layerKey, nextStatus)
-      }}
-      onDeleteLayer={(layerKey) => {
-        void handleDeleteLayer(layerKey)
-      }}
-      onRefreshManagedLayers={() => {
-        void refreshLayers(session?.id, currentThreadId)
-      }}
-      onCloseLayerManager={variant === 'results' ? () => setPanelMode('summary') : undefined}
-      layerTree={layerManager.tree}
-      layerSelectedId={layerManager.selectedId}
-      layerSearchQuery={layerManager.searchQuery}
-      layerTotalCount={layerManager.totalCount}
-      layerVisibleCount={layerManager.visibleCount}
-      layerSelectedNode={layerManager.selectedNode}
-      layerActiveView={layerManager.activeView}
-      layerVisibilityFilter={layerManager.visibilityFilter}
-      layerOperationError={layerManager.operationError}
-      onLayerSelect={layerManager.selectLayer}
-      onLayerToggleVisibility={layerManager.toggleVisibility}
-      onLayerToggleAllVisibility={layerManager.toggleAllVisibility}
-      onLayerSetOpacity={layerManager.setOpacity}
-      onLayerSetColor={layerManager.setColor}
-      onLayerRename={layerManager.renameLayer}
-      onLayerMoveUp={layerManager.moveUp}
-      onLayerMoveDown={layerManager.moveDown}
-      onLayerMoveTo={layerManager.moveTo}
-      onLayerRemove={layerManager.removeLayer}
-      onLayerCreateGroup={layerManager.createGroup}
-      onLayerToggleGroup={layerManager.toggleGroup}
-      onLayerSetSearchQuery={layerManager.setSearchQuery}
-      onLayerZoomTo={handleLayerZoomTo}
-      onLayerExport={handleExportLayer}
-      onLayerSetActiveView={layerManager.setActiveView}
-      onLayerSetVisibilityFilter={layerManager.setVisibilityFilter}
-      onLayerSetLabelEnabled={layerManager.setLabelEnabled}
-      onLayerSetLabelField={layerManager.setLabelField}
-      layerSceneManagedLayerKeys={layerManager.sceneManagedLayerKeys}
-      onLayerAddReference={layerManager.addReferenceLayer}
-      onLayerRemoveReference={layerManager.removeReferenceLayer}
-      allFiles={allFiles}
-      onUploadFile={(file) => { void handleUploadAnyFile(file) }}
-      onDeleteFile={(fileId) => { void handleDeleteAnyFile(fileId) }}
-      isFileSubmitting={isFileSubmitting}
-      tasks={variant === 'contents' ? [] : progressTasks}
-      onOpenHistory={() => setPanelMode('history')}
+      detail={variant === 'contents' ? createLayerManagerDetail(false) : createResultDetail()}
+      progress={variant === 'results'
+        ? {
+            runStatus: run?.status,
+            progressItems,
+            tasks: progressTasks,
+            events: deferredEvents,
+            artifactCount: artifacts.length,
+            onOpenHistory: () => setPanelMode('history'),
+          }
+        : undefined}
     />
   )
 
@@ -768,7 +717,9 @@ function AppShell() {
                     artifacts={artifacts}
                     defaultArtifactId={selectedArtifact?.artifactId ?? artifacts.at(-1)?.artifactId}
                     busy={exportBusy}
-                    onOpenChange={setExportWizardOpen}
+                    onOpenChange={(open) => {
+                      if (!open) closeExportWizard()
+                    }}
                     onConfirm={handleConfirmExport}
                   />
                 )}
@@ -1048,28 +999,3 @@ function AppShell() {
 }
 
 export default AppShell
-
-function waitForDesktopPaint(): Promise<void> {
-  return new Promise(resolve => {
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => resolve())
-    })
-  })
-}
-
-function taskbarProgressForRun(status?: string) {
-  if (status === 'queued' || status === 'running') {
-    return { state: 'indeterminate' as const, value: null }
-  }
-  if (
-    status === 'waiting_approval'
-    || status === 'clarification_needed'
-    || status === 'requires_action'
-  ) {
-    return { state: 'paused' as const, value: 1 }
-  }
-  if (status === 'failed' || status === 'interrupted') {
-    return { state: 'error' as const, value: 1 }
-  }
-  return { state: 'none' as const, value: null }
-}

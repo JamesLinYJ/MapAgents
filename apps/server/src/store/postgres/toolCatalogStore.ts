@@ -28,7 +28,7 @@ export interface ToolCatalogEntry {
 export class ToolCatalogStore {
   constructor(private readonly db: Database) {}
 
-  async list(): Promise<ToolCatalogEntry[]> {
+  async listToolCatalogEntries(): Promise<ToolCatalogEntry[]> {
     const rows = await this.db
       .select()
       .from(toolCatalogEntries)
@@ -40,7 +40,7 @@ export class ToolCatalogStore {
     return rows.map(row => mapToolCatalogRow(row))
   }
 
-  async upsert(entry: ToolCatalogEntry): Promise<ToolCatalogEntry> {
+  async upsertToolCatalogEntry(entry: ToolCatalogEntry): Promise<ToolCatalogEntry> {
     await this.db
       .insert(toolCatalogEntries)
       .values({
@@ -59,7 +59,7 @@ export class ToolCatalogStore {
     return entry
   }
 
-  async delete(toolKind: string, toolName: string): Promise<void> {
+  async deleteToolCatalogEntry(toolKind: string, toolName: string): Promise<void> {
     await this.db
       .delete(toolCatalogEntries)
       .where(and(

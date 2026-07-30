@@ -138,7 +138,7 @@ export async function handleMemoryCommand(
       )
     case 'thread:memory:rebuild': {
       const threadId = requiredString(payload, 'threadId')
-      const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
+      const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
       return rebuildSessionMemory(
         store,
         threadId,
@@ -148,14 +148,14 @@ export async function handleMemoryCommand(
       )
     }
     case 'memory:list': {
-      const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
+      const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
       const runtimeMemory = createMemoryRuntime(store.runtimeRoot, config.context)
       const scope = optionalString(payload.scope)
       const records = await listMemories(runtimeMemory, scope ? memoryScopeSchema.parse(scope) : undefined)
       return { records, total: records.length }
     }
     case 'memory:read': {
-      const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
+      const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
       return readMemory(
         createMemoryRuntime(store.runtimeRoot, config.context),
         memoryScopeSchema.parse(requiredString(payload, 'scope')),
@@ -163,7 +163,7 @@ export async function handleMemoryCommand(
       )
     }
     case 'memory:write': {
-      const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
+      const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
       return writeMemory(createMemoryRuntime(store.runtimeRoot, config.context), {
         scope: memoryScopeSchema.parse(requiredString(payload, 'scope')),
         type: memoryTypeSchema.parse(requiredString(payload, 'type')),
@@ -174,7 +174,7 @@ export async function handleMemoryCommand(
       })
     }
     case 'memory:delete': {
-      const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
+      const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
       return deleteMemory(
         createMemoryRuntime(store.runtimeRoot, config.context),
         memoryScopeSchema.parse(requiredString(payload, 'scope')),
@@ -182,7 +182,7 @@ export async function handleMemoryCommand(
       )
     }
     case 'memory:search': {
-      const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
+      const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
       const selector = makeOptionalStructuredSelector(
         modelRegistry,
         config,
@@ -199,7 +199,7 @@ export async function handleMemoryCommand(
     }
     case 'memory:extract': {
       const threadId = requiredString(payload, 'threadId')
-      const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
+      const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
       const runId = optionalString(payload.runId) ?? store.listRunsForThread(threadId)[0]?.id
       if (!runId) throw new Error('memory:extract 需要 runId 或已有线程运行')
       const records = await extractMemoriesFromThread(
@@ -218,7 +218,7 @@ export async function handleMemoryCommand(
       return { records, total: records.length }
     }
     case 'memory:dream': {
-      const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
+      const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
       return dreamMemories(
         createMemoryRuntime(store.runtimeRoot, config.context),
         makeOptionalStructuredSelector(
@@ -235,7 +235,7 @@ export async function handleMemoryCommand(
       return store.getThreadMemory(requiredString(payload, 'threadId'))
     case 'memory:session:rebuild': {
       const threadId = requiredString(payload, 'threadId')
-      const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
+      const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
       return rebuildSessionMemory(
         store,
         threadId,
@@ -245,7 +245,7 @@ export async function handleMemoryCommand(
       )
     }
     case 'memory:instructions:list': {
-      const config = await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
+      const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
       return {
         enabled: config.context.instructionMemoryEnabled,
         entrypointName: config.context.instructionEntrypointName,

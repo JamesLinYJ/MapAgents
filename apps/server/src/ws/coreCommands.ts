@@ -17,7 +17,7 @@ import type { WsCommandRegistry } from './commandRegistry.js'
 
 const emptyPayloadSchema = z.object({}).passthrough()
 const sessionGetPayloadSchema = z.object({ sessionId: z.string().min(1) }).passthrough()
-const fileListPayloadSchema = z.object({ threadId: z.string().min(1).nullable().optional() }).passthrough()
+const fileListPayloadSchema = z.object({ threadId: z.string().min(1) }).strict()
 
 export function registerCoreCommands(registry: WsCommandRegistry): void {
   registry.register({
@@ -64,7 +64,7 @@ export function registerCoreCommands(registry: WsCommandRegistry): void {
     auth: 'required',
     csrf: false,
     handler: (_payload, context) => resolveRuntimeConfig(
-      context.dependencies.store,
+      context.dependencies.store.runtimeConfiguration,
       context.dependencies.defaultRuntimeConfig,
     ),
   })
@@ -93,7 +93,7 @@ export function registerCoreCommands(registry: WsCommandRegistry): void {
     auth: 'required',
     csrf: false,
     handler: async (payload, context) => {
-      const entries = await context.files.list(payload.threadId ?? null)
+      const entries = await context.files.list(payload.threadId)
       return { files: entries, total: entries.length }
     },
   })

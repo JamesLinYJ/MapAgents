@@ -45,7 +45,7 @@ export async function respondDecision(
     const approved = selectedApprovalValue(decision, optionalString(payload.optionId))
     const approvalId = typeof decision.payload.approvalId === 'string' ? decision.payload.approvalId : decisionId
     if (approved) dependencies.usageStats.assertWorkspaceCanStartModelRun(auth)
-    subscribeToRun(ws, runId, store, subscriptions)
+    subscribeToRun(ws, runId, store, dependencies.events, subscriptions)
     return runTasks.respondToApproval(runId, approvalId, approved, auth, {
       onComplete: completedRunId => sendRunSnapshot(ws, completedRunId, store),
     })
@@ -61,7 +61,7 @@ export async function respondDecision(
         ? { ...run.state.clarification, selectedOptionId: optionId ?? 'free_text' }
         : run.state.clarification,
     })
-    const config = run.runtimeConfigSnapshot ?? await resolveRuntimeConfig(store, dependencies.defaultRuntimeConfig)
+    const config = run.runtimeConfigSnapshot ?? await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
     const provider = requiredRunProvider(run.modelProvider)
     dependencies.usageStats.assertWorkspaceCanStartModelRun(auth)
     const nextRun = await store.createRun(run.sessionId, answer, {
@@ -70,7 +70,7 @@ export async function respondDecision(
       modelName: run.modelName,
       runtimeConfigSnapshot: config,
     })
-    subscribeToRun(ws, nextRun.id, store, subscriptions)
+    subscribeToRun(ws, nextRun.id, store, dependencies.events, subscriptions)
     runTasks.startDetached({
       runId: nextRun.id,
       threadId: run.threadId,

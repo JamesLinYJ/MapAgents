@@ -16,10 +16,10 @@
 
 import { agentRuntimeConfigSchema, type AgentRuntimeConfig } from '@geo-agent-platform/shared-types/runtime'
 import { defaultRuntimeConfig } from '../agent/defaultRuntimeConfig.js'
-import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
+import type { RuntimeConfigStore } from '../store/postgres/runtimeConfigStore.js'
 
 export async function resolveRuntimeConfig(
-  store: PlatformPersistenceFacade,
+  store: Pick<RuntimeConfigStore, 'getRuntimeConfig'>,
   fallbackConfig: AgentRuntimeConfig = defaultRuntimeConfig(),
 ): Promise<AgentRuntimeConfig> {
   const stored = await store.getRuntimeConfig('agent-runtime')

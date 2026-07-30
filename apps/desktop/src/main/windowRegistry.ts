@@ -23,6 +23,7 @@ import {
 import { encodeDesktopEvent } from './eventTransportEncoder.js'
 import type { FileHandleRegistry } from './fileHandleRegistry.js'
 import { installNativeContextMenu } from './nativeMenus.js'
+import { secureWebPreferences } from './secureWebPreferences.js'
 import {
   isTrustedApplicationUrl,
   isTrustedDevelopmentRendererUrl,
@@ -131,15 +132,11 @@ export class WorkspaceWindowRegistry {
         symbolColor: '#21333c',
         height: 34,
       },
-      webPreferences: {
+      webPreferences: secureWebPreferences({
         preload: path.resolve(moduleDirectory, '..', 'preload', 'index.cjs'),
-        nodeIntegration: false,
-        contextIsolation: true,
-        sandbox: true,
-        webSecurity: true,
         devTools: !app.isPackaged,
         spellcheck: true,
-      },
+      }),
     })
     this.windowTitles.set(window, windowTitle)
     state.manage(window)

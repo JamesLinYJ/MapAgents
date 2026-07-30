@@ -69,8 +69,9 @@ export function createAgentsTools(
 
   return definitions.map(definition => {
     const { jsonSchema } = ensureToolSchemas(definition)
-    const enrichedSchema = enrichValueRefDescriptions(jsonSchema)
+    const enrichedSchema = withWorkflowStepIdentity(enrichValueRefDescriptions(jsonSchema), definition.name)
     const description = describeToolForAgent(definition, jsonSchema)
+      + '\n工作流步骤身份：智能体工作流中调用本工具时，workflowStepId 必须填写本次执行对应的 stepId；它只用于绑定进度，不会传给工具实现。'
     const normalizeArguments = (input: unknown): Record<string, unknown> => {
       const args = requireArguments(definition.name, input)
       return options.schemaMode === 'strict' ? stripNullObjectValues(args) : args
@@ -167,6 +168,26 @@ export function createAgentsTools(
 
 function supportsAgentExecution(definition: ToolDef): boolean {
   return definition.executionSurfaces?.includes('agent') ?? true
+}
+
+function withWorkflowStepIdentity(
+  schema: Record<string, unknown>,
+  toolName: string,
+): Record<string, unknown> {
+  const properties = isRecord(schema.properties) ? schema.properties : {}
+  if ('workflowStepId' in properties) {
+    throw new Error(`工具 '${toolName}' 使用了平台保留参数 workflowStepId`)
+  }
+  return {
+    ...schema,
+    properties: {
+      ...properties,
+      workflowStepId: {
+        type: ['string', 'null'],
+        description: '当前智能体工作流中与这次执行对应的 stepId；没有智能体工作流时填 null。',
+      },
+    },
+  }
 }
 
 // Agent 看到的是 Chat Completions 函数 schema，而不是 DebugPage 的参数面板。

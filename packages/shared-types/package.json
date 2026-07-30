@@ -13,7 +13,8 @@
     "./transport": { "types": "./dist/transport.d.ts", "import": "./dist/transport.js" },
     "./worker": { "types": "./dist/worker.d.ts", "import": "./dist/worker.js" },
     "./operations": { "types": "./dist/operations.d.ts", "import": "./dist/operations.js" },
-    "./desktop": { "types": "./dist/desktop.d.ts", "import": "./dist/desktop.js" }
+    "./desktop": { "types": "./dist/desktop.d.ts", "import": "./dist/desktop.js" },
+    "./local-operations": { "types": "./dist/localOperations.d.ts", "import": "./dist/localOperations.js" }
   },
   "types": "./dist/index.d.ts",
   "scripts": {

@@ -194,15 +194,15 @@ describe('platform architecture', () => {
   it('keeps the Windows development stack bound to loopback explicitly', async () => {
     const repositoryRoot = path.resolve(process.cwd(), '..', '..')
     const source = await readFile(path.join(repositoryRoot, 'dev.ps1'), 'utf8')
-    const environmentSource = await readFile(
-      path.join(repositoryRoot, 'scripts/dev-environment.ps1'),
+    const launcherSource = await readFile(
+      path.join(repositoryRoot, 'packages/operations-supervisor/src/devLauncher.ts'),
       'utf8',
     )
 
-    expect(source.includes("scripts\\dev-environment.ps1")).toBe(true)
-    expect(environmentSource.includes("Set-GeoForgeValue 'API_HOST' '127.0.0.1'")).toBe(true)
-    expect(environmentSource.includes("Set-GeoForgeDefault 'API_HOST' '127.0.0.1'")).toBe(false)
-    expect(environmentSource.includes('WEB_DEV_HOST')).toBe(false)
+    expect(source.includes('@geo-agent-platform/operations-supervisor')).toBe(true)
+    expect(source.includes('API_HOST')).toBe(false)
+    expect(launcherSource.includes("API_HOST: '127.0.0.1'")).toBe(true)
+    expect(launcherSource.includes('WEB_DEV_HOST')).toBe(false)
   })
 
   it('keeps the retired browser, public-sharing, and container sidecars out of active runtime boundaries', async () => {
@@ -380,7 +380,7 @@ describe('platform architecture', () => {
 
   it('keeps the local Agent CLI classified and on the canonical API runtime boundary', async () => {
     const repositoryRoot = path.resolve(process.cwd(), '..', '..')
-    const agentRoot = path.join(repositoryRoot, 'apps/server/src/operations/agent')
+    const agentRoot = path.join(repositoryRoot, 'apps/operations-console/src/agent')
     const categories = (await readdir(agentRoot, { withFileTypes: true }))
       .filter(entry => entry.isDirectory())
       .map(entry => entry.name)
@@ -409,8 +409,9 @@ describe('platform architecture', () => {
     expect(categories).toEqual(['application', 'cli', 'transport', 'ui'])
     expect(sessionSource.includes("client.send('run:start'")).toBe(true)
     expect(sessionSource.includes("send('run:respond-decision'")).toBe(true)
-    expect(entrySource.includes('withLocalAgentAuthorization')).toBe(true)
-    expect(entrySource.includes('http://127.0.0.1:')).toBe(true)
+    expect(entrySource.includes("LocalOperationsBrokerClient.open(projectRoot, 'agent')")).toBe(true)
+    expect(entrySource.includes('apps/server/src')).toBe(false)
+    expect(entrySource.includes('../../../server')).toBe(false)
     expect(websocketSource.includes('authenticateLocalAgentHeaders')).toBe(true)
     expect(websocketSource.includes('isLoopbackAddress')).toBe(true)
     for (const { file, source } of sourceEntries) {
@@ -430,25 +431,26 @@ describe('platform architecture', () => {
       path.join(presentationRoot, 'src/presentation.ts'),
       'utf8',
     )
-    const serverViewSource = await readFile(
-      path.join(repositoryRoot, 'apps/server/src/operations/agent/ui/localAgentView.ts'),
+    const consoleViewSource = await readFile(
+      path.join(repositoryRoot, 'apps/operations-console/src/agent/ui/localAgentView.ts'),
       'utf8',
     )
     const desktopConversationSource = await readFile(
       path.join(repositoryRoot, 'apps/desktop/src/renderer/features/conversation/useConversation.ts'),
       'utf8',
     )
-    const windowsDevSource = await readFile(path.join(repositoryRoot, 'dev.ps1'), 'utf8')
-    const linuxDevSource = await readFile(path.join(repositoryRoot, 'dev.sh'), 'utf8')
+    const devLauncherSource = await readFile(
+      path.join(repositoryRoot, 'packages/operations-supervisor/src/devLauncher.ts'),
+      'utf8',
+    )
 
     expect(presentationSource.includes('deriveEntriesFromItems')).toBe(true)
     expect(presentationSource.includes('displayIdentifier')).toBe(true)
     expect(presentationSource.includes("from 'react'")).toBe(false)
     expect(presentationSource.includes("from 'ink'")).toBe(false)
-    expect(serverViewSource.includes("from '@geo-agent-platform/conversation-presentation'")).toBe(true)
+    expect(consoleViewSource.includes("from '@geo-agent-platform/conversation-presentation'")).toBe(true)
     expect(desktopConversationSource.includes("from '@geo-agent-platform/conversation-presentation'")).toBe(true)
-    expect(windowsDevSource.includes("build:dev --workspace '@geo-agent-platform/conversation-presentation'")).toBe(true)
-    expect(linuxDevSource.includes('build:dev --workspace @geo-agent-platform/conversation-presentation')).toBe(true)
+    expect(devLauncherSource.includes("'@geo-agent-platform/conversation-presentation'")).toBe(true)
     for (const packageName of ['shared-types', 'conversation-presentation', 'operations-supervisor']) {
       const packageJson = JSON.parse(await readFile(
         path.join(repositoryRoot, 'packages', packageName, 'package.json'),
@@ -463,7 +465,7 @@ describe('platform architecture', () => {
     ))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
-  it('keeps PlatformPersistenceFacade as a resource facade instead of a writer god object', async () => {
+  it('keeps PlatformPersistenceFacade as a conversation and artifact composition facade', async () => {
     const source = await readFile(path.join(process.cwd(), 'src/store/platformPersistenceFacade.ts'), 'utf8')
     const requiredDelegates = [
       'new SessionStore',
@@ -507,6 +509,34 @@ describe('platform architecture', () => {
     expect(source).not.toMatch(/^\s*readonly payloadStore: ConversationPayloadStore/mu)
     for (const forbidden of forbiddenWritePaths) {
       expect(source.includes(forbidden), forbidden).toBe(false)
+    }
+  })
+
+  it('injects domain persistence ports and the event hub independently', async () => {
+    const root = process.cwd()
+    const facadeSource = await readFile(path.join(root, 'src/store/platformPersistenceFacade.ts'), 'utf8')
+    const containerSource = await readFile(path.join(root, 'src/app/container.ts'), 'utf8')
+    const runtimePortSource = await readFile(path.join(root, 'src/store/runtimePorts.ts'), 'utf8')
+    const coreServiceFiles = [
+      'src/automations/automationDefinitionService.ts',
+      'src/automations/automationRunner.ts',
+      'src/automations/scheduledTaskService.ts',
+      'src/usage/usageStatsService.ts',
+      'src/agent/runtime.ts',
+      'src/tools/persistentToolExecutor.ts',
+    ]
+
+    expect(facadeSource.includes('readonly events')).toBe(false)
+    expect(facadeSource.includes('events?: PlatformEventHub')).toBe(true)
+    expect(containerSource.includes('const events = new PlatformEventHub()')).toBe(true)
+    expect(containerSource.includes('new PlatformPersistenceFacade(db, path.join(runtimeRoot, \'conversations\'), { events })')).toBe(true)
+    expect(containerSource.includes('automations: store.automations')).toBe(true)
+    expect(containerSource.includes('runtimeConfiguration: store.runtimeConfiguration')).toBe(true)
+    expect(runtimePortSource.includes('export interface AgentRuntimeStore')).toBe(true)
+    expect(runtimePortSource.includes('export type ToolExecutionStore')).toBe(true)
+    for (const relativePath of coreServiceFiles) {
+      const source = await readFile(path.join(root, relativePath), 'utf8')
+      expect(source.includes('platformPersistenceFacade'), relativePath).toBe(false)
     }
   })
 
@@ -1059,9 +1089,9 @@ describe('platform architecture', () => {
       'INSERT INTO platform_meteorological_jobs',
     ]
 
-    expect(source.includes('store.listMeteorologicalDatasets')).toBe(true)
-    expect(source.includes('store.createMeteorologicalDataset')).toBe(true)
-    expect(source.includes('store.getMeteorologicalJob')).toBe(true)
+    expect(source.includes('store.meteorology.listMeteorologicalDatasets')).toBe(true)
+    expect(source.includes('store.meteorology.createMeteorologicalDataset')).toBe(true)
+    expect(source.includes('store.meteorology.getMeteorologicalJob')).toBe(true)
     for (const token of forbidden) {
       expect(source.includes(token), token).toBe(false)
     }

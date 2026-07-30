@@ -8,11 +8,21 @@
 //   作者:       JamesLinYJ
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
+//
+//   维护记录 (2026-07-31):
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
+//     说明: 上传改为线程作用域、流式暂存文件、独立幂等索引和原子元数据提交。
 
 import { createHash } from 'node:crypto'
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
+import { link, mkdir, readdir, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
+import PQueue from 'p-queue'
+import { z } from 'zod'
 import { makeId, nowUtc } from '../utils/ids.js'
+import { atomicWriteJson, readJson } from './durableFileIo.js'
+import { StoreConflictError } from './storeErrors.js'
 
 export interface StoredFileEntry {
   id: string
@@ -35,88 +45,149 @@ interface StoredFileMetadata {
   sizeBytes: number
   uploadedAt: string
   status: string
-  threadId: string | null
+  threadId: string
   relativePath: string
   contentHash: string
   mediaType: string
 }
 
+export interface StagedFileInput {
+  name: string
+  tempPath: string
+  sizeBytes: number
+  contentHash: string
+  mediaType: string
+}
+
+interface FileIdempotencyRecord {
+  requestId: string
+  fileId: string
+  name: string
+  sourceKey: string
+  sizeBytes: number
+  contentHash: string
+}
+
+const storedFileMetadataSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  sourceRelativePath: z.string().min(1).nullable(),
+  sizeBytes: z.number().int().nonnegative(),
+  uploadedAt: z.string().min(1),
+  status: z.string().min(1),
+  threadId: z.string().min(1),
+  relativePath: z.string().min(1),
+  contentHash: z.string().regex(/^[a-f0-9]{64}$/u),
+  mediaType: z.string().min(1),
+})
+
+const fileIdempotencyRecordSchema = z.object({
+  requestId: z.string().min(1),
+  fileId: z.string().min(1),
+  name: z.string().min(1),
+  sourceKey: z.string().min(1),
+  sizeBytes: z.number().int().nonnegative(),
+  contentHash: z.string().regex(/^[a-f0-9]{64}$/u),
+})
+
 export class RuntimeFileStore {
   private readonly root: string
   private readonly objectRoot: string
+  private readonly scopeQueues = new Map<string, PQueue>()
 
   constructor(runtimeRoot: string) {
     this.root = path.resolve(runtimeRoot, 'uploads', 'files')
     this.objectRoot = path.resolve(runtimeRoot, 'objects', 'sha256')
   }
 
-  async list(threadId?: string | null): Promise<StoredFileEntry[]> {
-    await mkdir(this.root, { recursive: true })
-    const scopes = threadId ? [scopeName(threadId)] : await listDirectories(this.root)
+  async list(threadId: string): Promise<StoredFileEntry[]> {
+    const scope = scopeName(threadId)
+    const scopeDir = path.join(this.root, scope)
     const entries: StoredFileEntry[] = []
-    for (const scope of scopes) {
-      const scopeDir = path.join(this.root, scope)
-      for (const metaName of await listMetadataFiles(scopeDir)) {
-        const metadata = await readMetadata(metaName)
-        if (!metadata) continue
-        if (threadId && metadata.threadId !== threadId) continue
-        entries.push(toEntry(metadata))
+    for (const metaName of await listMetadataFiles(scopeDir)) {
+      const metadata = await readMetadata(metaName)
+      if (!metadata) continue
+      if (metadata.threadId !== threadId) {
+        throw new Error(`文件元数据 '${metadata.id}' 的线程作用域不一致。`)
       }
+      entries.push(toEntry(metadata))
     }
     const sorted = entries.sort((left, right) => right.uploadedAt.localeCompare(left.uploadedAt))
     const seen = new Set<string>()
     return sorted.filter(entry => {
-      const key = `${entry.threadId ?? '__global__'}:${entry.sourceRelativePath ?? entry.name}`
+      const key = entry.sourceRelativePath ?? entry.name
       if (seen.has(key)) return false
       seen.add(key)
       return true
     })
   }
 
-  async save(file: FileLike, threadId?: string | null, requestId?: string | null, sourceRelativePath?: string | null): Promise<StoredFileEntry> {
-    const uploadedAt = nowUtc()
+  async save(
+    file: StagedFileInput,
+    threadId: string,
+    requestId?: string | null,
+    sourceRelativePath?: string | null,
+  ): Promise<StoredFileEntry> {
     const cleanName = sanitizeFilename(file.name || 'upload.bin')
     const cleanSourceRelativePath = sanitizeSourceRelativePath(sourceRelativePath, cleanName)
     const scope = scopeName(threadId)
-    // 线程文件按来源相对路径覆盖；没有目录信息时退回文件名。requestId 只负责新条目的幂等键。
-    const existing = await findMetadataBySourceKey(path.join(this.root, scope), cleanSourceRelativePath ?? cleanName)
-    const id = existing?.id ?? (requestId?.trim() ? safePathSegment(requestId, 'requestId') : makeId('file'))
-    const dir = path.join(this.root, scope, id)
-    await mkdir(dir, { recursive: true })
-    const bytes = Buffer.from(await file.arrayBuffer())
-    const contentHash = createHash('sha256').update(bytes).digest('hex')
-    // 内容哈希仍是对象身份；原始安全扩展名进入对象路径，避免气象、
-    // GeoJSON、雷达等后缀敏感 reader 在 runtime hash 文件上误判格式。
-    const objectName = `${contentHash}${safeObjectExtension(cleanName)}`
-    const relativePath = path.posix.join('objects', 'sha256', contentHash.slice(0, 2), objectName)
-    const objectPath = path.join(this.objectRoot, contentHash.slice(0, 2), objectName)
-    await mkdir(path.dirname(objectPath), { recursive: true })
-    try {
-      await writeFile(objectPath, bytes, { flag: 'wx' })
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    }
-    const metadata: StoredFileMetadata = {
-      id,
-      name: cleanName,
-      sourceRelativePath: cleanSourceRelativePath,
-      sizeBytes: bytes.byteLength,
-      uploadedAt,
-      status: 'ready',
-      threadId: threadId ?? null,
-      relativePath,
-      contentHash,
-      mediaType: inferMediaType(cleanName),
-    }
-    await writeFile(path.join(dir, 'metadata.json'), JSON.stringify(metadata, null, 2), 'utf8')
-    return toEntry(metadata)
+    const sourceKey = cleanSourceRelativePath ?? cleanName
+    const normalizedRequestId = requestId?.trim()
+      ? safePathSegment(requestId, 'requestId')
+      : null
+    validateStagedFile(file)
+    return this.scopeQueue(scope).add(async () => {
+      const scopeDir = path.join(this.root, scope)
+      if (normalizedRequestId) {
+        const replay = await this.resolveIdempotentReplay(scope, normalizedRequestId, {
+          name: cleanName,
+          sourceKey,
+          sizeBytes: file.sizeBytes,
+          contentHash: file.contentHash,
+        })
+        if (replay) return replay
+      }
+
+      const existing = await findMetadataBySourceKey(scopeDir, sourceKey)
+      const id = existing?.id ?? makeId('file')
+      const uploadedAt = nowUtc()
+      // 内容哈希是对象身份；保留安全扩展名，供依赖后缀判断格式的科学 reader 使用。
+      const objectName = `${file.contentHash}${safeObjectExtension(cleanName)}`
+      const relativePath = path.posix.join('objects', 'sha256', file.contentHash.slice(0, 2), objectName)
+      const objectPath = path.join(this.objectRoot, file.contentHash.slice(0, 2), objectName)
+      await publishContentObject(file.tempPath, objectPath)
+      const metadata: StoredFileMetadata = {
+        id,
+        name: cleanName,
+        sourceRelativePath: cleanSourceRelativePath,
+        sizeBytes: file.sizeBytes,
+        uploadedAt,
+        status: 'ready',
+        threadId,
+        relativePath,
+        contentHash: file.contentHash,
+        mediaType: file.mediaType || inferMediaType(cleanName),
+      }
+      const metadataPath = path.join(scopeDir, id, 'metadata.json')
+      await atomicWriteJson(metadataPath, metadata)
+      if (normalizedRequestId) {
+        await atomicWriteJson(idempotencyPath(scopeDir, normalizedRequestId), {
+          requestId: normalizedRequestId,
+          fileId: id,
+          name: cleanName,
+          sourceKey,
+          sizeBytes: file.sizeBytes,
+          contentHash: file.contentHash,
+        } satisfies FileIdempotencyRecord)
+      }
+      return toEntry(metadata)
+    })
   }
 
-  async delete(fileId: string, threadId?: string | null): Promise<boolean> {
-    await mkdir(this.root, { recursive: true })
+  async delete(fileId: string, threadId: string): Promise<boolean> {
     const safeFileId = safePathSegment(fileId, 'fileId')
-    const scopes = threadId ? [scopeName(threadId)] : await listDirectories(this.root)
-    for (const scope of scopes) {
+    const scope = scopeName(threadId)
+    return this.scopeQueue(scope).add(async () => {
       const dir = path.join(this.root, scope, safeFileId)
       try {
         await stat(dir)
@@ -125,8 +196,8 @@ export class RuntimeFileStore {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       }
-    }
-    return false
+      return false
+    })
   }
 
   // 分支复用同一内容寻址对象，只复制线程级 metadata，不复制大文件。
@@ -147,17 +218,76 @@ export class RuntimeFileStore {
         mediaType: entry.mediaType,
       }
       const directory = path.join(this.root, scopeName(targetThreadId), entry.id)
-      await mkdir(directory, { recursive: true })
-      await writeFile(path.join(directory, 'metadata.json'), JSON.stringify(metadata, null, 2), 'utf8')
+      await atomicWriteJson(path.join(directory, 'metadata.json'), metadata)
       copied.push(toEntry(metadata))
     }
     return copied
   }
-}
 
-export interface FileLike {
-  name: string
-  arrayBuffer(): Promise<ArrayBuffer>
+  async verifyIntegrity(): Promise<{ files: number }> {
+    let files = 0
+    for (const scope of await listDirectories(this.root)) {
+      for (const metadataPath of await listMetadataFiles(path.join(this.root, scope))) {
+        const metadata = await readMetadata(metadataPath)
+        if (!metadata) throw new Error(`上传元数据 '${metadataPath}' 不是合法对象。`)
+        if (scopeName(metadata.threadId) !== scope) {
+          throw new Error(`文件元数据 '${metadata.id}' 的目录与线程作用域不一致。`)
+        }
+        const expectedDirectory = path.join(this.root, scope, safePathSegment(metadata.id, 'fileId'))
+        if (path.dirname(metadataPath) !== expectedDirectory) {
+          throw new Error(`文件元数据 '${metadata.id}' 的目录与文件标识不一致。`)
+        }
+        const objectPath = resolveRuntimeRelativePath(this.objectRoot, metadata.relativePath)
+        const info = await stat(objectPath)
+        if (!info.isFile() || info.size !== metadata.sizeBytes) {
+          throw new Error(`文件元数据 '${metadata.id}' 的内容大小不一致。`)
+        }
+        if (await hashFile(objectPath) !== metadata.contentHash) {
+          throw new Error(`文件元数据 '${metadata.id}' 的内容哈希不一致。`)
+        }
+        files += 1
+      }
+      await verifyIdempotencyRecords(path.join(this.root, scope))
+    }
+    return { files }
+  }
+
+  private scopeQueue(scope: string): PQueue {
+    const existing = this.scopeQueues.get(scope)
+    if (existing) return existing
+    const queue = new PQueue({ concurrency: 1 })
+    this.scopeQueues.set(scope, queue)
+    return queue
+  }
+
+  private async resolveIdempotentReplay(
+    scope: string,
+    requestId: string,
+    expected: Omit<FileIdempotencyRecord, 'requestId' | 'fileId'>,
+  ): Promise<StoredFileEntry | null> {
+    const scopeDir = path.join(this.root, scope)
+    const record = await readJson(idempotencyPath(scopeDir, requestId), fileIdempotencyRecordSchema)
+    if (!record) return null
+    if (
+      record.name !== expected.name
+      || record.sourceKey !== expected.sourceKey
+      || record.sizeBytes !== expected.sizeBytes
+      || record.contentHash !== expected.contentHash
+    ) {
+      throw new StoreConflictError(`requestId '${requestId}' 已用于不同的上传内容。`)
+    }
+    const metadata = await readMetadata(path.join(scopeDir, record.fileId, 'metadata.json'))
+    if (
+      !metadata
+      || metadata.name !== record.name
+      || (metadata.sourceRelativePath ?? metadata.name) !== record.sourceKey
+      || metadata.sizeBytes !== record.sizeBytes
+      || metadata.contentHash !== record.contentHash
+    ) {
+      throw new StoreConflictError(`requestId '${requestId}' 对应的文件状态已变化，不能重复提交。`)
+    }
+    return toEntry(metadata)
+  }
 }
 
 function toEntry(metadata: StoredFileMetadata): StoredFileEntry {
@@ -187,36 +317,16 @@ async function listDirectories(root: string): Promise<string[]> {
 }
 
 async function listMetadataFiles(scopeDir: string): Promise<string[]> {
-  const dirs = await listDirectories(scopeDir)
+  const dirs = (await listDirectories(scopeDir)).filter(dir => dir !== '_idempotency')
   return dirs.map(dir => path.join(scopeDir, dir, 'metadata.json'))
 }
 
 async function readMetadata(filePath: string): Promise<StoredFileMetadata | null> {
-  try {
-    const parsed = JSON.parse(await readFile(filePath, 'utf8')) as unknown
-    if (!isRecord(parsed)) return null
-    return {
-      id: String(parsed.id ?? ''),
-      name: String(parsed.name ?? ''),
-      sourceRelativePath: typeof parsed.sourceRelativePath === 'string' && parsed.sourceRelativePath.trim()
-        ? parsed.sourceRelativePath
-        : null,
-      sizeBytes: Number(parsed.sizeBytes ?? 0),
-      uploadedAt: String(parsed.uploadedAt ?? ''),
-      status: String(parsed.status ?? 'ready'),
-      threadId: typeof parsed.threadId === 'string' ? parsed.threadId : null,
-      relativePath: String(parsed.relativePath ?? ''),
-      contentHash: String(parsed.contentHash ?? ''),
-      mediaType: String(parsed.mediaType ?? 'application/octet-stream'),
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw error
-  }
+  return readJson(filePath, storedFileMetadataSchema)
 }
 
-function scopeName(threadId?: string | null): string {
-  return threadId?.trim() ? safePathSegment(threadId, 'threadId') : '__global__'
+function scopeName(threadId: string): string {
+  return safePathSegment(threadId, 'threadId')
 }
 
 async function findMetadataBySourceKey(scopeDir: string, sourceKey: string): Promise<StoredFileMetadata | null> {
@@ -279,6 +389,70 @@ function inferMediaType(name: string): string {
   return 'application/octet-stream'
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
+function validateStagedFile(file: StagedFileInput): void {
+  if (!Number.isSafeInteger(file.sizeBytes) || file.sizeBytes < 0) {
+    throw new Error('暂存文件大小无效。')
+  }
+  if (!/^[a-f0-9]{64}$/u.test(file.contentHash)) {
+    throw new Error('暂存文件内容哈希无效。')
+  }
+  if (!path.isAbsolute(file.tempPath)) {
+    throw new Error('暂存文件路径必须是绝对路径。')
+  }
+}
+
+async function publishContentObject(tempPath: string, objectPath: string): Promise<void> {
+  await mkdir(path.dirname(objectPath), { recursive: true })
+  try {
+    await link(tempPath, objectPath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+  }
+}
+
+function resolveRuntimeRelativePath(objectRoot: string, relativePath: string): string {
+  const runtimeRoot = path.dirname(path.dirname(objectRoot))
+  if (path.isAbsolute(relativePath)) throw new Error('上传对象路径必须是相对路径。')
+  const candidate = path.resolve(runtimeRoot, relativePath)
+  if (candidate !== objectRoot && !candidate.startsWith(`${objectRoot}${path.sep}`)) {
+    throw new Error('上传对象路径越出内容对象目录。')
+  }
+  return candidate
+}
+
+async function hashFile(filePath: string): Promise<string> {
+  const hash = createHash('sha256')
+  for await (const chunk of createReadStream(filePath)) hash.update(chunk as Buffer)
+  return hash.digest('hex')
+}
+
+async function verifyIdempotencyRecords(scopeDir: string): Promise<void> {
+  const directory = path.join(scopeDir, '_idempotency')
+  for (const entry of await listJsonFiles(directory)) {
+    const record = await readJson(path.join(directory, entry), fileIdempotencyRecordSchema)
+    if (!record) throw new Error(`上传幂等记录 '${entry}' 不是合法对象。`)
+    const metadata = await readMetadata(path.join(scopeDir, record.fileId, 'metadata.json'))
+    if (
+      !metadata
+      || metadata.contentHash !== record.contentHash
+      || metadata.sizeBytes !== record.sizeBytes
+      || (metadata.sourceRelativePath ?? metadata.name) !== record.sourceKey
+    ) {
+      throw new Error(`上传幂等记录 '${record.requestId}' 指向无效文件元数据。`)
+    }
+  }
+}
+
+async function listJsonFiles(root: string): Promise<string[]> {
+  try {
+    const entries = await readdir(root, { withFileTypes: true })
+    return entries.filter(entry => entry.isFile() && entry.name.endsWith('.json')).map(entry => entry.name)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw error
+  }
+}
+
+function idempotencyPath(scopeDir: string, requestId: string): string {
+  return path.join(scopeDir, '_idempotency', `${requestId}.json`)
 }

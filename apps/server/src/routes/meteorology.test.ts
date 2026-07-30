@@ -18,14 +18,17 @@ import { ensureMeteorologicalTables, meteorologyRoutes } from './meteorology.js'
 import { verifySchema } from '../security/database.js'
 import type { SecurityServices } from '../security/routes.js'
 import type { AuthContext } from '../security/types.js'
+import { RuntimeFileStore } from '../store/fileStore.js'
 
 describe('meteorology routes', () => {
   it('passes threadId and filename query parameters into dataset filtering', async () => {
     const calls: unknown[] = []
     const store = {
-      listMeteorologicalDatasets: async (filters: unknown) => {
-        calls.push(filters)
-        return [{ datasetId: 'dataset-b' }]
+      meteorology: {
+        listMeteorologicalDatasets: async (filters: unknown) => {
+          calls.push(filters)
+          return [{ datasetId: 'dataset-b' }]
+        },
       },
     } as unknown as PlatformPersistenceFacade
     const app = new Hono()
@@ -33,7 +36,9 @@ describe('meteorology routes', () => {
       c.set('auth', TEST_AUTH)
       await next()
     })
-    app.route('/', meteorologyRoutes(os.tmpdir(), store, testSecurity()))
+    app.route('/', meteorologyRoutes(os.tmpdir(), new RuntimeFileStore(os.tmpdir()), store, testSecurity(), {
+      MAX_METEOROLOGY_UPLOAD_BYTES: 500 * 1024 * 1024,
+    }))
 
     const response = await app.request('/api/v1/meteorology/datasets?threadId=thread-b&filename=target.nc')
     const rows = await response.json() as Array<{ datasetId: string }>

@@ -35,7 +35,7 @@ describe('AutomationRunner queue dispatch', () => {
       completedAt: '2026-07-18T00:01:00.000Z',
     })
     const runner = new AutomationRunner({
-      store: {
+      automations: {
         getAutomationRunRecord: vi.fn(async () => record),
         getScheduledTask,
       },
@@ -70,7 +70,7 @@ describe('AutomationRunner queue dispatch', () => {
       startedAt: '2026-07-18T00:00:00.000Z',
     })
     const runner = new AutomationRunner({
-      store: { getAutomationRunRecord: vi.fn(async () => record) },
+      automations: { getAutomationRunRecord: vi.fn(async () => record) },
     } as unknown as AutomationRunnerOptions)
 
     await expect(runner.executeQueuedJob({
@@ -134,7 +134,7 @@ describe('AutomationRunner queue dispatch', () => {
       startedAt: '2026-07-18T00:00:00.000Z',
     })
     const runner = new AutomationRunner({
-      store: {
+      automations: {
         getAutomationRunRecord: vi.fn(async () => stored),
         updateAutomationRunRecord: vi.fn(async (_runId, input) => {
           const { expectedStatuses: _expectedStatuses, ...patch } = input

@@ -342,12 +342,55 @@ describe('frontend architecture guards', () => {
     const srcRoot = path.resolve(process.cwd(), 'src', 'renderer')
     const appShellSource = await readFile(path.join(srcRoot, 'app/AppShell.tsx'), 'utf8')
     const inspectorSource = await readFile(path.join(srcRoot, 'app/layout/WorkspaceInspectorPanel.tsx'), 'utf8')
+    const detailSource = await readFile(path.join(srcRoot, 'features/artifacts/DetailPanel.tsx'), 'utf8')
 
     expect(appShellSource.includes('WorkspaceInspectorPanel')).toBe(true)
     expect(appShellSource.includes('../features/artifacts/DetailPanel')).toBe(false)
     expect(appShellSource.includes('WorkbenchProgressCard')).toBe(false)
     expect(inspectorSource.includes("import('../../features/artifacts/DetailPanel')")).toBe(true)
     expect(inspectorSource.includes('WorkbenchProgressCard')).toBe(true)
+    expect(inspectorSource.includes('extends DetailPanelProps')).toBe(false)
+    expect(inspectorSource.includes('detail: WorkspaceInspectorDetail')).toBe(true)
+    for (const modeProps of [
+      'SummaryDetailPanelProps',
+      'LayerOverviewDetailPanelProps',
+      'HistoryDetailPanelProps',
+      'ComputeDetailPanelProps',
+      'SourcesDetailPanelProps',
+      'ExportDetailPanelProps',
+      'ConfigDetailPanelProps',
+      'LayerManagerDetailPanelProps',
+    ]) {
+      expect(detailSource.includes(modeProps), modeProps).toBe(true)
+    }
+    expect(detailSource.includes('void uploadedLayerName')).toBe(false)
+    expect(detailSource.includes('void selectedBasemapName')).toBe(false)
+    expect(detailSource.includes('void isFileSubmitting')).toBe(false)
+  })
+
+  it('keeps platform side effects in feature-scoped coordinators', async () => {
+    const srcRoot = path.resolve(process.cwd(), 'src', 'renderer')
+    const appShellSource = await readFile(path.join(srcRoot, 'app/AppShell.tsx'), 'utf8')
+    const controllerRoot = path.join(srcRoot, 'app/controllers')
+    const coordinatorFiles = [
+      'useDesktopWindowCoordinator.ts',
+      'useWorkspaceAuthenticationCoordinator.ts',
+      'useRunHistoryLoader.ts',
+      'useWorkspaceResourceLoader.ts',
+      'useWorkspaceExportCoordinator.ts',
+      'toolingController.ts',
+    ]
+
+    expect(appShellSource.includes('useEffect(')).toBe(false)
+    expect(appShellSource.includes('useState(')).toBe(false)
+    expect(appShellSource.includes('window.geoforgeDesktop')).toBe(false)
+    expect(appShellSource.includes('exportWorkspaceResult')).toBe(false)
+    expect(appShellSource.includes('requestDesktopDownload')).toBe(false)
+    for (const file of coordinatorFiles) {
+      const source = await readFile(path.join(controllerRoot, file), 'utf8')
+      expect(source.length, file).toBeGreaterThan(0)
+      expect(appShellSource.includes(file.replace(/\.ts$/, '')), file).toBe(true)
+    }
   })
 
   it('keeps conversation rendering isolated from AppShell', async () => {

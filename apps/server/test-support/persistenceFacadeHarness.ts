@@ -11,6 +11,7 @@
 import type { Database } from '../src/db/connection.js'
 import type { ArtifactRef } from '../src/schemas/types.js'
 import { PlatformPersistenceFacade } from '../src/store/platformPersistenceFacade.js'
+import { PlatformEventHub } from '../src/store/platformEventHub.js'
 import type {
   ArtifactRecord,
   ArtifactOwnerProjection,
@@ -18,6 +19,8 @@ import type {
   VisibleArtifactQuery,
 } from '../src/store/postgres/artifactRepository.js'
 import { InMemoryConversationPersistence } from './inMemoryConversationPersistence.js'
+
+const eventHubs = new WeakMap<PlatformPersistenceFacade, PlatformEventHub>()
 
 class InMemoryArtifactRepository implements ArtifactRepository {
   private readonly records = new Map<string, ArtifactRecord>()
@@ -74,15 +77,25 @@ export class PersistenceFacadeTestHarness {
   readonly artifactRepository = new InMemoryArtifactRepository()
 
   create(storageRoot: string, db: Database = noOpDatabase()): PlatformPersistenceFacade {
-    return new PlatformPersistenceFacade(db, storageRoot, {
+    const events = new PlatformEventHub()
+    const store = new PlatformPersistenceFacade(db, storageRoot, {
       conversationPersistence: this.conversationPersistence,
       artifactRepository: this.artifactRepository,
+      events,
     })
+    eventHubs.set(store, events)
+    return store
   }
 }
 
 export function createTestPersistenceFacade(storageRoot: string, db?: Database): PlatformPersistenceFacade {
   return new PersistenceFacadeTestHarness().create(storageRoot, db)
+}
+
+export function testPlatformEventHub(store: PlatformPersistenceFacade): PlatformEventHub {
+  const events = eventHubs.get(store)
+  if (!events) throw new Error('测试持久化门面未注册 PlatformEventHub。')
+  return events
 }
 
 function noOpDatabase(): Database {

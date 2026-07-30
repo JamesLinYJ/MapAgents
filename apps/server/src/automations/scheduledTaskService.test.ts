@@ -167,12 +167,13 @@ function createFixture() {
   const listQueuedAutomationRuns = vi.fn(async (): Promise<AutomationRunRecord[]> => [])
   const authorizationEnforce = vi.fn(async () => undefined)
   const service = new ScheduledTaskService({
-    store: {
+    automations: {
       createAutomationRunRecord,
       getAutomationRunRecord: vi.fn(async () => stored),
       updateAutomationRunRecord,
       listQueuedAutomationRuns,
     },
+    conversations: {},
     definitions: { requirePublished: vi.fn(async () => definition) },
     compiler: {
       compile: vi.fn(() => ({ definition, validateParameters: vi.fn() })),

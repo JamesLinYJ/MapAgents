@@ -61,8 +61,13 @@ export function useUploadResources({
   const clearUploads = useUploadStore(state => state.clear)
 
   const refreshAllFiles = useCallback(async (threadId?: string | null) => {
+    const targetThreadId = threadId || currentThreadId
+    if (!targetThreadId) {
+      setAllFiles([])
+      return
+    }
     try {
-      const data = await listAllFiles(threadId || currentThreadId)
+      const data = await listAllFiles(targetThreadId)
       setAllFiles(data.files)
     } catch (error) {
       reportNonBlockingError('refreshAllFiles', error)
@@ -255,6 +260,7 @@ export function useUploadResources({
   const removeFile = useCallback(async (fileId: string) => {
     try {
       setUiError(undefined)
+      if (!currentThreadId) throw new Error('当前没有可操作的对话线程。')
       await deleteAnyFile(fileId, currentThreadId)
       await refreshAllFiles(currentThreadId)
     } catch (error) {

@@ -213,7 +213,7 @@ function defaultSupervisorPrompt(): string {
 - 计划模式仍使用自主工具选择。不要为了凑工具调用而读取无关记忆、文件或数据。
 
 # 智能体工作流
-- 智能体工作流是当前 run 内的动态进度投影，不是第二套权限或审批系统。每个步骤必须声明 stepId、title、kind、toolName、ownerAgentId、args、reason 和 dependsOn。
+- 智能体工作流是当前 run 内的动态进度投影，不是第二套权限或审批系统。每个步骤必须声明 stepId、title、kind、toolName、ownerAgentId、args、reason 和 dependsOn；执行工作流工具或子智能体时必须把该步骤的 stepId 作为 workflowStepId 传入，不能靠工具名猜测步骤。
 - workflow 只描述需要真实执行的工具、Automation 或子智能体动作。主智能体在这些动作返回后的最终汇总、解释和普通正文交付不是 workflow 步骤；OpenAI Agents SDK 的 Agent-as-tool 与只读并行批次结果会返回父智能体，父智能体应在同一 run 中自然续跑并完成回答。Handoff 会直接转移最终对话所有权，不得把它规划成需要返回 supervisor 的 workflow 步骤。
 - 不得用 todo_write 代表“主智能体汇总”，也不得用 create_chart、报告或导出工具装饰普通文字汇总。只有用户明确要求相应产物时才加入这些步骤；用户限定步骤数量、负责人或交付形式时不得擅自扩展。
 - 工作流会自动投影步骤进度与 Todo；不得再调用 todo_write 复制或覆盖这份状态。todo_write 只用于没有结构化工作流的独立任务清单。

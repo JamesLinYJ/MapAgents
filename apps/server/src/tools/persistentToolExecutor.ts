@@ -19,7 +19,8 @@ import type { ModelAdapterRegistry } from '../model/registry.js'
 import { recordModelCompletionUsage, type ModelCompletionService } from '../model/modelResultCache.js'
 import type { AgentRuntimeConfig } from '../schemas/types.js'
 import type { AuthContext } from '../security/types.js'
-import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
+import type { PersistentToolStore } from '../store/runtimePorts.js'
+import type { RuntimeConfigStore } from '../store/postgres/runtimeConfigStore.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 import { persistToolExecutionResult, resolveRuntimeValueRef } from './resultPersistence.js'
 import { resolveRuntimeConfig } from '../ws/runtimeConfig.js'
@@ -35,7 +36,8 @@ export interface PersistedToolExecutionInput {
 export async function executePersistedTool(
   input: PersistedToolExecutionInput,
   deps: {
-    store: PlatformPersistenceFacade
+    store: PersistentToolStore
+    runtimeConfiguration: Pick<RuntimeConfigStore, 'getRuntimeConfig'>
     registry: ToolRegistry
     modelRegistry: ModelAdapterRegistry
     modelCompletions?: ModelCompletionService
@@ -51,18 +53,18 @@ export async function executePersistedTool(
     threadId: run.threadId,
     signal: input.signal ?? new AbortController().signal,
     runtimeRoot: deps.store.runtimeRoot,
-    runtimeConfig: run.runtimeConfigSnapshot ?? await resolveRuntimeConfig(deps.store, deps.defaultRuntimeConfig),
+    runtimeConfig: run.runtimeConfigSnapshot ?? await resolveRuntimeConfig(deps.runtimeConfiguration, deps.defaultRuntimeConfig),
     auth: input.auth,
     state: values,
     resolveValueRef: refId => resolveRuntimeValueRef(values, refId),
-    listMeteorologicalDatasets: datasetInput => deps.store.listMeteorologicalDatasets({
+    listMeteorologicalDatasets: datasetInput => deps.store.meteorology.listMeteorologicalDatasets({
       sessionId: run.sessionId,
       threadId: datasetInput?.scope === 'thread' ? run.threadId : null,
       workspaceId: run.workspaceId,
       filename: datasetInput?.filename ?? null,
       ...(datasetInput?.limit === undefined ? {} : { limit: datasetInput.limit }),
     }),
-    resolveMeteorologicalDataset: datasetInput => deps.store.resolveMeteorologicalDataset({
+    resolveMeteorologicalDataset: datasetInput => deps.store.meteorology.resolveMeteorologicalDataset({
       sessionId: run.sessionId,
       threadId: null,
       workspaceId: run.workspaceId,

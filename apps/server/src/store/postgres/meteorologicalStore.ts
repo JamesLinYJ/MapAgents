@@ -32,27 +32,27 @@ export class MeteorologicalStore {
     this.jobs = new MeteorologicalJobRepository(db)
   }
 
-  list(filters: ListMeteorologicalDatasetsFilters = {}): Promise<MeteorologicalDatasetRecord[]> {
+  listMeteorologicalDatasets(filters: ListMeteorologicalDatasetsFilters = {}): Promise<MeteorologicalDatasetRecord[]> {
     return this.datasets.list(filters)
   }
 
-  resolve(filters: ResolveMeteorologicalDatasetFilters): Promise<MeteorologicalDatasetRecord | null> {
+  resolveMeteorologicalDataset(filters: ResolveMeteorologicalDatasetFilters): Promise<MeteorologicalDatasetRecord | null> {
     return this.datasets.resolve(filters)
   }
 
-  get(datasetId: string): Promise<MeteorologicalDatasetRecord | null> {
+  getMeteorologicalDataset(datasetId: string): Promise<MeteorologicalDatasetRecord | null> {
     return this.datasets.get(datasetId)
   }
 
-  create(dataset: MeteorologicalDatasetRecord): Promise<void> {
+  createMeteorologicalDataset(dataset: MeteorologicalDatasetRecord): Promise<void> {
     return this.datasets.create(dataset)
   }
 
-  getJob(jobId: string): Promise<MeteorologicalJobRecord | null> {
+  getMeteorologicalJob(jobId: string): Promise<MeteorologicalJobRecord | null> {
     return this.jobs.get(jobId)
   }
 
-  createJob(job: MeteorologicalJobRecord): Promise<void> {
+  createMeteorologicalJob(job: MeteorologicalJobRecord): Promise<void> {
     return this.jobs.create(job)
   }
 }
