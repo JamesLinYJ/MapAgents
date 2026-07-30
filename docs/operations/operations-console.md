@@ -89,7 +89,7 @@ npm run build
 npm run make --workspace @geo-agent-platform/desktop
 ```
 
-Desktop 的 Forge `package`/`make` 固定使用 `.node-version` 中的 Node.js `24.14.0`（支持范围 `>=24 <25`）；脚本会在其它主版本上硬失败，不能用运行时 monkey patch 绕过依赖兼容问题。`build:desktop` 以及 Desktop 自身的 `package`/`make` 会依次构建 `shared-types`、`conversation-presentation`、`operations-supervisor` 和 Desktop，因此不依赖仓库中残留的 `dist/`。Desktop 版本与平台版本均为 `0.1.0`。服务发布目录必须是不可变的版本目录，例如 Windows 的 `C:\Program Files\GeoForge\services\0.1.0` 或 Linux 的 `/opt/geoforge/releases/0.1.0`；升级先安装新目录和新清单，再切换服务，不覆盖正在运行的目录。
+Desktop 的 Forge `package`/`make` 支持 `package.json` 声明的 Node.js `>=24`；`.node-version` 中的 `24.14.0` 是推荐开发基线，不是专用门禁。Windows ZIP 由项目内 `GeoForgeZipMaker` 使用 Archiver 生成，不再经过在 Node 25 上调用已移除文件系统接口的 `maker-zip → cross-zip` 链路。`build:desktop` 以及 Desktop 自身的 `package`/`make` 会依次构建 `shared-types`、`conversation-presentation`、`operations-supervisor` 和 Desktop，因此不依赖仓库中残留的 `dist/`。Desktop 版本与平台版本均为 `0.1.0`。服务发布目录必须是不可变的版本目录，例如 Windows 的 `C:\Program Files\GeoForge\services\0.1.0` 或 Linux 的 `/opt/geoforge/releases/0.1.0`；升级先安装新目录和新清单，再切换服务，不覆盖正在运行的目录。
 
 Windows `make` 会从 Microsoft 固定 URL 获取 NuGet CLI `6.14.0`，验证仓库内固定的 SHA256 后写入忽略版本控制的 `.squirrel-vendor` 构建缓存。Squirrel 自带的旧 NuGet 只作为其它 vendor 文件来源，不参与 nupkg 打包；下载失败或哈希不符都会硬失败。
 

@@ -16,9 +16,11 @@ import { fileURLToPath } from 'node:url'
 import windowStateKeeper from 'electron-window-state'
 
 import {
+  DESKTOP_IPC_CHANNELS,
   desktopWorkspaceWindowDescriptorSchema,
   type DesktopWorkspaceWindowDescriptor,
 } from '../contracts/desktopIpc.js'
+import { encodeDesktopEvent } from './eventTransportEncoder.js'
 import type { FileHandleRegistry } from './fileHandleRegistry.js'
 import { installNativeContextMenu } from './nativeMenus.js'
 import {
@@ -206,11 +208,11 @@ export class WorkspaceWindowRegistry {
     window: BrowserWindow,
     event: 'window:maximized' | 'window:restored',
   ): void {
-    window.webContents.send('geoforge:event', {
+    window.webContents.send(DESKTOP_IPC_CHANNELS.event, encodeDesktopEvent({
       version: 1,
       event,
       payload: null,
-    })
+    }))
   }
 }
 

@@ -12,13 +12,16 @@
 //     作者: JamesLinYJ
 //     协助: OpenAI Codex:GPT-5.6 Sol
 //     说明: 删除 Renderer 文件路径反查，只暴露选择、受限文本读取和上传句柄。
+//
+//   维护记录 (2026-07-30):
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
+//     说明: 统一解码认证与监督控制响应，并单独校验批量日志数据。
 // --------------------------------------------------------------------------
 
 import { contextBridge, ipcRenderer } from 'electron'
 import {
   operationsOperationResultSchema,
-  operationsLogEntrySchema,
-  operationsLogQuerySchema,
   operationsSnapshotSchema,
 } from '@geo-agent-platform/shared-types/operations'
 
@@ -34,7 +37,6 @@ import {
   desktopClipboardWriteSchema,
   desktopConfirmationRequestSchema,
   desktopControlRequestSchema,
-  desktopControlResponseSchema,
   desktopRendererDiagnosticSchema,
   desktopDownloadRequestSchema,
   desktopDownloadResultSchema,
@@ -46,6 +48,8 @@ import {
   desktopTextFileReadResultSchema,
   desktopMicrophonePermissionRequestSchema,
   desktopMicrophonePermissionResultSchema,
+  desktopSupervisorLogsQuerySchema,
+  desktopSupervisorLogsResponseSchema,
   desktopWindowCommandSchema,
   type DesktopAuthCommand,
   type DesktopControlResponse,
@@ -90,7 +94,7 @@ const bridge: DesktopBridge = {
         command: request.command,
         payload: request.payload,
       })
-      const response = desktopControlResponseSchema.parse(
+      const response = await decodeDesktopControlResponse(
         await ipcRenderer.invoke(
           DESKTOP_IPC_CHANNELS.authRequest,
           request,
@@ -189,8 +193,11 @@ const bridge: DesktopBridge = {
       )
     },
     async logs(query) {
-      return operationsLogEntrySchema.array().parse(
-        await invokeSupervisor('logs', operationsLogQuerySchema.parse(query)),
+      return desktopSupervisorLogsResponseSchema.parse(
+        await ipcRenderer.invoke(
+          DESKTOP_IPC_CHANNELS.supervisorLogs,
+          desktopSupervisorLogsQuerySchema.parse(query),
+        ),
       )
     },
   },
@@ -218,7 +225,7 @@ const bridge: DesktopBridge = {
 contextBridge.exposeInMainWorld('geoforgeDesktop', bridge)
 
 async function invokeSupervisor(
-  command: 'status' | 'start' | 'logs',
+  command: 'status' | 'start',
   payload: Record<string, unknown>,
 ): Promise<unknown> {
   const request = desktopControlRequestSchema.parse({
@@ -227,7 +234,7 @@ async function invokeSupervisor(
     command,
     payload,
   })
-  const response = desktopControlResponseSchema.parse(
+  const response = await decodeDesktopControlResponse(
     await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.supervisorRequest, request),
   )
   if (!response.ok) {

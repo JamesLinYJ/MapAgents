@@ -42,7 +42,10 @@ vi.mock('electron', () => ({
 
 import {
   DESKTOP_IPC_CHANNELS,
+  DESKTOP_CONTROL_FRAME_MAX_BYTES,
+  desktopControlResponseTransportSchema,
   desktopMicrophonePermissionResultSchema,
+  type DesktopControlRequest,
 } from '../contracts/desktopIpc.js'
 import {
   installDesktopIpcHandlers,
@@ -127,6 +130,89 @@ describe('microphone permission IPC', () => {
   })
 })
 
+describe('desktop IPC transport ownership', () => {
+  beforeEach(() => {
+    electronState.handlers.clear()
+  })
+
+  it('compresses large auth projections and keeps bulk logs off the control channel', async () => {
+    const frame = { url: 'geoforge://app/workspace' }
+    const sender = {
+      id: 62,
+      isDestroyed: () => false,
+      on: vi.fn(),
+      once: vi.fn(),
+    }
+    const window = {
+      webContents: {
+        id: 62,
+        mainFrame: frame,
+      },
+      isDestroyed: () => false,
+    }
+    const logs = Array.from({ length: 1_000 }, (_, index) => ({
+      sequence: index + 1,
+      serviceId: 'api' as const,
+      component: 'server',
+      processId: 42,
+      stream: 'stdout' as const,
+      level: 'info' as const,
+      message: `日志 ${index} ${'运行信息'.repeat(30)}`,
+      createdAt: '2026-07-30T08:00:00.000Z',
+    }))
+    installDesktopIpcHandlers({
+      api: {},
+      auth: {
+        handle: vi.fn(async (request: DesktopControlRequest) => ({
+          version: request.version,
+          requestId: request.requestId,
+          ok: true,
+          data: { memberships: '工作区成员'.repeat(40_000) },
+        })),
+      },
+      control: {},
+      downloads: {},
+      exports: {},
+      files: {},
+      logger: {},
+      microphone: {},
+      supervisor: {
+        handle: vi.fn(),
+        logs: vi.fn(async () => logs),
+      },
+      windows: {
+        getForWebContents: vi.fn(() => window),
+      },
+    } as unknown as DesktopIpcDependencies)
+    const event = { sender, senderFrame: frame }
+    const authHandler = requireChannelHandler(DESKTOP_IPC_CHANNELS.authRequest)
+    const logsHandler = requireChannelHandler(DESKTOP_IPC_CHANNELS.supervisorLogs)
+
+    const authTransport = desktopControlResponseTransportSchema.parse(
+      await authHandler(event, {
+        version: 1,
+        requestId: '019fa8d2-d331-7c48-a667-68383b815be9',
+        command: 'projection',
+        payload: {},
+      }),
+    )
+    expect(authTransport).toMatchObject({ encoding: 'gzip-base64' })
+
+    const logResponse = await logsHandler(event, {
+      services: ['infra', 'worker', 'api'],
+      levels: [],
+      streams: [],
+      search: '',
+      includeSupervisor: true,
+      afterSequence: null,
+      tail: 2_000,
+    })
+    expect(logResponse).toEqual(logs)
+    expect(new TextEncoder().encode(JSON.stringify(logResponse)).byteLength)
+      .toBeGreaterThan(DESKTOP_CONTROL_FRAME_MAX_BYTES)
+  })
+})
+
 function installFixture(gate: MicrophonePermissionGate) {
   const frame = { url: 'geoforge://app/workspace' }
   const sender = {
@@ -171,7 +257,11 @@ function installFixture(gate: MicrophonePermissionGate) {
 }
 
 function requireHandler() {
-  const handler = electronState.handlers.get(DESKTOP_IPC_CHANNELS.microphonePermission)
-  if (!handler) throw new Error('麦克风 IPC 未注册。')
+  return requireChannelHandler(DESKTOP_IPC_CHANNELS.microphonePermission)
+}
+
+function requireChannelHandler(channel: string) {
+  const handler = electronState.handlers.get(channel)
+  if (!handler) throw new Error(`桌面 IPC 通道未注册：${channel}`)
   return handler
 }

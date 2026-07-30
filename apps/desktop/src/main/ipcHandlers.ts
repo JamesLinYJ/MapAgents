@@ -7,6 +7,11 @@
 //   日期:       2026年07月29日
 //   作者:       JamesLinYJ
 //   协助:       OpenAI Codex:GPT-5.6 Sol
+//
+//   维护记录 (2026-07-30):
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
+//     说明: 控制响应统一编码；系统日志改走独立的批量数据 IPC。
 // --------------------------------------------------------------------------
 
 import { clipboard, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron'
@@ -24,6 +29,8 @@ import {
   desktopTextFileReadRequestSchema,
   desktopMicrophonePermissionRequestSchema,
   desktopMicrophonePermissionResultSchema,
+  desktopSupervisorLogsQuerySchema,
+  desktopSupervisorLogsResponseSchema,
   desktopWindowCommandSchema,
 } from '../contracts/desktopIpc.js'
 import { encodeDesktopControlResponse } from './controlResponseEncoder.js'
@@ -75,7 +82,9 @@ export function installDesktopIpcHandlers(dependencies: DesktopIpcDependencies):
   })
   ipcMain.handle(DESKTOP_IPC_CHANNELS.authRequest, async (event, input: unknown) => {
     requireWindow(event, dependencies.windows)
-    return dependencies.auth.handle(desktopControlRequestSchema.parse(input))
+    return encodeDesktopControlResponse(
+      await dependencies.auth.handle(desktopControlRequestSchema.parse(input)),
+    )
   })
   ipcMain.handle(DESKTOP_IPC_CHANNELS.clipboardWrite, (event, input: unknown) => {
     requireWindow(event, dependencies.windows)
@@ -109,7 +118,15 @@ export function installDesktopIpcHandlers(dependencies: DesktopIpcDependencies):
   })
   ipcMain.handle(DESKTOP_IPC_CHANNELS.supervisorRequest, async (event, input: unknown) => {
     requireWindow(event, dependencies.windows)
-    return dependencies.supervisor.handle(desktopControlRequestSchema.parse(input))
+    return encodeDesktopControlResponse(
+      await dependencies.supervisor.handle(desktopControlRequestSchema.parse(input)),
+    )
+  })
+  ipcMain.handle(DESKTOP_IPC_CHANNELS.supervisorLogs, async (event, input: unknown) => {
+    requireWindow(event, dependencies.windows)
+    return desktopSupervisorLogsResponseSchema.parse(
+      await dependencies.supervisor.logs(desktopSupervisorLogsQuerySchema.parse(input)),
+    )
   })
   ipcMain.handle(DESKTOP_IPC_CHANNELS.fileSelect, async (event, input: unknown) => {
     const window = requireWindow(event, dependencies.windows)

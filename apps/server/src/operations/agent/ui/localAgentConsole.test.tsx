@@ -77,6 +77,69 @@ describe('LocalAgentConsoleApp', () => {
     await vi.waitFor(() => expect(session.submit).toHaveBeenCalledWith('天好气'))
   })
 
+  it('opens and filters the slash-command menu, then completes and executes an exact command', async () => {
+    const session = new TestSession(snapshot())
+    const instance = renderConsole(session)
+    resize(instance.stdout, 100, 32)
+    await vi.waitFor(() => expect(instance.lastFrame()).toContain('输入消息'))
+
+    instance.stdin.write('/')
+    await vi.waitFor(() => {
+      const frame = stripVTControlCharacters(instance.lastFrame() ?? '')
+      expect(frame).toContain('斜杠命令')
+      expect(frame).toContain('/help')
+      expect(frame).toContain('Tab/Enter 补全')
+    })
+
+    instance.stdin.write('st')
+    await vi.waitFor(() => {
+      const frame = stripVTControlCharacters(instance.lastFrame() ?? '')
+      expect(frame).toContain('/status')
+      expect(frame).toContain('查看运行与连接状态')
+      expect(frame).not.toContain('打开快捷键与命令帮助')
+    })
+
+    instance.stdin.write('\r')
+    await vi.waitFor(() => expect(stripVTControlCharacters(instance.lastFrame() ?? '')).toContain('› /status'))
+    instance.stdin.write('\r')
+    await vi.waitFor(() => expect(instance.lastFrame()).toContain('等待输入 · 已连接'))
+    expect(session.submit).not.toHaveBeenCalled()
+  })
+
+  it('supports arrow selection and Tab completion in the slash-command menu', async () => {
+    const session = new TestSession(snapshot())
+    const instance = renderConsole(session)
+    resize(instance.stdout, 100, 32)
+    await vi.waitFor(() => expect(instance.lastFrame()).toContain('输入消息'))
+
+    instance.stdin.write('/')
+    await vi.waitFor(() => expect(instance.lastFrame()).toContain('斜杠命令'))
+    instance.stdin.write('\u001b[B')
+    await vi.waitFor(() => expect(stripVTControlCharacters(instance.lastFrame() ?? '')).toContain('› /new'))
+    instance.stdin.write('\t')
+    await vi.waitFor(() => expect(stripVTControlCharacters(instance.lastFrame() ?? '')).toContain('› /new'))
+    instance.stdin.write('\r')
+    await vi.waitFor(() => expect(session.newConversation).toHaveBeenCalledOnce())
+  })
+
+  it('scrolls the slash-command window so every registered command remains selectable', async () => {
+    const session = new TestSession(snapshot())
+    const instance = renderConsole(session)
+    resize(instance.stdout, 100, 32)
+    await vi.waitFor(() => expect(instance.lastFrame()).toContain('输入消息'))
+
+    instance.stdin.write('/')
+    await vi.waitFor(() => expect(instance.lastFrame()).toContain('斜杠命令'))
+    instance.stdin.write('\u001b[A')
+    await vi.waitFor(() => {
+      const frame = stripVTControlCharacters(instance.lastFrame() ?? '')
+      expect(frame).toContain('13/13')
+      expect(frame).toContain('› /exit')
+      expect(frame).not.toContain('打开快捷键与命令帮助')
+      assertFrameFits(instance.lastFrame(), 100, 32)
+    })
+  })
+
   it('shows reasoning and assistant updates as canonical accumulated items', async () => {
     const value = snapshot(run('running'))
     value.items = [

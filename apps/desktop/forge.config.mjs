@@ -7,6 +7,11 @@
 //   日期:       2026年07月29日
 //   作者:       JamesLinYJ
 //   协助:       OpenAI Codex:GPT-5.6 Sol
+//
+//   维护记录 (2026-07-30):
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
+//     说明: ZIP 构建改用项目内跨版本 Maker，解除 cross-zip 对 Node 24 的隐式绑定。
 // --------------------------------------------------------------------------
 
 import { FuseV1Options, FuseVersion } from '@electron/fuses'
@@ -14,6 +19,7 @@ import { existsSync } from 'node:fs'
 import { rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { GeoForgeZipMaker } from './packaging/geoForgeZipMaker.mjs'
 
 const squirrelVendorDirectory = fileURLToPath(new URL('./.squirrel-vendor', import.meta.url))
 const windowsIconPath = fileURLToPath(new URL('./assets/geoforge.ico', import.meta.url))
@@ -70,11 +76,7 @@ export default {
         windowsSign: windowsSigningOptions,
       },
     },
-    {
-      name: '@electron-forge/maker-zip',
-      platforms: ['win32'],
-      config: {},
-    },
+    new GeoForgeZipMaker({}, ['win32']),
   ],
   hooks: {
     postPackage: async (_forgeConfig, packageResult) => {

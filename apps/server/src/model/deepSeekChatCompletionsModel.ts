@@ -25,6 +25,7 @@ import {
   type SerializedHandoff,
   type SerializedTool,
 } from '@openai/agents'
+import { Ajv, type ValidateFunction } from 'ajv'
 import OpenAI from 'openai'
 import { createHash } from 'node:crypto'
 import type {
@@ -112,7 +113,14 @@ class DeepSeekStructuredOutputError extends Error {
   }
 }
 
-type StructuredOutputKind = 'empty' | 'markdown_fence' | 'dsml' | 'truncated_json' | 'json_scalar' | 'non_json_text'
+type StructuredOutputKind =
+  | 'empty'
+  | 'markdown_fence'
+  | 'dsml'
+  | 'truncated_json'
+  | 'json_scalar'
+  | 'non_json_text'
+  | 'schema_mismatch'
 
 export interface DeepSeekChatCompletionsModelOptions {
   client: OpenAI
@@ -151,6 +159,7 @@ export class DeepSeekChatCompletionsModel implements Model {
     const params = this.buildRequest(request, false)
     const maximumAttempts = request.outputType === 'text' ? 1 : 3
     const aggregateUsage = new Usage()
+    const structuredOutputValidator = createStructuredOutputValidator(request.outputType)
 
     for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
       const attemptParams = attempt === 1
@@ -165,7 +174,9 @@ export class DeepSeekChatCompletionsModel implements Model {
         aggregateUsage.add(attemptUsage)
         this.observePromptCache(attemptParams, response.usage as DeepSeekStreamChunk['usage'])
         const message = choice.message as DeepSeekAssistantMessage
-        if (!message.tool_calls?.length) assertStructuredOutput(request.outputType, message.content ?? '')
+        if (!message.tool_calls?.length) {
+          assertStructuredOutput(request.outputType, message.content ?? '', structuredOutputValidator)
+        }
         const output = parseAssistantMessage(response.id, message)
         if (!output.length) throw new Error('Chat Completions 未返回正文或工具调用')
         return {
@@ -198,11 +209,11 @@ export class DeepSeekChatCompletionsModel implements Model {
     const bufferStructuredTurn = request.outputType !== 'text'
     const maximumAttempts = bufferStructuredTurn ? 3 : 1
     const aggregateUsage = new Usage()
+    const structuredOutputValidator = createStructuredOutputValidator(request.outputType)
 
     for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
-      // 一旦模型已选择无工具的最终回答却违反 JSON 契约，后续尝试就是纯
-      // 最终化请求。移除工具目录可避免 DeepSeek 再进入 DSML 工具通道，且
-      // 不会重放任何已经执行过的工具副作用。
+      // 重试沿用同一工具目录与已完成的工具历史；只有当前失败响应会被丢弃，
+      // 已执行结果不会重放，模型仍可选择合法的后续控制或业务工具。
       const attemptParams = attempt === 1
         ? params
         : toStructuredRetryRequest(params, attempt)
@@ -278,7 +289,9 @@ export class DeepSeekChatCompletionsModel implements Model {
         const attemptUsage = new Usage(toUsage(usage))
         aggregateUsage.add(attemptUsage)
         this.observePromptCache(attemptParams, usage)
-        if (calls.size === 0) assertStructuredOutput(request.outputType, text)
+        if (calls.size === 0) {
+          assertStructuredOutput(request.outputType, text, structuredOutputValidator)
+        }
         const output = buildOutput(responseId, text, reasoning, [...calls.values()].sort((a, b) => a.index - b.index))
         if (!output.length) throw new Error('Chat Completions 流未返回正文或工具调用')
         const doneEvent: ResponseStreamEvent = {
@@ -549,37 +562,27 @@ function toResponseFormat(outputType: ModelRequest['outputType']): Record<string
   return { type: 'json_object' }
 }
 
-function toFinalizationRequest<
-  T extends ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming,
->(params: T): T {
-  const finalizationParams = { ...params } as T
-  delete finalizationParams.tools
-  delete finalizationParams.tool_choice
-  return finalizationParams
-}
-
 // DeepSeek 官方说明 JSON Output 偶尔可能返回空内容，并建议修改提示后重试。
-// 尚无工具结果时，失败响应也没有产生可执行副作用，重试必须保留工具目录，
-// 否则模型会被迫在缺数据时编造最终答案。已有工具结果时才进入无工具最终化，
-// 并用官方 thinking 开关关闭修复轮推理，让 JSON envelope 更稳定。
+// 失败响应没有产生可执行副作用；历史工具结果已经作为独立消息固定在上下文中，
+// 因此重试必须保留当前工具目录。删除工具会让已进入计划模式的运行失去
+// request_clarification / submit_agent_workflow 等合法收口路径。
 function toStructuredRetryRequest<
   T extends ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming,
 >(params: T, attempt: number): T {
   const retryNumber = Math.max(1, attempt - 1)
   const hasExecutedToolResult = params.messages.some(message => message.role === 'tool')
-  const retryParams = hasExecutedToolResult ? toFinalizationRequest(params) : { ...params }
   const shouldDisableThinking = hasExecutedToolResult || attempt >= 3
   const result = {
-    ...retryParams,
+    ...params,
     messages: [
-      ...retryParams.messages,
+      ...params.messages,
       {
         role: 'user',
         content: [
           `<structured_output_retry attempt="${retryNumber}">`,
-          '上一响应为空或不是合法的 json object，未被系统接受。',
+          '上一响应为空、不是合法 JSON object，或不符合既定 schema，未被系统接受。',
           hasExecutedToolResult
-            ? '已有工具结果，请直接完成同一回答；只输出一个以 { 开始、以 } 结束且符合既定 schema 的 JSON object。'
+            ? '请根据已有工具结果继续当前任务：若仍需调用当前可用工具，请返回合法工具调用；否则只输出一个以 { 开始、以 } 结束且符合既定 schema 的 JSON object。'
             : '如果回答依赖可用工具数据，请先返回合法工具调用；否则只输出一个以 { 开始、以 } 结束且符合既定 schema 的 JSON object。',
           '不要输出 Markdown 代码围栏、解释、前后缀或空白占位。',
           '</structured_output_retry>',
@@ -597,7 +600,11 @@ function toStructuredRetryRequest<
 // DeepSeek json_object 承诺返回单个合法 JSON object。适配器在供应商边界
 // 先验证该协议，再把正文交给 Agents SDK 做业务 schema 校验，避免把传输层
 // 拼接错误误报成业务 outputType 错误。
-function assertStructuredOutput(outputType: ModelRequest['outputType'], text: string): void {
+function assertStructuredOutput(
+  outputType: ModelRequest['outputType'],
+  text: string,
+  validator: ValidateFunction<unknown> | null,
+): void {
   if (outputType === 'text') return
   let parsed: unknown
   try {
@@ -606,6 +613,20 @@ function assertStructuredOutput(outputType: ModelRequest['outputType'], text: st
     throw new DeepSeekStructuredOutputError('DeepSeek JSON Output 未返回单个合法 JSON object', text, { cause: error })
   }
   if (!isRecord(parsed)) throw new DeepSeekStructuredOutputError('DeepSeek JSON Output 的根值必须是 JSON object', text)
+  if (validator && !validator(parsed)) {
+    throw new DeepSeekStructuredOutputError('DeepSeek JSON Output 不符合既定 schema', text)
+  }
+}
+
+function createStructuredOutputValidator(
+  outputType: ModelRequest['outputType'],
+): ValidateFunction<unknown> | null {
+  if (outputType === 'text' || outputType.type !== 'json_schema') return null
+  try {
+    return new Ajv({ allErrors: true, strict: false }).compile(outputType.schema)
+  } catch {
+    throw new UserError('DeepSeek 结构化输出 schema 无法编译')
+  }
 }
 
 function classifyStructuredOutput(text: string): StructuredOutputKind {
@@ -615,7 +636,7 @@ function classifyStructuredOutput(text: string): StructuredOutputKind {
   if (/DSML|<tool_calls?>|<invoke\b/iu.test(trimmed)) return 'dsml'
   if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && !/[}\]]\s*$/u.test(trimmed)) return 'truncated_json'
   try {
-    return isRecord(JSON.parse(trimmed)) ? 'non_json_text' : 'json_scalar'
+    return isRecord(JSON.parse(trimmed)) ? 'schema_mismatch' : 'json_scalar'
   } catch {
     return 'non_json_text'
   }

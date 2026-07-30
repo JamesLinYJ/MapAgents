@@ -612,6 +612,8 @@ select {
 
 .gf-titlebar-region .workbench-chrome {
   box-sizing: border-box;
+  grid-template-columns: minmax(0, 1fr) minmax(230px, 300px) minmax(0, 1fr);
+  column-gap: 12px;
   height: 34px;
   min-height: 34px;
   padding: 0 142px 0 8px;
@@ -625,6 +627,14 @@ select {
 .gf-titlebar-region .workbench-chrome__left,
 .gf-titlebar-region .workbench-chrome__right {
   gap: 2px;
+}
+
+.gf-titlebar-region .workbench-chrome__left {
+  grid-column: 1;
+}
+
+.gf-titlebar-region .workbench-chrome__right {
+  grid-column: 3;
 }
 
 .gf-titlebar-region .workbench-chrome__center {

@@ -40,10 +40,17 @@ import {
   createTerminalMouseController,
   type TerminalMouseSource,
 } from '../../terminalMouse.js'
+import {
+  localAgentSlashCommands,
+  parseLocalAgentSlashCommand,
+  suggestLocalAgentSlashCommands,
+  type LocalAgentSlashCommandDefinition,
+} from './localAgentCommandRegistry.js'
 
 const MIN_COLUMNS = 80
 const MIN_ROWS = 24
 const MAX_INPUT_LENGTH = 16_000
+const MAX_VISIBLE_SLASH_COMMANDS = 7
 
 export interface LocalAgentConsoleIdentity {
   version: string
@@ -121,6 +128,8 @@ export function LocalAgentConsoleApp({
   const [help, setHelp] = useState(false)
   const [decisionIndex, setDecisionIndex] = useState(0)
   const decisionIndexRef = useRef(0)
+  const [slashCommandIndex, setSlashCommandIndex] = useState(0)
+  const slashCommandIndexRef = useRef(0)
   const [approvalArmed, setApprovalArmed] = useState(false)
   const decisionIdRef = useRef<string | null>(null)
   const lastInterruptRef = useRef(0)
@@ -139,6 +148,16 @@ export function LocalAgentConsoleApp({
     decisionIndexRef.current = nextIndex
     setDecisionIndex(nextIndex)
   }, [decision])
+
+  const slashCommandSuggestions = useMemo(
+    () => decision || busy ? [] : suggestLocalAgentSlashCommands(input),
+    [busy, decision, input],
+  )
+  const slashCommandMenuOpen = slashCommandSuggestions.length > 0
+  useEffect(() => {
+    slashCommandIndexRef.current = 0
+    setSlashCommandIndex(0)
+  }, [input])
 
   const disconnect = useCallback(() => {
     session.close()
@@ -187,55 +206,31 @@ export function LocalAgentConsoleApp({
   }, [approvalArmed, decision, runAction, session])
 
   const executeCommand = useCallback((value: string): boolean => {
-    const [rawCommand, ...parts] = value.trim().split(/\s+/u)
-    const command = rawCommand?.toLowerCase()
-    if (!command?.startsWith('/')) return false
-    const argument = parts.join(' ')
-    if (command === '/help' || command === '/?') setHelp(true)
-    else if (command === '/exit' || command === '/quit') disconnect()
-    else if (command === '/new') beginNewConversation()
-    else if (command === '/plan' || (command === '/mode' && argument === 'plan')) {
-      session.setExecutionMode('plan')
-      setFeedback('下一次运行将使用计划模式。')
-    } else if (command === '/auto' || (command === '/mode' && argument === 'auto')) {
-      session.setExecutionMode('auto')
-      setFeedback('下一次运行将使用自动模式。')
-    } else if (command === '/reasoning') {
-      const enabled = argument !== 'off'
-      session.setReasoning(enabled)
-      setFeedback(`思考过程已${enabled ? '开启' : '关闭'}。`)
-    } else if (command === '/resume') {
-      void runAction(async () => {
-        await session.resume()
-        setFeedback('运行恢复请求已提交。')
-      })
-    } else if (command === '/cancel') {
-      void runAction(async () => {
-        await session.cancel()
-        setFeedback('运行已取消。')
-      })
-    } else if (command === '/model') {
-      setFeedback(`当前模型：${snapshot.provider?.displayName ?? '未连接'} / ${snapshot.model ?? '未配置'}；模型由服务端能力清单约束。`)
-    } else if (command === '/agents') {
-      const agents = snapshot.run?.state.subAgents ?? []
-      setFeedback(agents.length
-        ? `子智能体：${agents.map(agent => `${agent.name}(${agent.status})`).join('、')}`
-        : '当前没有子智能体。')
-    } else if (command === '/tools') {
-      setFeedback(`当前工作区注册了 ${snapshot.bootstrap?.tools.length ?? 0} 个工具；详细调用会显示在对话时间线。`)
-    } else if (command === '/status') {
-      const status = runPresentation(snapshot.run?.status)
-      setFeedback(`${status.symbol} ${status.label} · ${snapshot.connectionMessage}`)
-    } else if (command === '/history') {
-      const threads = snapshot.bootstrap?.threads ?? []
-      setFeedback(threads.length
-        ? `最近对话：${threads.slice(0, 5).map(thread => thread.title).join(' · ')}`
-        : '尚无历史对话。')
-    } else {
-      setFeedback(`未知命令 ${command}；输入 /help 查看可用命令。`)
+    const parsed = parseLocalAgentSlashCommand(value)
+    if (!parsed) return false
+    if (!parsed.definition) {
+      setFeedback(`未知命令 ${parsed.rawCommand}；输入 / 查看可用命令。`)
+      return true
     }
+    parsed.definition.execute({
+      snapshot,
+      session,
+      setFeedback,
+      showHelp: () => setHelp(true),
+      disconnect,
+      beginNewConversation,
+      runAction,
+    }, parsed.argument)
     return true
   }, [beginNewConversation, disconnect, runAction, session, snapshot])
+
+  const completeSlashCommand = useCallback((command: LocalAgentSlashCommandDefinition) => {
+    const completed = `${command.command}${command.expectsArgument ? ' ' : ''}`
+    setEditor({ value: completed, cursorIndex: codePoints(completed).length })
+    setFeedback(command.expectsArgument
+      ? `${command.usage}：请补充参数后按 Enter 执行。`
+      : `${command.command} 已补全；按 Enter 执行。`)
+  }, [])
 
   const submitInput = useCallback(() => {
     const value = input.trim()
@@ -310,8 +305,24 @@ export function LocalAgentConsoleApp({
       return
     }
     if (key.escape) {
+      if (slashCommandMenuOpen) {
+        setEditor({ value: '', cursorIndex: 0 })
+        setFeedback('已关闭斜杠命令提示。')
+        return
+      }
       setApprovalArmed(false)
       setFeedback('已取消当前界面选择；没有执行任何操作。')
+      return
+    }
+    if (slashCommandMenuOpen && (key.upArrow || key.downArrow)) {
+      const length = slashCommandSuggestions.length
+      const nextIndex = (
+        slashCommandIndexRef.current
+        + (key.downArrow ? 1 : -1)
+        + length
+      ) % length
+      slashCommandIndexRef.current = nextIndex
+      setSlashCommandIndex(nextIndex)
       return
     }
     if (decision && (key.upArrow || key.downArrow)) {
@@ -343,7 +354,17 @@ export function LocalAgentConsoleApp({
       setEditor(current => insertText(current.value, current.cursorIndex, '\n', MAX_INPUT_LENGTH))
       return
     }
+    if (slashCommandMenuOpen && key.tab) {
+      const selected = slashCommandSuggestions[slashCommandIndexRef.current]
+      if (selected) completeSlashCommand(selected)
+      return
+    }
     if (key.return) {
+      if (slashCommandMenuOpen && !parseLocalAgentSlashCommand(input)?.definition) {
+        const selected = slashCommandSuggestions[slashCommandIndexRef.current]
+        if (selected) completeSlashCommand(selected)
+        return
+      }
       submitInput()
       return
     }
@@ -404,7 +425,10 @@ export function LocalAgentConsoleApp({
   const compact = columns < 100
   const activity = describeAgentActivity(snapshot, busy)
   const decisionRows = decision ? Math.min(7, 3 + decision.options.length) : 0
-  const contentRows = Math.max(4, rows - (compact ? 8 : 10) - decisionRows)
+  const slashCommandRows = slashCommandMenuOpen
+    ? Math.min(slashCommandSuggestions.length, MAX_VISIBLE_SLASH_COMMANDS) + 2
+    : 0
+  const contentRows = Math.max(4, rows - (compact ? 8 : 10) - decisionRows - slashCommandRows)
   const conversationWidth = wide ? columns - 46 : columns - 4
   const allLines = buildConversationLines(snapshot, conversationWidth - 2)
   const maximumOffset = Math.max(0, allLines.length - contentRows)
@@ -468,6 +492,15 @@ export function LocalAgentConsoleApp({
             setApprovalArmed(false)
           }}
           onSubmit={option => submitDecision(option)}
+        />}
+        {slashCommandMenuOpen && !help && <SlashCommandPanel
+          commands={slashCommandSuggestions}
+          selectedIndex={slashCommandIndex}
+          onSelect={index => {
+            slashCommandIndexRef.current = index
+            setSlashCommandIndex(index)
+          }}
+          onComplete={completeSlashCommand}
         />}
         <AgentComposer
           value={input}
@@ -705,6 +738,70 @@ function AgentComposer({
   )
 }
 
+function SlashCommandPanel({
+  commands,
+  selectedIndex,
+  onSelect,
+  onComplete,
+}: {
+  commands: readonly LocalAgentSlashCommandDefinition[]
+  selectedIndex: number
+  onSelect: (index: number) => void
+  onComplete: (command: LocalAgentSlashCommandDefinition) => void
+}) {
+  const firstVisibleIndex = Math.min(
+    Math.max(0, selectedIndex - MAX_VISIBLE_SLASH_COMMANDS + 1),
+    Math.max(0, commands.length - MAX_VISIBLE_SLASH_COMMANDS),
+  )
+  const visibleCommands = commands.slice(
+    firstVisibleIndex,
+    firstVisibleIndex + MAX_VISIBLE_SLASH_COMMANDS,
+  )
+  return (
+    <Box
+      flexShrink={0}
+      borderStyle="round"
+      borderColor={consolePalette.accent}
+      backgroundColor={consolePalette.panel}
+      paddingX={1}
+      flexDirection="column"
+    >
+      <Box justifyContent="space-between">
+        <Text bold color={consolePalette.accent}>/ 斜杠命令</Text>
+        <Text color={consolePalette.muted}>
+          {commands.length > MAX_VISIBLE_SLASH_COMMANDS ? `${selectedIndex + 1}/${commands.length} · ` : ''}
+          ↑↓ 选择 · Tab/Enter 补全 · Esc 关闭
+        </Text>
+      </Box>
+      {visibleCommands.map((command, visibleIndex) => {
+        const index = firstVisibleIndex + visibleIndex
+        const selected = index === selectedIndex
+        return (
+          <MouseRegion
+            key={command.id}
+            onClick={() => {
+              if (selected) onComplete(command)
+              else onSelect(index)
+            }}
+            priority={35}
+          >
+            {state => <Text
+              bold={selected || state.hovered}
+              color={selected ? consolePalette.canvas : consolePalette.text}
+              {...(selected
+                ? { backgroundColor: consolePalette.accent }
+                : state.hovered ? { backgroundColor: consolePalette.selected } : {})}
+              wrap="truncate-end"
+            >
+              {selected ? '›' : ' '} {command.usage.padEnd(20)} {command.description}
+            </Text>}
+          </MouseRegion>
+        )
+      })}
+    </Box>
+  )
+}
+
 function AgentFooter({
   snapshot,
   feedback,
@@ -786,9 +883,12 @@ function HelpView({ onClose }: { onClose: () => void }) {
       <Text>Enter 发送 · Ctrl+J 换行 · ↑↓ 历史/决策 · PgUp/PgDn 或滚轮浏览</Text>
       <Text>Ctrl+C：运行中取消；有输入时清空；空闲连续两次分离 · Ctrl+D 空输入分离</Text>
       <Text color={consolePalette.warning}>审批：默认焦点优先“拒绝”；批准必须再次确认。</Text>
-      <Text>/new 新对话 · /history 最近对话 · /status 状态 · /model 模型</Text>
-      <Text>/plan 计划模式 · /auto 自动模式 · /reasoning on|off · /resume · /cancel</Text>
-      <Text>/tools 工具摘要 · /agents 子智能体摘要 · /exit 分离</Text>
+      {localAgentSlashCommands.map(command => (
+        <Text key={command.id}>
+          <Text bold color={consolePalette.info}>{command.usage.padEnd(20)}</Text>
+          {command.description}
+        </Text>
+      ))}
       <Text color={consolePalette.muted}>普通字母（包括 q、?、S、R）在输入区只会作为文本，不会触发运维操作。</Text>
       <Text color={consolePalette.muted}>鼠标只捕获点击与滚轮；终端原生文本选择不启用移动追踪。</Text>
     </Box>

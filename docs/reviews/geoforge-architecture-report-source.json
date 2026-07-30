@@ -1,0 +1,1691 @@
+{
+  "title": "GeoForge 架构设计与演进分析报告",
+  "subtitle": "面向技术交流的完整版本｜设计动机、关键链路、权衡与门禁精简建议",
+  "projectName": "GeoForge",
+  "version": "0.1.0",
+  "generatedAt": "2026-07-30T14:00:00+08:00",
+  "sections": [
+    {
+      "title": "项目概述与执行摘要",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "GeoForge 是一个 Windows 优先、中文优先的桌面 GIS Agent 平台。它不是普通地图查看器，也不是给模型套一层聊天界面，而是把地图交互、Agent 编排、科学计算、结构化事实和本机运维组合成一个可恢复、可审计、可继续扩展的工作台。"
+        },
+        {
+          "kind": "paragraph",
+          "data": "本报告的核心判断是：当前总体拆分方向正确。Electron 是低权限驾驶舱，Node Server 是调度中心，Python Worker 是计算实验室，PostgreSQL/PostGIS 是结构化总账，对象存储保存大件内容，Operations Supervisor 负责本机后台服务。真正需要优化的不是删除所有边界，而是把同一规则从多个调用点收回一个权威位置。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "分析范围与方法"
+        },
+        {
+          "kind": "paragraph",
+          "data": "分析基线为提交 64d0dc72。报告依据当前入口代码、协议契约、数据库 schema、ToolProvider、Worker、架构测试和生产部署模板进行静态分析，不把历史评审、已删除的 Web 工作台或旧 Docker 方案当成现行事实。报告解释设计动机和工程取舍，但不替代生产负载测试、故障统计或团队访谈。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "六个容易记住的角色"
+        },
+        {
+          "kind": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "Electron Desktop：驾驶舱，负责地图、图层、对话、工作流和原生交互。",
+              "Node Server：调度中心，负责身份、权限、Thread、Run、Agent、工具和实时控制。",
+              "Python Worker：计算实验室，负责气象、雷达和空间科学计算，不保存会话。",
+              "PostgreSQL/PostGIS：总账本，保存平台结构化事实和空间数据。",
+              "内容寻址对象存储：大件仓库，保存上传文件、Artifact、checkpoint 正文和记忆正文。",
+              "Operations Supervisor：本机运维台，负责 infra、worker、api 的启动、健康、日志和重启。"
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "总体判断"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "维度",
+              "当前判断",
+              "主要理由"
+            ],
+            "rows": [
+              [
+                "职责边界",
+                "清楚",
+                "桌面、编排、计算、数据和运维分别有明确所有者"
+              ],
+              [
+                "数据一致性",
+                "较强",
+                "结构化事实集中在 PostgreSQL，文件只保存内容载荷"
+              ],
+              [
+                "扩展性",
+                "较强",
+                "WS、工具、Worker 和地图渲染均采用注册表"
+              ],
+              [
+                "可恢复性",
+                "较强",
+                "RunState、checkpoint、审批和运行输入都有持久化边界"
+              ],
+              [
+                "开发便利性",
+                "中等",
+                "多进程和多层契约带来接线与理解成本"
+              ],
+              [
+                "复杂度控制",
+                "需要收敛",
+                "AppShell、WorkspaceLayout、desktopIpc 和持久化门面已偏大"
+              ],
+              [
+                "门禁设计",
+                "核心合理、局部重复",
+                "真正拖慢扩展的是重复校验和手写清单，不是事务、权限或路径边界本身"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "技术栈与仓库结构",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "仓库是 npm workspaces 与 Python package 混合的 monorepo。Node 版本由 .node-version 固定为 24.14.0；根版本、Desktop、Server 和主要共享包版本均为 0.1.0。Python 科学计算包要求 Python 3.11 及以上。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "主要技术栈"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "层次",
+              "技术",
+              "版本",
+              "用途"
+            ],
+            "rows": [
+              [
+                "桌面壳",
+                "Electron",
+                "43.2.0",
+                "窗口、本机能力、IPC 与打包"
+              ],
+              [
+                "桌面 UI",
+                "React",
+                "19.2.8",
+                "GIS 工作台和对话交互"
+              ],
+              [
+                "地图",
+                "MapLibre GL",
+                "5.x",
+                "矢量、栅格、DEM 和交互渲染"
+              ],
+              [
+                "前端状态",
+                "Zustand / TanStack Query",
+                "5.x / 5.x",
+                "实时业务投影与 HTTP 查询缓存"
+              ],
+              [
+                "前端构建",
+                "electron-vite / Vite",
+                "5.0 / 7.3",
+                "Main、Preload、Renderer 构建"
+              ],
+              [
+                "Node API",
+                "Hono / ws",
+                "4.x / 8.x",
+                "HTTP 数据面与 WebSocket 控制面"
+              ],
+              [
+                "Agent",
+                "OpenAI Agents SDK",
+                "0.13.5",
+                "单次运行状态机、工具与 RunState"
+              ],
+              [
+                "身份与授权",
+                "Better Auth / Casbin",
+                "1.6 / 5.x",
+                "身份、会话、RBAC 和资源归属"
+              ],
+              [
+                "数据库",
+                "PostgreSQL/PostGIS / Drizzle",
+                "本机原生 / 0.45",
+                "结构化事实、空间数据和事务"
+              ],
+              [
+                "科学计算",
+                "FastAPI / Pydantic / NumPy / xarray / Rasterio",
+                "Python 3.11+",
+                "气象、雷达、栅格和报告"
+              ],
+              [
+                "本机运维",
+                "TypeScript Supervisor",
+                "0.1.0",
+                "服务拓扑、健康、日志、指标和重启"
+              ],
+              [
+                "测试",
+                "Vitest / pytest / Playwright Electron",
+                "仓库锁定",
+                "单元、架构、安全、科学链路和桌面 E2E"
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "仓库结构"
+        },
+        {
+          "kind": "directory_tree",
+          "data": "apps/\n  desktop/                 Electron Main、Preload、Renderer 与 IPC\n  server/                  Node API、WS、Agent、工具、权限和存储\n  worker/                  FastAPI 科学计算边界\npackages/\n  shared-types/            跨进程 Zod/TypeScript 契约\n  conversation-presentation/  Desktop 与 CLI 共用对话投影\n  operations-supervisor/   本机服务监督、日志和 IPC\n  gis-meteorology/         气象与 GIS 领域算法\ninfra/\n  migrations/              PostgreSQL/PostGIS 基线和迁移\n  seeds/                   地图种子\ndeploy/                    WinSW、systemd 与 runtime manifest\nscripts/                   开发、打包、安装与验证脚本\ntests/                     Electron E2E 与跨应用测试\ndocs/                      当前架构、运维、标准和历史评审"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "构建依赖"
+        },
+        {
+          "kind": "code_block",
+          "data": {
+            "language": "text",
+            "code": "shared-types\n  → conversation-presentation\n  → operations-supervisor\n  → server\n  → desktop"
+          }
+        },
+        {
+          "kind": "paragraph",
+          "data": "这里最重要的产品边界是：apps/desktop 是现行前端，生产运行依赖 Electron Forge、WinSW/systemd 和原生 Supervisor；旧 apps/web 与 Docker Compose 不属于当前产品形态。"
+        }
+      ]
+    },
+    {
+      "title": "总体架构与责任分层",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "GeoForge 按能力责任分层，而不是简单按“前端、后端、数据库”分三层。这样做是因为 Agent 运行、科学计算和本机运维都有独立生命周期，不能被压缩成普通 CRUD。"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "能力平面",
+              "负责回答的问题",
+              "主要实现"
+            ],
+            "rows": [
+              [
+                "体验平面",
+                "用户看见什么、怎样发出意图",
+                "Electron Desktop、本机 Agent CLI"
+              ],
+              [
+                "治理平面",
+                "谁可以做什么",
+                "Better Auth、Casbin、审批、审计、限流"
+              ],
+              [
+                "编排平面",
+                "任务怎样推进和恢复",
+                "Session、Thread、Run、Workflow、Automation"
+              ],
+              [
+                "执行平面",
+                "模型与工具怎样完成工作",
+                "Agents SDK、ToolProvider、Python Worker"
+              ],
+              [
+                "数据平面",
+                "哪些事实和内容需要保存",
+                "PostgreSQL/PostGIS、对象存储、地图与外部数据源"
+              ],
+              [
+                "运维平面",
+                "本机服务是否真实运行",
+                "Operations Supervisor、日志、指标和健康检查"
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "主要依赖方向"
+        },
+        {
+          "kind": "code_block",
+          "data": {
+            "language": "text",
+            "code": "用户\n  → Electron Renderer（表达意图）\n  → Preload / Main（受控本机能力与网络）\n  → Node HTTP / WebSocket（应用服务与编排）\n  → ToolProvider / Python Worker（执行）\n  → PostgreSQL / 对象存储（事实与内容）\n\nSupervisor → infra → worker → api\nSupervisor 不参与 Agent 的业务判断"
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "为什么不做成一个大进程"
+        },
+        {
+          "kind": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "React 页面依赖多、变化快，不适合持有数据库凭据、Cookie 和本机文件权限。",
+              "Python 科学库成熟，但不适合重复实现平台会话、审批、RBAC 和 WebSocket 状态。",
+              "数据库和后台服务需要独立于窗口生命周期运行，关闭 Electron 不应等于停止所有服务。",
+              "地图渲染状态、Agent 运行状态和结构化事实更新频率不同，需要不同的事实源和缓存策略。",
+              "新增工具或地图 source 应通过注册接入，不能持续扩大中央 switch。"
+            ]
+          }
+        },
+        {
+          "kind": "paragraph",
+          "data": "多进程设计的代价是接线、协议和调试成本更高。因此后续优化重点应是减少重复契约和宽接口，而不是把所有职责重新合并。"
+        }
+      ]
+    },
+    {
+      "title": "Electron 桌面工作台架构",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "GeoForge Desktop 不是把网页直接套入 Electron。Main 被设计为本机能力代理，Renderer 只是低权限驾驶舱。它可以表达“上传、分析、导出、打开工作区”等业务意图，但不能任意读取文件、提取凭据或访问系统网络。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "Main、Preload、Renderer 分工"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "层次",
+              "拥有的能力",
+              "不应承担的职责"
+            ],
+            "rows": [
+              [
+                "Main",
+                "Cookie、CSRF、HTTP/WS、文件、导出、日志、窗口、Supervisor",
+                "React 业务展示和地图组件状态"
+              ],
+              [
+                "Preload",
+                "固定 IPC 能力、输入输出校验、事件解码",
+                "任意通道、任意 URL、任意文件路径"
+              ],
+              [
+                "Renderer",
+                "React、MapLibre、Zustand、Query、表单和临时交互",
+                "认证凭据、真实 API 地址、本机绝对路径、生产网络连接"
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "组件树"
+        },
+        {
+          "kind": "directory_tree",
+          "data": "DesktopApplicationRuntime\n  DesktopBackendMonitor\n    AppLoader\n      AppQueryProvider\n        AppShell\n          WorkspaceRouteHost\n            WorkspaceLayout\n              TopBar / Ribbon / Command Search\n              Contents Dock\n                Layer Manager / Thread History\n              Document Workspace\n                Map / Tools / Workflow / Results\n                Account / Security / Diagnostics\n              Assistant Dock\n                Conversation Panel\n              Status Bar"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "桌面数据流"
+        },
+        {
+          "kind": "code_block",
+          "data": {
+            "language": "text",
+            "code": "React Feature\n  → requestJson / requestControl\n  → window.geoforgeDesktop\n  → Preload schema\n  → IPC\n  → Main Gateway\n  → Cookie / CSRF / Origin\n  → Node API 或 /ws\n  → Main 限制响应体并校验\n  → Preload 再校验\n  → Renderer 业务 schema\n  → Store / Query / Component"
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "状态事实源"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "状态",
+              "所有者",
+              "原因"
+            ],
+            "rows": [
+              [
+                "身份与权限投影",
+                "authStore",
+                "Renderer 只需要展示用投影"
+              ],
+              [
+                "工作区导航",
+                "workspaceStore",
+                "跨面板但只属于桌面体验"
+              ],
+              [
+                "Session / Thread",
+                "sessionStore",
+                "统一 canonical transcript 与历史游标"
+              ],
+              [
+                "当前 Run",
+                "useRunState reducer",
+                "高频 WS item、event 与 snapshot"
+              ],
+              [
+                "Artifact / Layer / Upload / Basemap",
+                "各领域 Zustand store",
+                "避免一个大 Store 引发无关重渲染"
+              ],
+              [
+                "MapScene 等可重取数据",
+                "TanStack Query",
+                "服务端为事实源，可失效后重新获取"
+              ],
+              [
+                "搜索、拖拽、Ribbon tab",
+                "React local state",
+                "短生命周期交互不应进入平台事实"
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "关键本机边界"
+        },
+        {
+          "kind": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "窗口使用 nodeIntegration=false、contextIsolation=true、sandbox=true、webSecurity=true。",
+              "文件选择返回限时、一次性、绑定窗口的 UUID 句柄，不把绝对路径交给 Renderer。",
+              "文件上传前 Main 再检查 realpath、符号链接、文件指纹、所有者和过期时间。",
+              "认证材料由 Main 和 safeStorage 管理，Renderer 只收到身份、角色和权限投影。",
+              "导出由 Main 基于服务端事实和当前地图生成 PNG、PDF、Artifact 与 ZIP，不直接打印整个 DOM。"
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "当前复杂度压力"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "模块",
+              "现状",
+              "建议"
+            ],
+            "rows": [
+              [
+                "AppShell.tsx",
+                "约 1,073 行，连接 Run、Thread、Provider、资源、地图、工具与导出",
+                "按 Conversation、Map、Tooling、Export 拆真实组合模块"
+              ],
+              [
+                "WorkspaceLayout.tsx",
+                "约 932 行，同时管理 Ribbon、Dock、文档、搜索、菜单、快捷键和状态栏",
+                "拆 WorkbenchRibbon、DockLayout、DocumentHost、CommandController、StatusBar"
+              ],
+              [
+                "desktopIpc.ts",
+                "约 770 行，schema、通道、路由白名单和路径解析集中",
+                "用声明式 Desktop Operation Registry 保留白名单但只登记一次"
+              ],
+              [
+                "AppShell.css",
+                "约 4,890 行，新旧样式并存",
+                "按页面迁移并删除已被拆分 CSS 覆盖的规则"
+              ],
+              [
+                "toolingController.ts",
+                "手工维护多组查询状态和五秒轮询",
+                "迁入 TanStack Query，按文档激活进行 refetch"
+              ],
+              [
+                "MapCanvas.tsx",
+                "地图生命周期、Popup、Hover、测量、terrain、状态投影集中",
+                "拆成独立交互 hooks，保留 MapScene 和渲染注册表边界"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "Node 服务端与通信架构",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "Node Server 不只是 API 层，而是整个平台的调度中心。它装配数据库、认证、地图、模型、工具、Agent Runtime、自动化和队列，再通过 HTTP 与 WebSocket 向客户端提供两种不同的通信语义。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "启动顺序"
+        },
+        {
+          "kind": "code_block",
+          "data": {
+            "language": "text",
+            "code": "加载 .env 与本地 tracing\n  → 创建数据库、PostGIS、模型和默认配置\n  → 获取 PostgreSQL 单写 advisory lock\n  → 建表与初始化 PlatformPersistenceFacade\n  → 可选地图种子\n  → 注册 ToolProvider\n  → 校验 Node 与 Python Worker 契约\n  → 初始化 Automation、Job Queue 与 Schedule\n  → 创建 Hono 路由和 WebSocket handler\n  → 安装统一生命周期管理器\n  → 最后开始监听端口"
+          }
+        },
+        {
+          "kind": "paragraph",
+          "data": "先初始化再监听属于应保留的启动门禁。它防止客户端进入“端口已经打开，但数据库、工具或调度器仍不可用”的半启动状态。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "HTTP 与 WebSocket 分工"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "协议",
+              "典型能力",
+              "选择理由"
+            ],
+            "rows": [
+              [
+                "HTTP",
+                "认证、上传、下载、地图瓦片、分页查询、健康和指标",
+                "天然支持 multipart、缓存、内容类型和一次性请求"
+              ],
+              [
+                "WebSocket",
+                "Run、订阅、审批、引导、实时状态、Thread 和 MapScene 更新",
+                "持续双向、低延迟，不需要轮询"
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "HTTP 接入链"
+        },
+        {
+          "kind": "list",
+          "data": {
+            "ordered": true,
+            "items": [
+              "退役分享路径固定 404，避免旧产品边界被误认为仍可用。",
+              "可信 Origin CORS。",
+              "trace ID、结构化请求日志和指标。",
+              "关闭状态拦截。",
+              "Better Auth 与认证限流。",
+              "/api/v1 通用限流、会话认证和写操作 CSRF。",
+              "路由级工作区与资源授权。",
+              "统一错误模型和 404。"
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "WebSocket 控制面"
+        },
+        {
+          "kind": "paragraph",
+          "data": "共享协议当前约有 74 个控制命令，覆盖工作区、会话、Thread、上下文、记忆、Run、审批、工具、模型、文件、地图、用量、语音、Automation 和后台任务。每条命令通过注册表绑定 payload schema、认证属性、授权策略和 handler，启动时拒绝没有授权策略的命令。"
+        },
+        {
+          "kind": "code_block",
+          "data": {
+            "language": "text",
+            "code": "/ws upgrade\n  → Origin\n  → Better Auth 或 loopback 本机 Agent\n  → 严格消息 envelope\n  → 连接与命令限流\n  → Command Registry\n  → CSRF\n  → Zod payload\n  → 活跃会话与 RBAC / 资源归属\n  → Handler\n  → 统一 response envelope / push event"
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "当前需要修正的生命周期问题"
+        },
+        {
+          "kind": "paragraph",
+          "data": "当前关闭流程先等待 container.shutdown() 排空任务，之后才关闭 WebSocket。HTTP 会因 isShuttingDown 返回 503，但已有 WS 连接在排空窗口内理论上仍可创建新 Run。建议在关闭开始时同时拒绝新 WS 命令或先关闭连接，再排空已接受任务。这属于真实运行竞争窗口，应优先修复。"
+        }
+      ]
+    },
+    {
+      "title": "Agent Runtime 与模型集成",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "GeoForge 把模型判断与平台事实分开。OpenAI Agents SDK Runner 负责单次运行内部的模型循环、工具、多轮、审批中断、handoff 和流；GeoForge Runtime 负责 Thread、Run、权限、工具策略、Artifact、valueRef、持久化、恢复和 UI 投影。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "一次 Run 的关键链路"
+        },
+        {
+          "kind": "code_block",
+          "data": {
+            "language": "text",
+            "code": "run:start\n  → 检查模型与工作区用量\n  → 创建或选择 Thread\n  → 保存 RuntimeConfig 快照\n  → 创建 Run\n  → RunTaskManager 后台执行\n  → OpenAIAgentsRuntime.run\n      → 写用户 transcript 与 ConversationItem\n      → 装配模型、上下文、工具、子 Agent、Sandbox、MCP\n      → Runner 流式执行\n      → Tool prepare / policy / run / persist\n      → checkpoint\n      → 审批、澄清或最终交付\n      → 完成 Run 并可选提取长期记忆"
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "Runner 与平台的分工"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "对象",
+              "主要职责",
+              "为什么不重复"
+            ],
+            "rows": [
+              [
+                "Agents SDK Runner",
+                "单次模型循环、工具调用、handoff、stream、RunState",
+                "采用成熟状态机，避免自研隐式循环"
+              ],
+              [
+                "GeoForge Runtime",
+                "平台 Run、Thread、权限、工具策略、恢复、审计和投影",
+                "这些是平台事实，不应交给模型供应商会话"
+              ],
+              [
+                "RuntimeTranscriptProjector",
+                "将 SDK 事件集中投影为 Transcript、ConversationItem 和 RunEvent",
+                "避免 Desktop 与 CLI 各自解析 SDK 原始事件"
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "Checkpoint、审批与恢复"
+        },
+        {
+          "kind": "paragraph",
+          "data": "SDK RunState 正文进入内容寻址对象存储，PostgreSQL 保存 hash、SDK 版本、schema 版本和 RuntimeConfig 摘要。恢复时这些条件必须一致；存在状态未知的 pending tool call 时禁止自动重放。审批也不是前端弹窗状态，而是保存 checkpoint、interruption、callId、turnId、参数和 consumed 标记后，恢复同一 RunState 再 approve 或 reject。"
+        },
+        {
+          "kind": "paragraph",
+          "data": "这部分复杂度属于必要复杂度。它解决的是“操作究竟执行过没有”，不能通过删除状态门禁来换取代码简短。可以优化的是重复策略判断和宽依赖，而不是取消 checkpoint 兼容性或副作用审批。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "运行中引导与上下文"
+        },
+        {
+          "kind": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "Steering 输入写入 run_inputs，使用 steeringId 保证幂等，在下一次模型输入过滤前原子消费。",
+              "上下文由系统提示词、线程记忆、用户固定记忆、活动 transcript 和相关资源索引组成。",
+              "压缩只追加摘要和边界，不删除原始 transcript；摘要是派生信息，不是事实源。",
+              "Desktop 与本机 CLI 共用 conversation-presentation，只保留 DOM 与终端两个最终渲染器。"
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "模型适配现状"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "Provider",
+              "当前能力",
+              "报告中的准确表述"
+            ],
+            "rows": [
+              [
+                "DeepSeek",
+                "完整 Agent Model、工具、结构化输出、MCP、handoff",
+                "当前 Supervisor 运行的主要完整 Provider"
+              ],
+              [
+                "Anthropic",
+                "基础 chat / 辅助调用",
+                "已接入适配边界，尚未补齐完整 Agent 传输"
+              ],
+              [
+                "Gemini",
+                "基础 chat / 辅助调用",
+                "不能与 DeepSeek 无差别替换"
+              ],
+              [
+                "Ollama",
+                "本地基础 chat",
+                "适合作为辅助模型，不代表完整 Agent 能力"
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "paragraph",
+          "data": "DeepSeek 自定义 Chat Completions Model 集中处理 reasoning_content、流式工具参数、结构化输出、有限重试、词元用量与缓存诊断。该适配器复杂度较高，后续可按 request mapper、stream accumulator、structured output policy 和 usage observer 拆分。"
+        }
+      ]
+    },
+    {
+      "title": "数据架构与唯一事实源",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "数据架构采用“总账本 + 大件仓库”模式。PostgreSQL/PostGIS 保存可查询、可关联、需要事务的结构化事实；SHA256 对象存储保存 NetCDF、GeoTIFF、PNG、DOCX、上传内容、SDK state 和记忆正文。数据库保存内容引用与生命周期。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "主要结构化资源"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "资源组",
+              "代表性表",
+              "用途"
+            ],
+            "rows": [
+              [
+                "身份认证",
+                "auth_user、auth_session、auth_account",
+                "Better Auth 身份与会话"
+              ],
+              [
+                "平台治理",
+                "platform_users、workspaces、memberships、rbac_policies、audit_events",
+                "工作区、角色、策略和审计"
+              ],
+              [
+                "会话运行",
+                "platform_sessions、threads、runs",
+                "Session、Thread、Run 生命周期"
+              ],
+              [
+                "对话与恢复",
+                "conversation_entries、run_records、run_inputs、event_outbox",
+                "Transcript、运行记录、引导和事件"
+              ],
+              [
+                "记忆与压缩",
+                "thread_memory_versions、thread_compactions",
+                "记忆正文引用和上下文压缩"
+              ],
+              [
+                "Artifact",
+                "platform_artifacts",
+                "元数据、归属、展示与文件引用"
+              ],
+              [
+                "地图空间",
+                "map_layers、map_scenes、scene_layers、layer_features",
+                "图层、场景、顺序和 PostGIS 几何"
+              ],
+              [
+                "气象",
+                "meteorological_datasets、meteorological_jobs",
+                "数据集与处理任务"
+              ],
+              [
+                "配置与工具",
+                "runtime_config、tool_catalog_entries",
+                "运行配置和工具目录"
+              ],
+              [
+                "自动化",
+                "automation_definitions、versions、scheduled_tasks、automation_runs",
+                "定义、版本、调度和执行"
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "paragraph",
+          "data": "当前 Drizzle schema 共约 32 个表，迁移从 001 基线延伸到 006 原生 Agent Runtime。按资源拆分的 Repository 负责 Session、Thread、Transcript、Run、Artifact、地图、气象和 Automation，不让一个 Store 同时决定所有资源规则。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "事实源分配"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "内容",
+              "权威位置",
+              "说明"
+            ],
+            "rows": [
+              [
+                "Session / Thread / Run / Transcript",
+                "PostgreSQL",
+                "禁止再写第二套 JSON/JSONL 在线事实"
+              ],
+              [
+                "Artifact 元数据与归属",
+                "PostgreSQL",
+                "文件系统只保存内容"
+              ],
+              [
+                "SDK checkpoint 元数据",
+                "platform_runs",
+                "hash、SDK 版本、schema 和配置摘要"
+              ],
+              [
+                "SDK state 与记忆正文",
+                "SHA256 对象存储",
+                "数据库保存引用"
+              ],
+              [
+                "上传与 Artifact 二进制",
+                "对象存储或受控 Artifact 路径",
+                "大对象不进入关系表"
+              ],
+              [
+                "ConversationProjectionIndex",
+                "内存投影",
+                "从 PostgreSQL 重建，不独立落盘"
+              ],
+              [
+                "Renderer 实时状态",
+                "Zustand",
+                "桌面投影，不反向成为平台事实"
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "事务和并发"
+        },
+        {
+          "kind": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "创建、删除、恢复和清理 Thread 与 Session 指针在事务内更新。",
+              "追加 Transcript 时锁定 Thread、分配严格递增 sequence、更新 active leaf 并写 event outbox。",
+              "Run input 入队与消费、Artifact 发布、MapScene 顺序、Automation 版本和 Thread memory 均有明确事务。",
+              "RunMutationQueue 保证同一 Run 的进程内写入顺序。",
+              "PostgreSQL session advisory lock 保护单 API 写实例，崩溃后由数据库自动释放，不依赖残留 lock 文件。"
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "对象存储"
+        },
+        {
+          "kind": "paragraph",
+          "data": "对象路径为 objects/sha256/<前两位>/<完整 hash>。写入使用排他创建避免覆盖，读取时重新计算 hash，内容损坏会明确失败。GC 合并 PostgreSQL 引用与合法附件/诊断引用，只有无引用对象才删除。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "已知例外"
+        },
+        {
+          "kind": "paragraph",
+          "data": "RuntimeFileStore 的通用上传目录仍用本地 metadata.json 维护文件列表，正文进入对象存储。对当前本机单实例部署可以接受，但若未来进入多节点，该文件目录元数据应迁入 PostgreSQL。"
+        }
+      ]
+    },
+    {
+      "title": "Python Worker 与科学计算",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "Python Worker 被设计为无状态科学计算边界。它不保存 Session、Thread 或 Run，只接收经过签名与 schema 校验的参数，在受控运行目录内读取文件并返回结果。这样 Worker 重启不会改变平台事实。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "Worker 装配"
+        },
+        {
+          "kind": "code_block",
+          "data": {
+            "language": "text",
+            "code": "sidecar.py\n  → WorkerSettings\n  → create_worker_app()\n      ├─ WorkerToolRegistry\n      ├─ register_builtin_tools()\n      ├─ WorkerPathSandbox\n      ├─ WorkerAuthVerifier\n      ├─ WorkerSecurityMiddleware\n      ├─ /health 与 /tools/catalog\n      └─ /tools/{tool_name}"
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "内部服务边界"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "机制",
+              "当前实现",
+              "设计目的"
+            ],
+            "rows": [
+              [
+                "请求体限制",
+                "默认 16 MiB",
+                "在框架解析前阻止无界内存占用"
+              ],
+              [
+                "并发限制",
+                "默认 2 个",
+                "保护 CPU、内存和科学库稳定性"
+              ],
+              [
+                "工具超时",
+                "默认 300 秒",
+                "防止单任务永久占用 Worker"
+              ],
+              [
+                "HMAC + bodyHash",
+                "签名绑定工具名与完整正文",
+                "防篡改、不能跨工具复用"
+              ],
+              [
+                "nonce",
+                "默认最多 10,000 条",
+                "阻止短期签名重放"
+              ],
+              [
+                "路径沙箱",
+                "仅允许 RUNTIME_ROOT 内相对路径",
+                "拒绝绝对路径、..、空字节和越界输出"
+              ],
+              [
+                "Pydantic catalog",
+                "request/response model_json_schema",
+                "Python 模型成为 Worker schema 事实源"
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "paragraph",
+          "data": "这里不需要公网式 CORS、Cookie 或用户级 RBAC，因为 Worker 只接受 Node 内部调用。它需要的是短期签名、资源上限、路径约束和可验证契约。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "领域包职责"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "模块",
+              "职责",
+              "当前判断"
+            ],
+            "rows": [
+              [
+                "readers.py",
+                "Xarray、Rasterio 与统一 GridQuery/GridSlice",
+                "应继续作为数据读取唯一公共入口"
+              ],
+              [
+                "service.py",
+                "inspect、render、stats、threshold、contour、report",
+                "仍残留第二套读取与缺失值函数，需要收敛"
+              ],
+              [
+                "nowcast.py",
+                "短临序列、降水分析、移动诊断和文本草稿",
+                "已经依赖 Reader facade"
+              ],
+              [
+                "radar.py",
+                "BZ2 雷达解析与极坐标网格",
+                "部分重依赖仍在顶层导入"
+              ],
+              [
+                "report.py",
+                "生成 DOCX",
+                "只消费已验证事实，不调用模型补造结论"
+              ],
+              [
+                "third_party/",
+                "平台 adapter 与第三方来源分离",
+                "来源保留清楚，但仍需统一惰性导入"
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "19 个 Worker 工具"
+        },
+        {
+          "kind": "paragraph",
+          "data": "工具覆盖气象检查、渲染、统计、阈值、等值线、报告、短临序列、降水分析、问题回答、预报文本、雷达站集合、拼图策略、雷达拼图、参考比较、风险图和面雨量表。工具数量由 Worker registry 测试固定为 19。"
+        },
+        {
+          "kind": "paragraph",
+          "data": "最有价值的复杂度削减是删除 service.py 与 readers.py 的重复读取路径，而不是删除 HMAC、路径沙箱或双端 schema。"
+        }
+      ]
+    },
+    {
+      "title": "工具系统、Automation 与 valueRef",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "工具系统采用 ToolProvider manifest、注册表和显式启用列表。安装到源码不等于启用；未知 Provider 或依赖缺失会进入 unavailable 状态并展示原因。新增能力应新增独立实现并注册，而不是修改中央工具 switch。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "Provider 与工具清单"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "Provider",
+              "平台工具数",
+              "主要能力"
+            ],
+            "rows": [
+              [
+                "automation-execution",
+                "4",
+                "列出、执行 Automation，读取运行"
+              ],
+              [
+                "chart",
+                "1",
+                "生成规范化图表描述"
+              ],
+              [
+                "geocode",
+                "1",
+                "地点编码"
+              ],
+              [
+                "media",
+                "1",
+                "文本转语音"
+              ],
+              [
+                "meteorology",
+                "23",
+                "气象目录、雷达、普通分析、短临、报告与风险产品"
+              ],
+              [
+                "plan",
+                "4",
+                "澄清、计划、工作流提交与修订"
+              ],
+              [
+                "public-weather",
+                "1",
+                "公共天气查询"
+              ],
+              [
+                "routing",
+                "1",
+                "路线规划"
+              ],
+              [
+                "scheduled-wake-up",
+                "1",
+                "计划唤醒"
+              ],
+              [
+                "spatial",
+                "5",
+                "图层、查询、空间分析、导出与创建"
+              ],
+              [
+                "memory",
+                "5",
+                "列出、读取、搜索、写入和遗忘记忆"
+              ],
+              [
+                "developer-tools",
+                "6",
+                "受控读写、编辑、glob、grep 和 todo"
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "paragraph",
+          "data": "源码共声明 12 个 Provider、53 个平台工具；实际运行数量由 ENABLED_TOOL_PROVIDERS 和环境依赖决定，不能把 53 个全部表述为默认已启用。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "跨语言契约"
+        },
+        {
+          "kind": "list",
+          "data": {
+            "ordered": true,
+            "items": [
+              "Server 使用 HMAC 请求 /tools/catalog。",
+              "共享 schema 校验 catalog 与数量。",
+              "重算每个 contract SHA256。",
+              "检查 19 个必需 Worker 工具。",
+              "检查每个 Worker 工具存在对应平台 ToolDef。",
+              "任一不一致阻止 API 启动。"
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "工具执行链"
+        },
+        {
+          "kind": "code_block",
+          "data": {
+            "language": "text",
+            "code": "Agents SDK tool call\n  → prepare：写 tool_call 与 pending 状态\n  → policy：plan / workflow / approval / surface\n  → registry.execute：Zod 参数与 ToolResult\n  → Worker-backed：catalog → HMAC → Pydantic request/response\n  → persistToolExecutionResult\n      → Run state\n      → ToolValue\n      → Artifact\n      → transcript / item / ledger\n  → completed 或真实失败"
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "valueRef"
+        },
+        {
+          "kind": "paragraph",
+          "data": "valueRef 是工具之间传递大型或结构化结果的受控句柄。模型不需要复制 GeoJSON、数据集元数据、雷达序列或分析结果，后续工具只传 refId；未知引用和错误 kind 直接失败。这样既节省上下文，也能证明下游输入来自平台已经验证的上游结果。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "当前改进点"
+        },
+        {
+          "kind": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "把 ToolExecutionCoordinator 的计划、审批、工作流和执行面判断抽为纯 ToolExecutionPolicy，减少 handler 重复策略。",
+              "由 Node ToolDef 的 workerToolName 元数据生成必需 Worker 工具清单，删除手写的第二份名称列表。",
+              "保留 Node 出站 schema 与 Worker 入站 Pydantic；要删的是重复手写 schema，不是任一侧边界校验。",
+              "审批只绑定真实副作用或 requiresApproval；只读查询和统计不应统一进入人工审批。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "地图、图层与 Artifact 架构",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "地图架构把业务事实与渲染对象分开。服务端 MapScene 保存图层顺序、显隐、透明度、样式和版本；MapLibre source/layer 只是 Renderer 内的渲染投影，不能反向成为地图事实源。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "MapScene 到 MapLibre"
+        },
+        {
+          "kind": "code_block",
+          "data": {
+            "language": "text",
+            "code": "Server MapScene\n  → TanStack Query\n  → MapSceneCommandService\n  → MapSceneMutationCoordinator\n      → 乐观显示\n      → 高频编辑合并\n      → 串行提交\n      → expectedVersion\n      → 失败后重新读取\n  → MapCanvasLayerSync\n  → MapLayerRendererRegistry\n  → MapLibre source / layer"
+          }
+        },
+        {
+          "kind": "paragraph",
+          "data": "这一链路支持快速拖动图层时只提交最终目标，也防止版本冲突被静默覆盖。新增 source 或 style 时只需新增 renderer 并注册，不必修改同步器中的大型条件分支。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "地图服务"
+        },
+        {
+          "kind": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "PostGIS 矢量瓦片由 Node 调用固定 MVT 函数生成。",
+              "GeoTIFF 栅格瓦片由 TypeScript 使用 GeoTIFF.js 与 sharp 渲染。",
+              "不再运行独立地图服务，减少额外进程、认证边界和运维成本。",
+              "底图、TileJSON、瓦片、要素与下载使用可缓存 HTTP GET。"
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "Artifact"
+        },
+        {
+          "kind": "paragraph",
+          "data": "Artifact 元数据、归属、展示契约和 Thread 导航投影在 PostgreSQL 原子发布，文件系统保存内容。Desktop 与 CLI 只展示当前用户和 Run 可见的 Artifact；终端交付策略还会检查最终回答提到的 Artifact 是否真实可见，避免模型声称生成了不存在的文件。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "桌面导出"
+        },
+        {
+          "kind": "paragraph",
+          "data": "Desktop Export Service 从 Server 获取权威会话和 MapScene，截取地图区域，生成 PDF/PNG，下载所选 Artifact，并创建带 manifest 的 ZIP。任何步骤失败会清除本次已经创建的文件，并写入导出审计。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "设计意义"
+        },
+        {
+          "kind": "paragraph",
+          "data": "地图不是 UI 装饰，而是可恢复业务状态；Artifact 也不是聊天附件，而是带归属、生命周期和展示契约的平台资源。把两者留在服务端事实源中，才能让桌面、CLI、导出和后续工具看到同一结果。"
+        }
+      ]
+    },
+    {
+      "title": "本机运维、部署与可观测性",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "GeoForge 采用本机原生服务拓扑。Supervisor 只管理 infra、worker、api 三个固定后台服务；Electron 是用户应用，不进入后台状态机。窗口关闭不会停止后台服务，只有显式 shutdown 才按反向依赖顺序关闭。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "服务拓扑"
+        },
+        {
+          "kind": "code_block",
+          "data": {
+            "language": "text",
+            "code": "infra：原生 PostgreSQL/PostGIS\n  ↓\nworker：Python 科学计算\n  ↓\napi：Node HTTP + WebSocket + Agent Runtime\n\nElectron Desktop：独立交互应用，通过 Main 连接 API 与 Supervisor"
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "Supervisor 负责什么"
+        },
+        {
+          "kind": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "固定服务目录、启动依赖、反向停止和重启预算。",
+              "真实进程句柄、完整进程树 CPU/内存、端口冲突和健康探针。",
+              "Windows named pipe 或 Linux Unix socket 的令牌认证 JSONL IPC。",
+              "写操作 operationId 去重与串行执行，连接中断后不自动重放。",
+              "日志脱敏、10,000 行/8 MiB 内存预算、结构化 JSONL、轮转与保留。",
+              "数据库或 API 不可用时，桌面仍可查看本机系统日志。"
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "开发与生产"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "场景",
+              "入口",
+              "特点"
+            ],
+            "rows": [
+              [
+                "Windows 日常开发",
+                "GeoForge.ps1 / dev.ps1 desktop",
+                "选择 Node 24、启动 Supervisor、立即进入桌面"
+              ],
+              [
+                "命令行运维",
+                "dev.ps1 / dev.sh",
+                "start、stop、restart、status、logs、console、agent"
+              ],
+              [
+                "Windows 生产",
+                "WinSW + Supervisor + Squirrel",
+                "固定版本服务目录、签名安装器和受保护 manifest"
+              ],
+              [
+                "Linux 生产",
+                "systemd + Supervisor",
+                "专用账户、runtime 目录、token 文件和 KillMode=control-group"
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "Runtime manifest"
+        },
+        {
+          "kind": "paragraph",
+          "data": "生产 Desktop 读取 schemaVersion=1 的受保护 runtime manifest，固定 projectRoot、runtimeRoot、loopback apiBaseUrl、supervisorTokenFile 和允许的环境覆盖列表。相对路径、网络路径、未知字段、未知版本和未授权环境覆盖会阻止启动。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "发布真实性"
+        },
+        {
+          "kind": "paragraph",
+          "data": "未配置证书时只生成带 UNSIGNED-TEST-BUILD 标记的测试包；生产 make:release 必须有 PFX、密码和安全时间戳，并验证应用 EXE 与安装器签名。这体现了“硬失败优先于假发布”。"
+        },
+        {
+          "kind": "paragraph",
+          "data": "当前仓库没有有效 Docker Compose 或 Web 反向代理配置，不能描述成 Docker/Web 部署。现行目标是 Windows/Linux 宿主机原生进程。"
+        }
+      ]
+    },
+    {
+      "title": "测试策略与质量证据",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "GeoForge 的测试不只检查函数返回值，还用架构测试证明边界没有回流。测试文件数量只能反映覆盖面，不能等同于当前全部通过；本报告生成阶段重点核对测试结构，没有把未重跑的全量套件描述成绿色。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "测试分层"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "层次",
+              "框架",
+              "位置",
+              "基线文件数",
+              "主要证明"
+            ],
+            "rows": [
+              [
+                "Server",
+                "Vitest",
+                "apps/server/src",
+                "约 93",
+                "运行时、存储、WS、权限、工具、地图与架构"
+              ],
+              [
+                "Desktop",
+                "Vitest",
+                "apps/desktop/src",
+                "约 86",
+                "Main、IPC、Renderer、Store、布局与地图"
+              ],
+              [
+                "Supervisor",
+                "Vitest",
+                "packages/operations-supervisor/src",
+                "约 11",
+                "进程代际、端口冲突、日志、IPC 和环境"
+              ],
+              [
+                "Conversation projection",
+                "Vitest",
+                "packages/conversation-presentation/src",
+                "1",
+                "Desktop 与 CLI 共用展示语义"
+              ],
+              [
+                "Worker / 科学链",
+                "pytest",
+                "apps/worker/tests、tests",
+                "约 8",
+                "HMAC、catalog、科学链路和报告"
+              ],
+              [
+                "真实桌面",
+                "Playwright Electron",
+                "tests/e2e",
+                "1 个大型规格",
+                "真实窗口、MapLibre、缩放、拖动、折叠与多工作区"
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "架构守卫"
+        },
+        {
+          "kind": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "Server architecture.test.ts 检查唯一事实源、资源 Repository、WS registry、工具注册、Runner、Worker 薄层和旧路径退役。",
+              "Desktop architecture.test.ts 禁止 Renderer 直接持有 HTTP/WS、认证凭据、DOM File 和本机路径，并检查 Zustand 与地图注册表边界。",
+              "Worker scan_security.py 检查危险 pickle、全局 warnings、os.chdir、非注册表分发和路径模式。",
+              "Supervisor 测试覆盖旧进程回调覆盖新代际、重复启动、端口冲突、日志脱敏与 IPC 帧上限。"
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "桌面 E2E"
+        },
+        {
+          "kind": "paragraph",
+          "data": "真实 Electron E2E 覆盖 1100×700、1366×768、1440×900、1920×1080 和 Windows 150% 缩放，检查整体无溢出、Ribbon/内容/地图/对话/状态栏在视口内、MapLibre 与 CSP Worker 真正加载，以及面板拖动、键盘调整、折叠恢复和多窗口去重。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "当前缺口"
+        },
+        {
+          "kind": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "仓库内未发现 .github/workflows 或其他提交内 CI workflow，测试存在但缺少可见的远程持续执行证据。",
+              "桌面 E2E 主要证明无裁切和真实运行，尚没有稳定的像素基线来发现细微颜色、间距和字体漂移。",
+              "部分架构测试检查文件名、源码字符串或目录形状，后续应优先保护依赖方向和失败行为，避免结构守卫阻碍合理重构。",
+              "建议把关键验证组合成团队可重复的最小门禁：typecheck、架构测试、核心 Runtime、Worker catalog、真实 Electron E2E。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "设计原则、取舍与门禁分类",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "GeoForge 的架构选择围绕五个优先级：用户结果真实、权限与资源隔离、结构化事实一致、失败可观察、能力可扩展。性能和局部简洁排在这些不变量之后。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "主要设计取舍"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "设计",
+              "收益",
+              "代价"
+            ],
+            "rows": [
+              [
+                "Electron Main 代理本机能力",
+                "Renderer 无凭据和完整 Node 权限",
+                "新增能力需要 IPC、Main 和 Renderer 接线"
+              ],
+              [
+                "Node 编排、Python 计算",
+                "兼顾实时平台能力与科学生态",
+                "需要跨语言 catalog 和 Worker 运行时"
+              ],
+              [
+                "PostgreSQL + 对象存储",
+                "事务、查询与大文件去重兼得",
+                "需要引用生命周期和 GC"
+              ],
+              [
+                "HTTP + WebSocket",
+                "上传/缓存与实时控制各用合适协议",
+                "必须维护统一授权和错误语义"
+              ],
+              [
+                "Runner + GeoForge Runtime",
+                "复用成熟 Agent 状态机，平台事实仍可控",
+                "checkpoint、投影和兼容性较复杂"
+              ],
+              [
+                "注册表扩展",
+                "新增能力不改中央 switch",
+                "需要 manifest、schema 和注册完整性测试"
+              ],
+              [
+                "Supervisor 独立运行",
+                "后台服务不依赖窗口，可真实运维",
+                "本机安装和 runtime manifest 更复杂"
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "必须保留的核心门禁"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "门禁",
+              "保护的不变量"
+            ],
+            "rows": [
+              [
+                "PostgreSQL 事务、外键与 advisory lock",
+                "结构化事实、顺序和单写一致性"
+              ],
+              [
+                "HTTP、WS、IPC、Worker schema",
+                "跨信任边界的数据真实性"
+              ],
+              [
+                "RBAC、workspace 归属和写操作 CSRF",
+                "身份、资源隔离和跨站写入"
+              ],
+              [
+                "Renderer 不持有凭据和绝对路径",
+                "桌面本机权限边界"
+              ],
+              [
+                "Worker HMAC、bodyHash、nonce、路径沙箱和资源上限",
+                "内部服务完整性与科学执行安全"
+              ],
+              [
+                "checkpoint 版本、配置摘要与 pending tool 检查",
+                "恢复时不重复副作用"
+              ],
+              [
+                "破坏性工具审批",
+                "不可恢复操作的人类授权"
+              ],
+              [
+                "内容 hash 与 Artifact 可见性",
+                "文件完整性和真实交付"
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "可以合并或删除的重复门禁"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "重复点",
+              "建议收敛方式"
+            ],
+            "rows": [
+              [
+                "WS csrf true/false、读写分类和 admin 分类多处手写",
+                "用 operation=query/command/admin 的命令元数据统一推导"
+              ],
+              [
+                "HTTP 通用 CSRF 后部分路由再次 requireCsrf",
+                "保留统一中间件，删除路由内重复检查"
+              ],
+              [
+                "WS upgrade、命令 auth、handler requireAuth 多层样板",
+                "授权后使用类型化 AuthenticatedWsCommandContext"
+              ],
+              [
+                "Renderer、Preload、Main、Gateway 重复 parse",
+                "只在每个真实信任边界校验，Main 内部使用强类型对象"
+              ],
+              [
+                "Desktop HTTP 路由白名单与 API 模块重复维护",
+                "建立一份声明式 Desktop Operation Registry"
+              ],
+              [
+                "原生菜单、Ribbon、搜索、文档和快捷键分别定义命令",
+                "建立统一 Workbench Command Registry"
+              ],
+              [
+                "service.py 与 readers.py 重复数据读取",
+                "readers 作为权威入口，删除领域重复实现"
+              ],
+              [
+                "手写 Worker 必需工具名列表",
+                "从 ToolDef 的 workerToolName 元数据生成"
+              ],
+              [
+                "架构测试依赖源码字符串和文件位置",
+                "改为检查禁止导入、注册完整性和真实失败路径"
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "paragraph",
+          "data": "门禁精简的正确表达不是“减少安全”，而是“把同一规则从多个调用点收回一个权威边界”。门禁数量可以减少，但关键约束应更难漏掉。"
+        }
+      ]
+    },
+    {
+      "title": "风险、演进建议与技术讲解提纲",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "当前最大的长期风险不是架构方向错误，而是边界数量继续增加后出现重复表达：同一权限、命令、路由、schema 或状态在多个层次各维护一次。下面建议按对用户结果和开发效率的影响排序。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "优先级 P0：先修真实运行问题"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "行动",
+              "原因",
+              "完成证据"
+            ],
+            "rows": [
+              [
+                "修正关闭期间 WS 仍可接收新命令的窗口",
+                "会导致排空永远追不上新任务",
+                "关闭开始后新 WS 命令稳定拒绝，既有任务正常排空"
+              ],
+              [
+                "统一 WS 命令 operation 元数据",
+                "csrf、读写、admin 当前存在双重事实和遗漏可能",
+                "operation 自动推导 CSRF、审计和授权，删除未使用分类"
+              ],
+              [
+                "收敛 readers.py 与 service.py",
+                "重复领域读取是实际扩展负担",
+                "只有 Reader facade 打开栅格，重复函数删除并由测试证明"
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "优先级 P1：降低扩展接线成本"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": [
+              "行动",
+              "作用"
+            ],
+            "rows": [
+              [
+                "建立 Desktop Operation Registry",
+                "新增 HTTP/上传/下载操作只登记一次，保留 Main 白名单"
+              ],
+              [
+                "建立 Workbench Command Registry",
+                "菜单、Ribbon、搜索、文档、快捷键和权限由同一描述驱动"
+              ],
+              [
+                "拆 AppShell 与 WorkspaceLayout 的真实职责",
+                "减少跨域 props 和视觉改动连锁影响"
+              ],
+              [
+                "Tooling 查询迁入 TanStack Query",
+                "删除手写轮询、loading、error 和 refresh 状态机"
+              ],
+              [
+                "调用方依赖窄 Port",
+                "避免 PlatformPersistenceFacade 和 WsDependencies 继续扩大"
+              ],
+              [
+                "统一稳定错误码",
+                "Renderer 不再通过中文错误字符串猜测状态"
+              ]
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "优先级 P2：提高长期维护与交付质量"
+        },
+        {
+          "kind": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "收敛 AppShell.css，按功能域删除历史覆盖规则并建立视觉回归基线。",
+              "Provider 选择器明确显示“完整 Agent”与“仅辅助 chat”，避免配置后运行期才失败。",
+              "将启动期 DDL 逐步迁到安装/升级 migration，服务启动只验证 schema 版本。",
+              "增加仓库内 CI workflow，至少自动运行 typecheck、核心架构测试、Worker catalog 和 Electron E2E。",
+              "把 Provider、WS command、Worker catalog 和 Desktop operation 自动生成为架构清单，减少文档漂移。",
+              "仅在实际测量后优化性能，不用缓存或门禁绕过掩盖错误所有权。"
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "五分钟技术讲解提纲"
+        },
+        {
+          "kind": "list",
+          "data": {
+            "ordered": true,
+            "items": [
+              "定位：GeoForge 是持续执行 GIS/气象任务的桌面 Agent 平台，不只是地图或聊天框。",
+              "六个角色：桌面是驾驶舱，Node 是调度中心，Python 是计算实验室，数据库是账本，对象存储是仓库，Supervisor 是运维台。",
+              "唯一事实源：Run、Thread、审批和 MapScene 只认服务端结构化事实，UI 与文件只是投影或内容载荷。",
+              "扩展方式：新命令、工具、Worker 能力和地图 source 通过 registry 与 schema 接入，不修改中央 switch。",
+              "主动承认代价：契约和接线较多；下一阶段要合并重复门禁、收窄组合层，而不是破坏事务、权限、路径和恢复边界。"
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "最终结论"
+        },
+        {
+          "kind": "paragraph",
+          "data": "GeoForge 当前是一个平台型本机桌面架构。最有价值的三个决定是：结构化事实只认 PostgreSQL/PostGIS；Agent 编排与 Python 科学计算分开；Desktop 与 CLI 共用服务端 Runtime 和对话投影。下一阶段的目标可以概括为一句话：关键边界足够硬，普通扩展足够轻。"
+        }
+      ]
+    }
+  ]
+}

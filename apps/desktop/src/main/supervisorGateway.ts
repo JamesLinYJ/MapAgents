@@ -7,6 +7,11 @@
 //   日期:       2026年07月29日
 //   作者:       JamesLinYJ
 //   协助:       OpenAI Codex:GPT-5.6 Sol
+//
+//   维护记录 (2026-07-30):
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
+//     说明: 日志查询从监督命令分支拆为独立的只读数据入口。
 // --------------------------------------------------------------------------
 
 import { readFile } from 'node:fs/promises'
@@ -45,9 +50,7 @@ export class DesktopSupervisorGateway {
         payload: request.payload,
       })
       let data: unknown
-      if (command.command === 'logs') {
-        data = await this.readLogs(command.payload)
-      } else if (command.command === 'status') {
+      if (command.command === 'status') {
         const client = await this.connect()
         data = await client.status()
       } else {
@@ -79,6 +82,14 @@ export class DesktopSupervisorGateway {
           message: safeMessage(error),
         },
       }
+    }
+  }
+
+  async logs(query: OperationsLogQuery): Promise<OperationsLogEntry[]> {
+    try {
+      return await this.readLogs(query)
+    } catch (error) {
+      throw new Error(safeMessage(error))
     }
   }
 

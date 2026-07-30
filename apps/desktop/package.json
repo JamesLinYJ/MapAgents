@@ -9,7 +9,7 @@
   },
   "license": "UNLICENSED",
   "engines": {
-    "node": ">=24 <25"
+    "node": ">=24"
   },
   "type": "module",
   "main": "./out/main/index.js",
@@ -18,8 +18,8 @@
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.renderer.json && tsc --noEmit -p tsconfig.node.json",
     "build": "npm run typecheck && electron-vite build",
-    "package": "node ../../scripts/require-node24.mjs && npm --prefix ../.. run build:desktop && electron-forge package --platform win32 --arch x64",
-    "make": "node ../../scripts/require-node24.mjs && npm --prefix ../.. run build:desktop && pwsh -NoProfile -ExecutionPolicy Bypass -File ../../scripts/prepare-squirrel-vendor.ps1 && electron-forge make --platform win32 --arch x64",
+    "package": "npm --prefix ../.. run build:desktop && electron-forge package --platform win32 --arch x64",
+    "make": "npm --prefix ../.. run build:desktop && pwsh -NoProfile -ExecutionPolicy Bypass -File ../../scripts/prepare-squirrel-vendor.ps1 && electron-forge make --platform win32 --arch x64",
     "make:release": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../../scripts/make-desktop-release.ps1",
     "lint": "eslint src --ext .ts,.tsx",
     "test": "vitest run src",
@@ -29,8 +29,8 @@
     "@better-auth/electron": "1.6.25",
     "@dagrejs/dagre": "^1.1.8",
     "@electron-forge/cli": "7.11.2",
+    "@electron-forge/maker-base": "7.11.2",
     "@electron-forge/maker-squirrel": "7.11.2",
-    "@electron-forge/maker-zip": "7.11.2",
     "@electron-forge/plugin-fuses": "7.11.2",
     "@electron/fuses": "1.8.0",
     "@electron/windows-sign": "1.2.2",

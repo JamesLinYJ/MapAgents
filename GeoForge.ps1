@@ -7,6 +7,11 @@
 #   日期:       2026年07月29日
 #   作者:       JamesLinYJ
 #   协助:       OpenAI Codex:GPT-5.6 Sol
+#
+#   维护记录 (2026-07-30):
+#     作者: JamesLinYJ
+#     协助: OpenAI Codex:GPT-5.6 Sol
+#     说明: 一键入口接受所有 Node 24 及以上版本，Node 24 仅作为推荐开发版本。
 # --------------------------------------------------------------------------
 
 [CmdletBinding()]
@@ -17,21 +22,42 @@ $ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 $Root = [IO.Path]::GetFullPath($PSScriptRoot)
 
-function Test-GeoForgeNode24 {
+function Test-GeoForgeNode {
     param([Parameter(Mandatory = $true)][string]$LiteralPath)
 
     if (-not (Test-Path -LiteralPath $LiteralPath -PathType Leaf)) { return $false }
     try {
         $Version = (& $LiteralPath --version 2>$null).Trim()
-        return $Version -match '^v24\.'
+        if ($Version -notmatch '^v(?<Major>\d+)\.') { return $false }
+        return [int]$Matches.Major -ge 24
     } catch {
         return $false
     }
 }
 
-function Resolve-GeoForgeNode24 {
+function Add-GeoForgeVersionManagerCandidates {
+    param(
+        [Parameter(Mandatory = $true)]
+        [Collections.Generic.List[string]]$Candidates,
+        [string]$VersionsRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$ExecutableRelativePath
+    )
+
+    if (-not $VersionsRoot -or -not (Test-Path -LiteralPath $VersionsRoot -PathType Container)) {
+        return
+    }
+    foreach ($VersionDirectory in @(
+        Get-ChildItem -LiteralPath $VersionsRoot -Directory -ErrorAction SilentlyContinue |
+            Sort-Object -Property Name -Descending
+    )) {
+        $Candidates.Add((Join-Path $VersionDirectory.FullName $ExecutableRelativePath))
+    }
+}
+
+function Resolve-GeoForgeNode {
     $Candidates = [Collections.Generic.List[string]]::new()
-    $Configured = [Environment]::GetEnvironmentVariable('GEOFORGE_NODE24', 'Process')
+    $Configured = [Environment]::GetEnvironmentVariable('GEOFORGE_NODE_EXECUTABLE', 'Process')
     if ($Configured) {
         $ConfiguredPath = if ([IO.Path]::IsPathRooted($Configured)) {
             [IO.Path]::GetFullPath($Configured)
@@ -45,29 +71,48 @@ function Resolve-GeoForgeNode24 {
         $Candidates.Add($Command.Source)
     }
 
+    $UserProfile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+    $VoltaRoot = if ($env:VOLTA_HOME) { $env:VOLTA_HOME } else { Join-Path $UserProfile '.volta' }
+    $NvmRoot = if ($env:NVM_HOME) { $env:NVM_HOME } else { Join-Path $env:APPDATA 'nvm' }
+    $FnmVersionsRoot = if ($env:FNM_DIR) {
+        Join-Path $env:FNM_DIR 'node-versions'
+    } else {
+        Join-Path $env:LOCALAPPDATA 'fnm\node-versions'
+    }
+    Add-GeoForgeVersionManagerCandidates `
+        -Candidates $Candidates `
+        -VersionsRoot (Join-Path $VoltaRoot 'tools\image\node') `
+        -ExecutableRelativePath 'node.exe'
+    Add-GeoForgeVersionManagerCandidates `
+        -Candidates $Candidates `
+        -VersionsRoot $NvmRoot `
+        -ExecutableRelativePath 'node.exe'
+    Add-GeoForgeVersionManagerCandidates `
+        -Candidates $Candidates `
+        -VersionsRoot $FnmVersionsRoot `
+        -ExecutableRelativePath 'installation\node.exe'
+
     $KnownLocations = @(
-        (Join-Path $HOME '.volta\tools\image\node\24.14.0\node.exe'),
-        (Join-Path $env:APPDATA 'nvm\v24.14.0\node.exe'),
-        (Join-Path $env:LOCALAPPDATA 'fnm\node-versions\v24.14.0\installation\node.exe'),
-        (Join-Path $HOME '.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe')
+        (Join-Path $env:ProgramFiles 'nodejs\node.exe'),
+        (Join-Path $UserProfile '.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe')
     )
     foreach ($Location in $KnownLocations) {
         if ($Location) { $Candidates.Add($Location) }
     }
 
     foreach ($Candidate in @($Candidates | Select-Object -Unique)) {
-        if (Test-GeoForgeNode24 -LiteralPath $Candidate) {
+        if (Test-GeoForgeNode -LiteralPath $Candidate) {
             return [IO.Path]::GetFullPath($Candidate)
         }
     }
 
     throw @'
-未找到 Node.js 24 LTS。请安装 .node-version 指定的版本，或将
-GEOFORGE_NODE24 设置为 node.exe 的绝对路径后重新运行 GeoForge.ps1。
+未找到 Node.js 24 或更高版本。可安装 .node-version 推荐的版本，或将
+GEOFORGE_NODE_EXECUTABLE 设置为 node.exe 的绝对路径后重新运行 GeoForge.ps1。
 '@
 }
 
-$Node = Resolve-GeoForgeNode24
+$Node = Resolve-GeoForgeNode
 $NodeDirectory = Split-Path -Parent $Node
 $env:Path = "$NodeDirectory$([IO.Path]::PathSeparator)$($env:Path)"
 $env:GEOFORGE_NODE_EXECUTABLE = $Node

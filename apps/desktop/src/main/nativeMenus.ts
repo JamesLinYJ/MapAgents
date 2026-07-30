@@ -27,6 +27,7 @@ import {
 } from '../contracts/desktopIpc.js'
 import type { DesktopAuthenticatedIdentity } from './authGateway.js'
 import type { DesktopShutdownCoordinator } from './desktopShutdownCoordinator.js'
+import { encodeDesktopEvent } from './eventTransportEncoder.js'
 
 export interface NativeMenuAuthorization {
   currentAuthorizationContext(): DesktopAuthenticatedIdentity | null
@@ -249,11 +250,11 @@ function commandItem(
 }
 
 function sendCommand(window: BrowserWindow, command: DesktopMenuCommand): void {
-  window.webContents.send(DESKTOP_IPC_CHANNELS.event, {
+  window.webContents.send(DESKTOP_IPC_CHANNELS.event, encodeDesktopEvent({
     version: 1,
     event: 'desktop:command',
     payload: { command },
-  })
+  }))
 }
 
 async function showShutdownFailure(

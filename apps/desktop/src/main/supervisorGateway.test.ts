@@ -76,16 +76,10 @@ describe('DesktopSupervisorGateway logs', () => {
     const gateway = new DesktopSupervisorGateway(runtimeConfig(projectRoot, runtimeRoot), { read })
 
     try {
-      const response = await gateway.handle({
-        version: 1,
-        requestId: '019fa8d2-d331-7c48-a667-68383b815be7',
-        command: 'logs',
-        payload: logQuery(),
-      })
+      const response = await gateway.logs(logQuery())
 
-      expect(response.ok).toBe(true)
       expect(read).toHaveBeenCalledOnce()
-      expect(response.data).toEqual([
+      expect(response).toEqual([
         localEntry,
         expect.objectContaining({
           component: 'desktop',
@@ -107,16 +101,10 @@ describe('DesktopSupervisorGateway logs', () => {
     })
 
     try {
-      const response = await gateway.handle({
-        version: 1,
-        requestId: '019fa8d2-d331-7c48-a667-68383b815be8',
-        command: 'logs',
-        payload: { ...logQuery(), includeSupervisor: false },
-      })
-      expect(response).toMatchObject({
-        ok: false,
-        error: { code: 'supervisor_unavailable' },
-      })
+      await expect(gateway.logs({
+        ...logQuery(),
+        includeSupervisor: false,
+      })).rejects.toThrow('本机监督器尚未初始化或运行文件缺失')
     } finally {
       gateway.close()
     }

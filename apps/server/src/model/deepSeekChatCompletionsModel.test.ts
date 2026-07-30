@@ -109,6 +109,45 @@ describe('DeepSeekChatCompletionsModel', () => {
     })))).rejects.toThrow('DeepSeek JSON Output 未返回单个合法 JSON object')
   })
 
+  it('retries a valid JSON object that does not satisfy the output schema', async () => {
+    let calls = 0
+    const client = {
+      chat: { completions: { create: async () => {
+        calls += 1
+        return (async function* () {
+          yield chunk({
+            content: calls === 1
+              ? '{"goal":"需要继续规划"}'
+              : '{"artifactIds":[],"markdown":"完成","summary":"完成","warnings":[]}',
+          }, 'stop')
+        })()
+      } } },
+    } as unknown as OpenAI
+    const model = new DeepSeekChatCompletionsModel({ client, model: 'deepseek-v4-pro' })
+
+    const events = await collect(model.getStreamedResponse(request({
+      outputType: {
+        type: 'json_schema',
+        name: 'delivery',
+        strict: true,
+        schema: {
+          type: 'object',
+          properties: {
+            artifactIds: { type: 'array', items: { type: 'string' } },
+            markdown: { type: 'string', minLength: 1 },
+            summary: { type: 'string', minLength: 1 },
+            warnings: { type: 'array', items: { type: 'string' } },
+          },
+          required: ['artifactIds', 'markdown', 'summary', 'warnings'],
+          additionalProperties: false,
+        },
+      },
+    })))
+
+    expect(calls).toBe(2)
+    expect(events).toContainEqual(expect.objectContaining({ type: 'response_done' }))
+  })
+
   it('applies structured-output validation only to the final non-tool response', async () => {
     const model = createModel([
       chunk({
@@ -446,7 +485,7 @@ describe('DeepSeekChatCompletionsModel', () => {
     expect(done?.response.usage.inputTokensDetails).toHaveLength(3)
   })
 
-  it('uses a non-thinking, tool-free finalization retry after an executed tool result', async () => {
+  it('keeps tools available on a non-thinking structured retry after an executed tool result', async () => {
     let calls = 0
     const observed: Array<Record<string, unknown>> = []
     const valid = '{"artifactIds":[],"markdown":"完成","summary":"完成","warnings":[]}'
@@ -490,14 +529,14 @@ describe('DeepSeekChatCompletionsModel', () => {
 
     expect(calls).toBe(3)
     expect(observed[0]?.tools).toBeDefined()
-    expect(observed[1]?.tools).toBeUndefined()
-    expect(observed[2]?.tools).toBeUndefined()
+    expect(observed[1]?.tools).toBeDefined()
+    expect(observed[2]?.tools).toBeDefined()
     expect(observed[1]?.thinking).toEqual({ type: 'disabled' })
     expect(observed[1]).not.toHaveProperty('reasoning_effort')
     const retryMessages = observed[1]?.messages as Array<{ role: string; content: string }>
     expect(retryMessages.at(-1)).toMatchObject({
       role: 'user',
-      content: expect.stringContaining('只输出一个以 { 开始、以 } 结束'),
+      content: expect.stringContaining('若仍需调用当前可用工具，请返回合法工具调用'),
     })
     expect(response.usage).toMatchObject({
       requests: 3,

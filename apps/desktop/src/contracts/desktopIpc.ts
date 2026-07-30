@@ -12,6 +12,11 @@
 //     作者: JamesLinYJ
 //     协助: OpenAI Codex:GPT-5.6 Sol
 //     说明: 本地文件边界收敛为 Main 原生选择器与一次性不透明句柄。
+//
+//   维护记录 (2026-07-30):
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
+//     说明: 区分命令控制帧与日志、剪贴板、文件结果等有界数据载荷。
 // --------------------------------------------------------------------------
 
 import { z } from 'zod'
@@ -22,12 +27,16 @@ import {
   authMeSchema,
   workspaceBootstrapSnapshotSchema,
 } from '@geo-agent-platform/shared-types'
-import { operationsLogQuerySchema } from '@geo-agent-platform/shared-types/operations'
+import {
+  operationsLogEntrySchema,
+  operationsLogQuerySchema,
+} from '@geo-agent-platform/shared-types/operations'
 
 export const DESKTOP_IPC_VERSION = 1 as const
 export const DESKTOP_CONTROL_FRAME_MAX_BYTES = 64 * 1024
 export const DESKTOP_CONTROL_DECOMPRESSED_MAX_BYTES = 4 * 1024 * 1024
 export const DESKTOP_API_RESPONSE_MAX_BYTES = 16 * 1024 * 1024
+export const DESKTOP_CLIPBOARD_TEXT_MAX_BYTES = 4 * 1024 * 1024
 export const DESKTOP_TEXT_FILE_MAX_BYTES = 48 * 1024
 
 export const desktopWorkspaceWindowDescriptorSchema = z.object({
@@ -82,8 +91,11 @@ export const desktopWindowCommandSchema = z.discriminatedUnion('action', [
 ])
 
 export const desktopClipboardWriteSchema = z.object({
-  text: z.string().max(DESKTOP_CONTROL_FRAME_MAX_BYTES),
-}).strict().superRefine(enforceDesktopControlFrameSize)
+  text: z.string().refine(
+    value => new TextEncoder().encode(value).byteLength <= DESKTOP_CLIPBOARD_TEXT_MAX_BYTES,
+    `桌面剪贴板文本不得超过 ${DESKTOP_CLIPBOARD_TEXT_MAX_BYTES} 字节。`,
+  ),
+}).strict()
 
 export const desktopConfirmationRequestSchema = z.object({
   title: z.string().trim().min(1).max(80),
@@ -236,7 +248,7 @@ export const desktopFileSelectionHandleSchema = z.object({
 
 export const desktopFileSelectionHandlesSchema = z.array(
   desktopFileSelectionHandleSchema,
-).max(200).superRefine(enforceDesktopControlFrameSize)
+).max(200)
 
 export const desktopFileSelectionRequestSchema = z.object({
   kind: z.enum(['files', 'folder']),
@@ -261,7 +273,7 @@ export const desktopTextFileReadResultSchema = z.object({
     value => new TextEncoder().encode(value).byteLength <= DESKTOP_TEXT_FILE_MAX_BYTES,
     `本地文本文件不得超过 ${DESKTOP_TEXT_FILE_MAX_BYTES} 字节。`,
   ),
-}).strict().superRefine(enforceDesktopControlFrameSize)
+}).strict()
 
 const desktopExportResourceIdSchema = z.string()
   .trim()
@@ -352,10 +364,6 @@ export const desktopSupervisorCommandSchema = z.discriminatedUnion('command', [
     payload: z.object({}).strict(),
   }).strict(),
   z.object({
-    command: z.literal('logs'),
-    payload: operationsLogQuerySchema,
-  }).strict(),
-  z.object({
     command: z.enum(['start', 'stop', 'restart']),
     payload: z.object({
       target: desktopOperationsTargetSchema,
@@ -364,6 +372,9 @@ export const desktopSupervisorCommandSchema = z.discriminatedUnion('command', [
     }).strict(),
   }).strict(),
 ])
+
+export const desktopSupervisorLogsQuerySchema = operationsLogQuerySchema
+export const desktopSupervisorLogsResponseSchema = z.array(operationsLogEntrySchema).max(10_000)
 
 export const desktopControlResponsePayloadSchema = z.object({
   version: z.literal(DESKTOP_IPC_VERSION),
@@ -442,6 +453,7 @@ export const DESKTOP_IPC_CHANNELS = {
   fileSelect: 'geoforge:file:select',
   fileReadText: 'geoforge:file:read-text',
   microphonePermission: 'geoforge:microphone:permission',
+  supervisorLogs: 'geoforge:supervisor:logs',
   supervisorRequest: 'geoforge:supervisor:request',
   windowCommand: 'geoforge:window:command',
   event: 'geoforge:event',

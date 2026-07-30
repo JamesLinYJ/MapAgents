@@ -1,0 +1,533 @@
+{
+  "title": "GeoForge 架构设计分析报告",
+  "subtitle": "技术交流精简版｜讲清整体设计、核心链路与演进方向\n作者：JamesLinYJ\n协助：OpenAI Codex：GPT-5",
+  "projectName": "GeoForge",
+  "version": "0.1.0",
+  "author": "JamesLinYJ",
+  "assistance": "OpenAI Codex：GPT-5",
+  "generatedAt": "2026-07-30T15:00:00+08:00",
+  "sections": [
+    {
+      "title": "执行摘要",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "GeoForge 是一套 Windows 优先的桌面 GIS Agent 平台。它把地图操作、自然语言分析、科学计算、结果交付和本机服务管理放进同一工作台，目标不是让模型“看起来会做 GIS”，而是让每次分析都有真实数据、真实工具、可恢复过程和可复核结果。"
+        },
+        {
+          "kind": "paragraph",
+          "data": "总体架构方向是合理的：Electron 负责用户体验，Node 服务端负责编排，Python 计算服务（Worker）负责专业计算，PostgreSQL/PostGIS 保存结构化事实，对象存储保存大文件，本机服务管理器（Operations Supervisor）管理后台服务。当前主要问题不是层次太多，而是少数规则在多个位置重复实现、部分前端装配文件过大，以及验证入口还不够统一。"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": ["判断", "结论", "一句话解释"],
+            "rows": [
+              ["整体方向", "正确", "按体验、编排、计算、数据和运维拆分，职责较清楚"],
+              ["扩展能力", "较好", "工具、WebSocket 命令、计算服务能力和地图渲染均可注册扩展"],
+              ["数据可靠性", "较强", "结构化事实集中在 PostgreSQL，避免多份真相"],
+              ["当前短板", "可控", "重复校验、前端大文件和分散验证增加维护成本"]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "技术组件与代码位置",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "GeoForge 是 TypeScript 与 Python 混合的多包单仓库（monorepo）。apps 放可独立启动的应用，packages 放可复用能力与跨应用契约，infra、deploy 和 scripts 放数据库、安装及运维材料。这样按“谁拥有运行生命周期”组织，比按语言把所有 TypeScript 或 Python 堆在一起更容易理解。"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": ["组件/技术", "主要位置", "作用与选择原因"],
+            "rows": [
+              ["Electron 43", "apps/desktop/src/main、preload、renderer", "提供 Windows 原生窗口、文件选择与安全进程隔离；适合桌面 GIS 而不是公开网页"],
+              ["React 19", "apps/desktop/src/renderer、renderer/app/AppShell.tsx", "构建工作台和功能面板；组件化适合地图、图层、对话等多区域协作"],
+              ["MapLibre GL 5", "renderer/features/map/MapCanvas.tsx、renderers/", "负责矢量/栅格地图渲染；开放生态且支持自定义数据源（source）与图层（layer）"],
+              ["Zustand 5", "renderer/app/stores/", "保存连接、会话、运行、图层等实时工作台状态；选择器订阅比大型上下文（Context）更轻"],
+              ["TanStack Query 5", "renderer/app/QueryProvider.tsx、features/map/useMapScene.ts", "管理可重新获取的 HTTP 查询和缓存，与 WebSocket 流状态分工"],
+              ["Hono 4", "apps/server/src/main.ts、routes/", "提供轻量、类型友好的 HTTP 服务；用于上传、下载、认证、查询和健康检查"],
+              ["ws + 命令注册表", "apps/server/src/ws/", "承担运行任务（Run）、对话线程（Thread）、审批、订阅和实时推送；避免频繁 HTTP 轮询"],
+              ["OpenAI Agents SDK", "apps/server/src/agent/", "管理单次模型—工具循环；GeoForge 继续掌握权限、持久化和恢复"],
+              ["Drizzle + pg", "apps/server/src/db/、store/postgres/、infra/migrations/", "访问 PostgreSQL/PostGIS；保留 SQL 可见性并提供类型化数据模式（schema）"],
+              ["FastAPI + Pydantic", "apps/worker/src/worker_app/", "暴露 Python 科学工具并生成契约；适合计算生态和参数校验"],
+              ["xarray/rasterio 等", "packages/gis-meteorology/src/gis_meteorology/", "读取 NetCDF、栅格和雷达数据；领域算法与 Web 路由分离"],
+              ["本机服务管理器", "packages/operations-supervisor/", "管理 infra、worker、api 的启动、健康和恢复；避免 Electron 直接托管后台进程"],
+              ["Zod 共享契约", "packages/shared-types/、apps/desktop/src/contracts/", "校验 HTTP、WebSocket、进程间通信（IPC）等跨边界数据，防止字段漂移"]
+            ]
+          }
+        },
+        {
+          "kind": "paragraph",
+          "data": "这些组件不是简单堆叠：React 和 MapLibre 解决体验，Node/Hono 与 WebSocket 解决业务编排，Agents SDK 解决单次 Agent 循环，Python 解决科学计算，PostgreSQL 与对象存储解决长期事实，本机服务管理器解决本机运行。每个组件只在自己擅长的边界内工作。"
+        }
+      ]
+    },
+    {
+      "title": "总体架构",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "系统采用“桌面体验层—服务编排层—专业执行层—数据层—本机运维层”的组合。每一层只拥有自己最擅长的责任，跨层通过明确协议通信。这样设计的价值是：界面不会直接接触数据库和密钥，Python 不需要理解会话，模型也不能绕过平台直接修改事实。"
+        },
+        {
+          "kind": "code_block",
+          "data": {
+            "language": "text",
+            "code": "apps/\n  desktop/    Electron 桌面体验\n  server/     Node 编排与 API\n  worker/     Python 计算服务\npackages/\n  shared-types/              跨进程数据模式\n  conversation-presentation/ 对话展示投影\n  gis-meteorology/           科学计算领域包\n  operations-supervisor/     本机服务管理\ninfra/        数据库迁移与基础设施\nscripts/      开发、验证、安装和发布脚本\ndeploy/       WinSW、systemd、运行清单与环境模板"
+          }
+        },
+        {
+          "kind": "code_block",
+          "data": {
+            "language": "text",
+            "code": "用户\n  ↓\nElectron 桌面端（地图、对话、图层、工作流）\n  ↓ HTTP / WebSocket\nNode 服务端（身份、对话线程、运行任务、Agent、工具编排）\n  ├─ PostgreSQL/PostGIS（结构化事实）\n  ├─ 对象存储（文件与交付成果内容）\n  └─ Python 计算服务（气象、雷达、空间计算）\n\n本机服务管理器：管理 infra → worker → api 的启动、健康与恢复"
+          }
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": ["角色", "核心责任", "不负责什么"],
+            "rows": [
+              ["Electron Desktop", "采集意图、展示事实、原生文件交互", "不保存认证密钥，不直接连数据库"],
+              ["Node 服务端", "业务编排、权限、运行任务、工具与实时控制", "不重复实现科学算法"],
+              ["Python 计算服务", "专业计算和科学文件生成", "不拥有会话、用户和审批"],
+              ["PostgreSQL/PostGIS", "结构化事实和空间数据", "不承担大文件正文存储"],
+              ["本机服务管理器", "本机服务生命周期", "不管理用户界面"]
+            ]
+          }
+        },
+        {
+          "kind": "paragraph",
+          "data": "采用多包单仓库的原因是跨进程契约需要同步演进：一次新增运行事件，可能同时涉及 shared-types、服务端、桌面端和测试。它们在一个仓库中可以原子修改和统一验证；同时仍以 apps/packages 边界防止代码互相穿透。"
+        }
+      ]
+    },
+    {
+      "title": "Electron 桌面工作台",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "桌面端采用 Electron 主进程（Main）、预加载层（Preload）、渲染进程（Renderer）三层结构。主进程持有网络、认证、原生文件选择和窗口能力；预加载层只暴露经过校验的窄接口；渲染进程使用 React、Zustand、TanStack Query 和 MapLibre 呈现工作台。"
+        },
+        {
+          "kind": "paragraph",
+          "data": "这样设计主要为了控制桌面应用的权限面：地图页面可以调用“选择文件”“发送控制命令”这类明确能力，但拿不到访问令牌、数据库地址或用户真实路径。未来新增面板时，应继续通过共享状态和命令注册表接入，而不是把更多业务塞进 AppShell。"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": ["桌面组件", "代表性文件夹/文件", "为什么放在这里"],
+            "rows": [
+              ["Electron 主进程", "apps/desktop/src/main/", "拥有认证、HTTP/WebSocket、原生文件、窗口和本机服务接口；高权限能力不进入页面"],
+              ["预加载桥", "apps/desktop/src/preload/、contracts/desktopIpc.ts", "只暴露白名单进程间通信，并用数据模式限制参数和返回值"],
+              ["工作台壳", "renderer/app/AppShell.tsx、layout/WorkspaceLayout.tsx", "负责装配 Ribbon、侧栏、地图和对话，不应继续吸收领域逻辑"],
+              ["领域功能", "renderer/features/map、chat、layers 等", "按功能自包含组件、Hook 和局部状态，便于独立修改"],
+              ["跨功能状态", "renderer/app/stores/", "Zustand 按连接、会话、运行、图层拆分，避免一个巨大的状态仓库（Store）"],
+              ["查询边界", "renderer/api/transport.ts、app/QueryProvider.tsx", "渲染进程只调用安全桥；TanStack Query 管理可重新获取的 HTTP 数据"],
+              ["地图渲染", "features/map/MapCanvas.tsx、renderers/", "MapLibre 负责底层渲染，注册表负责不同图层类型扩展"]
+            ]
+          }
+        },
+        {
+          "kind": "paragraph",
+          "data": "当前界面错位和重复逻辑主要不是 Electron 选型问题，而是 AppShell、WorkspaceLayout、桌面进程间通信与全局样式承担了过多装配责任。应按地图、对话、资源面板继续拆分，并统一尺寸变量、间距和共享交互组件。"
+        }
+      ]
+    },
+    {
+      "title": "Node 服务端、HTTP 与 WebSocket",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "Node 服务端是平台的调度中心。HTTP 处理认证、上传、下载、健康检查和可分页查询；WebSocket 处理运行任务、对话线程、审批、订阅和实时推送。两种协议按业务语义分工，而不是互相替代。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "WebSocket 具体在哪里使用"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": ["位置", "承担的 WebSocket 职责", "典型内容"],
+            "rows": [
+              ["apps/desktop/src/renderer/api/transport.ts", "渲染进程的实时控制门面", "把 run:start 等控制请求交给主进程，不在页面直接建连接"],
+              ["apps/desktop/src/main/controlGateway.ts", "每个窗口持有认证后的连接", "关联请求编号、45 秒超时、接收推送，再通过进程间通信发给渲染进程"],
+              ["apps/server/src/ws/handler.ts、protocol.ts", "处理 /ws 升级、认证、限速和协议帧", "解析命令、查注册表、返回响应（response）或推送（push）"],
+              ["apps/server/src/ws/runCommands.ts", "运行任务生命周期控制", "启动、取消、追加指导、恢复、回复审批和订阅"],
+              ["apps/server/src/ws/threadCommands.ts、threadContextCommands.ts", "对话线程与上下文控制", "线程更新、上下文、记忆和压缩相关命令"],
+              ["apps/server/src/ws/subscriptions.ts", "把运行和线程事件实时推送给桌面", "运行条目、运行事件、运行快照、线程条目、地图场景更新"],
+              ["apps/server/src/ws/defaultCommandRegistry.ts", "统一注册命令组", "运行、线程、地图、工具、自动化流程和工作区等命令"]
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "为什么这些场景使用 WebSocket"
+        },
+        {
+          "kind": "paragraph",
+          "data": "一次 Agent 运行任务可能持续几十秒到数分钟，中间不断产生模型片段、工具调用、审批请求、状态变化和地图更新。WebSocket 允许服务端在事实产生时立即推送，用户也能在同一连接上取消、追加指导或回复审批。如果改成 HTTP 轮询，桌面必须反复查询，既浪费请求，也容易在多个接口之间看到不同步状态。"
+        },
+        {
+          "kind": "code_block",
+          "data": {
+            "language": "text",
+            "code": "渲染进程发起实时控制请求\n  → 预加载层白名单进程间通信\n  → 主进程 DesktopControlGateway\n  → ws://127.0.0.1/.../ws\n  → 服务端处理器 + 命令注册表\n  → 运行/线程/工具应用服务\n  ← 带请求编号的响应，或实时推送\n  ← 主进程校验后投影给渲染进程"
+          }
+        },
+        {
+          "kind": "paragraph",
+          "data": "WebSocket 只是实时传输通道，不是事实源。运行任务、对话线程、对话条目（ConversationItem）和地图场景（MapScene）仍先由应用服务和 PostgreSQL 管理；subscriptions.ts 只把已经持久化或发布的事件投影出去。断线后可以通过快照（snapshot）重新水合，而不是依赖连接内存恢复事实。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "为什么仍保留 HTTP"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": ["通信方式", "适合场景", "设计原因"],
+            "rows": [
+              ["HTTP", "登录、上传、下载、Blob、分页查询、健康检查", "请求响应边界清楚，适合缓存、文件流和独立超时"],
+              ["WebSocket", "运行/线程控制、审批、订阅和持续推送", "双向长连接，减少轮询并保持交互连续"],
+              ["Node → Python 计算服务 HTTP", "调用科学工具", "计算服务无状态，计算任务使用明确请求/响应更容易隔离和重试"]
+            ]
+          }
+        },
+        {
+          "kind": "paragraph",
+          "data": "服务端 WebSocket 命令采用注册表而不是大型条件分支（switch）。每个命令在定义附近声明载荷数据模式、认证要求、跨站请求伪造防护（CSRF）和处理器（handler）；新增能力时增加独立命令并注册，核心处理器保持稳定。需要优化的是把 HTTP 与 WebSocket 中重复的权限和 CSRF 元数据收敛，而不是删除实时控制边界。"
+        }
+      ]
+    },
+    {
+      "title": "Agent 运行时",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "Agent 运行时的职责不是简单转发模型文本，而是把一次自然语言任务变成可管理的运行任务：准备上下文、选择工具、记录事件、处理审批、保存检查点（checkpoint），并把结果投影到对话和地图。模型负责推理，平台负责事实与边界。"
+        },
+        {
+          "kind": "paragraph",
+          "data": "代码主要位于 apps/server/src/agent/：runtime.ts 和 runtimeAssembly.ts 负责运行时装配，runtimeSdkExecutor.ts 对接 Agents SDK，context、approval、sandbox 与 checkpoint 模块分别承担上下文、审批、沙箱边界和恢复。apps/server/src/model/ 保存模型注册与适配。"
+        },
+        {
+          "kind": "code_block",
+          "data": {
+            "language": "text",
+            "code": "用户问题 → 创建运行任务 → 组装上下文 → 模型决策\n        → 工具调用 → 权限/审批 → 执行 → 保存结果\n        → 推送事件 → 更新地图/对话 → 完成或明确失败"
+          }
+        },
+        {
+          "kind": "paragraph",
+          "data": "这种设计比直接调用模型更复杂，但换来了恢复能力和可审计性。发生中断后，系统可以知道运行停在哪一步；遇到未知工具或审批未完成时，系统明确暂停，而不是伪造成功。"
+        }
+      ]
+    },
+    {
+      "title": "工具系统与自动化流程",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "工具是 Agent 连接真实世界的能力边界。GeoForge 通过工具提供者（ToolProvider）和注册表接入地图、文件、气象、报告等能力。工具执行遵循“准备—策略判断—执行—持久化”的统一流程，既方便扩展，也让失败原因能够被记录。"
+        },
+        {
+          "kind": "paragraph",
+          "data": "框架代码位于 apps/server/src/framework/registry.ts、schema.ts 和加载模块；具体工具提供者位于 apps/server/src/tools/，例如气象、空间分析、图表、路径规划、记忆和自动化执行。执行与结果落库集中在 apps/server/src/tools/persistentToolExecutor.ts、resultPersistence.ts，避免每个工具各写一套持久化逻辑。"
+        },
+        {
+          "kind": "paragraph",
+          "data": "值引用（valueRef）是其中一个关键设计：大规模数组、栅格或表格不反复塞进模型上下文，而是保存为可引用的值，后续工具只传引用。这既降低词元和网络开销，也减少数据在多层之间复制。自动化流程（Automation）则把已经验证的工具步骤组合成可重复流程。"
+        },
+        {
+          "kind": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "新增工具：增加独立实现并注册，不修改中央分支。",
+              "大数据传递：使用值引用，不把完整数据交给模型搬运。",
+              "重复业务：沉淀为自动化流程，减少每次从头规划。",
+              "执行失败：返回明确错误，不生成“看似完成”的结果。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "Python 计算服务与科学计算",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "Python 计算服务（Worker）是无状态的专业计算服务，承担 NetCDF、雷达、空间分析、图表和报告等任务。它只接收经过校验的工具参数和运行目录上下文，不保存用户、对话线程或运行任务，因此可以独立测试，也便于未来更换计算环境。"
+        },
+        {
+          "kind": "paragraph",
+          "data": "Node 端适配器位于 apps/server/src/tools/meteorology/；Python Web 层位于 apps/worker/src/worker_app/；真正的领域算法位于 packages/gis-meteorology/src/gis_meteorology/。这样 Node 只负责编排和结果落库，Python 计算服务只负责执行计算，科学包不依赖 HTTP 框架。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "Node 后端如何与 Python 计算服务交互"
+        },
+        {
+          "kind": "code_block",
+          "data": {
+            "language": "text",
+            "code": "1. 启动/首次调用：Node GET /tools/catalog\n   ← 计算服务返回工具名、参数/结果数据模式和契约哈希\n2. Agent 选择气象工具，Node 解析数据引用和输出相对路径\n3. Node 按工具目录校验参数，并生成短期 HMAC 请求签名\n4. Node POST /tools/{tool_name}，正文为 { args: ... }\n5. 计算服务校验签名、时效、工具名、正文哈希和随机数防重放\n6. FastAPI/Pydantic 校验参数，注册表分发到科学计算函数\n7. 计算服务返回说明文字和结果载荷；Node 再校验并持久化值引用和交付成果"
+          }
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": ["交互环节", "代表性文件", "具体职责"],
+            "rows": [
+              ["Node 调用入口", "meteorologyWorkerClient.ts", "读取并缓存工具目录，校验请求/响应，发送 HTTP 请求，传递追踪编号"],
+              ["Node 请求签名", "workerAuth.ts", "把工具名、正文哈希、60 秒有效期和一次性随机数绑定到 HMAC 签名"],
+              ["计算服务安全入口", "security_middleware.py、worker_auth.py", "验证签名、请求体、时效和重放；不合格请求不进入工具"],
+              ["计算服务路由", "tool_routes.py", "接收 POST /tools/{tool_name}，控制超时，把错误映射为明确 HTTP 状态"],
+              ["工具契约", "tool_contracts.py、tool_registry.py", "Pydantic 生成参数/结果数据模式，注册表按工具名分发"],
+              ["运行目录边界", "tool_context.py、path_sandbox.py", "只允许工具使用运行根目录内的相对路径"],
+              ["科学计算", "packages/gis-meteorology/.../readers.py、service.py", "读取 NetCDF/栅格/雷达并生成统计、图像或报告"]
+            ]
+          }
+        },
+        {
+          "kind": "paragraph",
+          "data": "Pydantic 模型是计算服务工具契约的事实源。/tools/catalog 由这些模型自动生成 JSON 数据模式和哈希，Node 在启动或首次调用时消费并缓存；调用前后都按同一契约校验，因此不用在 TypeScript 再手写一份 Python 参数模型。契约不一致会直接失败，而不是带着错误字段继续计算。"
+        },
+        {
+          "kind": "paragraph",
+          "data": "输入文件不会整块塞进 HTTP 正文。Node 先把上传文件管理在运行目录内，只向计算服务传安全的相对路径；计算服务通过路径沙箱解析。生成的 PNG、TIF、DOCX 等也写到运行目录中的目标相对路径，返回值只携带结构化结果和文件引用，随后由 Node 登记为值引用或交付成果。"
+        },
+        {
+          "kind": "sub_heading",
+          "data": "为什么 Node 与 Python 计算服务使用 HTTP，而不是 WebSocket"
+        },
+        {
+          "kind": "paragraph",
+          "data": "单个科学工具是边界明确的“请求—计算—返回”任务，不需要像 Agent 运行那样持续双向交互。HTTP 更容易设置超时、取消、状态码和独立测试，也让计算服务保持无状态、可重启和可替换。运行过程的实时推送仍由 Node 统一通过 WebSocket 发给桌面，Python 不直接连接用户界面。"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": ["设计", "解决的问题", "保留理由"],
+            "rows": [
+              ["计算服务无状态", "计算与会话耦合", "便于隔离、重启和测试"],
+              ["Pydantic 生成工具目录", "Node/Python 契约重复", "一个事实源即可演进"],
+              ["路径沙箱", "工具访问任意本机文件", "桌面产品必须保留的核心边界"],
+              ["惰性导入", "科学库拖慢启动", "按需付出加载成本"]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "数据架构",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "GeoForge 把数据分成两类：PostgreSQL/PostGIS 保存用户、工作区、会话、运行任务、工具结果元数据、图层和空间事实；内容寻址对象存储保存上传文件、交付成果正文、检查点载荷和其他大对象。数据库保存对象引用、所有权和生命周期。"
+        },
+        {
+          "kind": "paragraph",
+          "data": "表结构集中在 apps/server/src/db/schema.ts，版本迁移位于 infra/migrations/；各资源仓储位于 apps/server/src/store/postgres/。大对象由 apps/server/src/store/contentAddressedObjectStore.ts 和 conversationPayloadStorage.ts 管理，conversationProjectionIndex.ts 只是可重建的内存投影。"
+        },
+        {
+          "kind": "paragraph",
+          "data": "核心原则是“一类事实只有一个权威来源”。Zustand 是桌面实时状态，TanStack Query 是查询缓存，它们都不是后端事实。这样可以避免数据库一份、JSON 一份、界面又一份，最终不知道该相信谁。"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": ["数据类型", "权威位置", "原因"],
+            "rows": [
+              ["用户、权限、对话线程、运行任务、图层", "PostgreSQL/PostGIS", "需要事务、查询和关系完整性"],
+              ["上传文件、报告、影像、大型载荷", "内容寻址对象存储", "适合大对象、去重和完整性校验"],
+              ["界面实时交互状态", "Zustand", "只服务当前桌面会话"],
+              ["HTTP 查询缓存", "TanStack Query", "可失效、可重新获取"]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "地图、图层与交付成果",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "地图是 GeoForge 的主要结果呈现面。图层描述“数据如何被地图使用”，交付成果（Artifact）描述“某次分析交付了什么”。二者有关联但不能混为一谈：同一个交付成果可以生成地图图层，也可以是表格、图片或 DOCX 报告。"
+        },
+        {
+          "kind": "paragraph",
+          "data": "渲染进程的地图入口是 apps/desktop/src/renderer/features/map/MapCanvas.tsx，图层类型适配位于 features/map/renderers/；服务端图层、地图场景和交付成果接口分别位于 apps/server/src/map/、routes/layers.ts、routes/map.ts 与 routes/artifacts.ts，文件内容仍通过对象存储管理。"
+        },
+        {
+          "kind": "paragraph",
+          "data": "地图渲染通过注册表扩展不同数据源和结果类型，避免每新增一种数据就在 MapCanvas 中增加分支。后续应继续把图层生命周期、地图交互和结果水合拆成独立控制器，减少界面错位和重复逻辑对核心地图组件的影响。"
+        },
+        {
+          "kind": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "Dataset：原始或处理后的数据资源。",
+              "图层（Layer）：可加入地图、可控制样式和顺序的展示资源。",
+              "交付成果：一次运行产生、可交付和可追溯的结果。",
+              "地图视图（Map View）：用户当前看到的组合视图，不反向成为数据事实源。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "本机运维与部署",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "GeoForge 采用桌面应用与后台服务分离的原生部署方式。本机服务管理器按 infra、worker、api 的依赖顺序启动 PostgreSQL/PostGIS、Python 计算服务和 Node API，并负责健康检查、日志、异常重启和停止顺序。"
+        },
+        {
+          "kind": "paragraph",
+          "data": "本机服务管理器实现在 packages/operations-supervisor/src/supervisor.ts 与 catalog.ts；桌面端读取配置的代码在 apps/desktop/src/main/runtimeManifest.ts；Windows 安装与发布脚本位于 scripts/，WinSW 和 systemd 模板位于 deploy/。这种目录划分把产品运行代码、安装操作和平台模板分开。"
+        },
+        {
+          "kind": "paragraph",
+          "data": "桌面端通过受保护的运行清单（runtime manifest）获取 API 地址和运行目录，不从源码路径或随意环境变量猜测生产配置。Windows 使用 Electron Forge 生成安装包，正式发布要求签名；未签名构建会被明确标注为测试包，避免误发。"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": ["机制", "目的", "评价"],
+            "rows": [
+              ["本机服务管理器", "统一管理三个后台服务", "应保留"],
+              ["运行清单", "明确桌面与服务连接关系", "应保留并简化配置入口"],
+              ["签名/测试包区分", "防止测试构建冒充正式发布", "应保留"],
+              ["多条分散验证命令", "检查不同质量维度", "应收敛为统一 verify 入口"]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "测试与质量保障",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "仓库已经具备多层验证：TypeScript 单元测试、架构守卫、Python 科学链测试、Electron 真实进程 E2E，以及打包和安装契约测试。它们分别证明行为、边界、科学输出、界面链路和部署约束。"
+        },
+        {
+          "kind": "paragraph",
+          "data": "TypeScript 测试与源码同目录，服务端和桌面端的 architecture.test.ts 验证依赖方向；Electron 真实进程场景位于 tests/e2e/；Python 计算服务测试位于 apps/worker/tests/，科学链测试位于根 tests/。根 package.json 提供主要命令，但目前尚未由仓库内持续集成（CI）统一执行。"
+        },
+        {
+          "kind": "paragraph",
+          "data": "当前不足不是没有测试，而是验证入口分散，仓库内也没有可审计的 CI workflow。团队容易出现“某个命令通过了，就以为全部通过”的误判。最有效的改进是增加一条统一 verify 命令和基础 CI，而不是继续堆新的门禁脚本。"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": ["验证层", "主要证明"],
+            "rows": [
+              ["单元与服务测试", "局部行为和错误路径正确"],
+              ["架构守卫", "旧路径和错误依赖不会回流"],
+              ["Electron E2E", "真实桌面、地图和面板交互可用"],
+              ["Python 科学链", "真实数据能生成地图、表格和报告"],
+              ["部署契约", "构建、配置和安装边界符合预期"]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "门禁与安全机制取舍",
+      "level": 1,
+      "content": [
+        {
+          "kind": "paragraph",
+          "data": "门禁不能按“多或少”判断，而应看它是否守住真实风险、是否有唯一权威实现、失败信息是否清楚。权限、路径、事务、跨进程数据模式和生产签名保护的是数据与用户，不能为了开发方便删除；真正拖累扩展性的通常是同一校验在多层重复、手写清单和仅检查文件文字的脆弱测试。"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": ["分类", "处理方式", "示例"],
+            "rows": [
+              ["核心边界", "保留", "认证授权、工作区隔离、路径沙箱、事务、协议数据模式"],
+              ["产品真实性", "保留", "工具失败必须真实失败、交付成果必须来自真实输出"],
+              ["重复门禁", "合并", "HTTP/WebSocket 重复 CSRF、分散权限声明、重复响应校验"],
+              ["机械门禁", "删除或替换", "重复文件清单、固定行数限制、只扫字符串的脆弱规则"],
+              ["开发验证", "统一入口", "把 lint、test、build、Python 检查收敛到 verify"]
+            ]
+          }
+        },
+        {
+          "kind": "paragraph",
+          "data": "建议的原则是“安全边界不降级，执行方式做减法”：每条重要规则只保留一个事实源，调用方复用统一能力，开发环境给出快速模式，正式发布再执行完整验证。"
+        }
+      ]
+    },
+    {
+      "title": "演进建议与讲解提纲",
+      "level": 1,
+      "content": [
+        {
+          "kind": "sub_heading",
+          "data": "优先级建议"
+        },
+        {
+          "kind": "table",
+          "data": {
+            "headers": ["优先级", "建议", "预期收益"],
+            "rows": [
+              ["P0", "关闭期间先停止接受新的 WebSocket 运行任务，再排空和关闭服务", "避免关机窗口仍产生新任务"],
+              ["P1", "统一 WebSocket/HTTP 操作元数据和权限声明", "减少重复门禁与接线成本"],
+              ["P1", "拆分 AppShell、WorkspaceLayout 和桌面进程间通信", "降低界面错位与修改连锁影响"],
+              ["P1", "建立单一 verify 命令和基础 CI", "让质量状态可重复、可审计"],
+              ["P2", "继续注册表化地图渲染与工具接入", "新增能力时少改核心文件"]
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "15 分钟讲解顺序"
+        },
+        {
+          "kind": "list",
+          "data": {
+            "ordered": true,
+            "items": [
+              "2 分钟：GeoForge 解决什么问题——让自然语言、GIS 和科学计算形成真实交付链。",
+              "4 分钟：展示组件与目录——Electron/React、Node/Hono、Python 计算服务、数据库和本机服务管理器分别在哪里。",
+              "3 分钟：沿一次任务讲 WebSocket——为什么运行任务、审批和地图更新需要持续双向连接。",
+              "3 分钟：讲 Agent、工具与数据——模型负责决策，平台负责执行、事实和恢复。",
+              "2 分钟：解释设计取舍——唯一事实源、注册表扩展，以及哪些门禁保留或合并。",
+              "1 分钟：给出下一阶段四项优先工作。"
+            ]
+          }
+        },
+        {
+          "kind": "sub_heading",
+          "data": "结论"
+        },
+        {
+          "kind": "paragraph",
+          "data": "GeoForge 的价值不在于使用了多少技术，而在于把模型推理、专业工具、空间数据和用户界面放在清晰的责任边界内。下一阶段不需要推倒重来，应围绕“统一规则、拆分大文件、收敛验证、保持真实失败”做减法。这样既能降低今天的维护成本，也不会牺牲以后接入新工具、新数据和新工作流的能力。"
+        }
+      ]
+    }
+  ]
+}

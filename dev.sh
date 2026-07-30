@@ -23,12 +23,16 @@
 #     作者: JamesLinYJ
 #     协助: OpenAI Codex:GPT-5.6 Sol
 #     说明: 桌面入口启动三个后台服务后运行 Electron；浏览器工作台不再受监督。
+#
+#   维护记录 (2026-07-30):
+#     作者: JamesLinYJ
+#     协助: OpenAI Codex:GPT-5.6 Sol
+#     说明: 移除 Node 24 专用启动门禁；开发入口遵从 package.json 的 Node 最低版本。
 # --------------------------------------------------------------------------
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
-node "$ROOT/scripts/require-node24.mjs"
 
 load_dotenv() {
   local file="$1" line key value

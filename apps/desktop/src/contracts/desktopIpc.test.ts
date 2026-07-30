@@ -13,22 +13,27 @@ import { describe, expect, it } from 'vitest'
 
 import {
   DESKTOP_API_RESPONSE_MAX_BYTES,
+  DESKTOP_CLIPBOARD_TEXT_MAX_BYTES,
   desktopApiOperationSchema,
   desktopApiResponseSchema,
   desktopAuthBootstrapResultSchema,
   desktopAuthCommandSchema,
   desktopAuthProjectionSchema,
   desktopConfirmationRequestSchema,
+  desktopClipboardWriteSchema,
   desktopControlRequestSchema,
   desktopControlResponseSchema,
   desktopDownloadRequestSchema,
   desktopExportRequestSchema,
   desktopFileSelectionHandleSchema,
+  desktopFileSelectionHandlesSchema,
   desktopFileSelectionRequestSchema,
   desktopMicrophonePermissionRequestSchema,
   desktopMicrophonePermissionResultSchema,
   desktopRendererDiagnosticSchema,
   desktopSupervisorCommandSchema,
+  desktopSupervisorLogsQuerySchema,
+  desktopSupervisorLogsResponseSchema,
   desktopTextFileReadRequestSchema,
   desktopTextFileReadResultSchema,
   desktopUploadOperationSchema,
@@ -194,6 +199,30 @@ describe('desktop IPC contracts', () => {
     }).success).toBe(false)
   })
 
+  it('validates bounded file data without reclassifying it as a control frame', () => {
+    const handles = Array.from({ length: 200 }, (_, index) => ({
+      handleId: crypto.randomUUID(),
+      name: `radar-${index}.json`,
+      sizeBytes: 128,
+      mediaType: 'application/json',
+      relativePath: `${'长目录/'.repeat(60)}radar-${index}.json`,
+      modifiedAtMs: 100,
+    }))
+    expect(new TextEncoder().encode(JSON.stringify(handles)).byteLength).toBeGreaterThan(64 * 1024)
+    expect(desktopFileSelectionHandlesSchema.safeParse(handles).success).toBe(true)
+
+    const escapedText = '\\'.repeat(48 * 1024)
+    expect(new TextEncoder().encode(escapedText).byteLength).toBe(48 * 1024)
+    expect(new TextEncoder().encode(JSON.stringify({
+      name: 'automation.json',
+      text: escapedText,
+    })).byteLength).toBeGreaterThan(64 * 1024)
+    expect(desktopTextFileReadResultSchema.safeParse({
+      name: 'automation.json',
+      text: escapedText,
+    }).success).toBe(true)
+  })
+
   it('caps UTF-8 API response bodies before they cross back into Renderer', () => {
     expect(desktopApiResponseSchema.safeParse({
       status: 200,
@@ -210,6 +239,45 @@ describe('desktop IPC contracts', () => {
     expect(desktopSupervisorCommandSchema.safeParse({
       command: 'restart',
       payload: { target: 'web', operationId: crypto.randomUUID() },
+    }).success).toBe(false)
+    expect(desktopSupervisorCommandSchema.safeParse({
+      command: 'logs',
+      payload: {},
+    }).success).toBe(false)
+  })
+
+  it('keeps bulk logs and clipboard text out of the 64 KiB control-frame contract', () => {
+    const logs = Array.from({ length: 1_000 }, (_, index) => ({
+      sequence: index + 1,
+      serviceId: 'api' as const,
+      component: 'server',
+      processId: 42,
+      stream: 'stdout' as const,
+      level: 'info' as const,
+      message: `日志 ${index} ${'运行信息'.repeat(30)}`,
+      createdAt: '2026-07-30T08:00:00.000Z',
+    }))
+    const serializedLogs = JSON.stringify(logs)
+    expect(new TextEncoder().encode(serializedLogs).byteLength).toBeGreaterThan(64 * 1024)
+    expect(desktopSupervisorLogsQuerySchema.safeParse({
+      services: ['infra', 'worker', 'api'],
+      levels: [],
+      streams: [],
+      search: '',
+      includeSupervisor: true,
+      afterSequence: null,
+      tail: 2_000,
+    }).success).toBe(true)
+    expect(desktopSupervisorLogsResponseSchema.safeParse(logs).success).toBe(true)
+    expect(desktopControlResponseSchema.safeParse({
+      version: 1,
+      requestId: crypto.randomUUID(),
+      ok: true,
+      data: logs,
+    }).success).toBe(false)
+    expect(desktopClipboardWriteSchema.safeParse({ text: serializedLogs }).success).toBe(true)
+    expect(desktopClipboardWriteSchema.safeParse({
+      text: '测'.repeat(Math.floor(DESKTOP_CLIPBOARD_TEXT_MAX_BYTES / 3) + 1),
     }).success).toBe(false)
   })
 

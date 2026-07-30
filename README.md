@@ -44,7 +44,7 @@ HTTP 只保留 `/health`、文件/图层上传替换、artifact 元数据/GeoJSO
 
 ### Windows 一键启动
 
-首次运行先安装 `.node-version` 指定的 Node.js 24 LTS（当前为 24.14.0），复制 `.env.example` 为 `.env` 并执行 `npm install`。开发入口会在启动前拒绝不受支持的 Node 主版本，避免构建与实际运行使用两套环境。Supervisor 只管理 `infra`、`worker` 和 `api` 三个后台服务；Electron 是本地交互应用，不作为后台服务监督。
+首次运行建议安装 `.node-version` 指定的 Node.js 24 LTS（当前为 24.14.0），也支持 Node.js 25 及后续满足 `package.json` 中 `>=24` 要求的版本。复制 `.env.example` 为 `.env` 并执行 `npm install`。Supervisor 只管理 `infra`、`worker` 和 `api` 三个后台服务；Electron 是本地交互应用，不作为后台服务监督。
 
 ```powershell
 .\GeoForge.ps1
@@ -61,7 +61,7 @@ HTTP 只保留 `/health`、文件/图层上传替换、artifact 元数据/GeoJSO
 .\dev.ps1 stop
 ```
 
-`GeoForge.ps1` 是面向日常使用和演示的一键入口：它自动选择已安装的 Node 24，复用 `dev.ps1 desktop` 装配本机安全配置、启动 Supervisor，并立即进入桌面工作台；Renderer 不等待后端才挂载，三项原生后台服务会在旁路恢复。也可以使用 `npm run desktop:windows`、`npm run dev:windows:status` 和 `npm run dev:windows:stop`。关闭桌面窗口不会停止后台服务；使用 `.\dev.ps1 shutdown` 才会停止三项后台服务并关闭 Supervisor。
+`GeoForge.ps1` 是面向日常使用和演示的一键入口：它自动选择已安装的 Node 24 或更高版本，复用 `dev.ps1 desktop` 装配本机安全配置、启动 Supervisor，并立即进入桌面工作台；Renderer 不等待后端才挂载，三项原生后台服务会在旁路恢复。也可以使用 `npm run desktop:windows`、`npm run dev:windows:status` 和 `npm run dev:windows:stop`。关闭桌面窗口不会停止后台服务；使用 `.\dev.ps1 shutdown` 才会停止三项后台服务并关闭 Supervisor。
 
 `agent` 会打开无需输入平台账号密码的本机 Agent 终端。它使用操作系统 ACL 保护的本机根密钥建立短期、仅 loopback 可用的保留服务主体，并复用主 API 的 Agent Runner、工作流、审批和会话事实源。使用说明见 [GeoForge 本机 Agent CLI](docs/operations/local-agent-cli.md)。
 

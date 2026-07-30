@@ -9,15 +9,21 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { readFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 
 const packageSchema = z.object({
   version: z.string(),
   productName: z.string().optional(),
+  engines: z.object({
+    node: z.string(),
+  }),
   scripts: z.record(z.string(), z.string()),
+  devDependencies: z.record(z.string(), z.string()).optional(),
 })
 
 describe('desktop packaging contract', () => {
@@ -32,13 +38,17 @@ describe('desktop packaging contract', () => {
     expect(desktopPackage.version).toBe('0.1.0')
     expect(desktopPackage.version).toBe(rootPackage.version)
     expect(desktopPackage.productName).toBe('GeoForge')
+    expect(desktopPackage.engines.node).toBe('>=24')
+    expect(rootPackage.engines.node).toBe('>=24')
     expect(desktopPackage.scripts.package).toContain('npm --prefix ../.. run build:desktop')
-    expect(desktopPackage.scripts.package).toContain('require-node24.mjs')
+    expect(desktopPackage.scripts.package).not.toContain('require-node24.mjs')
     expect(desktopPackage.scripts.package).toContain('--platform win32 --arch x64')
     expect(desktopPackage.scripts.make).toContain('npm --prefix ../.. run build:desktop')
     expect(desktopPackage.scripts.make).toContain('prepare-squirrel-vendor.ps1')
     expect(desktopPackage.scripts.make).toContain('--platform win32 --arch x64')
     expect(desktopPackage.scripts['make:release']).toContain('make-desktop-release.ps1')
+    expect(desktopPackage.devDependencies?.['@electron-forge/maker-base']).toBe('7.11.2')
+    expect(desktopPackage.devDependencies?.['@electron-forge/maker-zip']).toBeUndefined()
 
     const rootBuild = rootPackage.scripts['build:desktop']
     expect(rootBuild).toBeDefined()
@@ -60,6 +70,10 @@ describe('desktop packaging contract', () => {
 
   it('keeps Windows installer identity and metadata explicit in Forge', async () => {
     const forgeSource = await readFile(path.resolve(process.cwd(), 'forge.config.mjs'), 'utf8')
+    const zipMakerSource = await readFile(
+      path.resolve(process.cwd(), 'packaging', 'geoForgeZipMaker.mjs'),
+      'utf8',
+    )
 
     for (const requiredMetadata of [
       "appBundleId: 'com.geoforge.desktop'",
@@ -80,13 +94,16 @@ describe('desktop packaging contract', () => {
       'GEOFORGE_RELEASE_BUILD',
       'noMsi: true',
       'setupIcon: windowsIconPath',
-      "name: '@electron-forge/maker-zip'",
-      "platforms: ['win32']",
+      "import { GeoForgeZipMaker } from './packaging/geoForgeZipMaker.mjs'",
+      "new GeoForgeZipMaker({}, ['win32'])",
     ]) {
       expect(forgeSource, requiredMetadata).toContain(requiredMetadata)
     }
     expect(forgeSource).toContain("artifact.replace(/\\.zip$/iu, '-UNSIGNED-TEST.zip')")
-    expect(forgeSource).not.toContain('fs.rmdir')
+    expect(forgeSource).not.toContain('@electron-forge/maker-zip')
+    expect(zipMakerSource).toContain('new ZipArchive(')
+    expect(zipMakerSource).toContain('await rm(destinationPath, { force: true })')
+    expect(zipMakerSource).not.toContain('fs.rmdir')
   })
 
   it('keeps unsigned verification builds distinct from signed production releases', async () => {
@@ -104,6 +121,58 @@ describe('desktop packaging contract', () => {
       'UNSIGNED-TEST-BUILD.txt',
     ]) {
       expect(releaseScript, releaseBoundary).toContain(releaseBoundary)
+    }
+  })
+
+  it('creates the Windows ZIP artifact without the cross-zip compatibility path', async () => {
+    const temporaryRoot = await mkdtemp(path.join(tmpdir(), 'geoforge-zip-maker-'))
+    try {
+      const sourceDirectory = path.join(temporaryRoot, 'GeoForge-win32-x64')
+      await mkdir(path.join(sourceDirectory, 'resources'), { recursive: true })
+      await writeFile(path.join(sourceDirectory, 'GeoForge.exe'), 'desktop-fixture', 'utf8')
+      await writeFile(path.join(sourceDirectory, 'resources', 'app.asar'), 'asar-fixture', 'utf8')
+
+      const makerModuleUrl = pathToFileURL(
+        path.resolve(process.cwd(), 'packaging', 'geoForgeZipMaker.mjs'),
+      ).href
+      const makerModule = await import(makerModuleUrl) as {
+        GeoForgeZipMaker: new () => {
+          platforms: string[]
+          make: (options: {
+            dir: string
+            makeDir: string
+            packageJSON: { version: string }
+            targetArch: string
+            targetPlatform: string
+          }) => Promise<string[]>
+        }
+      }
+      const maker = new makerModule.GeoForgeZipMaker()
+      const artifacts = await maker.make({
+        dir: sourceDirectory,
+        makeDir: path.join(temporaryRoot, 'make'),
+        packageJSON: { version: '0.1.0' },
+        targetArch: 'x64',
+        targetPlatform: 'win32',
+      })
+
+      expect(maker.platforms).toEqual(['win32'])
+      expect(artifacts).toHaveLength(1)
+      const artifact = artifacts[0]
+      if (!artifact) throw new Error('ZIP Maker 未返回构建产物。')
+      expect(artifact).toBe(path.join(
+        temporaryRoot,
+        'make',
+        'zip',
+        'win32',
+        'x64',
+        'GeoForge-win32-x64-0.1.0.zip',
+      ))
+      const archive = await readFile(artifact)
+      expect(archive.subarray(0, 4).toString('hex')).toBe('504b0304')
+      expect(archive.length).toBeGreaterThan(100)
+    } finally {
+      await rm(temporaryRoot, { recursive: true, force: true })
     }
   })
 

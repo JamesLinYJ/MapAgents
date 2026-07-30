@@ -27,6 +27,11 @@
 #     作者: JamesLinYJ
 #     协助: OpenAI Codex:GPT-5.6 Sol
 #     说明: 支持一键桌面启动器显式传入已验证的 Node 24 可执行文件。
+#
+#   维护记录 (2026-07-30):
+#     作者: JamesLinYJ
+#     协助: OpenAI Codex:GPT-5.6 Sol
+#     说明: 移除 Node 24 专用启动门禁；开发入口遵从 package.json 的 Node 最低版本。
 # --------------------------------------------------------------------------
 
 [CmdletBinding()]
@@ -85,8 +90,6 @@ if ($ConfiguredNode) {
 }
 $NodeDirectory = Split-Path -Parent $Node
 $env:Path = "$NodeDirectory$([IO.Path]::PathSeparator)$($env:Path)"
-& $Node (Join-Path $Root 'scripts\require-node24.mjs')
-if ($LASTEXITCODE -ne 0) { throw 'GeoForge 开发入口要求先切换到 Node 24 LTS。' }
 . (Join-Path $Root 'scripts\dev-environment.ps1')
 Initialize-GeoForgeDevEnvironment -ProjectRoot $Root
 
