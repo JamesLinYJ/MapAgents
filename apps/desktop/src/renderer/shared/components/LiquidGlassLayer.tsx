@@ -5,7 +5,8 @@
 //   文件:       LiquidGlassLayer.tsx
 //
 //   日期:       2026年06月18日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 // 位移图由 scripts/generate-liquid-glass-maps.mjs 预生成并由 Vite 加内容哈希。

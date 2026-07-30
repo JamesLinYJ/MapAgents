@@ -5,10 +5,12 @@
 //   文件:       localConsoleTheme.ts
 //
 //   日期:       2026年07月22日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 //
 //   维护记录 (2026-07-27):
-//     作者: OpenAI Codex
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
 //     说明: 增加 Agent 终端的信息层级色与活动指示器主题。
 // --------------------------------------------------------------------------
 

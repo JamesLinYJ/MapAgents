@@ -4,6 +4,9 @@
 //
 //   文件:       backgroundTaskRegistry.ts
 //
+//   日期:       2026年07月13日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 import { nowUtc } from '../utils/ids.js'

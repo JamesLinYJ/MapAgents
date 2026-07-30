@@ -3,6 +3,10 @@
 //   地理智能平台 - 直接工具执行动作
 //
 //   文件:       useToolExecutionAction.ts
+//
+//   日期:       2026年07月13日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 import { useCallback } from 'react'

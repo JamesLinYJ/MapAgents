@@ -1,3 +1,14 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - 运行变更队列
+//
+//   文件:       runMutationQueue.ts
+//
+//   日期:       2026年07月13日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
+// --------------------------------------------------------------------------
+
 import PQueue from 'p-queue'
 import { runtimeMutationQueueDepth } from '../observability/metrics.js'
 

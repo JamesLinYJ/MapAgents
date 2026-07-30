@@ -5,7 +5,8 @@
 //   文件:       geojson.ts
 //
 //   日期:       2026年06月15日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 export type Position = [number, number, ...number[]]
 export type Geometry =

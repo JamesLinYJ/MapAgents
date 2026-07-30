@@ -5,7 +5,8 @@
 //   文件:       workerAuth.ts
 //
 //   日期:       2026年07月02日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 import { createHash, createHmac, randomUUID } from 'node:crypto'

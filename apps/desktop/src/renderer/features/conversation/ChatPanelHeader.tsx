@@ -5,7 +5,8 @@
 //   文件:       ChatPanelHeader.tsx
 //
 //   日期:       2026年07月07日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 import { Maximize2, Minimize2, Pencil } from 'lucide-react'

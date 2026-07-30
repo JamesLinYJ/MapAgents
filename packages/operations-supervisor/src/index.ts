@@ -5,7 +5,8 @@
 //   文件:       index.ts
 //
 //   日期:       2026年07月22日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 export * from './catalog.js'

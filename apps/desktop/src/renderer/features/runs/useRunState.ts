@@ -6,6 +6,7 @@
 //
 //   日期:       2026年05月13日
 //   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 import { useCallback, useEffect, useReducer, useRef, startTransition } from 'react'

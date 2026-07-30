@@ -5,7 +5,8 @@
 //   文件:       itemSink.ts
 //
 //   日期:       2026年06月23日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 // ItemSink owns the UI item lifecycle for a single run. ConversationItem.timestamp

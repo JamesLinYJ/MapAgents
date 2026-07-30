@@ -1,3 +1,14 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - 应用实例数据库锁
+//
+//   文件:       applicationInstanceLock.ts
+//
+//   日期:       2026年07月13日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
+// --------------------------------------------------------------------------
+
 import type { PoolClient } from 'pg'
 
 import { errorLogPayload, logger } from '../observability/logger.js'

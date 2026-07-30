@@ -5,7 +5,8 @@
 //   文件:       prompts.ts
 //
 //   日期:       2026年07月17日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 export const LIST_AUTOMATIONS_PROMPT = `列出当前用户有权执行、且明确允许由智能体同步调用的自动化流程。

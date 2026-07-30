@@ -6,18 +6,22 @@
 #   文件:       dev.sh
 #
 #   日期:       2026年07月21日
-#   作者:       OpenAI Codex
+#   作者:       JamesLinYJ
+#   协助:       OpenAI Codex:GPT-5.6 Sol
 #
 #   维护记录 (2026-07-22):
-#     作者: OpenAI Codex
+#     作者: JamesLinYJ
+#     协助: OpenAI Codex:GPT-5.6 Sol
 #     说明: 进程事实源迁移到 TypeScript 监督后台；无参数进入中文本地运维台。
 #
 #   维护记录 (2026-07-27):
-#     作者: OpenAI Codex
+#     作者: JamesLinYJ
+#     协助: OpenAI Codex:GPT-5.6 Sol
 #     说明: 开发入口在启动 API 或 Agent CLI 前构建跨端对话展示包。
 #
 #   维护记录 (2026-07-29):
-#     作者: OpenAI Codex
+#     作者: JamesLinYJ
+#     协助: OpenAI Codex:GPT-5.6 Sol
 #     说明: 桌面入口启动三个后台服务后运行 Electron；浏览器工作台不再受监督。
 # --------------------------------------------------------------------------
 set -euo pipefail

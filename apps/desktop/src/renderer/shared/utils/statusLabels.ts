@@ -1,3 +1,14 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - 运行状态中文标签
+//
+//   文件:       statusLabels.ts
+//
+//   日期:       2026年07月07日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
+// --------------------------------------------------------------------------
+
 // Run status → Chinese display label (single source of truth).
 // Previously duplicated in useConversation.ts, DetailHistoryPanel.tsx, diagnostics.ts, derivedState.ts, detailSummaryModel.ts.
 
@@ -17,4 +28,3 @@ export function formatRunStatus(status?: string): string {
   if (!status) return '准备就绪'
   return STATUS_LABELS[status] ?? status
 }
-

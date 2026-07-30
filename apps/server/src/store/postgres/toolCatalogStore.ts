@@ -5,7 +5,8 @@
 //   文件:       toolCatalogStore.ts
 //
 //   日期:       2026年07月07日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 import { and, asc, eq } from 'drizzle-orm'

@@ -1,3 +1,14 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - 线程变更队列测试
+//
+//   文件:       threadMutationQueue.test.ts
+//
+//   日期:       2026年07月13日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
+// --------------------------------------------------------------------------
+
 import { describe, expect, it } from 'vitest'
 import { StoreConflictError } from './storeErrors.js'
 import { ThreadMutationQueue, ThreadMutationQueuePoisonedError } from './threadMutationQueue.js'

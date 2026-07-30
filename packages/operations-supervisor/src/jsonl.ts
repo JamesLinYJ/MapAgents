@@ -5,7 +5,8 @@
 //   文件:       jsonl.ts
 //
 //   日期:       2026年07月22日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 export const OPERATIONS_MAX_FRAME_BYTES = 64 * 1024

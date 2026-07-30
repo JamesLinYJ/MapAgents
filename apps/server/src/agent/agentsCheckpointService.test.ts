@@ -3,6 +3,10 @@
 //   地理智能平台 - Agents SDK 检查点兼容性测试
 //
 //   文件:       agentsCheckpointService.test.ts
+//
+//   日期:       2026年07月13日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 import { describe, expect, it } from 'vitest'

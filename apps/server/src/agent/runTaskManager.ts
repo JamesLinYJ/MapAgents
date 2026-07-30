@@ -4,6 +4,9 @@
 //
 //   文件:       runTaskManager.ts
 //
+//   日期:       2026年07月08日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 import type { AnalysisRun } from '../schemas/types.js'

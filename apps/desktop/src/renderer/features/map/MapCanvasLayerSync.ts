@@ -5,6 +5,7 @@
 //   文件:       MapCanvasLayerSync.ts
 //   日期:       2026年07月06日
 //   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 import { LngLatBounds, Map as MapLibreMap } from 'maplibre-gl/dist/maplibre-gl-csp'

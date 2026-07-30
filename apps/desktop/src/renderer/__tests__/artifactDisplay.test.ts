@@ -5,7 +5,8 @@
 //   文件:       artifactDisplay.test.ts
 //
 //   日期:       2026年06月24日
-//   作者:       Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 import { describe, expect, it } from 'vitest'

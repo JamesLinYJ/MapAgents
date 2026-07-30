@@ -5,7 +5,8 @@
 //   文件:       conversationJumpItems.ts
 //
 //   日期:       2026年07月09日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 import type { ConversationEntry } from '@geo-agent-platform/conversation-presentation'

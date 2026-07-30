@@ -5,7 +5,8 @@
 //   文件:       prompt.ts
 //
 //   日期:       2026年06月25日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 export const TODO_WRITE_PROMPT = `更新当前运行中用户可见的 Todo 列表。

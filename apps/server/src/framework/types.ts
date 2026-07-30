@@ -1,3 +1,14 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - 工具框架类型
+//
+//   文件:       types.ts
+//
+//   日期:       2026年06月26日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
+// --------------------------------------------------------------------------
+
 import type { z } from 'zod'
 import type { AgentRuntimeConfig, ArtifactDisplay, MeteorologicalDatasetRecord } from '../schemas/types.js'
 import type { AuthContext } from '../security/types.js'

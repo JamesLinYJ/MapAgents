@@ -5,7 +5,8 @@
 //   文件:       meteorology.test.ts
 //
 //   日期:       2026年07月01日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 import os from 'node:os'

@@ -5,19 +5,23 @@
 //   文件:       architecture.test.ts
 //
 //   日期:       2026年06月15日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 //
 //   维护记录 (2026-07-27):
-//     作者: OpenAI Codex
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
 //     说明: 核心应用统一归入 apps，共享契约源码统一归入 src，
 //           并增加旧目录与过时事实源不得回流的结构守卫。
 //
 //   维护记录 (2026-07-27):
-//     作者: OpenAI Codex
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
 //     说明: 增加 Web Chat 与本机 Agent CLI 共用只读对话展示投影的结构守卫。
 //
 //   维护记录 (2026-07-29):
-//     作者: OpenAI Codex
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
 //     说明: 增加浏览器工作台、匿名分享和容器地图旁车不得回流的守卫，
 //           并固定退役分享 URL 的 HTTP 404 行为。
 // --------------------------------------------------------------------------

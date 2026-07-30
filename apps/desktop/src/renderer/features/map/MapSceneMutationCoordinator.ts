@@ -4,7 +4,8 @@
 //
 //   文件:       MapSceneMutationCoordinator.ts
 //   日期:       2026年07月16日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 import type { MapScene, MapSceneLayer, MapSceneUpdate } from '@geo-agent-platform/shared-types'

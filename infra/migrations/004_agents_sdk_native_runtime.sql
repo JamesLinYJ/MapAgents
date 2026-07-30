@@ -1,6 +1,8 @@
 -- GeoForge Agents SDK 原生运行时迁移
+-- 文件:       004_agents_sdk_native_runtime.sql
 -- 日期: 2026年07月23日
--- 作者: OpenAI Codex
+-- 作者:       JamesLinYJ
+-- 协助:       OpenAI Codex:GPT-5.6 Sol
 --
 -- 只重置 agent-runtime 配置，并把无法由 schema v3 安全恢复的未完成运行
 -- 明确标记为失败。用户、会话、对话、工作流、数据集、图层和 Artifact 不变。

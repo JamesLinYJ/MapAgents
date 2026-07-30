@@ -1,3 +1,14 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - SDK 运行时集成测试
+//
+//   文件:       runtimeSdkIntegrations.test.ts
+//
+//   日期:       2026年07月08日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
+// --------------------------------------------------------------------------
+
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'

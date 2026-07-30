@@ -5,7 +5,8 @@
 //   文件:       demoManifest.ts
 //
 //   日期:       2026年06月17日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 // Manifest 是工具公开契约。UI、Agent 和 runtime descriptor 都从这里获得

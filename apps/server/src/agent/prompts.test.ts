@@ -1,3 +1,14 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - Agent 提示词测试
+//
+//   文件:       prompts.test.ts
+//
+//   日期:       2026年07月08日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
+// --------------------------------------------------------------------------
+
 import { describe, expect, it } from 'vitest'
 
 import type { ToolDef } from '../framework/types.js'

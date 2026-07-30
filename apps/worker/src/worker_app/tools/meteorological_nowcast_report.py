@@ -5,7 +5,8 @@
 #   文件:       meteorological_nowcast_report.py
 #
 #   日期:       2026年07月18日
-#   作者:       OpenAI Codex
+#   作者:       JamesLinYJ
+#   协助:       OpenAI Codex:GPT-5.6 Sol
 # --------------------------------------------------------------------------
 
 """从已校验的自动化运行事实生成确定性 DOCX 报告。"""

@@ -5,7 +5,8 @@
 //   文件:       index.ts
 //
 //   日期:       2026年06月15日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 import manifest from './manifest.json' with { type: 'json' };
 import { createRoutePlannerTool } from './routePlanner.js';

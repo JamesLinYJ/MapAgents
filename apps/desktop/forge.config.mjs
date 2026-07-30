@@ -5,7 +5,8 @@
 //   文件:       forge.config.mjs
 //
 //   日期:       2026年07月29日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 import { FuseV1Options, FuseVersion } from '@electron/fuses'

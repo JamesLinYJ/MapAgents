@@ -5,7 +5,8 @@
 //   文件:       fileAgentsSession.test.ts
 //
 //   日期:       2026年06月23日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 // FileAgentsSession 是 SDK Session 与 canonical transcript 的边界。

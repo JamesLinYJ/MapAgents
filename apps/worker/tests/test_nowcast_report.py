@@ -5,7 +5,8 @@
 #   文件:       test_nowcast_report.py
 #
 #   日期:       2026年07月18日
-#   作者:       OpenAI Codex
+#   作者:       JamesLinYJ
+#   协助:       OpenAI Codex:GPT-5.6 Sol
 # --------------------------------------------------------------------------
 
 from __future__ import annotations

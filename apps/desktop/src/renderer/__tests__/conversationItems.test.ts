@@ -5,7 +5,8 @@
 //   文件:       conversationItems.test.ts
 //
 //   日期:       2026年06月04日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 // 测试聊天 UI 的唯一事实源：ConversationItem。

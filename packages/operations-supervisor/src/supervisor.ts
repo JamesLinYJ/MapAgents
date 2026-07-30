@@ -5,10 +5,12 @@
 //   文件:       supervisor.ts
 //
 //   日期:       2026年07月22日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 //
 //   维护记录 (2026-07-29):
-//     作者: OpenAI Codex
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
 //     说明: 基础设施改为 Supervisor 直接拥有的原生进程树，端口不再接管外部进程。
 // --------------------------------------------------------------------------
 

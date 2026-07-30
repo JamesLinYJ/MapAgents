@@ -5,7 +5,8 @@
 //   文件:       GlassDialog.tsx
 //
 //   日期:       2026年07月07日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 import * as Dialog from '@radix-ui/react-dialog'

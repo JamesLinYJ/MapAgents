@@ -5,10 +5,12 @@
 //   文件:       desktopIpc.ts
 //
 //   日期:       2026年07月29日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 //
 //   维护记录 (2026-07-29):
-//     作者: OpenAI Codex
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
 //     说明: 本地文件边界收敛为 Main 原生选择器与一次性不透明句柄。
 // --------------------------------------------------------------------------
 

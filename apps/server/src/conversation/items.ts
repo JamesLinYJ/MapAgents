@@ -1,3 +1,14 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - 对话条目工具
+//
+//   文件:       items.ts
+//
+//   日期:       2026年06月26日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
+// --------------------------------------------------------------------------
+
 import type { ConversationItem } from '../schemas/types.js'
 
 export function latestAssistantText(items: ConversationItem[]): string {

@@ -3,6 +3,10 @@
 //   地理智能平台 - Agents SDK 检查点服务
 //
 //   文件:       agentsCheckpointService.ts
+//
+//   日期:       2026年07月13日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 import { Agent, RunContext, RunState } from '@openai/agents'

@@ -5,10 +5,12 @@
 //   文件:       transport.ts
 //
 //   日期:       2026年07月06日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 //
 //   维护记录 (2026-07-29):
-//     作者: OpenAI Codex
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
 //     说明: 网络与文件上传所有权迁入 Electron Main，Renderer 仅调用窄 IPC。
 // --------------------------------------------------------------------------
 

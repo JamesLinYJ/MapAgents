@@ -5,7 +5,8 @@
 //   文件:       scheduledTaskService.ts
 //
 //   日期:       2026年07月13日
-//   作者:       jameslinyj, OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 // GeoForge Automation 启动、审批、取消、定时任务和进程内后台任务服务。

@@ -5,7 +5,8 @@
 //   文件:       eslint.config.js
 //
 //   日期:       2026年06月25日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 import js from '@eslint/js'

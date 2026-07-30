@@ -5,7 +5,8 @@
 //   文件:       contractValidator.ts
 //
 //   日期:       2026年07月07日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 // Node 启动时拉取 Python Worker 由 Pydantic 生成的 /tools/catalog。

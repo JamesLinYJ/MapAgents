@@ -5,7 +5,8 @@
 //   文件:       maplibre-csp.d.ts
 //
 //   日期:       2026年06月18日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 declare module 'maplibre-gl/dist/maplibre-gl-csp' {

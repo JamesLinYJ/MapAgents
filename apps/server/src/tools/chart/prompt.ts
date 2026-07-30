@@ -5,7 +5,8 @@
 //   文件:       prompt.ts
 //
 //   日期:       2026年06月30日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 export const CREATE_CHART_PROMPT = `用于把已经明确的表格或数值数据生成结构化图表描述。

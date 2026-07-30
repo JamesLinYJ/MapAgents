@@ -5,10 +5,12 @@
 //   文件:       localAgentConsole.tsx
 //
 //   日期:       2026年07月27日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 //
 //   维护记录 (2026-07-27):
-//     作者: OpenAI Codex
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
 //     说明: 增加分层品牌色、状态徽标和仅在活动期间运行的思考动画。
 // --------------------------------------------------------------------------
 

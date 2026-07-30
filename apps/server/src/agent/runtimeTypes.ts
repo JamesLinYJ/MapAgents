@@ -1,3 +1,14 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - Agent 运行时类型
+//
+//   文件:       runtimeTypes.ts
+//
+//   日期:       2026年07月13日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
+// --------------------------------------------------------------------------
+
 import type { Agent, Runner } from '@openai/agents'
 import type { SandboxRunConfig } from '@openai/agents/sandbox'
 

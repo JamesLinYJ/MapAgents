@@ -3,6 +3,10 @@
 //   地理智能平台 - Run 生命周期动作
 //
 //   文件:       useRunLifecycleActions.ts
+//
+//   日期:       2026年07月13日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 import { startTransition, useCallback } from 'react'

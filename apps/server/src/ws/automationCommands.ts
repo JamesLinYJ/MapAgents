@@ -5,7 +5,8 @@
 //   文件:       automationCommands.ts
 //
 //   日期:       2026年07月13日
-//   作者:       jameslinyj, OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 // GeoForge Automation Studio、运行、审批、定时任务和后台任务 WS 命令。

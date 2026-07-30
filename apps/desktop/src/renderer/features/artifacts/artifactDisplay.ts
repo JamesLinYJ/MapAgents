@@ -5,7 +5,8 @@
 //   文件:       artifactDisplay.ts
 //
 //   日期:       2026年06月24日
-//   作者:       Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 export const ARTIFACT_DISPLAY_SURFACES = ['map', 'mini_app', 'download'] as const

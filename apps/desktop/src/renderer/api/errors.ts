@@ -6,7 +6,8 @@ import { isRecord } from '../shared/utils/guards'
 //   文件:       errors.ts
 //
 //   日期:       2026年07月02日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 export const API_UNAVAILABLE_MESSAGE = '工作台 API 未连接，请启动 Node API 服务。'

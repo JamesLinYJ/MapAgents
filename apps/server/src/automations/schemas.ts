@@ -5,7 +5,8 @@
 //   文件:       schemas.ts
 //
 //   日期:       2026年07月13日
-//   作者:       jameslinyj, OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 // GeoForge Automation 领域协议只在 shared-types 定义一次。

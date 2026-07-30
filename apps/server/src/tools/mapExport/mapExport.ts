@@ -5,7 +5,8 @@
 //   文件:       mapExport.ts
 //
 //   日期:       2026年06月15日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 // 导出文件必须进入统一 artifact store；payload 和 valueRef 不暴露绝对路径。

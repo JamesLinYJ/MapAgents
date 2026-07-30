@@ -5,6 +5,7 @@
 //   文件:       runStore.test.ts
 //   日期:       2026年07月13日
 //   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 import { describe, expect, it, vi } from 'vitest'

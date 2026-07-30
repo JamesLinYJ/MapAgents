@@ -5,7 +5,8 @@
 #   文件:       common.py
 #
 #   日期:       2026年06月23日
-#   作者:       Codex
+#   作者:       JamesLinYJ
+#   协助:       OpenAI Codex:GPT-5.5
 # --------------------------------------------------------------------------
 
 """Shared helpers for wrapping copied third-party meteorological tools.

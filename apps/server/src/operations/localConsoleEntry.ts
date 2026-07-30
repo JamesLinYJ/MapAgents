@@ -5,10 +5,12 @@
 //   文件:       localConsoleEntry.ts
 //
 //   日期:       2026年07月21日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 //
 //   维护记录 (2026-07-22):
-//     作者: OpenAI Codex
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
 //     说明: 改为连接独立 TypeScript 监督器，并将账户数据面延迟到对应页面。
 // --------------------------------------------------------------------------
 

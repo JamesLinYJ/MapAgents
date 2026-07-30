@@ -5,7 +5,8 @@
 //   文件:       automationExecution.test.ts
 //
 //   日期:       2026年07月19日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 import { describe, expect, it, vi } from 'vitest'

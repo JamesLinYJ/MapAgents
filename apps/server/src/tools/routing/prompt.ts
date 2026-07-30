@@ -5,7 +5,8 @@
 //   文件:       prompt.ts
 //
 //   日期:       2026年06月30日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 export const ROUTE_PLANNER_PROMPT = `用于基于 Valhalla/OpenStreetMap 路网规划真实通行路线。

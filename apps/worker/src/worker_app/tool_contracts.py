@@ -5,7 +5,8 @@
 #   文件:       tool_contracts.py
 #
 #   日期:       2026年07月07日
-#   作者:       OpenAI Codex
+#   作者:       JamesLinYJ
+#   协助:       OpenAI Codex:GPT-5.5
 # --------------------------------------------------------------------------
 
 """Worker 内部 API 的 Pydantic 请求/响应模型。

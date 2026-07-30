@@ -1,3 +1,14 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - 中止信号工具测试
+//
+//   文件:       abort.test.ts
+//
+//   日期:       2026年07月13日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
+// --------------------------------------------------------------------------
+
 import { describe, expect, it } from 'vitest'
 
 import { abortSignalWithTimeout } from './abort.js'

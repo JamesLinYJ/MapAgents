@@ -6,6 +6,7 @@
 //
 //   日期:       2026年07月03日
 //   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 import { describe, expect, it, vi } from 'vitest'

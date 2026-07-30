@@ -5,10 +5,12 @@
 //   文件:       fileHandleRegistry.ts
 //
 //   日期:       2026年07月29日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 //
 //   维护记录 (2026-07-29):
-//     作者: OpenAI Codex
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
 //     说明: Main 独占文件与目录选择、枚举、指纹校验和一次性读取生命周期。
 // --------------------------------------------------------------------------
 

@@ -1,3 +1,14 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - 事件总线测试
+//
+//   文件:       eventBus.test.ts
+//
+//   日期:       2026年07月13日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
+// --------------------------------------------------------------------------
+
 import { describe, expect, it, vi } from 'vitest'
 import { InMemoryEventBus } from './eventBus.js'
 

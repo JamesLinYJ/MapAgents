@@ -1,3 +1,14 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - 运行审批持久化
+//
+//   文件:       runtimeApprovalPersistence.ts
+//
+//   日期:       2026年07月13日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
+// --------------------------------------------------------------------------
+
 import type { RunToolApprovalItem } from '@openai/agents'
 
 import type { ItemSink } from '../conversation/itemSink.js'

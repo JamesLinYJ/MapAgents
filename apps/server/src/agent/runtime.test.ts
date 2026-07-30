@@ -5,7 +5,8 @@
 //   文件:       runtime.test.ts
 //
 //   日期:       2026年06月22日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 import { mkdtemp, readFile, rm } from 'node:fs/promises'

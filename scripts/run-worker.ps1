@@ -5,10 +5,12 @@
 #   文件:       run-worker.ps1
 #
 #   日期:       2026年07月21日
-#   作者:       OpenAI Codex
+#   作者:       JamesLinYJ
+#   协助:       OpenAI Codex:GPT-5.6 Sol
 #
 #   维护记录 (2026-07-23):
-#     作者: OpenAI Codex
+#     作者: JamesLinYJ
+#     协助: OpenAI Codex:GPT-5.6 Sol
 #     说明: 移除开发期 Uvicorn reload 子监督器，统一由 GeoForge 监督进程生命周期。
 # --------------------------------------------------------------------------
 

@@ -4,7 +4,8 @@
 //
 //   文件:       threadMemoryRepository.ts
 //   日期:       2026年07月16日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 import { and, desc, eq, ne } from 'drizzle-orm'

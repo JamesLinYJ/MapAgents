@@ -5,7 +5,8 @@
 //   文件:       automationBindings.test.ts
 //
 //   日期:       2026年07月18日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 import { describe, expect, it } from 'vitest'

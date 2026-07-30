@@ -5,7 +5,8 @@
 //   文件:       azureSpeechService.ts
 //
 //   日期:       2026年07月01日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 // Azure Speech 的订阅 key 只存在服务端。前端通过 WS 取得短期

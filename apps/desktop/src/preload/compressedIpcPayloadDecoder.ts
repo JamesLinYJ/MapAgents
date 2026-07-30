@@ -5,7 +5,8 @@
 //   文件:       compressedIpcPayloadDecoder.ts
 //
 //   日期:       2026年07月29日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 import { DESKTOP_CONTROL_DECOMPRESSED_MAX_BYTES } from '../contracts/desktopIpc.js'

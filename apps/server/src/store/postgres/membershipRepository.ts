@@ -4,7 +4,8 @@
 //
 //   文件:       membershipRepository.ts
 //   日期:       2026年07月16日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 //   来源:       adminMembershipRepository.ts 与 platformIdentityStore.ts 的成员资源边界
 // --------------------------------------------------------------------------
 

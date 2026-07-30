@@ -5,7 +5,8 @@
 //   文件:       conversationProjectionIndex.ts
 //
 //   日期:       2026年07月16日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 import type { AgentThreadRecord, AnalysisRun, SessionRecord } from '../schemas/types.js'

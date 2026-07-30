@@ -5,10 +5,12 @@
 //   文件:       WorkspaceLayout.tsx
 //
 //   日期:       2026年06月05日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 //
 //   维护记录 (2026-07-29):
-//     作者: OpenAI Codex
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
 //     说明: 将浏览器工作台壳重构为 Electron Ribbon、停靠面板与文档区。
 // --------------------------------------------------------------------------
 

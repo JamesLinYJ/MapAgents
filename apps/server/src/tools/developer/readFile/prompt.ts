@@ -5,7 +5,8 @@
 //   文件:       prompt.ts
 //
 //   日期:       2026年06月25日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 export const READ_FILE_PROMPT = `读取允许根目录内的 UTF-8 文本文件。

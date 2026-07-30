@@ -5,7 +5,8 @@
 //   文件:       generate-liquid-glass-maps.mjs
 //
 //   日期:       2026年06月18日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 import { mkdir, writeFile } from 'node:fs/promises'

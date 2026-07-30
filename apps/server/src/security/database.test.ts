@@ -6,6 +6,7 @@
 //
 //   日期:       2026年07月03日
 //   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 //
 //   verifySchema / ensureSecurityTables 在缺表/缺列时抛出的错误必须
 //   包含 "baseline migration" 指引，不连接真实数据库。

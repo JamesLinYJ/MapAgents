@@ -5,7 +5,8 @@
 //   文件:       deepSeekChatCompletionsModel.ts
 //
 //   日期:       2026年06月22日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 // 该模块是 DeepSeek OpenAI-compatible 传输层的唯一实现。Runner 负责

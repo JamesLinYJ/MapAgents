@@ -5,7 +5,8 @@
 //   文件:       developerTools.test.ts
 //
 //   日期:       2026年06月25日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 // 这些测试约束开发工具的硬边界：它们只维护 GeoForge GIS/气象 Agent，

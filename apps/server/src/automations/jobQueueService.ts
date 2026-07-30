@@ -4,6 +4,9 @@
 //
 //   文件:       jobQueueService.ts
 //
+//   日期:       2026年07月18日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 import { PgBoss, type Job } from 'pg-boss'

@@ -1,3 +1,14 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - 地图 HTTP 路由
+//
+//   文件:       map.ts
+//
+//   日期:       2026年06月26日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
+// --------------------------------------------------------------------------
+
 import { Hono } from 'hono'
 import { z } from 'zod'
 import type { MapLayerManifest } from '../schemas/types.js'

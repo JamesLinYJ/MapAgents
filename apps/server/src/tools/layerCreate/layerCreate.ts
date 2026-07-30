@@ -5,7 +5,8 @@
 //   文件:       layerCreate.ts
 //
 //   日期:       2026年06月15日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 // 工具创建的图层属于当前 session/thread，并由 PostGIS 持久化。

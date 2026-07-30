@@ -5,7 +5,8 @@
 //   文件:       database.ts
 //
 //   日期:       2026年07月02日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 //
 //   P0 重构 (2026-07-03):
 //     作者: Claude Code

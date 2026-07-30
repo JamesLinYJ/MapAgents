@@ -5,7 +5,8 @@
 //   文件:       pathPolicy.ts
 //
 //   日期:       2026年06月25日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 // 文件工具的事实边界是 DEVELOPER_TOOL_ALLOWED_ROOTS 与 RUNTIME_ROOT。

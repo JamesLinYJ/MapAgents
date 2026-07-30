@@ -3,6 +3,10 @@
 //   地理智能平台 - 会话状态 Store 测试
 //
 //   文件:       sessionStore.test.ts
+//
+//   日期:       2026年07月13日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 import { beforeEach, describe, expect, it } from 'vitest'

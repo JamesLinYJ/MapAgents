@@ -1,3 +1,14 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - Gemini 模型适配器
+//
+//   文件:       gemini.ts
+//
+//   日期:       2026年06月23日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
+// --------------------------------------------------------------------------
+
 // Gemini 模型适配器
 import type { ModelAdapter } from '../registry.js'
 import { abortSignalWithTimeout } from '../../utils/abort.js'

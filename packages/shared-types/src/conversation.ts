@@ -1,3 +1,14 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - 文件型会话协议
+//
+//   文件:       conversation.ts
+//
+//   日期:       2026年07月13日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
+// --------------------------------------------------------------------------
+
 // GeoForge 文件型会话协议：transcript、checkpoint、compaction 与上下文报告。
 import { z } from 'zod'
 import { analysisRunSchema } from './platform.js'

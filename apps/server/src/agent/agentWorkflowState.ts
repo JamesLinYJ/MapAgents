@@ -5,7 +5,8 @@
 //   文件:       agentWorkflowState.ts
 //
 //   日期:       2026年07月17日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 import { isDeepStrictEqual } from 'node:util'

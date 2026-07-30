@@ -1,3 +1,14 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - 运行记录投影器
+//
+//   文件:       runtimeTranscriptProjector.ts
+//
+//   日期:       2026年07月13日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
+// --------------------------------------------------------------------------
+
 import type { AgentInputItem, RunStreamEvent } from '@openai/agents'
 import {
   agentToolOutputMetadataSchema,

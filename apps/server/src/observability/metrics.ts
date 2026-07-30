@@ -5,7 +5,8 @@
 //   文件:       metrics.ts
 //
 //   日期:       2026年07月07日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 // 暴露 /metrics 端点，覆盖 HTTP、WS、工具、Worker、JSONL queue。

@@ -4,7 +4,8 @@
 //
 //   文件:       workspaceRepository.ts
 //   日期:       2026年07月16日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 //   来源:       adminWorkspaceRepository.ts 与 platformIdentityStore.ts 的工作区资源边界
 // --------------------------------------------------------------------------
 

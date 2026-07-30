@@ -5,7 +5,8 @@
 //   文件:       HistoryPanel.tsx
 //
 //   日期:       2026年07月07日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 import { Pencil, RefreshCw, Trash2 } from 'lucide-react'

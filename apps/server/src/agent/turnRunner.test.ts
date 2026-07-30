@@ -5,7 +5,8 @@
 //   文件:       turnRunner.test.ts
 //
 //   日期:       2026年06月23日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 // 这些测试约束 ConversationItem 的 UI 时间线语义。timestamp 表示首次出现

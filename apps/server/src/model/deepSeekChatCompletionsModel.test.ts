@@ -5,7 +5,8 @@
 //   文件:       deepSeekChatCompletionsModel.test.ts
 //
 //   日期:       2026年06月22日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 import type { ModelRequest, ResponseStreamEvent } from '@openai/agents'

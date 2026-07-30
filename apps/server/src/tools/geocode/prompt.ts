@@ -5,7 +5,8 @@
 //   文件:       prompt.ts
 //
 //   日期:       2026年06月30日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
 export const GEOCODE_PLACE_PROMPT = `用于把地名、POI、地址或用户给出的地点描述解析为候选坐标。

@@ -5,7 +5,8 @@
 //   文件:       transport.test.ts
 //
 //   日期:       2026年07月07日
-//   作者:       Claude Code
+//   作者:       JamesLinYJ
+//   协助:       Claude Code:Opus 4.8
 // --------------------------------------------------------------------------
 
 import { describe, expect, it } from 'vitest'

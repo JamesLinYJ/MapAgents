@@ -5,7 +5,8 @@
 //   文件:       trustedApplicationLocation.ts
 //
 //   日期:       2026年07月29日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '[::1]', 'localhost'])

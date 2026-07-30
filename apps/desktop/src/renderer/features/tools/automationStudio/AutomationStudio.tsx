@@ -5,7 +5,8 @@
 //   文件:       AutomationStudio.tsx
 //
 //   日期:       2026年07月13日
-//   作者:       jameslinyj, OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 import { useMemo, useState, type SetStateAction } from 'react'

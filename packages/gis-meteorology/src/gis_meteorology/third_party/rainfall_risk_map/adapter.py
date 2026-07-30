@@ -5,7 +5,8 @@
 #   文件:       adapter.py
 #
 #   日期:       2026年06月23日
-#   作者:       Codex
+#   作者:       JamesLinYJ
+#   协助:       OpenAI Codex:GPT-5.5
 # --------------------------------------------------------------------------
 
 """GeoForge wrapper for the copied rainfall risk map tool.

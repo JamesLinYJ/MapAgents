@@ -1,3 +1,14 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - Artifact 存储测试
+//
+//   文件:       artifactStore.test.ts
+//
+//   日期:       2026年07月13日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.6 Sol
+// --------------------------------------------------------------------------
+
 import { describe, expect, it, vi } from 'vitest'
 
 import type { AgentThreadRecord, AnalysisRun, ArtifactRef, SessionRecord } from '../schemas/types.js'

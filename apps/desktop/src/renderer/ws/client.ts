@@ -5,10 +5,12 @@
 //   文件:       client.ts
 //
 //   日期:       2026年06月25日
-//   作者:       OpenAI Codex
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
 //
 //   维护记录 (2026-07-29):
-//     作者: OpenAI Codex
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
 //     说明: 网络连接所有权迁入 Electron Main；Renderer 仅校验并投影实时事件。
 // --------------------------------------------------------------------------
 

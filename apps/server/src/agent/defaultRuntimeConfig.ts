@@ -1,3 +1,14 @@
+// +-------------------------------------------------------------------------
+//
+//   地理智能平台 - Agent 默认运行时配置
+//
+//   文件:       defaultRuntimeConfig.ts
+//
+//   日期:       2026年06月22日
+//   作者:       JamesLinYJ
+//   协助:       OpenAI Codex:GPT-5.5
+// --------------------------------------------------------------------------
+
 import type { AgentRuntimeConfig, RuntimeSandboxConfig } from '../schemas/types.js'
 
 interface DefaultRuntimeConfigOptions {

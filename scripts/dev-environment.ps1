@@ -5,7 +5,8 @@
 #   文件:       dev-environment.ps1
 #
 #   日期:       2026年07月21日
-#   作者:       OpenAI Codex
+#   作者:       JamesLinYJ
+#   协助:       OpenAI Codex:GPT-5.6 Sol
 # --------------------------------------------------------------------------
 
 function Initialize-GeoForgeDevEnvironment {

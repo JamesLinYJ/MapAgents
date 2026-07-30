@@ -1,6 +1,8 @@
 -- GeoForge 原生运行时配置迁移
+-- 文件:       006_native_agent_runtime.sql
 -- 日期: 2026年07月29日
--- 作者: OpenAI Codex
+-- 作者:       JamesLinYJ
+-- 协助:       OpenAI Codex:GPT-5.6 Sol
 --
 -- 只重置包含旧沙箱后端的 agent-runtime 配置，并把 schema v4 之前
 -- 无法安全恢复的未完成 SDK 运行标记为失败。业务数据与历史对话保持不变。
