@@ -13,10 +13,10 @@ Windows 交互界面：
 Windows 一次性任务：
 
 ```powershell
-.\dev.ps1 agent -AgentPrompt "杭州明天会下雨吗？"
-.\dev.ps1 agent -AgentPrompt "先制定计划，再分析杭州强降水风险" -AgentMode plan
-.\dev.ps1 agent -AgentPrompt "你好" -Json
-.\dev.ps1 agent -Check
+.\dev.ps1 agent --prompt "杭州明天会下雨吗？"
+.\dev.ps1 agent --prompt "先制定计划，再分析杭州强降水风险" --mode plan
+.\dev.ps1 agent --prompt "你好" --json
+.\dev.ps1 agent --check
 ```
 
 Linux/macOS：

@@ -11,6 +11,7 @@
 
 export * from './catalog.js'
 export * from './client.js'
+export * from './developmentDefaults.js'
 export * from './environment.js'
 export * from './ipcServer.js'
 export * from './jsonl.js'

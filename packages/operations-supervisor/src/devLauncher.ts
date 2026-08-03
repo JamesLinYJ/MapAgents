@@ -14,11 +14,11 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { parseArgs } from 'node:util'
 import { z } from 'zod'
-import {
-  PLATFORM_DESKTOP_APP_ORIGIN,
-  PLATFORM_DESKTOP_AUTH_CALLBACK_URL,
-  PRODUCT_CODENAME,
-} from '@geo-agent-platform/shared-types/product-identity'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
+
+import { applyDevelopmentDefaults } from './developmentDefaults.js'
+
+export { resolveDevelopmentRuntimeRoot } from './developmentDefaults.js'
 
 const actionSchema = z.enum([
   'default', 'start', 'stop', 'restart', 'status', 'logs',
@@ -56,29 +56,9 @@ export interface DevLauncherDependencies {
   delay(milliseconds: number): Promise<void>
 }
 
-const POWERSHELL_OPTION_ALIASES = new Map([
-  ['-Json', '--json'],
-  ['-Check', '--check'],
-  ['-KeepPostgis', '--keep-infra'],
-  ['-FollowLogs', '--follow'],
-  ['-IncludeSupervisor', '--supervisor'],
-  ['-NoReasoning', '--no-reasoning'],
-  ['-Tail', '--tail'],
-  ['-LogLevel', '--level'],
-  ['-LogStream', '--stream'],
-  ['-LogSearch', '--search'],
-  ['-AgentPrompt', '--prompt'],
-  ['-AgentMode', '--mode'],
-  ['-AgentProvider', '--provider'],
-  ['-AgentModel', '--model'],
-  ['-AgentThread', '--thread'],
-  ['-AgentTimeout', '--timeout'],
-])
-
 export function parseDevLauncherCommand(arguments_: readonly string[]): DevLauncherCommand {
-  const normalized = arguments_.map(value => POWERSHELL_OPTION_ALIASES.get(value) ?? value)
   const parsed = parseArgs({
-    args: normalized,
+    args: arguments_,
     allowPositionals: true,
     strict: true,
     options: {
@@ -155,7 +135,7 @@ export async function runDevLauncher(
   }
   const dependencies = input.dependencies ?? nativeDependencies()
   const projectRoot = path.resolve(input.projectRoot)
-  applyDevelopmentEnvironment(projectRoot)
+  applyDevelopmentDefaults(projectRoot)
   const supervisorCli = path.join(projectRoot, 'packages', 'operations-supervisor', 'dist', 'cli.js')
   const requiresBuild = ['default', 'start', 'restart', 'console', 'agent', 'desktop'].includes(command.action)
   if (requiresBuild) {
@@ -283,43 +263,6 @@ export function devLauncherHelp(): string {
     'Agent：--prompt TEXT  --mode auto|plan  --provider NAME  --model NAME  --thread ID  --timeout SEC  --no-reasoning',
     '',
   ].join('\n')
-}
-
-function applyDevelopmentEnvironment(projectRoot: string): void {
-  const runtimeRoot = resolveDevelopmentRuntimeRoot(projectRoot, process.env.RUNTIME_ROOT)
-  const defaults: Record<string, string> = {
-    NODE_ENV: 'development',
-    GEO_AGENT_PLATFORM_ROOT: projectRoot,
-    POSTGIS_PORT: '55432',
-    WORKER_PORT: '8012',
-    API_PORT: '8000',
-    WORKER_PYTHON: process.platform === 'win32' ? 'python.exe' : 'python3',
-    API_HOST: '127.0.0.1',
-  }
-  for (const [name, value] of Object.entries(defaults)) process.env[name] ??= value
-  // npm workspace scripts change cwd to the package directory. Resolve the runtime
-  // root once at the composition boundary so every child process sees one location.
-  process.env.GEO_AGENT_PLATFORM_ROOT = projectRoot
-  process.env.RUNTIME_ROOT = runtimeRoot
-  process.env.DATABASE_URL ??= `postgresql://geo_agent:geo_agent@127.0.0.1:${process.env.POSTGIS_PORT}/geo_agent`
-  process.env.WORKER_URL ??= `http://127.0.0.1:${process.env.WORKER_PORT}`
-  process.env.APP_BASE_URL ??= `http://127.0.0.1:${process.env.API_PORT}`
-  process.env.BETTER_AUTH_URL ??= process.env.APP_BASE_URL
-  process.env.TRUSTED_ORIGINS ??= (
-    `${PLATFORM_DESKTOP_APP_ORIGIN},${PLATFORM_DESKTOP_AUTH_CALLBACK_URL}`
-  )
-  process.env.BOOTSTRAP_ADMIN_EMAIL ??= 'admin@example.com'
-  process.env.GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH ??= 'true'
-  process.env.GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE ??= path.join(runtimeRoot, 'ops', 'supervisor.token')
-  process.env.GEO_AGENT_PLATFORM_LOCAL_ROOT_SECRET_FILE ??= path.join(runtimeRoot, 'ops', 'local-root.secret')
-}
-
-export function resolveDevelopmentRuntimeRoot(
-  projectRoot: string,
-  configuredRuntimeRoot?: string,
-): string {
-  const configured = configuredRuntimeRoot?.trim()
-  return path.resolve(projectRoot, configured || 'runtime')
 }
 
 function nativeDependencies(): DevLauncherDependencies {

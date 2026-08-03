@@ -100,7 +100,8 @@ export function resolveDesktopRendererServerOptions(
 }
 
 /**
- * Direct `npm run dev:desktop` launches from the desktop workspace, but the
+ * Direct `npm run dev --workspace @geo-agent-platform/desktop` launches from
+ * the desktop workspace, but the
  * development configuration belongs to the repository root. Only Main-owned
  * desktop settings are copied into the child process; provider and server
  * secrets are deliberately excluded from the Renderer build environment.

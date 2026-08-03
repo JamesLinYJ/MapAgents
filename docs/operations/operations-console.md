@@ -12,10 +12,10 @@ Windows：
 .\dev.ps1 start api           # 无交互启动 API 及缺失依赖
 .\dev.ps1 stop worker         # 反向停止仍依赖 Worker 的服务
 .\dev.ps1 restart infra       # 按依赖顺序重启原先运行的服务
-.\dev.ps1 status -Json
-.\dev.ps1 logs api -Tail 200 -FollowLogs
-.\dev.ps1 logs all -LogLevel error -IncludeSupervisor
-.\dev.ps1 logs all -LogSearch "数据库" -IncludeSupervisor
+.\dev.ps1 status --json
+.\dev.ps1 logs api --tail 200 --follow
+.\dev.ps1 logs all --level error --supervisor
+.\dev.ps1 logs all --search "数据库" --supervisor
 .\dev.ps1 shutdown            # 停止全部并关闭监督器
 ```
 

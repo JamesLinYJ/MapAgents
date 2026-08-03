@@ -30,15 +30,28 @@ afterEach(async () => {
 })
 
 describe('统一开发启动器', () => {
-  it('为 Bash 与 PowerShell 参数生成同一命令模型', () => {
-    const bash = parseDevLauncherCommand([
+  it('为 Bash 与 PowerShell 使用同一位置参数和 GNU 长选项', () => {
+    const command = [
       'agent', 'all', '--json', '--prompt', '你好', '--mode', 'plan', '--no-reasoning',
-    ])
-    const powershell = parseDevLauncherCommand([
-      'agent', 'all', '-Json', '-AgentPrompt', '你好', '-AgentMode', 'plan', '-NoReasoning',
-    ])
+    ]
 
-    expect(powershell).toEqual(bash)
+    expect(parseDevLauncherCommand(command)).toEqual({
+      action: 'agent',
+      service: 'all',
+      json: true,
+      check: false,
+      keepInfra: false,
+      follow: false,
+      includeSupervisor: false,
+      tail: 80,
+      prompt: '你好',
+      mode: 'plan',
+      timeout: 600,
+      reasoning: false,
+      help: false,
+    })
+    expect(parseDevLauncherCommand(['restart', 'api']).service).toBe('api')
+    expect(() => parseDevLauncherCommand(['restart', '-Service', 'api'])).toThrow()
   })
 
   it('只有一处声明共享构建顺序', () => {
@@ -135,5 +148,61 @@ describe('统一开发启动器', () => {
     expect(restartWorkerIndex).toBeGreaterThanOrEqual(0)
     expect(startApiIndex).toBeGreaterThan(restartWorkerIndex)
     expect(desktopIndex).toBeGreaterThan(startApiIndex)
+  })
+
+  it('默认入口以幂等启动连接已有服务，不制造隐式重启', async () => {
+    const calls: Array<{ command: string; args: readonly string[] }> = []
+    const result = await runDevLauncher(
+      parseDevLauncherCommand([]),
+      {
+        projectRoot: path.resolve('test-platform-root'),
+        nodeExecutable: process.execPath,
+        dependencies: {
+          run: vi.fn(async (command: string, args: readonly string[]) => {
+            calls.push({ command, args })
+            return 0
+          }),
+          delay: vi.fn().mockResolvedValue(undefined),
+        },
+      },
+    )
+
+    const startAllIndex = calls.findIndex(call =>
+      call.command === process.execPath && call.args.includes('start') && call.args.includes('all'))
+    const consoleIndex = calls.findIndex(call =>
+      call.command === 'npm' && call.args.join(' ') === 'run console --workspace @geo-agent-platform/operations-console')
+
+    expect(result).toBe(0)
+    expect(calls.some(call => call.args.includes('restart'))).toBe(false)
+    expect(startAllIndex).toBeGreaterThanOrEqual(0)
+    expect(consoleIndex).toBeGreaterThan(startAllIndex)
+  })
+
+  it('Agent 入口只确保 API 已启动，不在每次提问前制造冷启动', async () => {
+    const calls: Array<{ command: string; args: readonly string[] }> = []
+    const result = await runDevLauncher(
+      parseDevLauncherCommand(['agent']),
+      {
+        projectRoot: path.resolve('test-platform-root'),
+        nodeExecutable: process.execPath,
+        dependencies: {
+          run: vi.fn(async (command: string, args: readonly string[]) => {
+            calls.push({ command, args })
+            return 0
+          }),
+          delay: vi.fn().mockResolvedValue(undefined),
+        },
+      },
+    )
+
+    const startApiIndex = calls.findIndex(call =>
+      call.command === process.execPath && call.args.includes('start') && call.args.includes('api'))
+    const agentIndex = calls.findIndex(call =>
+      call.command === 'npm' && call.args.join(' ').startsWith('run agent --workspace @geo-agent-platform/operations-console'))
+
+    expect(result).toBe(0)
+    expect(calls.some(call => call.args.includes('restart'))).toBe(false)
+    expect(startApiIndex).toBeGreaterThanOrEqual(0)
+    expect(agentIndex).toBeGreaterThan(startApiIndex)
   })
 })

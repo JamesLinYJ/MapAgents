@@ -15,11 +15,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { fileURLToPath } from 'node:url'
-import {
-  PLATFORM_DESKTOP_APP_ORIGIN,
-  PLATFORM_DESKTOP_AUTH_CALLBACK_URL,
-  PRODUCT_CODENAME,
-} from '@geo-agent-platform/shared-types/product-identity'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 import {
   operationsProfileSchema,
@@ -38,6 +34,7 @@ import lockfile from 'proper-lockfile'
 
 import { OperationsClient } from './client.js'
 import { resolveOperationsCliPathInput } from './cliRuntimePaths.js'
+import { applyDevelopmentDefaults } from './developmentDefaults.js'
 import { secretValues } from './environment.js'
 import { OperationsIpcServer } from './ipcServer.js'
 import { OperationsLogBuffer } from './logBuffer.js'
@@ -302,26 +299,6 @@ function parseCsv<T extends string>(
 
 function resolveProfile(value: string | undefined): OperationsProfile {
   return operationsProfileSchema.parse(value ?? (process.env.NODE_ENV === 'production' ? 'production' : 'development'))
-}
-
-function applyDevelopmentDefaults(projectRoot: string): void {
-  const defaults: Record<string, string> = {
-    NODE_ENV: 'development',
-    RUNTIME_ROOT: path.join(projectRoot, 'runtime'),
-    POSTGIS_PORT: '55432',
-    WORKER_PORT: '8012',
-    API_PORT: '8000',
-    WORKER_PYTHON: process.platform === 'win32' ? 'python.exe' : 'python3',
-  }
-  for (const [name, value] of Object.entries(defaults)) process.env[name] ??= value
-  process.env.GEO_AGENT_PLATFORM_ROOT = projectRoot
-  process.env.DATABASE_URL ??= `postgresql://geo_agent:geo_agent@127.0.0.1:${process.env.POSTGIS_PORT}/geo_agent`
-  process.env.WORKER_URL ??= `http://127.0.0.1:${process.env.WORKER_PORT}`
-  process.env.APP_BASE_URL ??= `http://127.0.0.1:${process.env.API_PORT}`
-  process.env.BETTER_AUTH_URL ??= process.env.APP_BASE_URL
-  process.env.TRUSTED_ORIGINS ??= (
-    `${PLATFORM_DESKTOP_APP_ORIGIN},${PLATFORM_DESKTOP_AUTH_CALLBACK_URL}`
-  )
 }
 
 function defaultProjectRoot(): string {

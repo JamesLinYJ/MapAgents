@@ -240,15 +240,15 @@ describe('platform architecture', () => {
   it('keeps the Windows development stack bound to loopback explicitly', async () => {
     const repositoryRoot = path.resolve(process.cwd(), '..', '..')
     const source = await readFile(path.join(repositoryRoot, 'dev.ps1'), 'utf8')
-    const launcherSource = await readFile(
-      path.join(repositoryRoot, 'packages/operations-supervisor/src/devLauncher.ts'),
+    const developmentDefaultsSource = await readFile(
+      path.join(repositoryRoot, 'packages/operations-supervisor/src/developmentDefaults.ts'),
       'utf8',
     )
 
     expect(source.includes('@geo-agent-platform/operations-supervisor')).toBe(true)
     expect(source.includes('API_HOST')).toBe(false)
-    expect(launcherSource.includes("API_HOST: '127.0.0.1'")).toBe(true)
-    expect(launcherSource.includes('WEB_DEV_HOST')).toBe(false)
+    expect(developmentDefaultsSource.includes("API_HOST: '127.0.0.1'")).toBe(true)
+    expect(developmentDefaultsSource.includes('WEB_DEV_HOST')).toBe(false)
   })
 
   it('keeps the retired browser, public-sharing, and container sidecars out of active runtime boundaries', async () => {

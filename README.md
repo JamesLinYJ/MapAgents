@@ -50,13 +50,13 @@ HTTP 只保留 `/health`、文件/图层上传替换、artifact 元数据/GeoJSO
 .\desktop.ps1
 .\dev.ps1 desktop
 .\dev.ps1
-.\dev.ps1 restart -Service api
+.\dev.ps1 restart api
 .\dev.ps1 status
-.\dev.ps1 logs -Service api -Tail 100
-.\dev.ps1 logs -Service all -LogLevel error -IncludeSupervisor
+.\dev.ps1 logs api --tail 100
+.\dev.ps1 logs all --level error --supervisor
 .\dev.ps1 agent
-.\dev.ps1 agent -AgentPrompt "杭州明天会下雨吗？"
-.\dev.ps1 agent -Check
+.\dev.ps1 agent --prompt "杭州明天会下雨吗？"
+.\dev.ps1 agent --check
 .\dev.ps1 restart
 .\dev.ps1 stop
 ```
