@@ -54,7 +54,6 @@ const envSchema = z.object({
   DEEPSEEK_BASE_URL: z.string().optional(),
   DEEPSEEK_API_KEY: z.string().optional(),
   DEEPSEEK_MODEL: z.string().optional(),
-  DEEPSEEK_SUBAGENT_MODEL: z.string().optional(),
   DEEPSEEK_TOOL_SCHEMA_MODE: z.enum(['strict', 'compatible']).default('compatible'),
   DEEPSEEK_RESULT_CACHE_ENABLED: booleanEnvSchema.default(true),
   DEEPSEEK_RESULT_CACHE_TTL_SECONDS: z.coerce.number().int().positive().max(7 * 24 * 60 * 60).default(24 * 60 * 60),

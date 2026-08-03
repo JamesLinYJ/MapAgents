@@ -18,13 +18,39 @@ import {
   type TracingProcessor,
 } from '@openai/agents'
 
-import type { RunEventSink } from '../agent/turnRunner.js'
+import { logger } from './logger.js'
 
-// SDK tracing provider 是进程级边界；本类由应用容器显式创建并注入 Runtime，
-// 只把无敏感正文的结构化生命周期投影到对应 run 的诊断事件流。
+const RUN_TRACE_BUDGET_BYTES = 2 * 1024 * 1024
+const GLOBAL_TRACE_BUDGET_BYTES = 16 * 1024 * 1024
+const TRACE_RETENTION_MS = 30 * 60_000
+
+interface TraceBudgetRecord {
+  runId: string
+  bytes: number
+  recordedAt: number
+}
+
+interface TraceLogRecord {
+  level: 'debug' | 'info' | 'error'
+  message: string
+  payload: Record<string, unknown>
+}
+
+/**
+ * SDK Trace/Span 只投影到 Supervisor 的内存诊断流；不得复用 RunEventSink，
+ * 否则高频 Span 会被误当作业务事实持久化到 PostgreSQL。
+ */
 export class LocalAgentTracing implements TracingProcessor {
-  private readonly runSinks = new Map<string, RunEventSink>()
+  private readonly activeRuns = new Set<string>()
+  private readonly budgetRecords: TraceBudgetRecord[] = []
   private installed = false
+
+  constructor(
+    private readonly write: (record: TraceLogRecord) => void = record => {
+      logger[record.level](record.payload, record.message)
+    },
+    private readonly now: () => number = Date.now,
+  ) {}
 
   install(): void {
     if (this.installed) return
@@ -33,30 +59,38 @@ export class LocalAgentTracing implements TracingProcessor {
     this.installed = true
   }
 
-  attachRun(runId: string, sink: RunEventSink): () => void {
+  attachRun(runId: string): () => void {
     if (!this.installed) throw new Error('Agents SDK 本地追踪处理器尚未安装')
-    if (this.runSinks.has(runId)) throw new Error(`运行 '${runId}' 已绑定追踪事件流`)
-    this.runSinks.set(runId, sink)
-    return () => {
-      if (this.runSinks.get(runId) === sink) this.runSinks.delete(runId)
-    }
+    if (this.activeRuns.has(runId)) throw new Error(`运行 '${runId}' 已绑定追踪事件流`)
+    this.activeRuns.add(runId)
+    return () => this.activeRuns.delete(runId)
   }
 
   async onTraceStart(trace: Trace): Promise<void> {
-    this.emit(trace.metadata, 'SDK Trace 开始', {
-      phase: 'trace_start',
-      traceId: trace.traceId,
-      traceName: trace.name,
-      groupId: trace.groupId,
+    this.emit(trace.metadata, {
+      level: 'debug',
+      message: 'SDK Trace 开始',
+      payload: {
+        event: 'agent.sdk.trace.started',
+        category: 'agent',
+        retention: 'diagnostic',
+        phase: 'trace_start',
+        traceId: trace.traceId,
+      },
     })
   }
 
   async onTraceEnd(trace: Trace): Promise<void> {
-    this.emit(trace.metadata, 'SDK Trace 结束', {
-      phase: 'trace_end',
-      traceId: trace.traceId,
-      traceName: trace.name,
-      groupId: trace.groupId,
+    this.emit(trace.metadata, {
+      level: 'debug',
+      message: 'SDK Trace 结束',
+      payload: {
+        event: 'agent.sdk.trace.completed',
+        category: 'agent',
+        retention: 'diagnostic',
+        phase: 'trace_end',
+        traceId: trace.traceId,
+      },
     })
   }
 
@@ -65,91 +99,129 @@ export class LocalAgentTracing implements TracingProcessor {
   async onSpanEnd(span: Span<SpanData>): Promise<void> {
     const summary = summarizeSpan(span.spanData)
     const durationMs = durationBetween(span.startedAt, span.endedAt)
-    this.emit(span.traceMetadata, `SDK ${summary.label}${span.error ? '失败' : '完成'}`, {
-      phase: 'span_end',
-      traceId: span.traceId,
-      spanId: span.spanId,
-      parentId: span.parentId,
-      spanType: span.spanData.type,
-      spanName: summary.name,
-      startedAt: span.startedAt,
-      endedAt: span.endedAt,
-      durationMs,
-      failed: span.error !== null,
-      ...summary.details,
+    const failed = span.error !== null
+    this.emit(span.traceMetadata, {
+      level: 'debug',
+      message: `SDK ${summary.label}${failed ? '失败' : '完成'}`,
+      payload: {
+        event: `agent.sdk.span.${failed ? 'failed' : 'completed'}`,
+        category: 'agent',
+        retention: 'diagnostic',
+        phase: 'span_end',
+        traceId: span.traceId,
+        spanId: span.spanId,
+        spanType: span.spanData.type,
+        durationMs,
+        failed,
+        ...summary.details,
+      },
     })
   }
 
-  async forceFlush(): Promise<void> {
-    await Promise.all([...this.runSinks.values()].map(sink => sink.flush()))
-  }
+  async forceFlush(): Promise<void> {}
 
   async shutdown(): Promise<void> {
     if (!this.installed) return
-    await this.forceFlush()
-    this.runSinks.clear()
+    // SDK 在替换 processor 时会回调旧 processor.shutdown()。先撤销本实例的
+    // installed 标记，避免 setTraceProcessors([]) 重新进入本方法形成递归。
+    this.installed = false
+    this.activeRuns.clear()
+    this.budgetRecords.length = 0
     setTracingDisabled(true)
     setTraceProcessors([])
-    this.installed = false
   }
 
-  private emit(metadata: unknown, message: string, payload: Record<string, unknown>): void {
+  private emit(metadata: unknown, record: TraceLogRecord): void {
     const runId = recordString(metadata, 'runId')
-    if (!runId) return
-    this.runSinks.get(runId)?.emit('trace.recorded', message, {
-      diagnostic: true,
-      ...payload,
-    })
+    if (!runId || !this.activeRuns.has(runId)) return
+    const threadId = recordString(metadata, 'threadId')
+    const provider = recordString(metadata, 'provider')
+    const payload = {
+      ...record.payload,
+      runId,
+      ...(threadId ? { threadId } : {}),
+      ...(provider ? { provider } : {}),
+    }
+    const bytes = Buffer.byteLength(JSON.stringify(payload), 'utf8')
+    if (!this.reserveBudget(runId, bytes)) return
+    this.write({ ...record, payload })
+  }
+
+  private reserveBudget(runId: string, bytes: number): boolean {
+    const cutoff = this.now() - TRACE_RETENTION_MS
+    while ((this.budgetRecords[0]?.recordedAt ?? Number.POSITIVE_INFINITY) < cutoff) {
+      this.budgetRecords.shift()
+    }
+    const globalBytes = this.budgetRecords.reduce((total, record) => total + record.bytes, 0)
+    const runBytes = this.budgetRecords.reduce(
+      (total, record) => total + (record.runId === runId ? record.bytes : 0),
+      0,
+    )
+    if (bytes > RUN_TRACE_BUDGET_BYTES || runBytes + bytes > RUN_TRACE_BUDGET_BYTES) return false
+    if (globalBytes + bytes > GLOBAL_TRACE_BUDGET_BYTES) return false
+    this.budgetRecords.push({ runId, bytes, recordedAt: this.now() })
+    return true
   }
 }
 
 function summarizeSpan(data: SpanData): {
   label: string
-  name: string | null
   details: Record<string, unknown>
 } {
   switch (data.type) {
-    case 'agent':
+    case 'task':
       return {
-        label: 'Agent Span',
-        name: data.name,
+        label: '任务 Span',
         details: {
-          tools: data.tools ?? [],
-          handoffs: data.handoffs ?? [],
-          outputType: data.output_type ?? null,
+          requests: data.usage?.requests ?? null,
+          totalTokens: data.usage?.total_tokens ?? null,
         },
       }
-    case 'function':
-      return { label: '工具 Span', name: data.name, details: { mcp: Boolean(data.mcp_data) } }
-    case 'generation':
+    case 'turn':
       return {
-        label: '模型 Span',
-        name: data.model ?? null,
+        label: '轮次 Span',
         details: {
+          turn: data.turn,
           inputTokens: data.usage?.input_tokens ?? null,
           outputTokens: data.usage?.output_tokens ?? null,
         },
       }
+    case 'agent':
+      return { label: 'Agent Span', details: { agentName: data.name } }
+    case 'function':
+      return { label: '工具 Span', details: { toolName: data.name, mcp: Boolean(data.mcp_data) } }
+    case 'generation':
+      return {
+        label: '模型 Span',
+        details: {
+          model: data.model ?? null,
+          inputTokens: data.usage?.input_tokens ?? null,
+          outputTokens: data.usage?.output_tokens ?? null,
+          totalTokens: data.usage?.total_tokens ?? null,
+        },
+      }
     case 'response':
-      return { label: '响应 Span', name: data.response_id ?? null, details: {} }
+      return { label: '响应 Span', details: { responseId: data.response_id ?? null } }
     case 'handoff':
       return {
         label: 'Handoff Span',
-        name: data.to_agent ?? null,
         details: { fromAgent: data.from_agent ?? null, toAgent: data.to_agent ?? null },
       }
     case 'guardrail':
-      return { label: 'Guardrail Span', name: data.name, details: { triggered: data.triggered } }
+      return { label: 'Guardrail Span', details: { guardrailName: data.name, triggered: data.triggered } }
     case 'mcp_tools':
-      return { label: 'MCP 工具发现 Span', name: data.server ?? null, details: { tools: data.result ?? [] } }
+      return {
+        label: 'MCP 工具发现 Span',
+        details: { server: data.server ?? null, toolCount: Array.isArray(data.result) ? data.result.length : null },
+      }
     case 'custom':
-      return { label: '自定义 Span', name: data.name, details: {} }
+      return { label: '自定义 Span', details: { spanName: data.name } }
     case 'transcription':
-      return { label: '转写 Span', name: data.model ?? null, details: { format: data.input.format } }
+      return { label: '转写 Span', details: { model: data.model ?? null, format: data.input.format } }
     case 'speech':
-      return { label: '语音 Span', name: data.model ?? null, details: { format: data.output.format } }
+      return { label: '语音 Span', details: { model: data.model ?? null, format: data.output.format } }
     case 'speech_group':
-      return { label: '语音组 Span', name: null, details: {} }
+      return { label: '语音组 Span', details: {} }
   }
 }
 

@@ -32,6 +32,12 @@ export interface AutomationInvocationStore {
   createAutomationRunRecord(input: CreateAutomationRunInput): Promise<AutomationRunRecord>
   getAutomationRunRecord(automationRunId: string): Promise<AutomationRunRecord | null>
   listAutomationRuns(workspaceId: string): Promise<AutomationRunRecord[]>
+  countMeteorologicalDatasets(input: {
+    workspaceId: string
+    sessionId: string
+    threadId: string | null
+    status: string | null
+  }): Promise<number>
 }
 
 export interface AutomationInvocationDefinitions {
@@ -55,6 +61,7 @@ export interface AgentAutomationDescriptor {
   description: string
   invocationDescription: string
   examples: string[]
+  requirements: AutomationDefinition['agentInvocation']['requirements']
   parametersSchema: Record<string, unknown>
   defaultParameters: Record<string, unknown>
 }
@@ -130,6 +137,7 @@ export class AutomationInvocationService {
         description: definition.description,
         invocationDescription: definition.agentInvocation.description,
         examples: [...definition.agentInvocation.examples],
+        requirements: structuredClone(definition.agentInvocation.requirements),
         parametersSchema: structuredClone(definition.parametersSchema),
         defaultParameters: structuredClone(definition.defaultParameters),
       }))
@@ -192,6 +200,11 @@ export class AutomationInvocationService {
     const compiled = this.deps.compiler.compile(definition)
     const parameters = { ...definition.defaultParameters, ...(input.parameters ?? {}) }
     compiled.validateParameters(parameters)
+    await this.assertInvocationRequirements(definition, {
+      workspaceId: run.workspaceId,
+      sessionId: input.sessionId,
+      threadId: input.threadId,
+    })
     const state = createAutomationExecutionState({
       definition: compiled.definition,
       prompt: input.prompt.trim(),
@@ -252,6 +265,38 @@ export class AutomationInvocationService {
       throw new Error('Automation 不能跨工作区附着到 Agent 运行。')
     }
     return { ...run, workspaceId: run.workspaceId }
+  }
+
+  private async assertInvocationRequirements(
+    definition: AutomationDefinition,
+    context: { workspaceId: string; sessionId: string; threadId: string },
+  ): Promise<void> {
+    for (const requirement of definition.agentInvocation.requirements) {
+      if (requirement.resource !== 'meteorological_files') continue
+      const availableCount = await this.deps.store.countMeteorologicalDatasets({
+        workspaceId: context.workspaceId,
+        sessionId: context.sessionId,
+        threadId: requirement.scope === 'thread' ? context.threadId : null,
+        status: requirement.readyOnly ? 'ready' : null,
+      })
+      if (availableCount >= requirement.minimumCount) continue
+      const scopeLabel = requirement.scope === 'thread' ? '当前对话' : '当前会话'
+      throw new AutomationInputRequirementError(
+        `自动化流程“${definition.name}”需要${scopeLabel}至少 `
+        + `${requirement.minimumCount} 个可用气象文件，当前只有 ${availableCount} 个。`
+        + `请先在${scopeLabel}上传完整文件后再执行。`,
+      )
+    }
+  }
+}
+
+export class AutomationInputRequirementError extends Error {
+  readonly failureSource = 'data' as const
+  readonly code = 'automation_input_requirement_failed'
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'AutomationInputRequirementError'
   }
 }
 

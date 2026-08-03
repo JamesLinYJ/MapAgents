@@ -11,10 +11,12 @@
 
 import { createHash } from 'node:crypto'
 import { and, eq, gt, inArray, lt, sql } from 'drizzle-orm'
+import { z } from 'zod'
 import type { Database } from '../db/connection.js'
 import { platformModelResultCache } from '../db/schema.js'
 import type { AgentState } from '../schemas/types.js'
 import type { ModelAdapterRegistry } from './registry.js'
+import { runSdkStructuredOutput, type StructuredOutputSchema } from './sdkStructuredOutput.js'
 
 export const MODEL_COMPLETION_PURPOSES = [
   'thread_summary',
@@ -33,9 +35,10 @@ export interface ModelCompletionRequest {
   model?: string | null
   purpose: ModelCompletionPurpose
   prompt: string
-  output: 'text' | 'json'
+  output: 'text' | 'structured'
   cacheMode?: ModelResultCacheMode
   schemaVersion?: string
+  schemaFingerprint?: string
   signal?: AbortSignal
 }
 
@@ -48,7 +51,7 @@ export interface NormalizedModelUsage {
   cacheDetailReported: number
 }
 
-export interface ModelCompletionResult<T extends string | Record<string, unknown>> {
+export interface ModelCompletionResult<T> {
   content: T
   usage: NormalizedModelUsage
   resultCache: 'hit' | 'miss' | 'bypass'
@@ -158,11 +161,23 @@ export class ModelCompletionService {
     return this.complete({ ...request, output: 'text' }) as Promise<ModelCompletionResult<string>>
   }
 
-  async completeJson(request: Omit<ModelCompletionRequest, 'output'>): Promise<ModelCompletionResult<Record<string, unknown>>> {
-    return this.complete({ ...request, output: 'json' }) as Promise<ModelCompletionResult<Record<string, unknown>>>
+  async completeStructured<TSchema extends StructuredOutputSchema>(
+    request: Omit<ModelCompletionRequest, 'output' | 'schemaFingerprint'>,
+    schema: TSchema,
+  ): Promise<ModelCompletionResult<z.infer<TSchema>>> {
+    const schemaFingerprint = createHash('sha256')
+      .update(JSON.stringify(z.toJSONSchema(schema)))
+      .digest('hex')
+    return this.complete(
+      { ...request, output: 'structured', schemaFingerprint },
+      schema,
+    ) as Promise<ModelCompletionResult<z.infer<TSchema>>>
   }
 
-  private async complete(request: ModelCompletionRequest): Promise<ModelCompletionResult<string | Record<string, unknown>>> {
+  private async complete(
+    request: ModelCompletionRequest,
+    schema?: StructuredOutputSchema,
+  ): Promise<ModelCompletionResult<string | Record<string, unknown>>> {
     if (!request.workspaceId.trim()) throw new Error('模型辅助请求缺少 workspaceId')
     if (!request.prompt.trim()) throw new Error('模型辅助请求提示词不能为空')
     const adapter = this.registry.resolveProvider(request.provider)
@@ -178,14 +193,14 @@ export class ModelCompletionService {
       model,
       cacheNamespace: adapter.cacheNamespace ?? adapter.provider,
     })
-    if (!eligible) return this.callProvider(adapter, model, request, 'bypass')
+    if (!eligible) return this.callProvider(adapter, model, request, 'bypass', schema)
 
     const cached = await this.store!.get(request.workspaceId, cacheKey)
-    if (cached) return this.parseCached(cached, request.output)
+    if (cached) return this.parseCached(cached, request.output, schema)
 
     const existing = this.inFlight.get(cacheKey)
     if (existing) return existing
-    const pending = this.callAndCache(adapter, model, request, cacheKey)
+    const pending = this.callAndCache(adapter, model, request, cacheKey, schema)
     this.inFlight.set(cacheKey, pending)
     try {
       return await pending
@@ -199,8 +214,9 @@ export class ModelCompletionService {
     model: string,
     request: ModelCompletionRequest,
     cacheKey: string,
+    schema?: StructuredOutputSchema,
   ): Promise<ModelCompletionResult<string | Record<string, unknown>>> {
-    const result = await this.callProvider(adapter, model, request, 'miss')
+    const result = await this.callProvider(adapter, model, request, 'miss', schema)
     const serialized = typeof result.content === 'string' ? result.content : JSON.stringify(result.content)
     if (Buffer.byteLength(serialized, 'utf8') <= this.config.maxBytes) {
       await this.store!.put({
@@ -223,7 +239,13 @@ export class ModelCompletionService {
     model: string,
     request: ModelCompletionRequest,
     resultCache: 'miss' | 'bypass',
+    schema?: StructuredOutputSchema,
   ): Promise<ModelCompletionResult<string | Record<string, unknown>>> {
+    if (request.output === 'structured') {
+      if (!schema) throw new Error('结构化模型请求缺少输出 schema')
+      const result = await runSdkStructuredOutput(adapter, model, request.prompt, schema, request.signal)
+      return { ...result, resultCache }
+    }
     const response = await adapter.chat(request.prompt, {
       model,
       reasoning: false,
@@ -232,13 +254,25 @@ export class ModelCompletionService {
     })
     const raw = response.content
     if (typeof raw !== 'string' || !raw.trim()) throw new Error('辅助模型未返回文本')
-    const content = request.output === 'json' ? parseJsonObject(raw) : raw.trim()
-    return { content, usage: usageFromResponse(response), resultCache }
+    return { content: raw.trim(), usage: usageFromResponse(response), resultCache }
   }
 
-  private parseCached(entry: ModelResultCacheEntry, output: ModelCompletionRequest['output']): ModelCompletionResult<string | Record<string, unknown>> {
+  private parseCached(
+    entry: ModelResultCacheEntry,
+    output: ModelCompletionRequest['output'],
+    schema?: StructuredOutputSchema,
+  ): ModelCompletionResult<string | Record<string, unknown>> {
+    if (output === 'structured') {
+      if (!schema) throw new Error('结构化模型缓存读取缺少输出 schema')
+      const parsed: unknown = JSON.parse(entry.content)
+      return {
+        content: schema.parse(parsed),
+        usage: entry.usage,
+        resultCache: 'hit',
+      }
+    }
     return {
-      content: output === 'json' ? parseJsonObject(entry.content) : entry.content,
+      content: entry.content,
       usage: entry.usage,
       resultCache: 'hit',
     }
@@ -307,17 +341,12 @@ function modelCacheKey(input: ModelCompletionRequest & { provider: string; model
     purpose: input.purpose,
     output: input.output,
     schemaVersion: input.schemaVersion ?? '1',
+    schemaFingerprint: input.schemaFingerprint ?? null,
     prompt: input.prompt,
     reasoning: false,
     temperature: 0,
   })
   return createHash('sha256').update(stable).digest('hex')
-}
-
-function parseJsonObject(value: string): Record<string, unknown> {
-  const parsed: unknown = JSON.parse(value.trim().replace(/^```json\s*|\s*```$/gu, ''))
-  if (!isRecord(parsed)) throw new Error('辅助模型结构化输出必须是 JSON object')
-  return parsed
 }
 
 function usageFromResponse(response: Record<string, unknown>): NormalizedModelUsage {

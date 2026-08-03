@@ -37,6 +37,7 @@ import {
 
 type View = 'users' | 'workspaces' | 'memberships' | 'roles' | 'audit'
 type AdminTableRow = PlatformUser | PlatformWorkspace | AdminMembership | RbacPolicyRow | AuditEvent
+type AdminTableColumn = Readonly<{ key: string; label: string }>
 
 const VIEWS: Array<{ id: View; label: string }> = [
   { id: 'users', label: '用户' },
@@ -45,6 +46,43 @@ const VIEWS: Array<{ id: View; label: string }> = [
   { id: 'roles', label: '权限矩阵' },
   { id: 'audit', label: '审计日志' },
 ]
+
+const SECURITY_COLUMNS: Readonly<Record<View, readonly AdminTableColumn[]>> = {
+  users: [
+    { key: 'email', label: '邮箱' },
+    { key: 'displayName', label: '显示名称' },
+    { key: 'status', label: '状态' },
+    { key: 'lastLoginAt', label: '最后登录时间' },
+  ],
+  workspaces: [
+    { key: 'workspaceId', label: '工作区标识' },
+    { key: 'name', label: '名称' },
+    { key: 'status', label: '状态' },
+    { key: 'createdByUserId', label: '创建者标识' },
+  ],
+  memberships: [
+    { key: 'email', label: '邮箱' },
+    { key: 'displayName', label: '显示名称' },
+    { key: 'role', label: '角色' },
+    { key: 'workspaceId', label: '工作区标识' },
+  ],
+  roles: [
+    { key: 'ptype', label: '策略类型' },
+    { key: 'v0', label: '主体' },
+    { key: 'v1', label: '工作区' },
+    { key: 'v2', label: '资源' },
+    { key: 'v3', label: '操作' },
+    { key: 'v4', label: '效果' },
+  ],
+  audit: [
+    { key: 'createdAt', label: '发生时间' },
+    { key: 'actorUserId', label: '操作者标识' },
+    { key: 'workspaceId', label: '工作区标识' },
+    { key: 'objectType', label: '对象类型' },
+    { key: 'action', label: '操作' },
+    { key: 'outcome', label: '结果' },
+  ],
+}
 
 export default function SecurityAdminPage() {
   const [view, setView] = useState<View>('users')
@@ -158,6 +196,8 @@ export default function SecurityAdminPage() {
     if (view === 'roles') return roles
     return auditEvents
   }, [auditEvents, memberships, roles, users, view, workspaces])
+  const columns = SECURITY_COLUMNS[view]
+  const hasActions = view === 'users' || view === 'memberships'
 
   return (
     <main className="digital-cartographer dc-security-page">
@@ -207,16 +247,26 @@ export default function SecurityAdminPage() {
           <table className="dc-security-table">
             <thead>
               <tr>
-                {columnsFor(view).map(column => <th key={column}>{column}</th>)}
-                {view === 'users' || view === 'memberships' ? <th>操作</th> : null}
+                {columns.map(column => <th key={column.key} scope="col">{column.label}</th>)}
+                {hasActions ? <th scope="col">操作</th> : null}
               </tr>
             </thead>
             <tbody>
-              {currentRows.map((row, index) => (
-                <tr key={`${view}-${index}`}>
-                  {columnsFor(view).map(column => <td key={column}>{formatCell(cellValue(row, column))}</td>)}
+              {currentRows.length === 0 ? (
+                <tr>
+                  <td className="dc-security-table__empty" colSpan={columns.length + (hasActions ? 1 : 0)}>
+                    {isLoading ? '正在加载安全数据…' : '当前视图暂无数据。'}
+                  </td>
+                </tr>
+              ) : currentRows.map((row, index) => (
+                <tr key={rowKey(row, view, index)}>
+                  {columns.map(column => (
+                    <td key={column.key} data-label={column.label}>
+                      {formatCell(column.key, cellValue(row, column.key))}
+                    </td>
+                  ))}
                   {view === 'users' && isPlatformUser(row) ? (
-                    <td>
+                    <td data-label="操作">
                       <button
                         type="button"
                         title={row.status === 'disabled' ? '恢复后用户可重新登录' : '禁用后该用户现有会话将失效'}
@@ -227,7 +277,9 @@ export default function SecurityAdminPage() {
                     </td>
                   ) : null}
                   {view === 'memberships' && isAdminMembership(row) ? (
-                    <td><button type="button" onClick={() => void handleDeleteMembership(row)}>移除</button></td>
+                    <td data-label="操作">
+                      <button type="button" onClick={() => void handleDeleteMembership(row)}>移除</button>
+                    </td>
                   ) : null}
                 </tr>
               ))}
@@ -237,14 +289,6 @@ export default function SecurityAdminPage() {
       </section>
     </main>
   )
-}
-
-function columnsFor(view: View): string[] {
-  if (view === 'users') return ['email', 'displayName', 'status', 'lastLoginAt']
-  if (view === 'workspaces') return ['workspaceId', 'name', 'status', 'createdByUserId']
-  if (view === 'memberships') return ['email', 'displayName', 'role', 'workspaceId']
-  if (view === 'roles') return ['ptype', 'v0', 'v1', 'v2', 'v3', 'v4']
-  return ['createdAt', 'actorUserId', 'workspaceId', 'objectType', 'action', 'outcome']
 }
 
 function cellValue(row: AdminTableRow, column: string): unknown {
@@ -259,8 +303,42 @@ function isAdminMembership(row: AdminTableRow): row is AdminMembership {
   return 'membershipId' in row && 'email' in row
 }
 
-function formatCell(value: unknown): string {
-  if (value === null || value === undefined) return ''
+function rowKey(row: AdminTableRow, view: View, index: number): string {
+  if ('membershipId' in row) return `membership-${row.membershipId}`
+  if ('auditEventId' in row) return `audit-${row.auditEventId}`
+  if ('ptype' in row) return `policy-${row.ptype}-${row.v0}-${row.v1}-${row.v2}-${row.v3}-${row.v4}-${index}`
+  if ('userId' in row) return `user-${row.userId}`
+  if ('workspaceId' in row) return `workspace-${row.workspaceId}`
+  return `${view}-${index}`
+}
+
+function formatCell(column: string, value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—'
   if (typeof value === 'object') return JSON.stringify(value)
+  const translated = CELL_VALUE_LABELS[column]?.[String(value)]
+  if (translated) return translated
   return String(value)
+}
+
+const CELL_VALUE_LABELS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  status: {
+    active: '启用',
+    disabled: '禁用',
+    archived: '已归档',
+  },
+  role: {
+    platform_admin: '平台管理员',
+    workspace_admin: '工作区管理员',
+    analyst: '分析员',
+    viewer: '查看者',
+  },
+  ptype: {
+    p: '权限策略',
+    g: '角色绑定',
+  },
+  outcome: {
+    allowed: '允许',
+    denied: '拒绝',
+    error: '错误',
+  },
 }

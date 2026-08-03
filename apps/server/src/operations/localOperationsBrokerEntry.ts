@@ -41,7 +41,7 @@ import { PlatformUserRepository } from '../store/postgres/platformUserRepository
 import { WorkspaceRepository } from '../store/postgres/workspaceRepository.js'
 import { LocalAccountService } from './localAccountService.js'
 
-type BrokerMode = 'accounts' | 'agent'
+type BrokerMode = 'accounts' | 'agent' | 'desktop'
 
 async function main(): Promise<void> {
   const mode = parseMode(process.argv.slice(2))
@@ -94,13 +94,18 @@ async function main(): Promise<void> {
       }), audit)
       return
     }
-    await serveAgentAuthorization({
+    const authorizationInput = {
       auth,
       audit,
       rootSecret,
       appBaseUrl: localApiEndpoint(env.API_PORT),
       origin: new URL(env.APP_BASE_URL).origin,
-    })
+    }
+    if (mode === 'agent') {
+      await serveAgentAuthorization(authorizationInput)
+    } else {
+      await serveDesktopAuthorization(authorizationInput)
+    }
   } finally {
     await db.close()
   }
@@ -151,6 +156,8 @@ async function executeAccountRequest(
       return audit.listRecent(request.limit)
     case 'agent.close':
       throw new Error('账户 Broker 不接受 Agent 关闭命令。')
+    case 'desktop.close':
+      throw new Error('账户 Broker 不接受 Desktop 关闭命令。')
   }
 }
 
@@ -217,9 +224,110 @@ async function serveAgentAuthorization(input: {
   })
 }
 
+async function serveDesktopAuthorization(input: {
+  auth: BetterAuthService
+  audit: AuditStore
+  rootSecret: string
+  appBaseUrl: string
+  origin: string
+}): Promise<void> {
+  const parentPort = requireDesktopParentPort()
+  await input.auth.withLocalDesktopAuthorization(input.rootSecret, async authorization => {
+    const actor = {
+      ...localActor(),
+      keyVersion: authorization.keyVersion,
+      transport: 'electron_main',
+    }
+    await input.audit.recordEvent({
+      actorUserId: authorization.authContext.userId,
+      workspaceId: authorization.authContext.defaultWorkspaceId,
+      action: 'local_desktop.session.open',
+      objectType: 'system',
+      objectId: null,
+      outcome: 'allowed',
+      metadata: actor,
+    })
+    const cookie = authorization.headers.get('cookie')
+    if (!cookie) throw new Error('本机 Desktop 授权未生成 Cookie。')
+    parentPort.postMessage({
+      type: 'desktop.authorization',
+      appBaseUrl: input.appBaseUrl,
+      origin: input.origin,
+      cookie,
+      csrfToken: authorization.authContext.csrfToken,
+      actor,
+    })
+
+    const closeRequest = await waitForDesktopCloseRequest(parentPort)
+    await input.audit.recordEvent({
+      actorUserId: authorization.authContext.userId,
+      workspaceId: authorization.authContext.defaultWorkspaceId,
+      action: 'local_desktop.session.close',
+      objectType: 'system',
+      objectId: null,
+      outcome: closeRequest.outcome,
+      metadata: actor,
+    })
+  })
+}
+
+interface DesktopParentPort {
+  postMessage(message: unknown): void
+  on(event: 'message', listener: (event: { data: unknown }) => void): void
+  off(event: 'message', listener: (event: { data: unknown }) => void): void
+}
+
+function requireDesktopParentPort(): DesktopParentPort {
+  const parentPort = (process as NodeJS.Process & {
+    parentPort?: DesktopParentPort | null
+  }).parentPort
+  if (!parentPort) {
+    throw new Error('Desktop Broker 必须由 Electron utilityProcess 启动。')
+  }
+  return parentPort
+}
+
+function waitForDesktopCloseRequest(
+  parentPort: DesktopParentPort,
+): Promise<Extract<LocalOperationsRequest, { operation: 'desktop.close' }>> {
+  return new Promise(resolve => {
+    const handleMessage = (event: { data: unknown }) => {
+      const parsed = localOperationsRequestSchema.safeParse(event.data)
+      if (!parsed.success) {
+        parentPort.postMessage({
+          id: requestId(event.data),
+          ok: false,
+          error: `Desktop Broker 收到无效命令：${parsed.error.issues[0]?.message ?? '结构不匹配'}`,
+        })
+        return
+      }
+      if (parsed.data.operation !== 'desktop.close') {
+        parentPort.postMessage({
+          id: parsed.data.id,
+          ok: false,
+          error: 'Desktop Broker 只接受关闭命令。',
+        })
+        return
+      }
+      parentPort.off('message', handleMessage)
+      parentPort.postMessage({ id: parsed.data.id, ok: true, result: null })
+      resolve(parsed.data)
+    }
+    parentPort.on('message', handleMessage)
+  })
+}
+
+function requestId(value: unknown): string {
+  return value && typeof value === 'object' && 'id' in value && typeof value.id === 'string'
+    ? value.id
+    : 'invalid'
+}
+
 function parseMode(args: readonly string[]): BrokerMode {
   const mode = args[0]
-  if (mode !== 'accounts' && mode !== 'agent') throw new Error('Broker 模式必须是 accounts 或 agent。')
+  if (mode !== 'accounts' && mode !== 'agent' && mode !== 'desktop') {
+    throw new Error('Broker 模式必须是 accounts、agent 或 desktop。')
+  }
   return mode
 }
 

@@ -60,3 +60,7 @@ def register_system_routes(
             "nonceCacheSize": worker_auth.nonce_cache_size,
             "nonceCacheMax": nonce_cache_max,
         }
+
+    @app.get("/health/live")
+    async def health_live() -> dict[str, bool | str]:
+        return {"status": "ok", "live": True}

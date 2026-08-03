@@ -27,6 +27,10 @@ describe('logger sanitization', () => {
       },
       message: 'failed at file:///tmp/runtime/file.nc with Bearer abc.def and https://example.test/path?token=secret',
       openaiKey: 'sk-proj-secretvalue',
+      systemPrompt: '不要记录系统提示词',
+      requestBody: { messages: ['不要记录用户正文'] },
+      toolArguments: { source: '不要记录完整工具参数' },
+      inputTokens: 123,
     }) as Record<string, unknown>
     const encoded = JSON.stringify(sanitized)
 
@@ -37,6 +41,8 @@ describe('logger sanitization', () => {
     expect(encoded).not.toContain('token=secret')
     expect(encoded).not.toContain('C:/Users/example')
     expect(encoded).not.toContain('file:///tmp')
+    expect(encoded).not.toContain('不要记录')
+    expect(encoded).toContain('"inputTokens":123')
     expect(encoded).toContain('[LOCAL_PATH]')
   })
 

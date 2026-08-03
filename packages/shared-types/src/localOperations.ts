@@ -72,6 +72,11 @@ export const localOperationsRequestSchema = z.discriminatedUnion('operation', [
     threadId: z.string().nullable(),
     outcome: z.enum(['allowed', 'error']),
   }),
+  z.object({
+    id: z.string().min(1),
+    operation: z.literal('desktop.close'),
+    outcome: z.enum(['allowed', 'error']),
+  }),
 ])
 
 export type LocalOperationsRequest = z.infer<typeof localOperationsRequestSchema>
@@ -98,6 +103,22 @@ export const localAgentAuthorizationSchema = z.object({
 })
 
 export type LocalAgentAuthorization = z.infer<typeof localAgentAuthorizationSchema>
+
+export const localDesktopAuthorizationSchema = z.object({
+  type: z.literal('desktop.authorization'),
+  appBaseUrl: z.string().url(),
+  origin: z.string().url(),
+  cookie: z.string().min(1),
+  csrfToken: z.string().min(1),
+  actor: z.object({
+    osUser: z.string().min(1),
+    hostname: z.string().min(1),
+    processId: z.number().int().positive(),
+    keyVersion: z.string().min(1),
+  }),
+})
+
+export type LocalDesktopAuthorization = z.infer<typeof localDesktopAuthorizationSchema>
 
 export const localAccountListResultSchema = z.array(localManagedAccountSchema)
 export const localAccountResultSchema = localManagedAccountSchema

@@ -24,9 +24,6 @@ const DESKTOP_MAIN_ENVIRONMENT_KEYS = [
   'BOOTSTRAP_ADMIN_EMAIL',
   'DESKTOP_RENDERER_PORT',
   'GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH',
-  'GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_EMAIL',
-  'GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_NAME',
-  'GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_SECRET_FILE',
   'GEO_AGENT_PLATFORM_ROOT',
   'GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE',
   'RUNTIME_ROOT',
@@ -39,7 +36,7 @@ export default defineConfig(({ mode }) => {
     ...fileEnvironment,
     ...processEnvironment(process.env),
   }
-  const port = parsePort(env.DESKTOP_RENDERER_PORT) ?? 5173
+  const rendererServer = resolveDesktopRendererServerOptions(env)
 
   return {
     main: {
@@ -76,9 +73,7 @@ export default defineConfig(({ mode }) => {
         include: ['react', 'react-dom/client'],
       },
       server: {
-        host: '127.0.0.1',
-        port,
-        strictPort: true,
+        ...rendererServer,
         warmup: {
           clientFiles: ['./main.tsx', './app/AppShell.tsx'],
         },
@@ -90,6 +85,19 @@ export default defineConfig(({ mode }) => {
     },
   }
 })
+
+export function resolveDesktopRendererServerOptions(
+  environment: Record<string, string | undefined>,
+): { host: '127.0.0.1'; port: number; strictPort: boolean } {
+  const configuredPort = parsePort(environment.DESKTOP_RENDERER_PORT)
+  return {
+    host: '127.0.0.1',
+    port: configuredPort ?? 5173,
+    // 默认端口只是开发首选值；已有同项目实例时允许 Vite 选择下一可用端口，
+    // Electron 的单实例锁随后唤醒现有窗口。显式端口仍保持严格契约。
+    strictPort: configuredPort !== undefined,
+  }
+}
 
 /**
  * Direct `npm run dev:desktop` launches from the desktop workspace, but the

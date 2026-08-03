@@ -223,7 +223,7 @@ function buildTerminalEntry(item: ConversationItem): ConversationEntry | undefin
     id: item.itemId,
     kind: isFailure ? 'error' : 'system',
     timestamp: item.timestamp,
-    title: formatResultTitle(resultType),
+    title: formatResultTitle(resultType, item.metadata),
     body,
     status: isFailure ? 'failed' : 'blocked',
     details: item.metadata,
@@ -329,12 +329,24 @@ function itemStatus(item?: ConversationItem): LedgerEntryStatus {
   return 'completed'
 }
 
-function formatResultTitle(resultType: string): string {
-  if (resultType === 'failed') return '运行出错'
+function formatResultTitle(resultType: string, metadata?: Record<string, unknown>): string {
+  if (resultType === 'failed') return failureTitle(metadata?.failure)
   if (resultType === 'waiting_approval') return '等待审批'
   if (resultType === 'waiting_clarification' || resultType === 'clarification_needed') return '需要澄清'
   if (resultType === 'cancelled') return '已中断'
   return '运行状态'
+}
+
+function failureTitle(value: unknown): string {
+  if (!isRecord(value)) return '运行出错'
+  return ({
+    model: '模型调用失败',
+    tool: '工具执行失败',
+    data: '数据条件不满足',
+    database: '数据库处理失败',
+    transport: '连接与传输失败',
+    platform: '平台运行失败',
+  } as Record<string, string>)[String(value.source)] ?? '运行出错'
 }
 
 function safeJsonParse(value: string): unknown {

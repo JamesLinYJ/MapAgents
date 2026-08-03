@@ -35,6 +35,11 @@ const serverMessageSchema = z.object({
   payload: z.unknown(),
 }).strict()
 
+// WHATWG WebSocket 保留 1001–2999 给协议实现；应用主动关闭只能使用
+// 1000 或 3000–4999。协议校验失败使用平台私有关闭码，避免 Electron 抛异常。
+const CONTROL_PROTOCOL_ERROR_CLOSE_CODE = 4002
+const CONTROL_EVENT_ERROR_CLOSE_CODE = 4009
+
 interface PendingRequest {
   command: string
   resolve: (response: DesktopControlResponse) => void
@@ -190,7 +195,11 @@ export class DesktopControlGateway {
       try {
         message = serverMessageSchema.parse(JSON.parse(line))
       } catch {
-        this.closeSocket(connection, 1002, '服务端返回了无效控制帧。')
+        this.closeSocket(
+          connection,
+          CONTROL_PROTOCOL_ERROR_CLOSE_CODE,
+          '服务端返回了无效控制帧。',
+        )
         return
       }
       if (message.type === 'response' && message.id) {
@@ -215,16 +224,18 @@ export class DesktopControlGateway {
               })
         } catch (error) {
           pending.reject(error instanceof Error ? error : new Error('服务端返回了无效控制响应。'))
-          this.closeSocket(connection, 1002, '服务端返回了无效控制响应。')
+          this.closeSocket(
+            connection,
+            CONTROL_PROTOCOL_ERROR_CLOSE_CODE,
+            '服务端返回了无效控制响应。',
+          )
         }
         continue
       }
       try {
         this.emit(connection.window, 'transport:push', message)
       } catch (error) {
-        // Electron net.WebSocket 与浏览器 WebSocket 一样，只允许应用使用
-        // 3000–4999 区间的自定义关闭码。
-        this.closeSocket(connection, 4009, safeMessage(error))
+        this.closeSocket(connection, CONTROL_EVENT_ERROR_CLOSE_CODE, safeMessage(error))
         return
       }
     }

@@ -17,56 +17,60 @@ function databaseWithRows(...rows: unknown[][]) {
   return {
     execute: vi.fn()
       .mockResolvedValueOnce({ rows: rows[0] ?? [] })
-      .mockResolvedValueOnce({ rows: rows[1] ?? [] }),
+      .mockResolvedValueOnce({ rows: rows[1] ?? [] })
+      .mockResolvedValueOnce({ rows: rows[2] ?? [] }),
   }
 }
 
 describe('verifyDatabaseSchemaCompatibility', () => {
-  it('接受完整且受支持的迁移链', async () => {
+  it('接受当前单一基线', async () => {
     const db = databaseWithRows(
       [{ table_name: 'platform_schema_migrations' }],
-      [
-        { migration_id: '004_agents_sdk_native_runtime' },
-        { migration_id: '005_remove_public_sharing' },
-        { migration_id: '006_native_agent_runtime' },
-      ],
+      [{ migration_id: '001_init_postgis' }],
+      [{ vector_tile_function: 'geo_agent_platform_layer_tiles(integer,integer,integer,json)' }],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never)).resolves.toBeUndefined()
   })
 
-  it('拒绝没有版本跟踪表的旧数据库并给出迁移顺序', async () => {
+  it('拒绝没有版本跟踪表的旧数据库并指向当前基线', async () => {
     const db = databaseWithRows([{ table_name: null }])
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
-      .rejects.toThrow(/004_agents_sdk_native_runtime.*005_remove_public_sharing.*006_native_agent_runtime/u)
+      .rejects.toThrow(/001_init_postgis/u)
   })
 
-  it('拒绝缺失的中间迁移', async () => {
+  it('拒绝没有当前基线记录的数据库', async () => {
     const db = databaseWithRows(
       [{ table_name: 'platform_schema_migrations' }],
-      [
-        { migration_id: '004_agents_sdk_native_runtime' },
-        { migration_id: '006_native_agent_runtime' },
-      ],
+      [],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
-      .rejects.toThrow(/005_remove_public_sharing/u)
+      .rejects.toThrow(/001_init_postgis/u)
   })
 
   it('拒绝让旧服务连接未来版本数据库', async () => {
     const db = databaseWithRows(
       [{ table_name: 'platform_schema_migrations' }],
       [
-        { migration_id: '004_agents_sdk_native_runtime' },
-        { migration_id: '005_remove_public_sharing' },
-        { migration_id: '006_native_agent_runtime' },
-        { migration_id: '007_future_change' },
+        { migration_id: '001_init_postgis' },
+        { migration_id: '002_future_change' },
       ],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
       .rejects.toThrow(/数据库版本高于当前服务支持/u)
+  })
+
+  it('拒绝迁移记录存在但固定瓦片函数缺失的半升级数据库', async () => {
+    const db = databaseWithRows(
+      [{ table_name: 'platform_schema_migrations' }],
+      [{ migration_id: '001_init_postgis' }],
+      [{ vector_tile_function: null }],
+    )
+
+    await expect(verifyDatabaseSchemaCompatibility(db as never))
+      .rejects.toThrow(/geo_agent_platform_layer_tiles\(integer, integer, integer, json\)/u)
   })
 })

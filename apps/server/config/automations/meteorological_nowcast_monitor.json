@@ -2,8 +2,8 @@
   "automationId": "meteorological_nowcast_monitor",
   "name": "气象短临监测",
   "description": "按确定性工具链建立文件序列、校验时次并分析降水趋势，最后生成中文结论。",
-  "version": "3.5.0",
-  "revision": 6,
+  "version": "3.6.0",
+  "revision": 7,
   "enabled": true,
   "agentInvocation": {
     "enabled": true,
@@ -12,6 +12,14 @@
       "分析刚上传的气象文件，未来三小时会不会下雨？",
       "基于这一批连续时次数据给出三小时短临降水趋势。",
       "接下来三小时降水是否增强？"
+    ],
+    "requirements": [
+      {
+        "resource": "meteorological_files",
+        "scope": "thread",
+        "minimumCount": 2,
+        "readyOnly": true
+      }
     ]
   },
   "parametersSchema": {

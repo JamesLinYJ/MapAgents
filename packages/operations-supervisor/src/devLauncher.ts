@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { mkdir, open } from 'node:fs/promises'
+import { mkdir, open, rename, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { parseArgs } from 'node:util'
@@ -248,7 +248,12 @@ export async function runDevLauncher(
     ])
   }
   if (command.action === 'desktop') {
-    await ensureSupervisor(false)
+    await ensureSupervisor()
+    // Desktop 与 API 共享当前工作区契约。仅检查健康会让长期运行的旧 API
+    // 与刚编译的 Desktop schema 发生版本撕裂；重启 Worker 会连带重启 API，
+    // 再显式启动 API 可同时覆盖首次启动和已有服务两种状态，且不重启 PostGIS。
+    if (await supervisor(['restart', 'worker']) !== 0) return 1
+    if (await supervisor(['start', 'api']) !== 0) return 1
     return dependencies.run('npm', ['run', 'dev', '--workspace', '@geo-agent-platform/desktop'])
   }
   if (command.action === 'shutdown') {
@@ -281,11 +286,10 @@ export function devLauncherHelp(): string {
 }
 
 function applyDevelopmentEnvironment(projectRoot: string): void {
-  const defaultRuntimeRoot = path.join(projectRoot, 'runtime')
+  const runtimeRoot = resolveDevelopmentRuntimeRoot(projectRoot, process.env.RUNTIME_ROOT)
   const defaults: Record<string, string> = {
     NODE_ENV: 'development',
     GEO_AGENT_PLATFORM_ROOT: projectRoot,
-    RUNTIME_ROOT: defaultRuntimeRoot,
     POSTGIS_PORT: '55432',
     WORKER_PORT: '8012',
     API_PORT: '8000',
@@ -293,6 +297,10 @@ function applyDevelopmentEnvironment(projectRoot: string): void {
     API_HOST: '127.0.0.1',
   }
   for (const [name, value] of Object.entries(defaults)) process.env[name] ??= value
+  // npm workspace scripts change cwd to the package directory. Resolve the runtime
+  // root once at the composition boundary so every child process sees one location.
+  process.env.GEO_AGENT_PLATFORM_ROOT = projectRoot
+  process.env.RUNTIME_ROOT = runtimeRoot
   process.env.DATABASE_URL ??= `postgresql://geo_agent:geo_agent@127.0.0.1:${process.env.POSTGIS_PORT}/geo_agent`
   process.env.WORKER_URL ??= `http://127.0.0.1:${process.env.WORKER_PORT}`
   process.env.APP_BASE_URL ??= `http://127.0.0.1:${process.env.API_PORT}`
@@ -302,11 +310,16 @@ function applyDevelopmentEnvironment(projectRoot: string): void {
   )
   process.env.BOOTSTRAP_ADMIN_EMAIL ??= 'admin@example.com'
   process.env.GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH ??= 'true'
-  process.env.GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_EMAIL ??= process.env.BOOTSTRAP_ADMIN_EMAIL
-  process.env.GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_NAME ??= `${PRODUCT_CODENAME} 本机演示管理员`
-  const runtimeRoot = process.env.RUNTIME_ROOT ?? defaultRuntimeRoot
   process.env.GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE ??= path.join(runtimeRoot, 'ops', 'supervisor.token')
   process.env.GEO_AGENT_PLATFORM_LOCAL_ROOT_SECRET_FILE ??= path.join(runtimeRoot, 'ops', 'local-root.secret')
+}
+
+export function resolveDevelopmentRuntimeRoot(
+  projectRoot: string,
+  configuredRuntimeRoot?: string,
+): string {
+  const configured = configuredRuntimeRoot?.trim()
+  return path.resolve(projectRoot, configured || 'runtime')
 }
 
 function nativeDependencies(): DevLauncherDependencies {
@@ -362,11 +375,37 @@ async function openDetachedOutput(
     mkdir(path.dirname(stdoutPath), { recursive: true }),
     mkdir(path.dirname(stderrPath), { recursive: true }),
   ])
+  await Promise.all([
+    rotateDetachedOutput(stdoutPath),
+    rotateDetachedOutput(stderrPath),
+  ])
   const [stdout, stderr] = await Promise.all([
     open(stdoutPath, 'a'),
     open(stderrPath, 'a'),
   ])
   return { stdout, stderr }
+}
+
+/**
+ * 后台启动捕获文件只承担 daemon 建立统一日志前的故障信息。每次启动前原子
+ * 轮转非空旧文件，既不覆盖历史，也不让固定文件无限追加。
+ */
+export async function rotateDetachedOutput(
+  filePath: string,
+  now: Date = new Date(),
+  processId: number = process.pid,
+): Promise<string | null> {
+  const details = await stat(filePath).catch(error => {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
+    throw error
+  })
+  if (!details || details.size === 0) return null
+  const extension = path.extname(filePath)
+  const stem = path.basename(filePath, extension)
+  const timestamp = now.toISOString().replace(/[:.]/gu, '-')
+  const destination = path.join(path.dirname(filePath), `${stem}.${timestamp}.${processId}${extension}`)
+  await rename(filePath, destination)
+  return destination
 }
 
 function boundedInteger(value: string | undefined, name: string, minimum: number, maximum: number): number {

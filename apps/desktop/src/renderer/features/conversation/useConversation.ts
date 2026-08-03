@@ -109,7 +109,7 @@ export function formatStatusLine(
   artifactCount: number,
   uploadedLayerName?: string,
 ) {
-  const parts = [formatRunStatus(runStatus), providerLabel]
+  const parts = [formatRunStatus(runStatus), `模型路由 ${providerLabel}`]
   if (artifactCount > 0) parts.push(`${artifactCount} 结果`)
   if (uploadedLayerName) parts.push(uploadedLayerName)
   return parts.join(' · ')

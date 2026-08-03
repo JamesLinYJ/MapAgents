@@ -13,6 +13,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import { Writable } from 'node:stream'
 
 import pino from 'pino'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -63,6 +64,10 @@ describe('OperationsSupervisor operations', () => {
         services: ['infra', 'worker', 'api'],
         levels: ['info'],
         streams: ['supervisor'],
+        categories: [],
+        events: [],
+        retentions: [],
+        correlationId: '',
         search: '停止 全部服务',
         includeSupervisor: true,
         afterSequence: null,
@@ -177,6 +182,127 @@ describe('OperationsSupervisor operations', () => {
       expect(harness.probe).toHaveBeenCalledTimes(2)
     } finally {
       record.command = null
+      await supervisor.close()
+    }
+  })
+
+  it('keeps successful steady-state probes silent and records only failure transitions', async () => {
+    const { supervisor, logBuffer } = await createSupervisor()
+    const harness = supervisor as unknown as {
+      requireRecord(serviceId: 'worker'): {
+        command: object | null
+        stopping: boolean
+        state: string
+        healthMessage: string
+        healthFailures: number
+      }
+      monitorHealth(record: unknown): Promise<void>
+      probe(record: unknown, purpose: 'readiness' | 'liveness'): Promise<{ ok: boolean; message: string }>
+    }
+    const record = harness.requireRecord('worker')
+    record.command = { pid: 42, process: {} }
+    record.stopping = false
+    record.state = 'healthy'
+    record.healthMessage = '存活检查通过（HTTP 200）'
+    record.healthFailures = 0
+    let probeResult = { ok: true, message: '存活检查通过（HTTP 200）' }
+    harness.probe = vi.fn(async () => probeResult)
+
+    try {
+      for (let index = 0; index < 120; index += 1) await harness.monitorHealth(record)
+      expect(logBuffer.tail(['worker'], 20)).toEqual([])
+
+      probeResult = { ok: false, message: '存活检查返回 HTTP 503' }
+      await harness.monitorHealth(record)
+      await harness.monitorHealth(record)
+      await harness.monitorHealth(record)
+      probeResult = { ok: true, message: '存活检查通过（HTTP 200）' }
+      await harness.monitorHealth(record)
+
+      expect(logBuffer.tail(['worker'], 20).map(entry => entry.event)).toEqual([
+        'health.probe.failed',
+        'health.service.degraded',
+        'health.service.recovered',
+      ])
+      expect(harness.probe).toHaveBeenLastCalledWith(record, 'liveness')
+    } finally {
+      record.command = null
+      await supervisor.close()
+    }
+  })
+
+  it('persists operational child events while keeping diagnostics in memory only', async () => {
+    const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-supervisor-log-route-'))
+    cleanupPaths.push(projectRoot)
+    const paths = await resolveOperationsPaths({ projectRoot, profile: 'development' })
+    const logBuffer = new OperationsLogBuffer([])
+    const persisted: string[] = []
+    const destination = new Writable({
+      write(chunk, _encoding, callback) {
+        persisted.push(chunk.toString())
+        callback()
+      },
+    })
+    const supervisor = new OperationsSupervisor({
+      paths,
+      profile: 'development',
+      environment: {},
+      logBuffer,
+      logger: pino({ level: 'debug' }, destination),
+    })
+    const harness = supervisor as unknown as {
+      appendLines(
+        serviceId: 'api',
+        stream: 'stdout',
+        lines: readonly string[],
+        processId: number,
+      ): void
+    }
+
+    try {
+      harness.appendLines('api', 'stdout', [
+        JSON.stringify({
+          level: 20,
+          event: 'agent.sdk.span.completed',
+          category: 'agent',
+          retention: 'diagnostic',
+          message: '内存诊断',
+        }),
+        JSON.stringify({
+          level: 30,
+          event: 'lifecycle.api.ready',
+          category: 'lifecycle',
+          retention: 'operational',
+          message: '关键事件',
+        }),
+      ], 42)
+
+      expect(logBuffer.tail(['api'], 10).map(entry => entry.message)).toEqual(['内存诊断', '关键事件'])
+      expect(persisted.join('')).toContain('关键事件')
+      expect(persisted.join('')).not.toContain('内存诊断')
+    } finally {
+      await supervisor.close()
+      destination.destroy()
+    }
+  })
+
+  it('expires the fixed thirty-minute diagnostic mode and restores the normal memory budget', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-03T00:00:00.000Z'))
+    const { supervisor } = await createSupervisor()
+    try {
+      const enabled = supervisor.startDiagnostics()
+      expect(enabled).toMatchObject({ enabled: true, maxBytes: 32 * 1024 * 1024 })
+      expect(enabled.expiresAt).toBe('2026-08-03T00:30:00.000Z')
+
+      await vi.advanceTimersByTimeAsync(30 * 60_000)
+
+      expect(supervisor.snapshot().observability.diagnostics).toMatchObject({
+        enabled: false,
+        expiresAt: null,
+        maxBytes: 8 * 1024 * 1024,
+      })
+    } finally {
       await supervisor.close()
     }
   })
@@ -531,11 +657,16 @@ describe('OperationsSupervisor operations', () => {
   })
 })
 
-async function createSupervisor(environment: NodeJS.ProcessEnv = {}): Promise<{ supervisor: OperationsSupervisor }> {
+async function createSupervisor(environment: NodeJS.ProcessEnv = {}): Promise<{
+  supervisor: OperationsSupervisor
+  logBuffer: OperationsLogBuffer
+}> {
   const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-supervisor-'))
   cleanupPaths.push(projectRoot)
   const paths = await resolveOperationsPaths({ projectRoot, profile: 'development' })
+  const logBuffer = new OperationsLogBuffer([])
   return {
+    logBuffer,
     supervisor: new OperationsSupervisor({
       paths,
       profile: 'development',
@@ -545,7 +676,7 @@ async function createSupervisor(environment: NodeJS.ProcessEnv = {}): Promise<{ 
         API_PORT: '65433',
         ...environment,
       },
-      logBuffer: new OperationsLogBuffer([]),
+      logBuffer,
       logger: pino({ enabled: false }),
     }),
   }

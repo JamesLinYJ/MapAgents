@@ -216,12 +216,23 @@ export class OperationsIpcServer {
       })
       return
     }
-    if (request.action === 'logs') {
+    if (request.action === 'logs' || request.action === 'history_logs') {
+      const page = request.action === 'logs'
+        ? this.options.supervisor.queryLogs(request.query)
+        : await this.options.supervisor.queryHistoryLogs(request.query)
       const entries = fitLogEntries(
         request.requestId,
-        this.options.supervisor.queryLogs(request.query),
+        page.entries,
+        request.query.afterSequence !== null,
       )
-      this.respond(state, request.requestId, { type: 'logs', entries })
+      this.respond(state, request.requestId, {
+        type: 'logs',
+        page: {
+          entries,
+          nextCursor: entries.at(-1)?.sequence ?? request.query.afterSequence,
+          hasMore: page.hasMore || entries.length < page.entries.length,
+        },
+      })
       return
     }
     if (request.action === 'operation_result') {
@@ -229,6 +240,13 @@ export class OperationsIpcServer {
         type: 'operation',
         operation: this.options.supervisor.operationResult(request.operationId),
       })
+      return
+    }
+    if (request.action === 'diagnostics_start' || request.action === 'diagnostics_stop') {
+      const diagnostics = request.action === 'diagnostics_start'
+        ? this.options.supervisor.startDiagnostics()
+        : this.options.supervisor.stopDiagnostics()
+      this.respond(state, request.requestId, { type: 'diagnostics', diagnostics })
       return
     }
     const actor = state.actor
@@ -333,6 +351,10 @@ function defaultLogFilter(): OperationsLogFilter {
     services: ['infra', 'worker', 'api'],
     levels: [],
     streams: [],
+    categories: [],
+    events: [],
+    retentions: [],
+    correlationId: '',
     search: '',
     includeSupervisor: false,
     afterSequence: null,
@@ -351,30 +373,51 @@ function readProtocolVersion(value: unknown): number | null {
   return typeof version === 'number' && Number.isInteger(version) ? version : null
 }
 
-function fitLogEntries(requestId: string, entries: OperationsLogEntry[]): OperationsLogEntry[] {
+function fitLogEntries(
+  requestId: string,
+  entries: OperationsLogEntry[],
+  preserveOldest: boolean,
+): OperationsLogEntry[] {
   const selected: OperationsLogEntry[] = []
   let bytes = 256
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index]
-    if (!entry) continue
-    const entryBytes = Buffer.byteLength(JSON.stringify(entry), 'utf8') + 1
-    if (bytes + entryBytes >= OPERATIONS_MAX_FRAME_BYTES) break
-    selected.unshift(entry)
-    bytes += entryBytes
+  if (preserveOldest) {
+    for (const entry of entries) {
+      const entryBytes = Buffer.byteLength(JSON.stringify(entry), 'utf8') + 1
+      if (bytes + entryBytes >= OPERATIONS_MAX_FRAME_BYTES) break
+      selected.push(entry)
+      bytes += entryBytes
+    }
+  } else {
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index]
+      if (!entry) continue
+      const entryBytes = Buffer.byteLength(JSON.stringify(entry), 'utf8') + 1
+      if (bytes + entryBytes >= OPERATIONS_MAX_FRAME_BYTES) break
+      selected.unshift(entry)
+      bytes += entryBytes
+    }
   }
   while (selected.length > 0) {
     const frame: OperationsResponse = {
       kind: 'response',
       requestId,
       ok: true,
-      payload: { type: 'logs', entries: selected },
+      payload: {
+        type: 'logs',
+        page: {
+          entries: selected,
+          nextCursor: selected.at(-1)?.sequence ?? null,
+          hasMore: false,
+        },
+      },
     }
     try {
       encodeJsonlFrame(frame)
       return selected
     } catch (error) {
       if (!(error instanceof FrameTooLargeError)) throw error
-      selected.shift()
+      if (preserveOldest) selected.pop()
+      else selected.shift()
     }
   }
   return []

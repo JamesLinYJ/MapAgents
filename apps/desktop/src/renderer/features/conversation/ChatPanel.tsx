@@ -326,7 +326,7 @@ export function ChatPanel(props: ChatPanelProps) {
           )}
 
           <AnimatePresence>
-            {activeDecision ? (
+            {!isTaskMode && activeDecision ? (
               <DecisionSheet
                 key={activeDecision.decisionId}
                 decision={activeDecision}
@@ -341,50 +341,52 @@ export function ChatPanel(props: ChatPanelProps) {
             ) : null}
           </AnimatePresence>
 
-          <Composer
-            query={query}
-            providerLabel={providerLabel}
-            isSubmitting={isSubmitting}
-            canSteerActiveRun={runStatus === 'running'}
-            composerMode={composerMode}
+          {!isTaskMode ? (
+            <Composer
+              query={query}
+              providerLabel={providerLabel}
+              isSubmitting={isSubmitting}
+              canSteerActiveRun={runStatus === 'running'}
+              composerMode={composerMode}
               tokenBudget={tokenBudget}
               activeSkills={activeSkills}
               activeMcpServers={activeMcpServers}
               compactionLevel={compactionLevel}
-            runStats={runStats}
-            denialCounts={denialCounts}
-            composerInputRef={composerInputRef}
-            onQueryChange={onQueryChange}
-            onSubmit={handleSubmit}
-            onInterrupt={handleInterrupt}
-            onUseTemplate={onUseTemplate}
-            onUploadFiles={onUploadFiles}
-            uploadReferences={visibleUploadReferences}
-            onDismissUploadReference={(id) => {
-              setDismissedUploadIds(current => new Set(current).add(id))
-            }}
-            speechStatus={speech.status}
-            speechError={speech.error}
-            speechInterimText={speech.interimText}
-            speechLanguage={speech.language}
-            speechLanguages={speech.languages}
-            onSpeechLanguageChange={speech.setLanguage}
-            onStartSpeechRecognition={speech.startRecognition}
-            onStopSpeechRecognition={stopSpeechRecognition}
-            onClearSpeechError={speech.clearSpeechError}
-            modeMenuOpen={modeDecisionOpen}
-            onModeMenuOpenChange={(open) => {
-              if (open && activeServerDecision) {
-                setDismissedDecisionId(null)
-                return
-              }
-              setModeDecisionOpen(open)
-            }}
-            onComposerModeChange={setComposerMode}
-            onCompositionStart={() => setComposing(true)}
-            onCompositionEnd={() => setComposing(false)}
-            onInputKeyDown={handleKey}
-          />
+              runStats={runStats}
+              denialCounts={denialCounts}
+              composerInputRef={composerInputRef}
+              onQueryChange={onQueryChange}
+              onSubmit={handleSubmit}
+              onInterrupt={handleInterrupt}
+              onUseTemplate={onUseTemplate}
+              onUploadFiles={onUploadFiles}
+              uploadReferences={visibleUploadReferences}
+              onDismissUploadReference={(id) => {
+                setDismissedUploadIds(current => new Set(current).add(id))
+              }}
+              speechStatus={speech.status}
+              speechError={speech.error}
+              speechInterimText={speech.interimText}
+              speechLanguage={speech.language}
+              speechLanguages={speech.languages}
+              onSpeechLanguageChange={speech.setLanguage}
+              onStartSpeechRecognition={speech.startRecognition}
+              onStopSpeechRecognition={stopSpeechRecognition}
+              onClearSpeechError={speech.clearSpeechError}
+              modeMenuOpen={modeDecisionOpen}
+              onModeMenuOpenChange={(open) => {
+                if (open && activeServerDecision) {
+                  setDismissedDecisionId(null)
+                  return
+                }
+                setModeDecisionOpen(open)
+              }}
+              onComposerModeChange={setComposerMode}
+              onCompositionStart={() => setComposing(true)}
+              onCompositionEnd={() => setComposing(false)}
+              onInputKeyDown={handleKey}
+            />
+          ) : null}
         </m.section>
       </LayoutGroup>
     )

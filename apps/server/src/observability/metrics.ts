@@ -92,6 +92,33 @@ export const workerRequestDurationMs = new Histogram({
   buckets: [100, 500, 1000, 2500, 5000, 10000, 30000, 60000],
 })
 
+// Model / Responses API
+export const modelRequestsTotal = new Counter({
+  name: 'geo_agent_platform_model_requests_total',
+  help: '模型请求总数',
+  labelNames: ['provider', 'model', 'transport', 'status'],
+})
+
+export const modelRequestDurationMs = new Histogram({
+  name: 'geo_agent_platform_model_request_duration_ms',
+  help: '模型请求总耗时 (ms)',
+  labelNames: ['provider', 'model', 'transport'],
+  buckets: [100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000, 180000],
+})
+
+export const modelTimeToFirstTextDeltaMs = new Histogram({
+  name: 'geo_agent_platform_model_first_text_delta_ms',
+  help: '模型首个文本增量耗时 (ms)',
+  labelNames: ['provider', 'model', 'transport'],
+  buckets: [50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000],
+})
+
+export const modelTokensTotal = new Counter({
+  name: 'geo_agent_platform_model_tokens_total',
+  help: '模型服务返回的实际词元用量',
+  labelNames: ['provider', 'model', 'transport', 'kind'],
+})
+
 // JSONL storage
 export const jsonlQueueDepth = new Gauge({
   name: 'geo_agent_platform_jsonl_queue_depth',
@@ -156,7 +183,7 @@ export async function observeHttpMetrics(c: Context, next: Next): Promise<void> 
   }
 }
 
-function normalizedRouteLabel(c: Context): string {
+export function normalizedRouteLabel(c: Context): string {
   const matched = routePath(c, -1)
   return matched && matched !== '*' && matched !== '/*' ? matched : 'unmatched'
 }

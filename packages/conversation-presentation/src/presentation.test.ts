@@ -58,6 +58,32 @@ describe('cross-client conversation presentation', () => {
     expect(entries[0]?.title).toBe('工具调用')
     expect(entries[0]?.commands?.[0]?.displayIdentifier).toBeNull()
   })
+
+  it('uses the persisted failure source instead of blaming the selected model route', () => {
+    const entries = deriveEntriesFromItems([
+      item({
+        itemType: 'result',
+        status: 'failed',
+        isError: true,
+        metadata: {
+          resultType: 'failed',
+          message: '数据库函数不存在。',
+          failure: {
+            source: 'database',
+            message: '数据库函数不存在。',
+            code: '42883',
+            retryable: false,
+          },
+        },
+      }),
+    ], 'failed')
+
+    expect(entries[0]).toMatchObject({
+      kind: 'error',
+      title: '数据库处理失败',
+      body: '数据库函数不存在。',
+    })
+  })
 })
 
 function item(overrides: Partial<ConversationItem>): ConversationItem {

@@ -11,14 +11,19 @@
 
 // 模块职责
 //
-// 线程压缩、记忆搜索和自动整理都需要小模型/结构化模型能力。这里集中模型解析
-// 与 JSON 输出边界，避免各命令自行拼接 provider/model fallback 规则。
+// 线程压缩、记忆搜索和自动整理都需要小模型/结构化模型能力。这里集中 provider/model
+// 解析并把结构化调用交给 Agents SDK，避免各命令自行解析模型文本。
 
 import type { AgentRuntimeConfig } from '../schemas/types.js'
 import type { ModelAdapterRegistry } from '../model/registry.js'
 import { recordModelCompletionUsage, type ModelCompletionPurpose, type ModelCompletionService } from '../model/modelResultCache.js'
+import { runSdkStructuredOutput } from '../model/sdkStructuredOutput.js'
+import type { StructuredSelector } from '../memory/service.js'
+import {
+  createSdkMemoryDreamer,
+  createSdkMemoryExtractor,
+} from '../memory/sdkMemoryExtractor.js'
 import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
-import { isRecord } from './payload.js'
 
 export function makeSummarizer(
   registry: ModelAdapterRegistry,
@@ -56,7 +61,7 @@ export function makeOptionalStructuredSelector(
   requestedProvider: string | null,
   requestedModel: string | null,
   cached?: CachedCompletionContext,
-): ((prompt: string) => Promise<Record<string, unknown>>) | undefined {
+): StructuredSelector | undefined {
   if (!requestedProvider && !requestedModel && !config.context.summaryProvider && !registry.defaultProvider) return undefined
   return makeStructuredSelector(registry, config, requestedProvider, requestedModel, cached)
 }
@@ -67,32 +72,71 @@ export function makeStructuredSelector(
   requestedProvider: string | null,
   requestedModel: string | null,
   cached?: CachedCompletionContext,
-) {
-  return async (prompt: string): Promise<Record<string, unknown>> => {
+): StructuredSelector {
+  return async (prompt, schema, selectorOptions) => {
     const provider = requestedProvider ?? config.context.summaryProvider ?? registry.defaultProvider
     if (!provider) throw new Error('未配置记忆选择模型 provider')
     const adapter = registry.resolveProvider(provider)
     const model = requestedModel ?? config.context.summaryModel ?? adapter.subagentModel ?? adapter.defaultModel
     if (!model) throw new Error('未配置记忆选择模型')
     if (cached) {
-      const response = await cached.service.completeJson({
+      const response = await cached.service.completeStructured({
         workspaceId: cached.workspaceId,
         ...(cached.runId ? { runId: cached.runId } : {}),
         provider: adapter.provider,
         model,
         purpose: cached.purpose ?? 'memory_selection',
         prompt,
-      })
+        ...(selectorOptions?.schemaVersion ? { schemaVersion: selectorOptions.schemaVersion } : {}),
+      }, schema)
       if (cached.store && cached.runId) await recordModelCompletionUsage(cached.store, cached.runId, response)
       return response.content
     }
-    const response = await adapter.chat(prompt, {
-      model,
-      reasoning: false,
-    })
-    if (typeof response.content !== 'string' || !response.content.trim()) throw new Error('结构化模型未返回文本')
-    return parseStructuredJson(response.content)
+    return (await runSdkStructuredOutput(adapter, model, prompt, schema)).content
   }
+}
+
+export function makeMemoryExtractor(
+  registry: ModelAdapterRegistry,
+  config: AgentRuntimeConfig,
+  requestedProvider: string | null,
+  requestedModel: string | null,
+  signal?: AbortSignal,
+) {
+  const provider = requestedProvider ?? config.context.summaryProvider ?? registry.defaultProvider
+  if (!provider) throw new Error('未配置记忆提取模型 provider')
+  const adapter = registry.resolveProvider(provider)
+  const model = requestedModel ?? config.context.summaryModel ?? adapter.subagentModel ?? adapter.defaultModel
+  if (!model) throw new Error('未配置记忆提取模型')
+  return createSdkMemoryExtractor(adapter, model, signal)
+}
+
+export function makeMemoryDreamer(
+  registry: ModelAdapterRegistry,
+  config: AgentRuntimeConfig,
+  requestedProvider: string | null,
+  requestedModel: string | null,
+  signal?: AbortSignal,
+) {
+  const provider = requestedProvider ?? config.context.summaryProvider ?? registry.defaultProvider
+  if (!provider) throw new Error('未配置记忆整理模型 provider')
+  const adapter = registry.resolveProvider(provider)
+  const model = requestedModel ?? config.context.summaryModel ?? adapter.subagentModel ?? adapter.defaultModel
+  if (!model) throw new Error('未配置记忆整理模型')
+  return createSdkMemoryDreamer(adapter, model, signal)
+}
+
+export function makeOptionalMemoryDreamer(
+  registry: ModelAdapterRegistry,
+  config: AgentRuntimeConfig,
+  requestedProvider: string | null,
+  requestedModel: string | null,
+  signal?: AbortSignal,
+) {
+  if (!requestedProvider && !requestedModel && !config.context.summaryProvider && !registry.defaultProvider) {
+    return undefined
+  }
+  return makeMemoryDreamer(registry, config, requestedProvider, requestedModel, signal)
 }
 
 interface CachedCompletionContext {
@@ -101,11 +145,4 @@ interface CachedCompletionContext {
   store?: PlatformPersistenceFacade
   runId?: string | null
   purpose?: ModelCompletionPurpose
-}
-
-function parseStructuredJson(value: string): Record<string, unknown> {
-  const cleaned = value.trim().replace(/^```json\s*|\s*```$/gu, '')
-  const parsed: unknown = JSON.parse(cleaned)
-  if (!isRecord(parsed)) throw new Error('结构化模型输出必须是 JSON object')
-  return parsed
 }

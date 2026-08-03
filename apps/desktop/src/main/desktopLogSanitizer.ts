@@ -47,7 +47,9 @@ export function sanitizeDesktopLogValue(
   if (seen.has(value)) return '[CIRCULAR]'
   seen.add(value)
   if (Array.isArray(value)) {
-    return value.slice(0, 100).map(item => sanitizeDesktopLogValue(item, secrets, depth + 1, seen))
+    const result = value.slice(0, 100).map(item => sanitizeDesktopLogValue(item, secrets, depth + 1, seen))
+    seen.delete(value)
+    return result
   }
 
   const result: Record<string, unknown> = {}
@@ -56,6 +58,7 @@ export function sanitizeDesktopLogValue(
       ? '[REDACTED]'
       : sanitizeDesktopLogValue(item, secrets, depth + 1, seen)
   }
+  seen.delete(value)
   return result
 }
 

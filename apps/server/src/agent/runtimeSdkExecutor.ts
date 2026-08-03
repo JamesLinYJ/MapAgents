@@ -18,10 +18,8 @@ import {
 
 import type { ItemSink } from '../conversation/itemSink.js'
 import { errorLogPayload, logger } from '../observability/logger.js'
-import {
-  supervisorDeliverySchema,
-  type SupervisorDelivery,
-} from '../schemas/types.js'
+import { ModelRequestTelemetry } from '../observability/modelRequestTelemetry.js'
+import type { AgentState, SupervisorDelivery } from '../schemas/types.js'
 import type { AgentRuntimeStore } from '../store/runtimePorts.js'
 import type { AgentsCheckpointService } from './agentsCheckpointService.js'
 import type { AgentsExecutionContext } from './agentsToolBridge.js'
@@ -58,7 +56,7 @@ export class RuntimeSdkExecutor {
     assembly: RuntimeAssembly,
     resumeState: RunState<
       AgentsExecutionContext,
-      Agent<AgentsExecutionContext, typeof supervisorDeliverySchema>
+      Agent<AgentsExecutionContext>
     > | null,
     signal: AbortSignal,
     eventSink: RunEventSink,
@@ -74,15 +72,24 @@ export class RuntimeSdkExecutor {
     let outcome: RuntimeSdkOutcome | null = null
     let nextInput: RunState<
       AgentsExecutionContext,
-      Agent<AgentsExecutionContext, typeof supervisorDeliverySchema>
+      Agent<AgentsExecutionContext>
     > | AgentInputItem[] | string = resumeState ?? options.query
     let activeProjection: StreamProjectionState | null = null
+    let activeModelTelemetry: ModelRequestTelemetry | null = null
     let terminalRepairAttempts = 0
 
     try {
       while (true) {
         const projection = transcriptProjector.createState()
         activeProjection = projection
+        const modelTelemetry = new ModelRequestTelemetry({
+          provider: options.provider,
+          model: assembly.modelName,
+          transport: assembly.adapter.agentRuntimeCapabilities.transport,
+          runId: options.runId,
+          threadId: assembly.threadId,
+        })
+        activeModelTelemetry = modelTelemetry
         const stream = await assembly.runner.run(
           assembly.agent,
           nextInput,
@@ -102,13 +109,17 @@ export class RuntimeSdkExecutor {
         )
         await checkpoints.persist(options.runId, stream.state, assembly)
         for await (const event of stream) {
+          modelTelemetry.observe(event)
           await transcriptProjector.projectStreamEvent(event, projection, assembly, eventSink, itemSink)
           if (event.type === 'run_item_stream_event' && ['tool_output', 'tool_approval_requested'].includes(event.name)) {
             await checkpoints.persist(options.runId, stream.state, assembly)
           }
         }
         await stream.completed
-        if (stream.error) throw stream.error
+        if (stream.error) {
+          modelTelemetry.fail(stream.error)
+          throw stream.error
+        }
         await transcriptProjector.linkAssistantTranscriptEntries(options.runId, assembly, projection, itemSink)
         if (projection.reasoningItemId) {
           itemSink.completeItem(projection.reasoningItemId, { body: projection.reasoningText })
@@ -158,7 +169,8 @@ export class RuntimeSdkExecutor {
           throw new Error(`运行仍有未完成 Todo：${incompleteTodos.map(todo => todo.title).join('、')}。请先更新为完成、失败或受阻状态。`)
         }
 
-        const delivery = parseSupervisorDelivery(stream.finalOutput)
+        const finalOutput = requireFinalText(stream.finalOutput)
+        const delivery = platformDelivery(finalOutput, runAfterTools.state)
         const terminalDecision = options.executionMode === 'plan'
           ? { accepted: true as const }
           : evaluateTerminalDelivery({
@@ -184,19 +196,19 @@ export class RuntimeSdkExecutor {
           continue
         }
 
-        const finalOutput = delivery.markdown.trim()
         await assertArtifactDeliveryIsVisible(store, runAfterTools.id, delivery.artifactIds)
         const lastAgentName = stream.lastAgent?.name
         if (lastAgentName && assembly.handoffAgentNames.has(lastAgentName)) {
           await assembly.completeHandoff(lastAgentName, delivery.summary)
         }
-        const item = itemSink.startItem('message', { role: 'assistant' })
+        const itemId = projection.assistantItemId
+          ?? itemSink.startItem('message', { role: 'assistant' }).itemId
         const persisted = await transcriptProjector.appendAssistantMessageTranscript(
           assembly,
           finalOutput,
-          item.itemId,
+          itemId,
         )
-        itemSink.completeItem(item.itemId, {
+        itemSink.completeItem(itemId, {
           body: finalOutput,
           metadata: {
             transcriptEntryId: persisted.entryId,
@@ -205,6 +217,7 @@ export class RuntimeSdkExecutor {
             warnings: delivery.warnings,
           },
         })
+        projection.assistantItemId = null
         await checkpoints.persist(options.runId, stream.state, assembly)
         await store.saveRunCheckpoint(options.runId, {
           pendingToolCallIds: [],
@@ -222,6 +235,7 @@ export class RuntimeSdkExecutor {
         nextInput = []
       }
     } catch (error) {
+      activeModelTelemetry?.fail(error)
       const activeHandoff = assembly.coordinator.activeHandoffAgent()
       if (activeHandoff) {
         await assembly.failHandoff(activeHandoff, errorMessage(error)).catch(handoffError => {
@@ -252,8 +266,30 @@ export class RuntimeSdkExecutor {
   }
 }
 
-function parseSupervisorDelivery(finalOutput: unknown): SupervisorDelivery {
-  const parsed = supervisorDeliverySchema.safeParse(finalOutput)
-  if (parsed.success) return parsed.data
-  throw new Error('Agent 最终输出不符合结构化交付契约')
+function requireFinalText(finalOutput: unknown): string {
+  if (typeof finalOutput !== 'string' || !finalOutput.trim()) {
+    throw new Error('Agent 最终输出不是非空文本')
+  }
+  return finalOutput.trim()
+}
+
+function platformDelivery(markdown: string, state: AgentState): SupervisorDelivery {
+  return {
+    markdown,
+    summary: summarizeMarkdown(markdown),
+    artifactIds: [...new Set(state.artifacts
+      .filter(artifact => !artifact.isIntermediate)
+      .map(artifact => artifact.artifactId))],
+    warnings: [...state.warnings],
+  }
+}
+
+function summarizeMarkdown(markdown: string): string {
+  const plain = markdown
+    .replace(/```[\s\S]*?```/gu, ' ')
+    .replace(/[#>*_`[\]()!-]/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+  if (!plain) return '任务已完成。'
+  return plain.length > 160 ? `${plain.slice(0, 157)}…` : plain
 }

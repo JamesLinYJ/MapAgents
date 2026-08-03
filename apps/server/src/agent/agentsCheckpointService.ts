@@ -10,13 +10,12 @@
 // --------------------------------------------------------------------------
 
 import { Agent, RunContext, RunState } from '@openai/agents'
-import { supervisorDeliverySchema } from '@geo-agent-platform/shared-types/runtime'
 
 import type { AgentsExecutionContext } from './agentsToolBridge.js'
 import { SDK_STATE_SCHEMA_VERSION } from './agentsRuntimeMetadata.js'
 import type { AgentRuntimeStore } from '../store/runtimePorts.js'
 
-type SupervisorAgent = Agent<AgentsExecutionContext, typeof supervisorDeliverySchema>
+type SupervisorAgent = Agent<AgentsExecutionContext>
 
 export interface RestoreAgentsCheckpointOptions {
   runId: string

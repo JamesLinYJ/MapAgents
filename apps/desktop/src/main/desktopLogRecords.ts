@@ -9,26 +9,60 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
+import { matchesOperationsLogFilter } from '@geo-agent-platform/operations-supervisor'
 import {
+  operationsLogAttributeValueSchema,
+  operationsLogCategorySchema,
+  operationsLogCorrelationSchema,
   operationsLogEntrySchema,
+  operationsLogLevelSchema,
+  operationsLogRetentionSchema,
   type OperationsLogEntry,
   type OperationsLogQuery,
 } from '@geo-agent-platform/shared-types/operations'
 import { z } from 'zod'
 
 const desktopFileLogRecordSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
   createdAt: z.string().datetime(),
-  level: z.enum(['debug', 'info', 'warn', 'error', 'unknown']),
+  level: operationsLogLevelSchema,
+  event: z.string().min(1).max(120),
+  category: operationsLogCategorySchema,
+  retention: operationsLogRetentionSchema,
+  correlation: operationsLogCorrelationSchema,
   scope: z.string().trim().min(1).max(80),
   processId: z.number().int().positive(),
   message: z.string().max(16_000),
+  errorStack: z.string().max(8_000).nullable(),
+  attributes: z.record(z.string().min(1).max(80), operationsLogAttributeValueSchema),
 }).strict()
 
 export type DesktopFileLogRecord = z.infer<typeof desktopFileLogRecordSchema>
 
+export function desktopFileLogRecord(entry: OperationsLogEntry): DesktopFileLogRecord {
+  return desktopFileLogRecordSchema.parse({
+    version: 2,
+    createdAt: entry.createdAt,
+    level: entry.level,
+    event: entry.event,
+    category: entry.category,
+    retention: entry.retention,
+    correlation: entry.correlation,
+    scope: entry.component ?? 'desktop',
+    processId: entry.processId ?? process.pid,
+    message: entry.message,
+    errorStack: entry.errorStack,
+    attributes: entry.attributes,
+  })
+}
+
 export function serializeDesktopFileLogRecord(input: DesktopFileLogRecord): string {
   return JSON.stringify(desktopFileLogRecordSchema.parse(input))
+}
+
+export function parseDesktopFileLogRecord(input: unknown): DesktopFileLogRecord | null {
+  const parsed = desktopFileLogRecordSchema.safeParse(input)
+  return parsed.success ? parsed.data : null
 }
 
 export function projectDesktopLogLines(
@@ -36,39 +70,29 @@ export function projectDesktopLogLines(
   query: OperationsLogQuery,
 ): OperationsLogEntry[] {
   if (!query.includeSupervisor || query.tail === 0) return []
-  const search = query.search.trim().toLocaleLowerCase('zh-CN')
   const entries: OperationsLogEntry[] = []
   for (const [index, line] of lines.entries()) {
     const parsed = parseLine(line)
     if (!parsed) continue
-    if (query.levels.length > 0 && !query.levels.includes(parsed.level)) continue
-    if (query.streams.length > 0 && !query.streams.includes('supervisor')) continue
-    if (search && !`${parsed.scope} ${parsed.message}`.toLocaleLowerCase('zh-CN').includes(search)) continue
-    const sequence = 1_000_000_000 + index
-    if (query.afterSequence !== null && sequence <= query.afterSequence) continue
-    entries.push(operationsLogEntrySchema.parse({
-      sequence,
+    const entry = operationsLogEntrySchema.parse({
+      sequence: 1_500_000_000 + index,
       serviceId: null,
       component: parsed.scope,
       processId: parsed.processId,
       stream: 'supervisor',
       level: parsed.level,
+      event: parsed.event,
+      category: parsed.category,
+      retention: parsed.retention,
+      correlation: parsed.correlation,
       message: parsed.message,
+      errorStack: parsed.errorStack,
+      attributes: parsed.attributes,
       createdAt: parsed.createdAt,
-    }))
+    })
+    if (matchesOperationsLogFilter(entry, query)) entries.push(entry)
   }
   return entries.slice(-query.tail)
-}
-
-export function desktopLogMessage(data: readonly unknown[]): string {
-  return data.map(value => {
-    if (typeof value === 'string') return value
-    try {
-      return JSON.stringify(value)
-    } catch {
-      return '[UNSERIALIZABLE]'
-    }
-  }).join(' ')
 }
 
 function parseLine(value: string): DesktopFileLogRecord | null {

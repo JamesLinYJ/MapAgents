@@ -30,7 +30,32 @@ import {
   type MemoryType,
 } from './schemas.js'
 
-export type StructuredSelector = (prompt: string) => Promise<Record<string, unknown>>
+export type StructuredSelector = (
+  prompt: string,
+  schema: z.ZodObject,
+  options?: { schemaVersion?: string },
+) => Promise<unknown>
+
+export interface MemoryExtractionInput {
+  entries: TranscriptEntry[]
+  existing: MemoryFileRecord[]
+}
+
+export type MemoryExtractor = (
+  runtime: MemoryRuntime,
+  input: MemoryExtractionInput,
+) => Promise<MemoryFileRecord[]>
+
+export interface MemoryDreamResult {
+  changed: boolean
+  summary: string
+  warnings?: string[]
+}
+
+export type MemoryDreamer = (
+  runtime: MemoryRuntime,
+  records: MemoryFileRecord[],
+) => Promise<MemoryDreamResult>
 
 export interface DreamOptions {
   force?: boolean
@@ -167,12 +192,12 @@ export async function searchMemories(
   const output = await selector([
     '你正在为当前工作台选择与用户问题相关的记忆文件。',
     `最多返回 ${runtime.config.memoryRelevantLimit} 个 relativePath；不确定时不要返回。`,
-    '只返回 JSON：{"selected_memories":["path.md"]}。',
+    '通过输出结构返回 selected_memories 路径列表。',
     '',
     `用户问题：${query}`,
     '',
     `可用记忆：\n${manifest}`,
-  ].join('\n'))
+  ].join('\n'), memorySelectorOutputSchema, { schemaVersion: 'memory_selection_v1' })
   const parsed = memorySelectorOutputSchema.parse(output)
   const byPath = new Map(records.map(record => [record.relativePath, record]))
   return parsed.selected_memories
@@ -236,7 +261,7 @@ export async function extractMemoriesFromThread(
   store: MemoryConversationStore,
   threadId: string,
   runId: string,
-  selector: StructuredSelector,
+  extractor: MemoryExtractor,
 ): Promise<MemoryFileRecord[]> {
   if (!runtime.config.memoryAutoExtractEnabled) return []
   const run = store.getRun(runId)
@@ -244,16 +269,16 @@ export async function extractMemoriesFromThread(
   if (wroteMemory) return []
   const chain = await store.activeTranscript(threadId)
   const existing = await listMemories(runtime)
-  return runRestrictedMemoryExtractor(runtime, selector, chain.slice(-24), existing)
+  return extractor(runtime, { entries: chain.slice(-24), existing })
 }
 
 export async function dreamMemories(
   runtime: MemoryRuntime,
-  selector?: StructuredSelector,
+  dreamer?: MemoryDreamer,
   options: DreamOptions = {},
 ): Promise<{ changed: boolean; message: string; records: MemoryFileRecord[]; summary?: string; warnings?: string[] }> {
   await ensureMemoryDirectories(runtime)
-  if (!runtime.config.memoryAutoDreamEnabled && !selector) {
+  if (!runtime.config.memoryAutoDreamEnabled && !dreamer) {
     return { changed: false, message: '记忆整理功能未启用', records: [] }
   }
   return withDreamLock(runtime, async () => {
@@ -262,7 +287,7 @@ export async function dreamMemories(
       for (const scope of activeFileScopes(runtime.config)) await updateMemoryIndex(runtime, scope)
       return { changed: false, message: '没有可整理的记忆。', records: [] }
     }
-    if (!selector) {
+    if (!dreamer) {
       for (const scope of activeFileScopes(runtime.config)) await updateMemoryIndex(runtime, scope)
       return { changed: false, message: '已刷新记忆索引；未配置模型整理器。', records }
     }
@@ -276,37 +301,21 @@ export async function dreamMemories(
     }
 
     const detailedRecords = await Promise.all(records.map(record => readMemory(runtime, record.scope, record.relativePath)))
-    const output = memoryDreamOutputSchema().parse(await selector(buildDreamPrompt(runtime, detailedRecords)))
-    const existingKeys = new Set(records.map(record => memoryKey(record.scope, record.relativePath)))
-    const upsertKeys = new Set(output.upserts.flatMap(item => item.relativePath ? [memoryKey(item.scope, item.relativePath)] : []))
-    const warnings: string[] = []
-    let changed = false
-
-    for (const deletion of output.deletes) {
-      const key = memoryKey(deletion.scope, deletion.relativePath)
-      if (!existingKeys.has(key)) {
-        warnings.push(`忽略不存在的删除目标：${key}`)
-        continue
-      }
-      if (upsertKeys.has(key)) continue
-      await deleteMemory(runtime, deletion.scope, deletion.relativePath)
-      changed = true
-    }
-
-    for (const upsert of output.upserts) {
-      await writeMemory(runtime, upsert)
-      changed = true
-    }
+    const result = await dreamer(runtime, detailedRecords)
 
     for (const scope of activeFileScopes(runtime.config)) await updateMemoryIndex(runtime, scope)
     const nextRecords = await listMemories(runtime)
-    await writeDreamState(runtime, { lastCompletedAt: new Date().toISOString(), lastSummary: output.summary, recordCount: nextRecords.length })
+    await writeDreamState(runtime, {
+      lastCompletedAt: new Date().toISOString(),
+      lastSummary: result.summary,
+      recordCount: nextRecords.length,
+    })
     return {
-      changed,
-      message: changed ? '记忆整理已完成。' : '记忆整理完成，没有需要改写的文件。',
+      changed: result.changed,
+      message: result.changed ? '记忆整理已完成。' : '记忆整理完成，没有需要改写的文件。',
       records: nextRecords,
-      summary: output.summary,
-      warnings,
+      summary: result.summary,
+      warnings: result.warnings ?? [],
     }
   })
 }
@@ -391,264 +400,6 @@ function formatTranscriptForSessionMemory(entries: TranscriptEntry[]): string {
   }).join('\n')
 }
 
-async function runRestrictedMemoryExtractor(
-  runtime: MemoryRuntime,
-  selector: StructuredSelector,
-  entries: TranscriptEntry[],
-  existing: MemoryFileRecord[],
-): Promise<MemoryFileRecord[]> {
-  const firstOutput = memoryExtractorOutputSchema().parse(
-    await selector(buildExtractionPrompt(runtime, entries, existing)),
-  )
-  const first = await executeMemoryExtractorOperations(runtime, firstOutput.operations)
-  if (!first.observations.some(observation => observation.kind === 'read' || observation.kind === 'search')) {
-    return uniqueWrittenRecords(first.written)
-  }
-
-  const secondOutput = memoryExtractorMutationOutputSchema().parse(
-    await selector(buildExtractionFollowupPrompt(runtime, entries, existing, first.observations)),
-  )
-  const second = await executeMemoryExtractorOperations(runtime, secondOutput.operations)
-  return uniqueWrittenRecords([...first.written, ...second.written])
-}
-
-async function executeMemoryExtractorOperations(
-  runtime: MemoryRuntime,
-  operations: MemoryExtractorOperation[],
-): Promise<{ written: MemoryFileRecord[]; observations: MemoryExtractorObservation[] }> {
-  const written: MemoryFileRecord[] = []
-  const observations: MemoryExtractorObservation[] = []
-  for (const operation of operations.slice(0, 10)) {
-    if (operation.tool === 'read_memory') {
-      try {
-        const record = await readMemory(runtime, operation.arguments.scope, operation.arguments.relativePath)
-        observations.push({
-          kind: 'read',
-          tool: operation.tool,
-          ok: true,
-          relativePath: record.relativePath,
-          payload: pickMemoryRecordForObservation(record),
-        })
-      } catch (error) {
-        observations.push({
-          kind: 'read',
-          tool: operation.tool,
-          ok: false,
-          relativePath: operation.arguments.relativePath,
-          error: errorMessage(error),
-        })
-      }
-      continue
-    }
-    if (operation.tool === 'search_memory') {
-      const matches = await searchMemories(runtime, operation.arguments.query)
-      observations.push({
-        kind: 'search',
-        tool: operation.tool,
-        ok: true,
-        query: operation.arguments.query,
-        payload: matches.map(match => ({
-          scope: match.record.scope,
-          relativePath: match.record.relativePath,
-          name: match.record.name,
-          description: match.record.description,
-          type: match.record.type,
-          score: match.score,
-        })),
-      })
-      continue
-    }
-    if (operation.tool === 'write_memory') {
-      const record = await writeMemory(runtime, operation.arguments)
-      written.push(record)
-      observations.push({
-        kind: 'write',
-        tool: operation.tool,
-        ok: true,
-        relativePath: record.relativePath,
-        payload: pickMemoryRecordForObservation(record),
-      })
-      continue
-    }
-    const deleted = await deleteMemory(runtime, operation.arguments.scope, operation.arguments.relativePath)
-    observations.push({
-      kind: 'forget',
-      tool: operation.tool,
-      ok: true,
-      relativePath: deleted.relativePath,
-      payload: deleted,
-    })
-  }
-  return { written, observations }
-}
-
-function buildExtractionPrompt(runtime: MemoryRuntime, entries: TranscriptEntry[], existing: MemoryFileRecord[]): string {
-  const manifest = formatMemoryManifest(existing)
-  return [
-    '你是记忆提取子任务。只根据下面最近对话提取长期有用记忆。',
-    '这是受限 fork 语义：你只能请求 read_memory、search_memory、write_memory、forget_memory 四类记忆工具操作。',
-    '不能请求任何 GIS、气象、文件导出、shell、项目源码读取、外部网络或业务副作用工具。',
-    '如果本轮没有长期价值，返回 {"operations":[]}。',
-    '如果需要确认已有 topic file 正文，第一阶段只输出 read_memory 或 search_memory；服务端会把观察结果回传给第二阶段。',
-    '如果 manifest 已足够判断，可直接输出 write_memory 或 forget_memory。',
-    '不要保存可从仓库、工具结果、Git 历史直接推导的事实。',
-    '不要保存已经写在 AGENTS.md、工具提示词、测试或项目文档里的规则。',
-    '不要读取或推断业务源码；不要把历史运行日志、临时 artifact、当前 run 中间状态保存为记忆。',
-    '如果用户本轮要求忽略记忆或不要保存相关内容，返回 {"operations":[]}。',
-    'MEMORY.md 是索引，不是正文。候选 content 必须是独立 topic file 正文。',
-    '输出 JSON：{"operations":[{"tool":"write_memory","arguments":{"scope":"private|team","type":"user|feedback|project|reference","name":"...","description":"...","content":"...","relativePath":"可选.md"}}]}',
-    '允许的 tool 值只有：read_memory、search_memory、write_memory、forget_memory。其它 tool 会被结构校验拒绝。',
-    `记忆目录：private=${runtime.paths.privateDir}; team=${runtime.paths.teamDir}`,
-    '',
-    existing.length ? `已有记忆文件：\n${manifest}` : '已有记忆文件：无。',
-    '',
-    formatTranscriptForSessionMemory(entries),
-  ].join('\n')
-}
-
-function buildExtractionFollowupPrompt(
-  runtime: MemoryRuntime,
-  entries: TranscriptEntry[],
-  existing: MemoryFileRecord[],
-  observations: MemoryExtractorObservation[],
-): string {
-  return [
-    '你是记忆提取子任务的第二阶段。下面是第一阶段记忆工具观察结果。',
-    '现在只能输出 write_memory 或 forget_memory；如果无需写入或删除，返回 {"operations":[]}。',
-    '仍然只允许保存长期有用、不可从仓库或 Git 推导的事实；MEMORY.md 仍然只是索引。',
-    '不要保存已经写在 AGENTS.md、工具提示词、测试或项目文档里的规则；用户要求忽略记忆时不写入。',
-    '输出 JSON：{"operations":[{"tool":"write_memory","arguments":{"scope":"private|team","type":"user|feedback|project|reference","name":"...","description":"...","content":"...","relativePath":"可选.md"}}]}',
-    `记忆目录：private=${runtime.paths.privateDir}; team=${runtime.paths.teamDir}`,
-    '',
-    existing.length ? `原始 manifest：\n${formatMemoryManifest(existing)}` : '原始 manifest：无。',
-    '',
-    `记忆工具观察：\n${JSON.stringify(observations, null, 2)}`,
-    '',
-    `最近对话：\n${formatTranscriptForSessionMemory(entries)}`,
-  ].join('\n')
-}
-
-const fileScopeSchema = z.enum(['private', 'team'])
-
-const writeMemoryArgumentsSchema = z.object({
-  scope: fileScopeSchema,
-  type: memoryTypeSchema,
-  name: z.string().min(1),
-  description: z.string().min(1),
-  content: z.string().min(1),
-  relativePath: z.string().min(1).optional(),
-})
-
-const readMemoryOperationSchema = z.object({
-  tool: z.literal('read_memory'),
-  arguments: z.object({
-    scope: fileScopeSchema,
-    relativePath: z.string().min(1),
-  }),
-})
-
-const searchMemoryOperationSchema = z.object({
-  tool: z.literal('search_memory'),
-  arguments: z.object({
-    query: z.string().min(1),
-  }),
-})
-
-const writeMemoryOperationSchema = z.object({
-  tool: z.literal('write_memory'),
-  arguments: writeMemoryArgumentsSchema,
-})
-
-const forgetMemoryOperationSchema = z.object({
-  tool: z.literal('forget_memory'),
-  arguments: z.object({
-    scope: fileScopeSchema,
-    relativePath: z.string().min(1),
-  }),
-})
-
-const memoryExtractorOperationSchema = z.discriminatedUnion('tool', [
-  readMemoryOperationSchema,
-  searchMemoryOperationSchema,
-  writeMemoryOperationSchema,
-  forgetMemoryOperationSchema,
-])
-
-const memoryExtractorMutationOperationSchema = z.discriminatedUnion('tool', [
-  writeMemoryOperationSchema,
-  forgetMemoryOperationSchema,
-])
-
-function memoryExtractorOutputSchema() {
-  return z.object({
-    operations: z.array(memoryExtractorOperationSchema).default([]),
-  })
-}
-
-function memoryExtractorMutationOutputSchema() {
-  return z.object({
-    operations: z.array(memoryExtractorMutationOperationSchema).default([]),
-  })
-}
-
-type MemoryExtractorOperation = z.infer<typeof memoryExtractorOperationSchema>
-
-interface MemoryExtractorObservation {
-  kind: 'read' | 'search' | 'write' | 'forget'
-  tool: MemoryExtractorOperation['tool']
-  ok: boolean
-  relativePath?: string
-  query?: string
-  payload?: unknown
-  error?: string
-}
-
-function memoryDreamOutputSchema() {
-  return z.object({
-    summary: z.string().default(''),
-    upserts: z.array(z.object({
-      scope: fileScopeSchema,
-      type: memoryTypeSchema,
-      name: z.string().min(1),
-      description: z.string().min(1),
-      content: z.string().min(1),
-      relativePath: z.string().optional(),
-    })).default([]),
-    deletes: z.array(z.object({
-      scope: fileScopeSchema,
-      relativePath: z.string().min(1),
-      reason: z.string().default(''),
-    })).default([]),
-  })
-}
-
-function buildDreamPrompt(runtime: MemoryRuntime, records: MemoryFileRecord[]): string {
-  const bodies = records.map(record => [
-    `## ${record.scope}:${record.relativePath}`,
-    `name: ${record.name}`,
-    `description: ${record.description}`,
-    `type: ${record.type}`,
-    '',
-    record.content ?? '',
-  ].join('\n')).join('\n\n---\n\n')
-  return [
-    '你是长期记忆整理子任务。你的目标是合并重复、删除过期或低价值记忆，并保持主题文件精炼。',
-    '只能输出 JSON，不要输出 Markdown 说明。',
-    '允许操作：',
-    '- upserts：写入或更新 topic file。更新已有文件时必须带 relativePath。',
-    '- deletes：删除确定重复、被 upsert 合并、或明显低价值的已有 topic file。',
-    '禁止操作：',
-    '- 不要保存代码结构、文件路径、Git 历史、运行日志或当前临时任务。',
-    '- 不要把 AGENTS.md、工具提示词、测试或项目文档中已经存在的规则改写成长期记忆。',
-    '- 不要制造 team memory 远端同步成功信息；team 记忆只代表本地共享目录事实。',
-    '- 不确定时保持原样。',
-    '输出格式：{"summary":"整理摘要","upserts":[{"scope":"private|team","type":"user|feedback|project|reference","name":"...","description":"...","content":"...","relativePath":"可选已有路径.md"}],"deletes":[{"scope":"private|team","relativePath":"已有路径.md","reason":"..."}]}',
-    `索引限制：${runtime.config.memoryMaxIndexLines} 行 / ${runtime.config.memoryMaxIndexBytes} bytes；相关读取上限：${runtime.config.memoryRelevantLimit}。`,
-    '',
-    bodies,
-  ].join('\n')
-}
-
 async function withDreamLock<T extends { changed: boolean; message: string; records: MemoryFileRecord[] }>(
   runtime: MemoryRuntime,
   callback: () => Promise<T>,
@@ -700,33 +451,8 @@ function dreamStatePath(runtime: MemoryRuntime): string {
   return path.join(runtime.paths.runtimeRoot, 'memory', 'auto-dream-state.json')
 }
 
-function memoryKey(scope: string, relativePath: string): string {
-  return `${scope}:${relativePath}`
-}
-
-function uniqueWrittenRecords(records: MemoryFileRecord[]): MemoryFileRecord[] {
-  const byKey = new Map<string, MemoryFileRecord>()
-  for (const record of records) byKey.set(memoryKey(record.scope, record.relativePath), record)
-  return [...byKey.values()]
-}
-
-function pickMemoryRecordForObservation(record: MemoryFileRecord): Record<string, unknown> {
-  return {
-    scope: record.scope,
-    relativePath: record.relativePath,
-    type: record.type,
-    name: record.name,
-    description: record.description,
-    content: record.content,
-  }
-}
-
 function errorCode(error: unknown): string {
   return error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

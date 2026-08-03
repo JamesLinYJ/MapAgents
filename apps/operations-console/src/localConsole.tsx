@@ -83,6 +83,8 @@ export function LocalConsoleApp({ options, mouse }: { options: LocalConsoleOptio
   const [connection, setConnection] = useState('正在连接监督器…')
   const [snapshot, setSnapshot] = useState<OperationsSnapshot | null>(null)
   const [logs, setLogs] = useState<OperationsLogEntry[]>([])
+  const logCursorRef = useRef<number | null>(null)
+  const daemonIdRef = useRef<string | null>(null)
   const [serviceIndex, setServiceIndex] = useState(0)
   const [accountIndex, setAccountIndex] = useState(0)
   const [auditIndex, setAuditIndex] = useState(0)
@@ -159,27 +161,35 @@ export function LocalConsoleApp({ options, mouse }: { options: LocalConsoleOptio
         activeClient = next
         setClient(next)
         setConnection('已连接')
+        const replaceLogs = daemonIdRef.current !== null && daemonIdRef.current !== next.server.daemonId
+        if (replaceLogs) logCursorRef.current = null
+        daemonIdRef.current = next.server.daemonId
+        const resumeAfter = logCursorRef.current
+        const pendingLive: OperationsLogEntry[] = []
+        let catchingUp = true
         const disposeEvents = next.onEvent(event => {
           if (event.event === 'snapshot') setSnapshot(event.snapshot)
-          if (event.event === 'log') setLogs(current => [...current, event.entry].slice(-1_500))
+          if (event.event === 'log') {
+            if (catchingUp) {
+              pendingLive.push(event.entry)
+              if (pendingLive.length > 1_500) pendingLive.splice(0, pendingLive.length - 1_500)
+            }
+            else {
+              logCursorRef.current = Math.max(logCursorRef.current ?? 0, event.entry.sequence)
+              setLogs(current => mergeLogEntries(current, [event.entry]))
+            }
+          }
           if (event.event === 'operation') setFeedback(operationFeedback(event.operation))
         })
         const disposeDisconnected = next.onDisconnected(error => {
           disposeEvents()
           disposeDisconnected()
-          if (cancelled) return
+          if (cancelled || activeClient !== next) return
           activeClient = null
           setClient(null)
           setConnection(`连接中断：${safeMessage(error)}；2 秒后重连`)
           reconnectTimer = setTimeout(() => void connect(), 2_000)
         })
-        const [initialSnapshot, initialLogs] = await Promise.all([
-          next.status(),
-          next.logs(ALL_SERVICES, 300, { includeSupervisor: true }),
-        ])
-        if (cancelled || activeClient !== next) return
-        setSnapshot(initialSnapshot)
-        setLogs(initialLogs)
         await next.subscribe({
           metrics: true,
           logs: true,
@@ -187,13 +197,43 @@ export function LocalConsoleApp({ options, mouse }: { options: LocalConsoleOptio
             services: ALL_SERVICES,
             levels: [],
             streams: [],
+            categories: [],
+            events: [],
+            retentions: [],
+            correlationId: '',
             search: '',
             includeSupervisor: true,
-            afterSequence: null,
+            afterSequence: resumeAfter,
           },
         })
+        const initialSnapshot = await next.status()
+        const caughtUp: OperationsLogEntry[] = []
+        let page = await next.logs(ALL_SERVICES, 300, {
+          includeSupervisor: true,
+          afterSequence: resumeAfter,
+        })
+        caughtUp.push(...page.entries)
+        while (resumeAfter !== null && page.hasMore && page.nextCursor !== null) {
+          const previousCursor = page.nextCursor
+          page = await next.logs(ALL_SERVICES, 300, {
+            includeSupervisor: true,
+            afterSequence: previousCursor,
+          })
+          if (page.nextCursor === previousCursor) break
+          caughtUp.push(...page.entries)
+        }
+        if (cancelled || activeClient !== next) return
+        catchingUp = false
+        const reconciled = mergeLogEntries(caughtUp, pendingLive)
+        logCursorRef.current = reconciled.at(-1)?.sequence ?? resumeAfter
+        setSnapshot(initialSnapshot)
+        setLogs(current => mergeLogEntries(replaceLogs ? [] : current, reconciled))
       } catch (error) {
         if (cancelled) return
+        const failedClient = activeClient
+        activeClient = null
+        failedClient?.close()
+        setClient(null)
         setConnection(`无法连接：${safeMessage(error)}；2 秒后重试`)
         reconnectTimer = setTimeout(() => void connect(), 2_000)
       }
@@ -591,6 +631,18 @@ export function LocalConsoleApp({ options, mouse }: { options: LocalConsoleOptio
       </Box>
     </LocalConsoleMouseProvider>
   )
+}
+
+function mergeLogEntries(
+  current: readonly OperationsLogEntry[],
+  incoming: readonly OperationsLogEntry[],
+): OperationsLogEntry[] {
+  const bySequence = new Map<number, OperationsLogEntry>()
+  for (const entry of current) bySequence.set(entry.sequence, entry)
+  for (const entry of incoming) bySequence.set(entry.sequence, entry)
+  return [...bySequence.values()]
+    .sort((left, right) => left.sequence - right.sequence)
+    .slice(-1_500)
 }
 
 function ConsoleHeader({ snapshot, connection, mouseEnabled, columns }: {

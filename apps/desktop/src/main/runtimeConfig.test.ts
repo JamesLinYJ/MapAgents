@@ -15,7 +15,6 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   PLATFORM_TECHNICAL_ID,
-  PRODUCT_CODENAME,
 } from '@geo-agent-platform/shared-types/product-identity'
 
 import {
@@ -27,24 +26,15 @@ import {
 describe('resolveDesktopAutoAuthConfig', () => {
   const runtimeRoot = path.resolve('runtime-test')
 
-  it('enables the matching bootstrap administrator by default in development', () => {
+  it('enables a local managed identity by default without account credentials', () => {
     const config = resolveDesktopAutoAuthConfig({
-      environment: {
-        GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_EMAIL: 'ADMIN@example.com',
-        BOOTSTRAP_ADMIN_EMAIL: 'admin@example.com',
-        BETTER_AUTH_ALLOW_SIGN_UP: 'true',
-      },
+      environment: {},
       profile: 'development',
       runtimeRoot,
       apiBaseUrl: 'http://127.0.0.1:8000',
     })
 
-    expect(config).toEqual({
-      email: 'admin@example.com',
-      displayName: `${PRODUCT_CODENAME} 本机演示管理员`,
-      credentialFile: path.join(runtimeRoot, 'desktop', 'auto-auth.secret'),
-      allowAccountCreation: true,
-    })
+    expect(config).toEqual({ mode: 'local_managed' })
   })
 
   it('restores interactive login when development auto auth is explicitly disabled', () => {
@@ -58,10 +48,9 @@ describe('resolveDesktopAutoAuthConfig', () => {
     })).toBeNull()
   })
 
-  it('rejects remote APIs and production activation', () => {
+  it('rejects remote APIs but supports the production local runtime', () => {
     const environment = {
       GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH: 'true',
-      BOOTSTRAP_ADMIN_EMAIL: 'admin@example.com',
     }
     expect(() => resolveDesktopAutoAuthConfig({
       environment,
@@ -69,42 +58,96 @@ describe('resolveDesktopAutoAuthConfig', () => {
       runtimeRoot,
       apiBaseUrl: 'https://api.example.com',
     })).toThrow('回环 API')
-    expect(() => resolveDesktopAutoAuthConfig({
+    expect(resolveDesktopAutoAuthConfig({
       environment,
       profile: 'production',
       runtimeRoot,
       apiBaseUrl: 'http://127.0.0.1:8000',
-    })).toThrow('development')
+    })).toEqual({ mode: 'local_managed' })
   })
 
-  it('does not let APP_ENV downgrade a production profile into development auto auth', () => {
-    expect(() => resolveDesktopAutoAuthConfig({
+  it('lets a production deployment explicitly enable the optional account extension', () => {
+    expect(resolveDesktopAutoAuthConfig({
       environment: {
-        APP_ENV: 'development',
-        GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH: 'true',
-        BOOTSTRAP_ADMIN_EMAIL: 'admin@example.com',
+        GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH: 'false',
       },
       profile: 'production',
       runtimeRoot,
       apiBaseUrl: 'http://127.0.0.1:8000',
-    })).toThrow('development')
-  })
-
-  it('rejects a client-side account that differs from the server bootstrap identity', () => {
-    expect(() => resolveDesktopAutoAuthConfig({
-      environment: {
-        GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH: 'true',
-        GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_EMAIL: 'other@example.com',
-        BOOTSTRAP_ADMIN_EMAIL: 'admin@example.com',
-      },
-      profile: 'development',
-      runtimeRoot,
-      apiBaseUrl: 'http://localhost:8000',
-    })).toThrow('BOOTSTRAP_ADMIN_EMAIL')
+    })).toBeNull()
   })
 })
 
 describe('resolveDesktopRuntimeConfig', () => {
+  it('locates the workspace root from a nested Electron build directory', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-desktop-dev-root-'))
+    try {
+      const applicationPath = path.join(directory, 'apps', 'desktop', 'out', 'main')
+      await mkdir(applicationPath, { recursive: true })
+      await writeFile(path.join(directory, 'package.json'), JSON.stringify({
+        private: true,
+        workspaces: ['apps/desktop', 'packages/shared-types'],
+      }), 'utf8')
+
+      const config = resolveDesktopRuntimeConfig({}, {
+        profile: 'development',
+        applicationPath,
+      })
+
+      expect(config.projectRoot).toBe(directory)
+      expect(config.runtimeRoot).toBe(path.join(directory, 'runtime'))
+      expect(config.supervisorTokenFile).toBe(path.join(directory, 'runtime', 'ops', 'supervisor.token'))
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  })
+
+  it('resolves relative runtime paths from the workspace instead of the process directory', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-desktop-relative-runtime-'))
+    try {
+      const applicationPath = path.join(directory, 'apps', 'desktop', 'out', 'main')
+      await mkdir(applicationPath, { recursive: true })
+      await writeFile(path.join(directory, 'package.json'), JSON.stringify({
+        private: true,
+        workspaces: ['apps/desktop'],
+      }), 'utf8')
+
+      const config = resolveDesktopRuntimeConfig({
+        RUNTIME_ROOT: './var/runtime',
+        GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE: './var/secrets/supervisor.token',
+      }, {
+        profile: 'development',
+        applicationPath,
+      })
+
+      expect(config.runtimeRoot).toBe(path.join(directory, 'var', 'runtime'))
+      expect(config.supervisorTokenFile).toBe(path.join(directory, 'var', 'secrets', 'supervisor.token'))
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  })
+
+  it('requires an explicitly configured project root to be absolute', () => {
+    expect(() => resolveDesktopRuntimeConfig({
+      GEO_AGENT_PLATFORM_ROOT: '.',
+    }, {
+      profile: 'development',
+      applicationPath: path.resolve('unused'),
+    })).toThrow('路径必须是绝对路径')
+  })
+
+  it('fails explicitly when a development build has no workspace root', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-desktop-dev-missing-'))
+    try {
+      expect(() => resolveDesktopRuntimeConfig({}, {
+        profile: 'development',
+        applicationPath: path.join(directory, 'out', 'main'),
+      })).toThrow('无法从 Desktop 应用目录定位开发工作区')
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  })
+
   it('uses the protected production manifest instead of ambient legacy variables', async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-desktop-config-'))
     try {

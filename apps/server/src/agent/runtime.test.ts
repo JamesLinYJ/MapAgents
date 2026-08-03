@@ -408,7 +408,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         executionMode: 'plan',
       })
 
-      expect(completed.status).toBe('completed')
+      expect(completed.status, completed.state.errors.join('\n')).toBe('completed')
       expect(executions).toBe(1)
       const transcript = await store.activeTranscript(thread.id)
       expect(transcript).toContainEqual(expect.objectContaining({
@@ -517,7 +517,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
 
       const completed = await testRuntime(store, tools, registryWith(fakeAdapter(model))).run(runOptions(run, thread.id))
 
-      expect(completed.status).toBe('completed')
+      expect(completed.status, completed.state.errors.join('\n')).toBe('completed')
       expect(completed.state.planMode).toBe(true)
       expect(completed.state.agentWorkflow).toBeNull()
       expect(completed.state.errors).toEqual([])
@@ -1399,6 +1399,57 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     expect(transcriptResultIndex).toBeLessThan(transcriptFinalIndex)
   })
 
+  it('publishes SDK text deltas on the same assistant item before completion', async () => {
+    const responseId = 'response_streaming_text'
+    const model: Model = {
+      async getResponse(): Promise<ModelResponse> {
+        throw new Error('流式运行不应调用 getResponse')
+      },
+      async *getStreamedResponse(): AsyncIterable<ResponseStreamEvent> {
+        yield { type: 'response_started' }
+        yield { type: 'output_text_delta', delta: '逐字' }
+        yield { type: 'output_text_delta', delta: '显示。' }
+        yield {
+          type: 'response_done',
+          response: {
+            id: responseId,
+            usage: { requests: 1, inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+            output: outputItems({ text: '逐字显示。' }, responseId),
+          },
+        }
+      },
+    }
+
+    const outcome = await executeTextRun(model)
+    const assistantUpdates = outcome.liveItems.filter(item => (
+      item.itemType === 'message' && item.role === 'assistant'
+    ))
+
+    expect(assistantUpdates.map(item => [item.status, item.body])).toEqual([
+      ['running', null],
+      ['running', '逐字'],
+      ['running', '逐字显示。'],
+      ['completed', '逐字显示。'],
+    ])
+    expect(new Set(assistantUpdates.map(item => item.itemId))).toHaveLength(1)
+  })
+
+  it('negotiates native Responses web search only for a capable provider', async () => {
+    let requestedTools: ModelRequest['tools'] = []
+    const model = scriptedModel(request => {
+      requestedTools = request.tools
+      return { text: '已完成。' }
+    })
+
+    const outcome = await executeTextRun(model, new ToolRegistry(), '回答测试问题', true)
+
+    expect(outcome.run.status).toBe('completed')
+    expect(requestedTools).toContainEqual(expect.objectContaining({
+      type: 'hosted_tool',
+      name: 'web_search',
+    }))
+  })
+
   it('keeps provider reasoning in the SDK run while publishing it to the reasoning panel', async () => {
     const tools = new ToolRegistry()
     tools.register(providerFromTools('reasoning-replay-test', [{
@@ -1424,8 +1475,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
 
     expect(outcome.run.status).toBe('completed')
     expect(turns).toBe(2)
-    // Agents SDK 会把 reasoning 带到同一 run 的下一次 Model 请求；Chat Completions
-    // 的不可重放边界在 DeepSeekChatCompletionsModel 中统一执行。
+    // Agents SDK 会把 Responses reasoning item 原样带到同一 run 的下一次 Model 请求。
     expect(secondTurnInput.some(item => isRecord(item) && item.type === 'reasoning')).toBe(true)
     expect(outcome.items.some(item => (
       item.itemType === 'reasoning'
@@ -2712,7 +2762,12 @@ function withStrictWorkflowStepIdentity(response: ScriptedResponse, request: Mod
   }
 }
 
-async function executeTextRun(model: Model, tools = new ToolRegistry(), query = '回答测试问题') {
+async function executeTextRun(
+  model: Model,
+  tools = new ToolRegistry(),
+  query = '回答测试问题',
+  hostedTools = false,
+) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-stream-'))
   try {
     const store = createTestPersistenceFacade(root)
@@ -2724,11 +2779,18 @@ async function executeTextRun(model: Model, tools = new ToolRegistry(), query = 
       modelProvider: 'fake',
       runtimeConfigSnapshot: testRuntimeConfig(),
     })
-    const completed = await testRuntime(store, tools, registryWith(fakeAdapter(model))).run(runOptions(run, thread.id))
+    const liveItems: ConversationItem[] = []
+    testPlatformEventHub(store).conversationItems.subscribe(run.id, item => liveItems.push(structuredClone(item)))
+    const completed = await testRuntime(
+      store,
+      tools,
+      registryWith(fakeAdapter(model, 'strict', hostedTools)),
+    ).run(runOptions(run, thread.id))
     await store.flushConversationStore()
     return {
       run: structuredClone(completed),
       items: structuredClone(await store.listItems(run.id)),
+      liveItems,
       transcript: structuredClone(await store.activeTranscript(thread.id)),
     }
   } finally {
@@ -2736,7 +2798,11 @@ async function executeTextRun(model: Model, tools = new ToolRegistry(), query = 
   }
 }
 
-function fakeAdapter(model: Model, agentToolSchemaMode: ModelAdapter['agentToolSchemaMode'] = 'strict'): ModelAdapter {
+function fakeAdapter(
+  model: Model,
+  agentToolSchemaMode: ModelAdapter['agentToolSchemaMode'] = 'strict',
+  hostedTools = false,
+): ModelAdapter {
   return {
     provider: 'fake',
     displayName: 'Fake',
@@ -2747,7 +2813,7 @@ function fakeAdapter(model: Model, agentToolSchemaMode: ModelAdapter['agentToolS
       structuredOutput: 'json_schema',
       functionTools: true,
       localMcp: true,
-      hostedTools: false,
+      hostedTools,
       handoffs: true,
       remoteConversation: false,
       serverCompaction: false,

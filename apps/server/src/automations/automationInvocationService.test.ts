@@ -85,6 +85,73 @@ describe('AutomationInvocationService', () => {
     )
   })
 
+  it('rejects missing current-thread input before creating an automation run', async () => {
+    const guardedDefinition = definition({
+      requirements: [{
+        resource: 'meteorological_files',
+        scope: 'thread',
+        minimumCount: 2,
+        readyOnly: true,
+      }],
+    })
+    const fixture = createService({
+      definitions: [guardedDefinition],
+      meteorologicalDatasets: [meteorologicalDataset('thread_other')],
+    })
+
+    await expect(fixture.service.executeAttached(auth(), {
+      automationId: 'automation_agent_test',
+      prompt: '分析当前数据。',
+      parameters: { horizonMinutes: 180 },
+      sessionId: 'session_1',
+      threadId: 'thread_1',
+      runId: 'run_1',
+      signal: new AbortController().signal,
+    })).rejects.toMatchObject({
+      name: 'AutomationInputRequirementError',
+      failureSource: 'data',
+      code: 'automation_input_requirement_failed',
+      message: expect.stringContaining('当前对话至少 2 个可用气象文件'),
+    })
+    expect(fixture.created).toHaveLength(0)
+    expect(fixture.executeAttached).not.toHaveBeenCalled()
+    expect(fixture.countMeteorologicalDatasets).toHaveBeenCalledWith({
+      workspaceId: 'workspace_1',
+      sessionId: 'session_1',
+      threadId: 'thread_1',
+      status: 'ready',
+    })
+  })
+
+  it('accepts an invocation only when the declared scoped input is ready', async () => {
+    const guardedDefinition = definition({
+      requirements: [{
+        resource: 'meteorological_files',
+        scope: 'thread',
+        minimumCount: 2,
+        readyOnly: true,
+      }],
+    })
+    const fixture = createService({
+      definitions: [guardedDefinition],
+      meteorologicalDatasets: [
+        meteorologicalDataset('thread_1'),
+        meteorologicalDataset('thread_1', 'dataset_2'),
+      ],
+    })
+
+    await expect(fixture.service.executeAttached(auth(), {
+      automationId: 'automation_agent_test',
+      prompt: '分析当前数据。',
+      parameters: { horizonMinutes: 180 },
+      sessionId: 'session_1',
+      threadId: 'thread_1',
+      runId: 'run_1',
+      signal: new AbortController().signal,
+    })).resolves.toMatchObject({ automationId: 'automation_agent_test' })
+    expect(fixture.created).toHaveLength(1)
+  })
+
   it('rejects an attachment that does not belong to the current session and thread', async () => {
     const fixture = createService({ definitions: [definition()] })
 
@@ -151,6 +218,7 @@ describe('AutomationInvocationService', () => {
 function createService(input: {
   definitions: AutomationDefinition[]
   publishedDefinitions?: AutomationDefinition[]
+  meteorologicalDatasets?: ReturnType<typeof meteorologicalDataset>[]
 }) {
   const created: Parameters<AutomationInvocationStore['createAutomationRunRecord']>[0][] = []
   const completedRun = (automationRunId: string, runId: string) => automationRunRecordSchema.parse({
@@ -183,6 +251,17 @@ function createService(input: {
     completedRun('automation_run_other_thread', 'run_other'),
     completedRun('automation_run_other_session', 'run_other_session'),
   ]
+  const countMeteorologicalDatasets = vi.fn(async (filters: {
+    workspaceId: string
+    sessionId: string
+    threadId: string | null
+    status: string | null
+  }) => (input.meteorologicalDatasets ?? [])
+    .filter(dataset => dataset.workspaceId === filters.workspaceId)
+    .filter(dataset => dataset.sessionId === filters.sessionId)
+    .filter(dataset => filters.threadId === null || dataset.threadId === filters.threadId)
+    .filter(dataset => filters.status === null || dataset.status === filters.status)
+    .length)
   const store: AutomationInvocationStore = {
     getRun: runId => ({
       id: runId,
@@ -211,6 +290,7 @@ function createService(input: {
     },
     getAutomationRunRecord: async automationRunId => storedRuns.find(run => run.automationRunId === automationRunId) ?? null,
     listAutomationRuns: async () => storedRuns,
+    countMeteorologicalDatasets,
   }
   const definitions: AutomationInvocationDefinitions = {
     list: async () => ({ definitions: input.definitions, diagnostics: [], validation: {} }),
@@ -256,10 +336,13 @@ function createService(input: {
     service: new AutomationInvocationService({ store, definitions, compiler, runner }),
     created,
     executeAttached,
+    countMeteorologicalDatasets,
   }
 }
 
-function definition(): AutomationDefinition {
+function definition(
+  invocation: Partial<AutomationDefinition['agentInvocation']> = {},
+): AutomationDefinition {
   return automationDefinitionSchema.parse({
     automationId: 'automation_agent_test',
     name: '会话分析流程',
@@ -281,6 +364,7 @@ function definition(): AutomationDefinition {
       enabled: true,
       description: '当用户要求分析当前连续时次数据时执行。',
       examples: ['分析当前数据。'],
+      ...invocation,
     },
     graph: {
       schemaVersion: 1,
@@ -310,6 +394,29 @@ function definition(): AutomationDefinition {
       ],
     },
   })
+}
+
+function meteorologicalDataset(threadId: string, datasetId = 'dataset_1') {
+  const timestamp = new Date().toISOString()
+  return {
+    datasetId,
+    workspaceId: 'workspace_1',
+    createdByUserId: 'user_1',
+    visibility: 'workspace' as const,
+    sessionId: 'session_1',
+    threadId,
+    filename: `${datasetId}.nc`,
+    originalFilename: `${datasetId}.nc`,
+    fileId: `file_${datasetId}`,
+    fileRelativePath: `sessions/session_1/threads/${threadId}/files/${datasetId}.nc`,
+    sizeBytes: 1024,
+    contentHash: null,
+    mediaType: 'application/x-netcdf',
+    status: 'ready',
+    metadata: {},
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }
 }
 
 function answerTool(): ToolDef {

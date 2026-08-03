@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
-import type { RunEvent } from '../schemas/types.js'
+import type { RunEvent, RunFailure } from '../schemas/types.js'
 import type { ItemSink } from '../conversation/itemSink.js'
 import { OrderedWriteBuffer } from '../conversation/orderedWriteBuffer.js'
 import { makeId, nowUtc } from '../utils/ids.js'
@@ -62,10 +62,15 @@ export class TurnFinalizer {
     await this.onComplete('completed')
   }
 
-  async fail(error: string, errors: string[] = []): Promise<void> {
+  async fail(error: string, errors: string[] = [], failure?: RunFailure): Promise<void> {
     const allErrors = errors.length ? errors : [error]
-    this.eventSink.emit('run.failed', '运行失败', { errors: allErrors, message: error })
-    this.itemSink.appendResult('failed', { errors: allErrors, message: error })
+    const payload = {
+      errors: allErrors,
+      message: error,
+      ...(failure ? { failure } : {}),
+    }
+    this.eventSink.emit('run.failed', '运行失败', payload)
+    this.itemSink.appendResult('failed', payload)
     await this.eventSink.flush()
     await this.itemSink.flush()
     await this.onComplete('failed')

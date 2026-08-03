@@ -61,7 +61,7 @@ export const basemapDescriptorSchema = z.object({
 })
 
 export const agentRuntimeCapabilitiesSchema = z.object({
-  transport: z.enum(['deepseek_chat_completions', 'none']),
+  transport: z.enum(['deepseek_responses', 'none']),
   structuredOutput: z.enum(['json_object', 'json_schema', 'none']),
   functionTools: z.boolean(),
   localMcp: z.boolean(),
@@ -178,10 +178,22 @@ export const automationRetryPolicySchema = z.object({
   backoffSeconds: z.number().int().min(0).max(300).default(0),
 })
 
+// Agent 调用前置条件是自动化定义的一部分，由调用边界确定性校验。
+// 新资源类型通过扩展此联合类型接入，不把具体 automationId 写入运行时分支。
+export const automationInvocationRequirementSchema = z.discriminatedUnion('resource', [
+  z.object({
+    resource: z.literal('meteorological_files'),
+    scope: z.enum(['thread', 'session']).default('thread'),
+    minimumCount: z.number().int().min(1).max(500),
+    readyOnly: z.boolean().default(true),
+  }).strict(),
+])
+
 export const automationAgentInvocationSchema = z.object({
   enabled: z.boolean().default(false),
   description: z.string().default(''),
   examples: z.array(z.string().min(1)).max(12).default([]),
+  requirements: z.array(automationInvocationRequirementSchema).max(12).default([]),
 }).strict()
 
 const automationNodeBaseSchema = z.object({
@@ -301,6 +313,7 @@ export const automationDefinitionSchema = z.object({
     enabled: false,
     description: '',
     examples: [],
+    requirements: [],
   }),
   graph: automationGraphSchema,
   createdAt: z.string().nullable().default(null),

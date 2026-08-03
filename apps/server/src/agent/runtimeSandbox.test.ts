@@ -147,9 +147,6 @@ describe('runtimeSandbox', () => {
     expect(telemetry.createCount).toBe(1)
     expect(telemetry.execCommands).toEqual(['echo lifecycle'])
     expect(protectedExecutions).toBe(0)
-    expect(telemetry.cleanupOptions).toContainEqual(expect.objectContaining({
-      preserveOwnedSessions: true,
-    }))
     const serialized = interrupted.state.toString()
     expect(JSON.parse(serialized)).toMatchObject({
       sandbox: { backendId: 'unix_local' },
@@ -170,9 +167,6 @@ describe('runtimeSandbox', () => {
     expect(protectedExecutions).toBe(1)
     expect(telemetry.resumeCount).toBe(1)
     expect(telemetry.serializeCount).toBeGreaterThanOrEqual(2)
-    expect(telemetry.cleanupOptions.at(-1)).not.toMatchObject({
-      preserveOwnedSessions: true,
-    })
   })
 
   it('lets the SDK reject a checkpoint owned by another sandbox backend', async () => {

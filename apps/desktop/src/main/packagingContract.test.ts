@@ -47,14 +47,18 @@ describe('desktop packaging contract', () => {
     expect(desktopPackage.productName).toBeUndefined()
     expect(desktopPackage.engines.node).toBe('^22.13.0 || >=24.0.0')
     expect(rootPackage.engines.node).toBe('^22.13.0 || >=24.0.0')
-    expect(desktopPackage.scripts.package).toContain('npm --prefix ../.. run build:desktop')
+    expect(desktopPackage.scripts.package).toBe('npm run package:windows')
     expect(desktopPackage.scripts.package).not.toContain('require-node24.mjs')
-    expect(desktopPackage.scripts.package).toContain('--platform win32 --arch x64')
-    expect(desktopPackage.scripts.make).toContain('npm --prefix ../.. run build:desktop')
-    expect(desktopPackage.scripts.make).toContain('prepare-squirrel-vendor.ps1')
-    expect(desktopPackage.scripts.make).toContain('--platform win32 --arch x64')
+    expect(desktopPackage.scripts['package:windows']).toContain('npm --prefix ../.. run build:desktop')
+    expect(desktopPackage.scripts['package:windows']).toContain('--platform win32 --arch x64')
+    expect(desktopPackage.scripts.make).toBe('npm run make:windows')
+    expect(desktopPackage.scripts['make:windows']).toContain('prepare-squirrel-vendor.ps1')
+    expect(desktopPackage.scripts['make:windows']).toContain('--platform win32 --arch x64')
+    expect(desktopPackage.scripts['make:linux:rpm']).toContain('npm --prefix ../.. run build:desktop')
+    expect(desktopPackage.scripts['make:linux:rpm']).toContain('--platform linux --arch x64')
     expect(desktopPackage.scripts['make:release']).toContain('make-desktop-release.ps1')
     expect(desktopPackage.devDependencies?.['@electron-forge/maker-base']).toBe('7.11.2')
+    expect(desktopPackage.devDependencies?.['@electron-forge/maker-rpm']).toBe('7.11.2')
     expect(desktopPackage.devDependencies?.['@electron-forge/maker-zip']).toBeUndefined()
 
     const rootBuild = rootPackage.scripts['build:desktop']
@@ -75,7 +79,7 @@ describe('desktop packaging contract', () => {
       .toBe('24.14.0')
   })
 
-  it('keeps Windows installer identity and metadata explicit in Forge', async () => {
+  it('keeps Windows and Linux package identity and metadata explicit in Forge', async () => {
     const forgeSource = await readFile(path.resolve(process.cwd(), 'forge.config.mjs'), 'utf8')
     const zipMakerSource = await readFile(
       path.resolve(process.cwd(), 'packaging', 'desktopZipMaker.mjs'),
@@ -102,6 +106,11 @@ describe('desktop packaging contract', () => {
       'setupIcon: windowsIconPath',
       "import { DesktopZipMaker } from './packaging/desktopZipMaker.mjs'",
       "new DesktopZipMaker({}, ['win32'])",
+      "name: '@electron-forge/maker-rpm'",
+      'name: `${PLATFORM_TECHNICAL_ID}-desktop`',
+      'productName: PRODUCT_DESKTOP_NAME',
+      "categories: ['Science', 'Utility']",
+      "packageResult.platform !== 'win32'",
       'schemes: [PLATFORM_DESKTOP_PROTOCOL_SCHEME]',
     ]) {
       expect(forgeSource, requiredMetadata).toContain(requiredMetadata)

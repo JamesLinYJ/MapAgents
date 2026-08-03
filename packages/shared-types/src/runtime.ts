@@ -266,7 +266,25 @@ export const runtimeSkillConfigSchema = z.object({
   skillRoots: z.array(z.string()).default([]),
 })
 
+export const runtimeHostedWebSearchConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  searchContextSize: z.enum(['low', 'medium', 'high']).default('medium'),
+})
+
+export const runtimeHostedToolsConfigSchema = z.object({
+  webSearch: runtimeHostedWebSearchConfigSchema.default({
+    enabled: true,
+    searchContextSize: 'medium',
+  }),
+})
+
 export const runtimeSdkConfigSchema = z.object({
+  hostedTools: runtimeHostedToolsConfigSchema.default({
+    webSearch: {
+      enabled: true,
+      searchContextSize: 'medium',
+    },
+  }),
   mcp: runtimeMcpConfigSchema.default({
     enabled: false,
     connectTimeoutMs: 10_000,
@@ -287,6 +305,12 @@ export const agentRuntimeConfigSchema = z.object({
   maxFunctionToolConcurrency: z.number().int().min(1).max(16).default(4),
   sandbox: runtimeSandboxConfigSchema.default({ backend: 'disabled' }),
   sdk: runtimeSdkConfigSchema.default({
+    hostedTools: {
+      webSearch: {
+        enabled: true,
+        searchContextSize: 'medium',
+      },
+    },
     mcp: { enabled: false, connectTimeoutMs: 10_000, closeTimeoutMs: 2_000, servers: [] },
     skills: { enabled: false, skillsPath: '.agents', skillPaths: [], skillRoots: [] },
   }),

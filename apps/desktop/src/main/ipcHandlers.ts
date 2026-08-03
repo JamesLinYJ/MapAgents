@@ -25,6 +25,8 @@ import {
   desktopConfirmationRequestSchema,
   desktopControlRequestSchema,
   desktopDownloadRequestSchema,
+  desktopDiagnosticExportRequestSchema,
+  desktopDiagnosticExportResultSchema,
   desktopExportRequestSchema,
   desktopFileSelectionRequestSchema,
   desktopTextFileReadRequestSchema,
@@ -32,14 +34,18 @@ import {
   desktopMicrophonePermissionResultSchema,
   desktopSupervisorLogsQuerySchema,
   desktopSupervisorLogsResponseSchema,
+  desktopSupervisorLogSubscriptionSchema,
   desktopWindowCommandSchema,
 } from '../contracts/desktopIpc.js'
 import { encodeDesktopControlResponse } from './controlResponseEncoder.js'
+import { encodeDesktopEvent } from './eventTransportEncoder.js'
+import { fitDesktopLogPage } from './desktopLogPageTransport.js'
 import { popupApplicationMenu } from './nativeMenus.js'
 import type { DesktopApiGateway } from './apiGateway.js'
 import type { DesktopAuthGateway } from './authGateway.js'
 import type { DesktopControlGateway } from './controlGateway.js'
 import type { DesktopDownloadService } from './downloadService.js'
+import type { DesktopDiagnosticExportService } from './diagnosticExportService.js'
 import type { DesktopExportService } from './exportService.js'
 import type { FileHandleRegistry } from './fileHandleRegistry.js'
 import type { MicrophonePermissionGate } from './microphonePermissionGate.js'
@@ -56,6 +62,7 @@ export interface DesktopIpcDependencies {
   auth: DesktopAuthGateway
   control: DesktopControlGateway
   downloads: DesktopDownloadService
+  diagnosticExports: DesktopDiagnosticExportService
   exports: DesktopExportService
   files: FileHandleRegistry
   logger: RendererDiagnosticLogger
@@ -65,6 +72,7 @@ export interface DesktopIpcDependencies {
 }
 
 export function installDesktopIpcHandlers(dependencies: DesktopIpcDependencies): void {
+  const logSubscriptionCleanupRegistered = new Set<number>()
   ipcMain.handle(DESKTOP_IPC_CHANNELS.apiRequest, async (event, input: unknown) => {
     requireWindow(event, dependencies.windows)
     return dependencies.api.request(desktopApiOperationSchema.parse(input))
@@ -125,8 +133,52 @@ export function installDesktopIpcHandlers(dependencies: DesktopIpcDependencies):
   })
   ipcMain.handle(DESKTOP_IPC_CHANNELS.supervisorLogs, async (event, input: unknown) => {
     requireWindow(event, dependencies.windows)
-    return desktopSupervisorLogsResponseSchema.parse(
-      await dependencies.supervisor.logs(desktopSupervisorLogsQuerySchema.parse(input)),
+    const query = desktopSupervisorLogsQuerySchema.parse(input)
+    return desktopSupervisorLogsResponseSchema.parse(fitDesktopLogPage(
+      await dependencies.supervisor.logs(query),
+      query.afterSequence,
+    ))
+  })
+  ipcMain.handle(DESKTOP_IPC_CHANNELS.supervisorLogHistory, async (event, input: unknown) => {
+    requireWindow(event, dependencies.windows)
+    const query = desktopSupervisorLogsQuerySchema.parse(input)
+    return desktopSupervisorLogsResponseSchema.parse(fitDesktopLogPage(
+      await dependencies.supervisor.history(query),
+      query.afterSequence,
+    ))
+  })
+  ipcMain.handle(DESKTOP_IPC_CHANNELS.supervisorLogSubscription, async (event, input: unknown) => {
+    const window = requireWindow(event, dependencies.windows)
+    const request = desktopSupervisorLogSubscriptionSchema.parse(input)
+    await dependencies.supervisor.subscribeLogs(
+      event.sender.id,
+      request.active,
+      request.filter,
+      entry => {
+        if (window.isDestroyed() || window.webContents.isDestroyed()) return
+        window.webContents.send(DESKTOP_IPC_CHANNELS.event, encodeDesktopEvent({
+          version: 1,
+          event: 'supervisor:log',
+          payload: entry,
+        }))
+      },
+    )
+    if (request.active && !logSubscriptionCleanupRegistered.has(event.sender.id)) {
+      logSubscriptionCleanupRegistered.add(event.sender.id)
+      event.sender.once('destroyed', () => {
+        logSubscriptionCleanupRegistered.delete(event.sender.id)
+        void dependencies.supervisor.subscribeLogs(event.sender.id, false, request.filter, () => {})
+      })
+    }
+  })
+  ipcMain.handle(DESKTOP_IPC_CHANNELS.supervisorDiagnosticExport, async (event, input: unknown) => {
+    const window = requireWindow(event, dependencies.windows)
+    desktopDiagnosticExportRequestSchema.parse(input)
+    return desktopDiagnosticExportResultSchema.parse(
+      await dependencies.diagnosticExports.create(
+        window,
+        await dependencies.supervisor.diagnosticBundle(),
+      ),
     )
   })
   ipcMain.handle(DESKTOP_IPC_CHANNELS.fileSelect, async (event, input: unknown) => {

@@ -94,7 +94,6 @@ describe('service environment isolation', () => {
       'DEEPSEEK_BASE_URL',
       'DEEPSEEK_API_KEY',
       'DEEPSEEK_MODEL',
-      'DEEPSEEK_SUBAGENT_MODEL',
       'DEEPSEEK_TOOL_SCHEMA_MODE',
       'DEEPSEEK_RESULT_CACHE_ENABLED',
       'DEEPSEEK_RESULT_CACHE_TTL_SECONDS',

@@ -416,7 +416,8 @@
   }
 
   .dc-security-form {
-    @apply grid gap-3 md:grid-cols-[1fr_1fr_auto_auto];
+    @apply grid gap-3;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
   }
 
   .dc-security-form input,
@@ -425,23 +426,80 @@
   }
 
   .dc-security-table-wrap {
-    @apply overflow-auto rounded-2xl border border-slate-200 bg-white/70;
+    @apply overflow-hidden rounded-2xl border border-slate-200 bg-white/70;
+    container: security-table / inline-size;
   }
 
   .dc-security-table {
-    @apply w-full min-w-[760px] border-collapse text-left text-sm;
+    @apply w-full table-fixed border-collapse text-left text-sm;
   }
 
   .dc-security-table th {
     @apply border-b border-slate-200 bg-slate-50 px-4 py-3 font-semibold text-slate-500;
+    overflow-wrap: anywhere;
   }
 
   .dc-security-table td {
     @apply border-b border-slate-100 px-4 py-3 align-top text-slate-800;
+    overflow-wrap: anywhere;
   }
 
   .dc-security-table td button {
     @apply rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700;
+  }
+
+  .dc-security-table__empty {
+    @apply text-center text-slate-500;
+  }
+
+  @container security-table (max-width: 720px) {
+    .dc-security-table,
+    .dc-security-table tbody {
+      display: block;
+    }
+
+    .dc-security-table thead {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .dc-security-table tbody {
+      @apply grid gap-3 p-3;
+    }
+
+    .dc-security-table tr {
+      @apply block overflow-hidden rounded-xl border border-slate-200 bg-white/80;
+    }
+
+    .dc-security-table td {
+      @apply grid gap-3 border-b border-slate-100 px-3 py-2.5;
+      grid-template-columns: minmax(92px, 0.36fr) minmax(0, 1fr);
+    }
+
+    .dc-security-table td:last-child {
+      @apply border-b-0;
+    }
+
+    .dc-security-table td::before {
+      content: attr(data-label);
+      @apply font-semibold text-slate-500;
+    }
+
+    .dc-security-table td.dc-security-table__empty {
+      display: block;
+      border: 0;
+    }
+
+    .dc-security-table td.dc-security-table__empty::before {
+      content: none;
+    }
   }
 
   .liquid-glass-defs {
@@ -1575,7 +1633,7 @@
   }
 
   .cc-clarification-card {
-    @apply flex max-w-[760px] items-start justify-between gap-3 rounded-[8px] border border-[#0969da]/20 bg-[#ddf4ff]/60 px-3 py-3;
+    @apply flex max-w-[760px] flex-wrap items-start justify-between gap-3 rounded-[8px] border border-[#0969da]/20 bg-[#ddf4ff]/60 px-3 py-3;
   }
 
   .cc-clarification-card__copy {
@@ -1629,6 +1687,10 @@
 
   .cc-mini-button--primary {
     @apply border-[#1f883d]/25 bg-[#dafbe1] text-[#1f883d] hover:bg-[#aceebb];
+  }
+
+  .cc-clarification-card > .cc-mini-button {
+    @apply ml-auto shrink-0 whitespace-nowrap;
   }
 
   .cc-run-footer {
@@ -2519,7 +2581,7 @@
   /* ---- overview grid ---- */
 
   .debug-overview {
-    @apply mb-8 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6;
+    @apply mb-8 grid gap-4;
   }
 
   .overview-card {
@@ -4354,6 +4416,10 @@
 
   .sdk-config-alert {
     @apply mx-5 mb-2 flex items-center gap-2 rounded-[18px] border border-[#e2a08d]/45 bg-[#fff2ef]/70 text-[12px] font-semibold text-[#8f4d3e];
+  }
+
+  .sdk-config-note {
+    @apply text-[11px] leading-5 text-[#647b83];
   }
 
   .sdk-config-overview {

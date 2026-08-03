@@ -14,9 +14,11 @@
 export {
   backgroundTaskInfoSchema,
   scheduledTaskSchema,
+  automationAgentInvocationSchema,
   automationApprovalRequestSchema,
   automationBindingSchema,
   automationDefinitionSchema,
+  automationInvocationRequirementSchema,
   automationEdgePortSchema,
   automationEdgeSchema,
   automationGraphSchema,

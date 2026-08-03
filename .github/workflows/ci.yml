@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    name: Node.js ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node:
+          - 22
+          - 24
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run TypeScript tests
+        run: npm test
+
+      - name: Check terminology
+        if: matrix.node == 24
+        run: npm run lint:terminology
+
+      - name: Lint Desktop
+        if: matrix.node == 24
+        run: npm run lint:desktop
+
+      - name: Build all applications
+        if: matrix.node == 24
+        run: npm run build
+
+      - name: Check Desktop bundle budget
+        if: matrix.node == 24
+        run: npm run check:bundle
+
+  python-worker:
+    name: Python Worker
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: packages/gis-meteorology/pyproject.toml
+
+      - name: Install scientific package
+        run: python -m pip install -e packages/gis-meteorology
+
+      - name: Scan Worker security invariants
+        run: python apps/worker/tests/scan_security.py
+
+      - name: Run Worker and scientific tests
+        run: python -m pytest apps/worker/tests
+

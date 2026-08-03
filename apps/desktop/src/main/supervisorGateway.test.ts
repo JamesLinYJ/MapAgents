@@ -15,7 +15,9 @@ import path from 'node:path'
 
 import type {
   OperationsLogEntry,
+  OperationsLogPage,
   OperationsLogQuery,
+  OperationsSnapshot,
 } from '@geo-agent-platform/shared-types/operations'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -49,7 +51,7 @@ describe('DesktopSupervisorGateway logs', () => {
         ok: false,
         error: {
           code: 'supervisor_unavailable',
-          message: '本机监督器尚未初始化或运行文件缺失，请从本机运维台启动后台服务。',
+          message: '本机监督器尚未初始化或运行文件缺失。',
         },
       })
       expect(JSON.stringify(response)).not.toContain(runtimeRoot)
@@ -69,17 +71,30 @@ describe('DesktopSupervisorGateway logs', () => {
       processId: 42,
       stream: 'supervisor',
       level: 'info',
-      message: 'desktop_ready',
+      event: 'lifecycle.desktop.ready',
+      category: 'lifecycle',
+      retention: 'operational',
+      correlation: {},
+      message: '桌面主进程已就绪。',
+      errorStack: null,
+      attributes: {},
       createdAt: '2026-07-29T09:00:00.000Z',
     }
-    const read = vi.fn(async (_query: OperationsLogQuery) => [localEntry])
-    const gateway = new DesktopSupervisorGateway(runtimeConfig(projectRoot, runtimeRoot), { read })
+    const read = vi.fn(async (_query: OperationsLogQuery): Promise<OperationsLogPage> => ({
+      entries: [localEntry],
+      nextCursor: localEntry.sequence,
+      hasMore: false,
+    }))
+    const gateway = new DesktopSupervisorGateway(
+      runtimeConfig(projectRoot, runtimeRoot),
+      localLogSource(read),
+    )
 
     try {
       const response = await gateway.logs(logQuery())
 
       expect(read).toHaveBeenCalledOnce()
-      expect(response).toEqual([
+      expect(response.entries).toEqual([
         localEntry,
         expect.objectContaining({
           component: 'desktop',
@@ -96,9 +111,10 @@ describe('DesktopSupervisorGateway logs', () => {
     const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-desktop-logs-'))
     cleanupDirectories.push(projectRoot)
     const runtimeRoot = path.join(projectRoot, 'runtime')
-    const gateway = new DesktopSupervisorGateway(runtimeConfig(projectRoot, runtimeRoot), {
-      read: async () => [],
-    })
+    const gateway = new DesktopSupervisorGateway(
+      runtimeConfig(projectRoot, runtimeRoot),
+      localLogSource(async query => ({ entries: [], nextCursor: query.afterSequence, hasMore: false })),
+    )
 
     try {
       await expect(gateway.logs({
@@ -128,9 +144,30 @@ function logQuery(): OperationsLogQuery {
     services: ['infra', 'worker', 'api'],
     levels: [],
     streams: [],
+    categories: [],
+    events: [],
+    retentions: [],
+    correlationId: '',
     search: '',
     includeSupervisor: true,
     afterSequence: null,
     tail: 100,
+  }
+}
+
+function localLogSource(
+  read: (query: OperationsLogQuery) => Promise<OperationsLogPage>,
+) {
+  const persistence: OperationsSnapshot['observability']['persistence'] = {
+    state: 'healthy',
+    message: '测试日志持久化正常。',
+    lastSuccessAt: null,
+    lastErrorAt: null,
+  }
+  return {
+    read,
+    readHistory: read,
+    onLog: () => () => undefined,
+    persistenceState: () => persistence,
   }
 }

@@ -19,6 +19,9 @@ import {
 } from './WorkspaceLayout'
 
 const SecurityAdminPage = lazy(() => import('../../features/security/SecurityAdminPage'))
+const ModelSettingsPage = lazy(() => import('../../features/settings/ModelSettingsPage').then(module => ({
+  default: module.ModelSettingsPage,
+})))
 const AccountCenterPage = lazy(() => import('../../features/account/AccountCenterPage').then(module => ({
   default: module.AccountCenterPage,
 })))
@@ -32,6 +35,7 @@ interface WorkspaceRouteHostProps {
   ) => ReactNode
   renderDebug: (Debug: ComponentType<DebugPageProps>) => ReactNode
   account: ReactNode
+  settings: ReactNode
   canAccessDiagnostics: boolean
   canAccessSecurity: boolean
   terms: ReactNode
@@ -42,6 +46,7 @@ export function WorkspaceRouteHost({
   renderWorkspace,
   renderDebug,
   account,
+  settings,
   canAccessDiagnostics,
   canAccessSecurity,
   terms,
@@ -49,6 +54,7 @@ export function WorkspaceRouteHost({
 }: WorkspaceRouteHostProps) {
   return renderWorkspace(WorkspaceLayout, {
     account,
+    settings,
     security: canAccessSecurity ? <SecurityAdminPage /> : null,
     debug: canAccessDiagnostics ? renderDebug(WorkspaceDebugPanel) : null,
     terms,
@@ -56,4 +62,4 @@ export function WorkspaceRouteHost({
   })
 }
 
-export { AccountCenterPage, LegalPolicyPage }
+export { AccountCenterPage, LegalPolicyPage, ModelSettingsPage }

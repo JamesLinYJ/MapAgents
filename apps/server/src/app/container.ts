@@ -230,6 +230,7 @@ export async function createAppContainer(input: {
       createAutomationRunRecord: input => store.automations.createAutomationRunRecord(input),
       getAutomationRunRecord: automationRunId => store.automations.getAutomationRunRecord(automationRunId),
       listAutomationRuns: workspaceId => store.automations.listAutomationRuns(workspaceId),
+      countMeteorologicalDatasets: input => store.meteorology.countMeteorologicalDatasets(input),
     },
     definitions: automationDefinitionService,
     compiler: automationCompiler,

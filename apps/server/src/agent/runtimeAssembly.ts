@@ -12,6 +12,7 @@
 import {
   Agent,
   Runner,
+  webSearchTool,
   type AgentOptions,
   type AgentInputItem,
   type Tool,
@@ -31,7 +32,6 @@ import type { LocalAgentTracing } from '../observability/agentTracing.js'
 import type { ModelAdapter, ModelAdapterRegistry } from '../model/registry.js'
 import { recordModelCompletionUsage, type ModelCompletionService } from '../model/modelResultCache.js'
 import type { AgentRuntimeConfig, ToolValueRef } from '../schemas/types.js'
-import { supervisorDeliverySchema } from '../schemas/types.js'
 import type { VisibleArtifactResource } from '../store/postgres/artifactRepository.js'
 import type { AgentRuntimeStore } from '../store/runtimePorts.js'
 import {
@@ -244,12 +244,9 @@ export class RuntimeAssemblyFactory {
     const returnDirectToolNames = toolRegistry.list()
       .filter(tool => (tool.executionSurfaces?.includes('agent') ?? true) && tool.agentResultMode === 'return_direct')
       .map(tool => tool.name)
-    const supervisorTools = wrapReturnDirectTools(
-      createAgentsTools(toolRegistry, approvalTools, {
-        schemaMode: adapter.agentToolSchemaMode,
-      }),
-      new Set(returnDirectToolNames),
-    )
+    const supervisorTools = createAgentsTools(toolRegistry, approvalTools, {
+      schemaMode: adapter.agentToolSchemaMode,
+    })
     const subAgentDependencies = {
       configs: options.runtimeConfig.subAgents,
       selectedModel,
@@ -303,6 +300,8 @@ export class RuntimeAssemblyFactory {
       ...subAgentTools.map(tool => tool.name),
       ...handoffIntegration.handoffs.map(item => item.toolName),
     ])
+    const hostedTools = createHostedTools(adapter, options.runtimeConfig)
+    for (const tool of hostedTools) reservedToolNames.add(tool.name)
     const sdkIntegration = await createRuntimeSdkIntegration(
       options.runtimeConfig,
       reservedToolNames,
@@ -349,10 +348,15 @@ export class RuntimeAssemblyFactory {
       activeSkills: sandboxIntegration.activeSkills,
       activeMcpServers: sdkIntegration.activeMcpServers,
     })
-    if (sandboxIntegration.activeSkills.length || sdkIntegration.activeMcpServers.length) {
+    if (
+      sandboxIntegration.activeSkills.length
+      || sdkIntegration.activeMcpServers.length
+      || hostedTools.length
+    ) {
       eventSink.emit('step.started', 'SDK 扩展已装配', {
         active_skills: sandboxIntegration.activeSkills,
         active_mcp_servers: sdkIntegration.activeMcpServers,
+        active_hosted_tools: hostedTools.map(tool => tool.name),
       })
     }
 
@@ -360,8 +364,9 @@ export class RuntimeAssemblyFactory {
       ...supervisorTools,
       ...subAgentTools,
       ...sdkIntegration.tools,
+      ...hostedTools,
     ]
-    const agentOptions: AgentOptions<AgentsExecutionContext, typeof supervisorDeliverySchema> = {
+    const agentOptions: AgentOptions<AgentsExecutionContext> = {
       name: options.runtimeConfig.supervisor.name,
       instructions: () => buildSupervisorInstructions(),
       model,
@@ -369,11 +374,10 @@ export class RuntimeAssemblyFactory {
       resetToolChoice: true,
       tools: explicitTools,
       toolUseBehavior: { stopAtToolNames: returnDirectToolNames },
-      outputType: supervisorDeliverySchema,
       handoffs: handoffIntegration.handoffs,
     }
-    const agent: Agent<AgentsExecutionContext, typeof supervisorDeliverySchema> = sandboxManifest
-      ? new SandboxAgent<AgentsExecutionContext, typeof supervisorDeliverySchema>({
+    const agent: Agent<AgentsExecutionContext> = sandboxManifest
+      ? new SandboxAgent<AgentsExecutionContext>({
         ...agentOptions,
       defaultManifest: sandboxManifest,
       capabilities: [
@@ -381,7 +385,7 @@ export class RuntimeAssemblyFactory {
         ...sandboxIntegration.capabilities,
       ],
       })
-      : new Agent<AgentsExecutionContext, typeof supervisorDeliverySchema>(agentOptions)
+      : new Agent<AgentsExecutionContext>(agentOptions)
     const unavailableSdkToolCallIds = new Set<string>()
     const runner = new Runner({
       model,
@@ -396,6 +400,8 @@ export class RuntimeAssemblyFactory {
         threadId,
         sessionId: options.sessionId,
         provider: options.provider,
+        modelName: selectedModel,
+        transport: adapter.agentRuntimeCapabilities.transport,
       },
       toolNotFoundBehavior: 'return_error_to_model',
       toolErrorFormatter: ({ kind, toolName, callId }) => {
@@ -453,6 +459,18 @@ export class RuntimeAssemblyFactory {
           continue
         }
         if (item.type === 'reasoning' || ('role' in item && item.role === 'user')) continue
+        if (item.type === 'hosted_tool_call') {
+          await flushPendingSessionAssistantMessage()
+          await transcriptProjector.appendSdkHostedToolCallCheckpoint(
+            options.runId,
+            threadId,
+            turnId,
+            item,
+            itemSink,
+            sdkNativeToolPresentation(item.name, currentAssembly),
+          )
+          continue
+        }
         if (item.type === 'function_call') {
           const exists = (await store.activeTranscript(threadId))
             .some(entry => entry.kind === 'tool_call' && entry.payload.callId === item.callId)
@@ -582,6 +600,7 @@ export class RuntimeAssemblyFactory {
       context,
       coordinator,
       adapter,
+      modelName: selectedModel,
       ...(sandbox ? { sandbox } : {}),
       sdkIntegration,
       modelInput,
@@ -595,6 +614,7 @@ export class RuntimeAssemblyFactory {
       handoffToolNames: new Set(handoffIntegration.handoffs.map(item => item.toolName)),
       handoffAgentNames: handoffIntegration.agentIds,
       mcpToolNames: sdkIntegration.mcpToolNames,
+      hostedToolNames: new Set(hostedTools.map(tool => tool.name)),
       completeHandoff: handoffIntegration.complete,
       failHandoff: handoffIntegration.fail,
       flushPendingSessionAssistantMessage,
@@ -676,6 +696,9 @@ function sdkNativeToolPresentation(
   toolName: string,
   assembly: RuntimeAssembly,
 ): { label: string; source: string } {
+  if (assembly.hostedToolNames.has(toolName) || toolName === 'web_search_call') {
+    return { label: '联网搜索', source: 'openai_agents_hosted_web_search' }
+  }
   if (assembly.handoffToolNames.has(toolName)) {
     return { label: 'Handoff 转交', source: 'openai_agents_handoff' }
   }
@@ -685,30 +708,19 @@ function sdkNativeToolPresentation(
   return { label: '沙箱工具调用', source: 'openai_agents_sandbox' }
 }
 
-function wrapReturnDirectTools(
-  tools: Tool<AgentsExecutionContext>[],
-  returnDirectToolNames: ReadonlySet<string>,
+function createHostedTools(
+  adapter: ModelAdapter,
+  config: AgentRuntimeConfig,
 ): Tool<AgentsExecutionContext>[] {
-  return tools.map(tool => {
-    if (tool.type !== 'function' || !returnDirectToolNames.has(tool.name)) return tool
-    const invoke = tool.invoke.bind(tool)
-    return {
-      ...tool,
-      invoke: async (runContext, input, details) => {
-        const output = await invoke(runContext, input, details)
-        if (typeof output !== 'string') {
-          throw new Error(`直接交付工具 '${tool.name}' 返回了非文本结果`)
-        }
-        const markdown = output.trim()
-        return JSON.stringify({
-          markdown,
-          summary: markdown,
-          artifactIds: [],
-          warnings: [],
-        })
-      },
-    }
-  })
+  if (!adapter.agentRuntimeCapabilities.hostedTools) return []
+  const webSearch = config.sdk.hostedTools.webSearch
+  if (!webSearch.enabled) return []
+  return [
+    webSearchTool({
+      name: 'web_search',
+      searchContextSize: webSearch.searchContextSize,
+    }),
+  ]
 }
 
 function planAwareSandboxCapabilities(executionGate: RunToolConcurrencyGate): Capability[] {

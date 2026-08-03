@@ -18,7 +18,11 @@ import { EventEmitter } from 'node:events'
 import { stripVTControlCharacters } from 'node:util'
 
 import type { OperationsClient } from '@geo-agent-platform/operations-supervisor/client'
-import type { OperationsLogEntry, OperationsSnapshot } from '@geo-agent-platform/shared-types/operations'
+import {
+  OPERATIONS_PROTOCOL_VERSION,
+  type OperationsLogEntry,
+  type OperationsSnapshot,
+} from '@geo-agent-platform/shared-types/operations'
 import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 import { ThemeProvider } from '@inkjs/ui'
 import { cleanup, render } from 'ink-testing-library'
@@ -208,8 +212,19 @@ function createOptions(client: OperationsClient, openDataPlane: LocalConsoleOpti
 function createClient(logs: OperationsLogEntry[] = []): OperationsClient {
   const events = new EventEmitter()
   const client = {
+    server: {
+      kind: 'welcome',
+      protocolVersion: OPERATIONS_PROTOCOL_VERSION,
+      daemonId: '12345678-1234-4234-8234-123456789abc',
+      workspaceId: '1234567890abcdef',
+      profile: 'development',
+    },
     status: vi.fn().mockResolvedValue(snapshot),
-    logs: vi.fn().mockResolvedValue(logs),
+    logs: vi.fn().mockResolvedValue({
+      entries: logs,
+      nextCursor: logs.at(-1)?.sequence ?? null,
+      hasMore: false,
+    }),
     subscribe: vi.fn().mockResolvedValue(undefined),
     operate: vi.fn().mockResolvedValue({
       operationId: '12345678-1234-4234-8234-123456789abc',
@@ -243,6 +258,7 @@ function createLogs(count: number): OperationsLogEntry[] {
     stream: 'stdout',
     level: 'info',
     message: `日志 ${index + 1}`,
+    attributes: {},
     createdAt: new Date(Date.UTC(2026, 6, 22, 0, 0, index)).toISOString(),
   }))
 }

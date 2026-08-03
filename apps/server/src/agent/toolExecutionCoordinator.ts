@@ -13,6 +13,7 @@ import type { ToolRegistry } from '../framework/registry.js'
 import type { ToolContext, ToolResult, ValueRef } from '../framework/types.js'
 import type { ModelAdapter } from '../model/registry.js'
 import { recordModelCompletionUsage, type ModelCompletionService } from '../model/modelResultCache.js'
+import { runSdkStructuredOutput } from '../model/sdkStructuredOutput.js'
 import type { ToolExecutionStore } from '../store/runtimePorts.js'
 import type { AuthContext } from '../security/types.js'
 import {
@@ -786,22 +787,31 @@ export class ToolExecutionCoordinator {
         datasetId: input.datasetId ?? null,
         filename: input.filename ?? null,
       }),
-      invokeStructuredModel: async prompt => {
+      invokeStructuredModel: async (prompt, schema, options) => {
         if (!this.options.adapter) throw new Error('当前确定性工具链未配置结构化模型调用')
         if (this.options.modelCompletions && this.options.workspaceId) {
-          const response = await this.options.modelCompletions.completeJson({
+          const response = await this.options.modelCompletions.completeStructured({
             workspaceId: this.options.workspaceId,
             runId: this.options.runId,
             provider: this.options.adapter.provider,
             ...(this.options.modelName === undefined ? {} : { model: this.options.modelName }),
             purpose: 'tool_structured_analysis',
             prompt,
+            ...(options?.schemaVersion ? { schemaVersion: options.schemaVersion } : {}),
             signal: this.options.signal,
-          })
+          }, schema)
           await recordModelCompletionUsage(this.options.store, this.options.runId, response)
           return response.content
         }
-        return invokeStructuredModel(this.options.adapter, prompt, this.options.modelName, this.options.signal)
+        const modelName = this.options.modelName ?? this.options.adapter.defaultModel
+        if (!modelName) throw new Error(`模型 provider '${this.options.adapter.provider}' 未配置模型名称`)
+        return (await runSdkStructuredOutput(
+          this.options.adapter,
+          modelName,
+          prompt,
+          schema,
+          this.options.signal,
+        )).content
       },
       log: (level, message) => this.options.eventSink.emit('tool.completed', message, { level }),
     }
@@ -1138,25 +1148,6 @@ function scalarSummary(value: unknown): unknown {
   if (Array.isArray(value)) return { type: 'array', length: value.length }
   if (isRecord(value)) return { type: 'object', keys: Object.keys(value).slice(0, 12) }
   return value
-}
-
-async function invokeStructuredModel(
-  adapter: ModelAdapter,
-  prompt: string,
-  modelName?: string | null,
-  signal?: AbortSignal,
-): Promise<Record<string, unknown>> {
-  const response = await adapter.chat(prompt, {
-    model: modelName ?? adapter.defaultModel,
-    reasoning: false,
-    ...(signal ? { signal } : {}),
-  })
-  const content = response.content
-  if (typeof content !== 'string' || !content.trim()) throw new Error('模型未返回结构化内容')
-  const cleaned = content.replace(/^```json\s*|\s*```$/gu, '')
-  const parsed: unknown = JSON.parse(cleaned)
-  if (!isRecord(parsed)) throw new Error('模型结构化输出必须是 JSON object')
-  return parsed
 }
 
 function splitWorkflowStepIdentity(args: Record<string, unknown>): {

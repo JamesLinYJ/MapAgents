@@ -10,7 +10,6 @@
 // --------------------------------------------------------------------------
 
 import { describe, expect, it, vi } from 'vitest'
-import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 vi.mock('@better-auth/electron/client', () => ({ electronClient: vi.fn(() => ({})) }))
 vi.mock('better-auth/client', () => ({ createAuthClient: vi.fn(() => ({})) }))
@@ -36,63 +35,38 @@ describe('DesktopAuthGateway auto auth', () => {
     )
 
     expect(result).toEqual({ mode: 'interactive', status: 'ready', message: null })
-    expect(client.getSession).not.toHaveBeenCalled()
     expect(client.signIn.email).not.toHaveBeenCalled()
     expect(client.signUp.email).not.toHaveBeenCalled()
   })
 
-  it('reuses a matching Better Auth session without reading credentials', async () => {
+  it('opens the protected local identity Broker without public account mutations', async () => {
     const client = fakeClient()
-    vi.mocked(client.getSession).mockResolvedValue(ok(session('admin@example.com')))
-    const readAutoAuthSecret = vi.fn<() => Promise<string>>()
+    const managedIdentity = fakeManagedIdentity()
     const gateway = new DesktopAuthGateway('http://127.0.0.1:8000', {
       client,
       autoAuth: autoAuth(),
-      readAutoAuthSecret,
+      managedIdentity,
     })
 
     const result = desktopAuthBootstrapResultSchema.parse(
       (await gateway.handle(request())).data,
     )
 
-    expect(result.status).toBe('authenticated')
-    expect(readAutoAuthSecret).not.toHaveBeenCalled()
+    expect(result).toEqual({ mode: 'local_auto', status: 'authenticated', message: null })
+    expect(managedIdentity.open).toHaveBeenCalledOnce()
+    expect(gateway.cookieHeader()).toBe('better-auth.session_token=managed-cookie')
     expect(client.signIn.email).not.toHaveBeenCalled()
+    expect(client.signUp.email).not.toHaveBeenCalled()
   })
 
-  it('creates the configured local account through official email auth and never projects its password', async () => {
+  it('returns a stable bootstrap failure when the local identity Broker is unavailable', async () => {
     const client = fakeClient()
-    vi.mocked(client.getSession)
-      .mockResolvedValueOnce(ok(null))
-      .mockResolvedValueOnce(ok(session('admin@example.com')))
-    vi.mocked(client.signIn.email).mockResolvedValue(failed('INVALID_EMAIL_OR_PASSWORD'))
-    vi.mocked(client.signUp.email).mockResolvedValue(ok({ user: { id: 'auth_1' } }))
+    const managedIdentity = fakeManagedIdentity()
+    managedIdentity.open.mockRejectedValue(new Error('本机根密钥不可用'))
     const gateway = new DesktopAuthGateway('http://127.0.0.1:8000', {
       client,
       autoAuth: autoAuth(),
-      readAutoAuthSecret: async () => 'local-secret-that-never-enters-renderer',
-    })
-
-    const response = await gateway.handle(request())
-    const result = desktopAuthBootstrapResultSchema.parse(response.data)
-
-    expect(result).toEqual({ mode: 'local_auto', status: 'authenticated', message: null })
-    expect(client.signUp.email).toHaveBeenCalledWith({
-      email: 'admin@example.com',
-      name: `${PRODUCT_CODENAME} 演示管理员`,
-      password: 'local-secret-that-never-enters-renderer',
-    })
-    expect(JSON.stringify(response)).not.toContain('local-secret-that-never-enters-renderer')
-  })
-
-  it('reports a stable failure when account creation is disabled', async () => {
-    const client = fakeClient()
-    vi.mocked(client.getSession).mockResolvedValue(ok(null))
-    vi.mocked(client.signIn.email).mockResolvedValue(failed('INVALID_EMAIL_OR_PASSWORD'))
-    const gateway = new DesktopAuthGateway('http://127.0.0.1:8000', {
-      client,
-      autoAuth: { ...autoAuth(), allowAccountCreation: false },
-      readAutoAuthSecret: async () => 'another-private-secret',
+      managedIdentity,
     })
 
     const response = await gateway.handle(request())
@@ -100,9 +74,9 @@ describe('DesktopAuthGateway auto auth', () => {
 
     expect(result.mode).toBe('local_auto')
     expect(result.status).toBe('failed')
-    expect(result.message).toContain('关闭 Better Auth 注册')
+    expect(result.message).toContain('本机根密钥不可用')
+    expect(client.signIn.email).not.toHaveBeenCalled()
     expect(client.signUp.email).not.toHaveBeenCalled()
-    expect(JSON.stringify(response)).not.toContain('another-private-secret')
   })
 
   it('keeps CSRF and session cookies in Main while returning only the identity projection', async () => {
@@ -244,37 +218,39 @@ function authRequest(command: 'projection' | 'sign-out') {
 }
 
 function autoAuth(): DesktopAutoAuthConfig {
-  return {
-    email: 'admin@example.com',
-    displayName: `${PRODUCT_CODENAME} 演示管理员`,
-    credentialFile: 'C:\\runtime\\desktop\\auto-auth.secret',
-    allowAccountCreation: true,
-  }
+  return { mode: 'local_managed' }
 }
 
 function fakeClient(): DesktopAuthClientPort {
   return {
     getCookie: vi.fn(() => ''),
-    getSession: vi.fn(async () => ok(null)),
     signIn: { email: vi.fn(async () => ok(null)) },
     signUp: { email: vi.fn(async () => ok(null)) },
     signOut: vi.fn(async () => ok(null)),
   }
 }
 
-function session(email: string) {
+function fakeManagedIdentity() {
   return {
-    session: { id: 'session_1', userId: 'auth_1' },
-    user: { id: 'auth_1', email, name: '管理员' },
+    open: vi.fn(async () => ({
+      type: 'desktop.authorization' as const,
+      appBaseUrl: 'http://127.0.0.1:8000',
+      origin: 'http://127.0.0.1:8000',
+      cookie: 'better-auth.session_token=managed-cookie',
+      csrfToken: 'managed-csrf',
+      actor: {
+        osUser: 'tester',
+        hostname: 'localhost',
+        processId: 100,
+        keyVersion: 'key-v1',
+      },
+    })),
+    close: vi.fn(async () => undefined),
   }
 }
 
 function ok(data: unknown) {
   return { data, error: null }
-}
-
-function failed(message: string) {
-  return { data: null, error: { message, statusText: 'Unauthorized' } }
 }
 
 function authMe(

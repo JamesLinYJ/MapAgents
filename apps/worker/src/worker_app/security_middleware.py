@@ -53,7 +53,7 @@ class WorkerSecurityMiddleware:
         trace_id = headers.get("x-geo-agent-platform-trace-id") or uuid4().hex[:12]
         state = scope.setdefault("state", {})
         state["trace_id"] = trace_id
-        if path == "/health":
+        if path in {"/health", "/health/live"}:
             await self.app(scope, receive, send)
             return
 
@@ -64,7 +64,7 @@ class WorkerSecurityMiddleware:
         if content_length is not None and content_length > self.max_body_bytes:
             self.logger.warning(
                 "Worker 请求体超过大小限制",
-                extra={"trace_id": trace_id, "content_length": content_length, "limit": self.max_body_bytes},
+                extra={"event": "security.request_body.rejected", "category": "security", "retention": "operational", "trace_id": trace_id, "content_length": content_length, "limit": self.max_body_bytes},
             )
             await _send_json(scope, receive, send, 413, "Worker 请求体超过大小限制")
             return
@@ -73,7 +73,7 @@ class WorkerSecurityMiddleware:
         if body is None:
             self.logger.warning(
                 "Worker 请求体超过大小限制",
-                extra={"trace_id": trace_id, "limit": self.max_body_bytes},
+                extra={"event": "security.request_body.rejected", "category": "security", "retention": "operational", "trace_id": trace_id, "limit": self.max_body_bytes},
             )
             await _send_json(scope, receive, send, 413, "Worker 请求体超过大小限制")
             return
@@ -84,7 +84,7 @@ class WorkerSecurityMiddleware:
             status_code, detail = auth_error
             self.logger.warning(
                 "Worker 认证失败",
-                extra={"trace_id": trace_id, "tool_name": tool_name, "status": status_code, "detail": detail},
+                extra={"event": "security.worker_auth.rejected", "category": "security", "retention": "operational", "trace_id": trace_id, "tool_name": tool_name, "status": status_code},
             )
             await _send_json(scope, receive, send, status_code, detail)
             return

@@ -30,6 +30,22 @@ export const runStatusSchema = z.enum([
   'completed', 'failed', 'cancelled', 'interrupted', 'requires_action',
 ])
 
+export const runFailureSourceSchema = z.enum([
+  'model',
+  'tool',
+  'data',
+  'database',
+  'transport',
+  'platform',
+])
+
+export const runFailureSchema = z.object({
+  source: runFailureSourceSchema,
+  message: z.string().min(1),
+  code: z.string().min(1).max(120).nullable().default(null),
+  retryable: z.boolean().default(false),
+}).strict()
+
 export const todoStatusSchema = z.enum(['pending', 'running', 'completed', 'failed', 'blocked'])
 
 export const conversationItemTypeSchema = z.enum([
@@ -389,6 +405,7 @@ export const agentStateSchema = z.object({
   planRepairAttempts: z.number().default(0),
   warnings: z.array(z.string()).default([]),
   errors: z.array(z.string()).default([]),
+  failure: runFailureSchema.nullable().default(null),
   failedStepId: z.string().nullable().default(null),
   failedTool: z.string().nullable().default(null),
   denialCounts: z.record(z.string(), z.number()).prefault({}),
@@ -443,6 +460,8 @@ export const runSteeringRecordSchema = z.object({
 
 export type EventType = z.infer<typeof eventTypeSchema>
 export type RunStatus = z.infer<typeof runStatusSchema>
+export type RunFailureSource = z.infer<typeof runFailureSourceSchema>
+export type RunFailure = z.infer<typeof runFailureSchema>
 export type TodoStatus = z.infer<typeof todoStatusSchema>
 export type ConversationItemType = z.infer<typeof conversationItemTypeSchema>
 export type ClarificationOption = z.infer<typeof clarificationOptionSchema>

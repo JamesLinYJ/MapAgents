@@ -12,7 +12,10 @@
 // 平台 Automation Studio、运行、审批、定时任务和后台任务 WS 命令。
 
 import { z } from 'zod'
-import { automationGraphSchema } from '../automations/schemas.js'
+import {
+  automationAgentInvocationSchema,
+  automationGraphSchema,
+} from '../automations/schemas.js'
 import type { AuthContext } from '../security/types.js'
 import type { WsCommandRegistry } from './commandRegistry.js'
 
@@ -25,11 +28,7 @@ const automationDraftPayloadSchema = z.object({
   defaultParameters: z.record(z.string(), z.unknown()),
   timeoutSeconds: z.number().int().positive().max(86_400),
   outputType: z.string().min(1),
-  agentInvocation: z.object({
-    enabled: z.boolean(),
-    description: z.string(),
-    examples: z.array(z.string().min(1)).max(12),
-  }).strict().optional(),
+  agentInvocation: automationAgentInvocationSchema.optional(),
   graph: automationGraphSchema,
 }).strict()
 

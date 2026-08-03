@@ -36,6 +36,10 @@ export class MeteorologicalStore {
     return this.datasets.list(filters)
   }
 
+  countMeteorologicalDatasets(filters: ListMeteorologicalDatasetsFilters = {}): Promise<number> {
+    return this.datasets.count(filters)
+  }
+
   resolveMeteorologicalDataset(filters: ResolveMeteorologicalDatasetFilters): Promise<MeteorologicalDatasetRecord | null> {
     return this.datasets.resolve(filters)
   }

@@ -31,7 +31,12 @@ import type { WsDependencies } from './dependencies.js'
 import type { WsCommandRegistry } from './commandRegistry.js'
 import { isRecord, optionalNonNegativeInteger, optionalString, requiredString } from './payload.js'
 import { resolveRuntimeConfig } from './runtimeConfig.js'
-import { makeOptionalStructuredSelector, makeStructuredSelector, makeSummarizer } from './modelSelectors.js'
+import {
+  makeMemoryExtractor,
+  makeOptionalStructuredSelector,
+  makeOptionalMemoryDreamer,
+  makeSummarizer,
+} from './modelSelectors.js'
 import { z } from 'zod'
 
 const threadMemoryGetSchema = z.object({ threadId: z.string().min(1) }).passthrough()
@@ -207,12 +212,11 @@ export async function handleMemoryCommand(
         store,
         threadId,
         runId,
-        makeStructuredSelector(
+        makeMemoryExtractor(
           modelRegistry,
           config,
           optionalString(payload.provider),
           optionalString(payload.modelName),
-          cached ? { ...cached, store, runId } : undefined,
         ),
       )
       return { records, total: records.length }
@@ -221,12 +225,11 @@ export async function handleMemoryCommand(
       const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
       return dreamMemories(
         createMemoryRuntime(store.runtimeRoot, config.context),
-        makeOptionalStructuredSelector(
+        makeOptionalMemoryDreamer(
           modelRegistry,
           config,
           optionalString(payload.provider),
           optionalString(payload.modelName),
-          cached ? { ...cached, purpose: 'memory_dream' } : undefined,
         ),
         { force: payload.force === true },
       )

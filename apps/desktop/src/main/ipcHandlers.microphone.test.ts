@@ -45,6 +45,7 @@ import {
   DESKTOP_CONTROL_FRAME_MAX_BYTES,
   desktopControlResponseTransportSchema,
   desktopMicrophonePermissionResultSchema,
+  desktopSupervisorLogsResponseSchema,
   type DesktopControlRequest,
 } from '../contracts/desktopIpc.js'
 import {
@@ -157,7 +158,13 @@ describe('desktop IPC transport ownership', () => {
       processId: 42,
       stream: 'stdout' as const,
       level: 'info' as const,
+      event: 'request.http.completed',
+      category: 'request' as const,
+      retention: 'operational' as const,
+      correlation: { requestId: `request_${index}` },
       message: `日志 ${index} ${'运行信息'.repeat(30)}`,
+      errorStack: null,
+      attributes: {},
       createdAt: '2026-07-30T08:00:00.000Z',
     }))
     installDesktopIpcHandlers({
@@ -178,7 +185,7 @@ describe('desktop IPC transport ownership', () => {
       microphone: {},
       supervisor: {
         handle: vi.fn(),
-        logs: vi.fn(async () => logs),
+        logs: vi.fn(async () => ({ entries: logs, nextCursor: 1_000, hasMore: false })),
       },
       windows: {
         getForWebContents: vi.fn(() => window),
@@ -202,14 +209,20 @@ describe('desktop IPC transport ownership', () => {
       services: ['infra', 'worker', 'api'],
       levels: [],
       streams: [],
+      categories: [],
+      events: [],
+      retentions: [],
+      correlationId: '',
       search: '',
       includeSupervisor: true,
       afterSequence: null,
       tail: 2_000,
     })
-    expect(logResponse).toEqual(logs)
-    expect(new TextEncoder().encode(JSON.stringify(logResponse)).byteLength)
-      .toBeGreaterThan(DESKTOP_CONTROL_FRAME_MAX_BYTES)
+    const parsedLogResponse = desktopSupervisorLogsResponseSchema.parse(logResponse)
+    expect(parsedLogResponse).toMatchObject({ hasMore: true })
+    expect(parsedLogResponse.entries.length).toBeLessThan(logs.length)
+    expect(new TextEncoder().encode(JSON.stringify(parsedLogResponse)).byteLength)
+      .toBeLessThanOrEqual(DESKTOP_CONTROL_FRAME_MAX_BYTES)
   })
 })
 

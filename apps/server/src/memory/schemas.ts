@@ -60,7 +60,7 @@ export const memoryOperationResultSchema = z.object({
 })
 
 export const memorySelectorOutputSchema = z.object({
-  selected_memories: z.array(z.string()).default([]),
+  selected_memories: z.array(z.string()),
 })
 
 export type MemoryScope = z.infer<typeof memoryScopeSchema>

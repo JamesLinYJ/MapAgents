@@ -16,8 +16,8 @@ const baselinePath = fileURLToPath(new URL('../../../../infra/migrations/001_ini
 
 describe('map database baseline contract', () => {
   it('keeps text feature identifiers as MVT attributes instead of numeric feature ids', async () => {
-    const baseline = await readFile(baselinePath, 'utf8')
-    const functionBody = baseline.match(
+    const source = await readFile(baselinePath, 'utf8')
+    const functionBody = source.match(
       /CREATE OR REPLACE FUNCTION geo_agent_platform_layer_tiles[\s\S]+?\$\$;/u,
     )?.[0]
 

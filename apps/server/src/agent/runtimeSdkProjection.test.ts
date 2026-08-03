@@ -10,7 +10,10 @@
 // --------------------------------------------------------------------------
 
 import { describe, expect, it } from 'vitest'
-import { modelSettings } from './runtimeSdkProjection.js'
+import {
+  extractReasoningDelta,
+  modelSettings,
+} from './runtimeSdkProjection.js'
 
 describe('runtimeSdkProjection', () => {
   it('keeps autonomous tool choice so plan mode cannot force unrelated calls', () => {
@@ -22,5 +25,13 @@ describe('runtimeSdkProjection', () => {
       toolChoice: 'auto',
     })
     expect(modelSettings(false)).not.toHaveProperty('reasoning')
+  })
+
+  it('projects native Responses API reasoning events', () => {
+    expect(extractReasoningDelta({
+      type: 'response.reasoning_text.delta',
+      delta: '正在核验数据时次。',
+      sequence_number: 3,
+    })).toBe('正在核验数据时次。')
   })
 })

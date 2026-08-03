@@ -50,6 +50,7 @@ arguments=(
   --app-dir apps/worker/src
   --host 127.0.0.1
   --port "$WORKER_PORT_VALUE"
+  --no-access-log
 )
 
 if [[ "${NODE_ENV:-development}" == production ]]; then

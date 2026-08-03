@@ -15,6 +15,7 @@ import type { AuthContext } from '../security/types.js'
 
 export type ToolExecutionSurface = 'agent' | 'automation' | 'debug'
 export type AgentToolResultMode = 'continue' | 'return_direct'
+export type AgentToolSchemaOverride = 'strict' | 'compatible'
 
 export interface ToolManifest {
     id: string;
@@ -40,6 +41,7 @@ export interface ToolManifestEntry {
     requiresApproval?: boolean;
     executionSurfaces?: ToolExecutionSurface[];
     agentResultMode?: AgentToolResultMode;
+    agentSchemaMode?: AgentToolSchemaOverride;
     jsonSchema: Record<string, unknown>;
 }
 export interface ToolDef {
@@ -55,6 +57,7 @@ export interface ToolDef {
     requiresApproval?: boolean;
     executionSurfaces?: ToolExecutionSurface[];
     agentResultMode?: AgentToolResultMode;
+    agentSchemaMode?: AgentToolSchemaOverride;
     parameters?: z.ZodObject;
     jsonSchema?: Record<string, unknown>;
     handler: ToolHandler;
@@ -81,7 +84,11 @@ export interface ToolContext {
         filename?: string | null;
         limit?: number;
     }): Promise<MeteorologicalDatasetRecord[]>;
-    invokeStructuredModel(prompt: string): Promise<Record<string, unknown>>;
+    invokeStructuredModel<TSchema extends z.ZodObject>(
+        prompt: string,
+        schema: TSchema,
+        options?: { schemaVersion?: string },
+    ): Promise<z.infer<TSchema>>;
     log(level: 'info' | 'warn' | 'error', message: string): void;
 }
 export interface ToolResult {

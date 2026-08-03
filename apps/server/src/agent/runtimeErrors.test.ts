@@ -15,7 +15,7 @@ import {
   UserError,
 } from '@openai/agents'
 import { describe, expect, it } from 'vitest'
-import { runtimeFailureMessage } from './runtimeErrors.js'
+import { runtimeFailure, runtimeFailureMessage } from './runtimeErrors.js'
 
 describe('runtimeFailureMessage', () => {
   it('does not expose English SDK internals or mislabel every UserError as a DeepSeek error', () => {
@@ -33,5 +33,45 @@ describe('runtimeFailureMessage', () => {
   it('maps SDK control errors to stable Chinese messages', () => {
     expect(runtimeFailureMessage(new MaxTurnsExceededError('limit'))).toContain('最大运行轮次')
     expect(runtimeFailureMessage(new ModelBehaviorError('bad output'))).toContain('不符合 Agent 协议')
+  })
+
+  it('classifies model, database, data and transport failures without using the selected provider as evidence', () => {
+    expect(runtimeFailure(new Error('DeepSeek JSON Output 未返回单个合法 JSON object。'))).toMatchObject({
+      source: 'model',
+    })
+    expect(runtimeFailure(Object.assign(
+      new Error('函数 geo_agent_platform_layer_tiles 不存在'),
+      { code: '42883' },
+    ))).toMatchObject({
+      source: 'database',
+      code: '42883',
+    })
+    expect(runtimeFailure(
+      new Error('短时临近预报序列至少需要两个气象文件'),
+      { failedTool: 'create_nowcast_sequence' },
+    )).toMatchObject({
+      source: 'data',
+    })
+    expect(runtimeFailure(Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' }))).toMatchObject({
+      source: 'transport',
+      retryable: true,
+    })
+    expect(runtimeFailure(new Error('内部状态不一致'))).toMatchObject({
+      source: 'platform',
+    })
+  })
+
+  it('honors typed boundary failures before message heuristics', () => {
+    const error = Object.assign(new Error('当前对话没有足够输入。'), {
+      failureSource: 'data',
+      code: 'automation_input_requirement_failed',
+    })
+
+    expect(runtimeFailure(error)).toEqual({
+      source: 'data',
+      code: 'automation_input_requirement_failed',
+      message: '当前对话没有足够输入。',
+      retryable: false,
+    })
   })
 })

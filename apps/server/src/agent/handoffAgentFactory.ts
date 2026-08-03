@@ -16,7 +16,6 @@ import {
 } from '@openai/agents'
 import {
   subAgentInvocationSchema,
-  supervisorDeliverySchema,
   type RuntimeSubAgentConfig,
 } from '@geo-agent-platform/shared-types/runtime'
 
@@ -31,7 +30,7 @@ import {
 const AGENT_NAME = /^[a-zA-Z0-9_-]+$/u
 
 export interface HandoffAgentIntegration {
-  handoffs: Handoff<AgentsExecutionContext, typeof supervisorDeliverySchema>[]
+  handoffs: Handoff<AgentsExecutionContext, 'text'>[]
   agentIds: ReadonlySet<string>
   complete(agentId: string, summary: string): Promise<void>
   fail(agentId: string, message: string): Promise<void>
@@ -64,17 +63,16 @@ export function createHandoffAgents(options: HandoffAgentFactoryOptions): Handof
       runToolExecution: (lane, operation) => options.executionGate.run(lane, operation),
       toolOutputMetadata: callId => options.coordinator.toolOutputMetadata(callId),
     }
-    const agent = new Agent<AgentsExecutionContext, typeof supervisorDeliverySchema>({
+    const agent = new Agent<AgentsExecutionContext>({
       name: config.agentId,
       instructions: [
         config.systemPrompt ?? config.summary,
-        '你已经通过 handoff 接管当前对话。请完成任务并直接交付 supervisorDelivery outputType；不要再把任务退回给主智能体。',
-        'artifactIds 只能填写当前线程已授权的 artifact_<id>，来源必须是本轮工具结果或 thread-resources；不能填写 valueRefs[].refId。没有 Artifact 时返回空数组。',
+        '你已经通过 handoff 接管当前对话。请完成任务并直接返回可展示给用户的中文 Markdown 正文；不要再把任务退回给主智能体。',
+        'Artifact、警告和运行证据由平台根据真实工具账本附加，不要在正文中伪造 ID 或结构化包装。',
       ].join('\n\n'),
       handoffDescription: config.summary,
       model: resolveSubAgentModel(config, options),
       modelSettings: modelSettings(options.reasoning),
-      outputType: supervisorDeliverySchema,
       tools: createAgentsTools(options.toolRegistry, options.approvalTools, {
         schemaMode: options.adapter.agentToolSchemaMode,
         allowedToolNames: new Set(config.tools),

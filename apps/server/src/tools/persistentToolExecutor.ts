@@ -17,6 +17,7 @@ import type { ToolRegistry } from '../framework/registry.js'
 import type { ToolContext, ToolResult } from '../framework/types.js'
 import type { ModelAdapterRegistry } from '../model/registry.js'
 import { recordModelCompletionUsage, type ModelCompletionService } from '../model/modelResultCache.js'
+import { runSdkStructuredOutput } from '../model/sdkStructuredOutput.js'
 import type { AgentRuntimeConfig } from '../schemas/types.js'
 import type { AuthContext } from '../security/types.js'
 import type { PersistentToolStore } from '../store/runtimePorts.js'
@@ -32,7 +33,6 @@ export interface PersistedToolExecutionInput {
   auth: AuthContext
   signal?: AbortSignal
 }
-
 export async function executePersistedTool(
   input: PersistedToolExecutionInput,
   deps: {
@@ -71,32 +71,25 @@ export async function executePersistedTool(
       datasetId: datasetInput.datasetId ?? null,
       filename: datasetInput.filename ?? null,
     }),
-    invokeStructuredModel: async prompt => {
+    invokeStructuredModel: async (prompt, schema, options) => {
       const adapter = deps.modelRegistry.resolveProvider(run.modelProvider)
       if (deps.modelCompletions && run.workspaceId) {
-        const response = await deps.modelCompletions.completeJson({
+        const response = await deps.modelCompletions.completeStructured({
           workspaceId: run.workspaceId,
           runId: run.id,
           provider: adapter.provider,
           model: run.modelName ?? adapter.defaultModel,
           purpose: 'tool_structured_analysis',
           prompt,
+          ...(options?.schemaVersion ? { schemaVersion: options.schemaVersion } : {}),
           signal: context.signal,
-        })
+        }, schema)
         await recordModelCompletionUsage(deps.store, run.id, response)
         return response.content
       }
-      const response = await adapter.chat(prompt, {
-        model: run.modelName ?? adapter.defaultModel,
-        reasoning: false,
-        signal: context.signal,
-      })
-      if (typeof response.content !== 'string' || !response.content.trim()) {
-        throw new Error('模型未返回结构化内容。')
-      }
-      const parsed: unknown = JSON.parse(response.content.replace(/^```json\s*|\s*```$/gu, ''))
-      if (!isRecord(parsed)) throw new Error('模型结构化输出必须是 JSON object。')
-      return parsed
+      const modelName = run.modelName ?? adapter.defaultModel
+      if (!modelName) throw new Error(`模型 provider '${adapter.provider}' 未配置模型名称`)
+      return (await runSdkStructuredOutput(adapter, modelName, prompt, schema, context.signal)).content
     },
     log: (level, message) => {
       pendingLogWrites.push(deps.store.appendEvent(run.id, {
@@ -163,8 +156,4 @@ export async function executePersistedTool(
     await itemSink.flush()
     throw error
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

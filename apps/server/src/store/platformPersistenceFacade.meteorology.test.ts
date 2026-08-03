@@ -64,6 +64,27 @@ describe('MeteorologicalStore domain port', () => {
     expect(fixture.queries[0]?.text).toContain('"thread_id" =')
     expect(fixture.queries[0]?.text).toContain('."filename") = lower')
   })
+
+  it('counts only ready datasets inside the declared workspace, session and thread scope', async () => {
+    const fixture = createMeteorologicalDb([
+      datasetRow('dataset-a', 'session-a', 'thread-a', 'a.nc', '2026-07-01T00:00:00.000Z', 'workspace-a'),
+      datasetRow('dataset-b', 'session-a', 'thread-a', 'b.nc', '2026-07-01T01:00:00.000Z', 'workspace-a'),
+      { ...datasetRow('dataset-c', 'session-a', 'thread-a', 'c.nc', '2026-07-01T02:00:00.000Z', 'workspace-a'), status: 'failed' },
+      datasetRow('dataset-d', 'session-a', 'thread-b', 'd.nc', '2026-07-01T03:00:00.000Z', 'workspace-a'),
+    ])
+    const store = new PlatformPersistenceFacade(fixture.db, path.join(os.tmpdir(), 'geo-store-meteorology-count'))
+
+    const count = await store.meteorology.countMeteorologicalDatasets({
+      workspaceId: 'workspace-a',
+      sessionId: 'session-a',
+      threadId: 'thread-a',
+      status: 'ready',
+    })
+
+    expect(count).toBe(2)
+    expect(fixture.queries[0]?.text).toContain('count(*)')
+    expect(fixture.queries[0]?.text).toContain('"status" =')
+  })
 })
 
 interface CapturedQuery {
@@ -82,7 +103,12 @@ function createMeteorologicalDb(rows: DatasetRow[]): { db: Database; queries: Ca
     query: async (query: PgQueryConfig | string, values: unknown[] = []) => {
       const captured = { text: typeof query === 'string' ? query : query.text, values }
       queries.push(captured)
-      return { rows: filterRows(rows, captured).map(datasetRowToArray) }
+      const filtered = filterRows(rows, captured)
+      return {
+        rows: captured.text.includes('count(*)')
+          ? [[filtered.length]]
+          : filtered.map(datasetRowToArray),
+      }
     },
   }
   const db = drizzle(client as never, { schema }) as unknown as Database
@@ -96,6 +122,7 @@ function filterRows(rows: DatasetRow[], query: CapturedQuery): DatasetRow[] {
   const workspaceId = query.text.includes('"workspace_id" =') ? String(query.values[valueIndex++]) : null
   const sessionId = query.text.includes('"session_id" =') ? String(query.values[valueIndex++]) : null
   const threadId = query.text.includes('"thread_id" =') ? String(query.values[valueIndex++]) : null
+  const status = query.text.includes('"status" =') ? String(query.values[valueIndex++]) : null
   const filename = query.text.includes('."filename") = lower') ? String(query.values[valueIndex++]).toLowerCase() : null
   const limit = Number(query.values.at(-1) ?? rows.length)
 
@@ -103,6 +130,7 @@ function filterRows(rows: DatasetRow[], query: CapturedQuery): DatasetRow[] {
     .filter(row => !workspaceId || row.workspace_id === workspaceId)
     .filter(row => !sessionId || row.session_id === sessionId)
     .filter(row => !threadId || row.thread_id === threadId)
+    .filter(row => !status || row.status === status)
     .filter(row => !filename || String(row.filename).toLowerCase() === filename)
     .sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)))
     .slice(0, Number.isFinite(limit) ? limit : rows.length)

@@ -19,7 +19,7 @@ import { defaultRuntimeConfig } from '../agent/defaultRuntimeConfig.js'
 import { parseMemoryMarkdown, truncateEntrypointContent } from './markdown.js'
 import { createMemoryPathConfig, resolveMemoryFilePath, validateRelativeMemoryPath } from './paths.js'
 import { scanMemoryFiles } from './scan.js'
-import { createMemoryRuntime, dreamMemories, extractMemoriesFromThread, readMemory, rebuildSessionMemory, searchMemories, writeMemory } from './service.js'
+import { createMemoryRuntime, deleteMemory, dreamMemories, extractMemoriesFromThread, readMemory, rebuildSessionMemory, searchMemories, writeMemory } from './service.js'
 
 const tempRoots: string[] = []
 
@@ -140,7 +140,7 @@ describe('memory core', () => {
     expect(matches.every(match => match.record.relativePath.endsWith('.md'))).toBe(true)
   })
 
-  it('extracts memories through restricted memory tool operations only', async () => {
+  it('delegates automatic extraction through the restricted extractor boundary', async () => {
     const root = await makeTempRoot()
     const store = createTestPersistenceFacade(root)
     await store.initialize()
@@ -169,57 +169,29 @@ describe('memory core', () => {
     })
 
     let calls = 0
-    const written = await extractMemoriesFromThread(runtime, store, thread.id, run.id, async (prompt) => {
+    const written = await extractMemoriesFromThread(runtime, store, thread.id, run.id, async (actualRuntime, input) => {
       calls += 1
-      if (calls === 1) {
-        expect(prompt).toContain('只能请求 read_memory')
-        return { operations: [{ tool: 'read_memory', arguments: { scope: 'private', relativePath: existing.relativePath } }] }
-      }
-      expect(prompt).toContain('记忆工具观察')
-      return {
-        operations: [{
-          tool: 'write_memory',
-          arguments: {
-            scope: 'private',
-            type: 'feedback',
-            name: 'Review rule',
-            description: 'User requires root-cause fixes instead of hack patches',
-            content: '规则：修改要从根因修复，不要用 fallback 或 hack 掩盖问题。',
-            relativePath: existing.relativePath,
-          },
-        }],
-      }
+      expect(actualRuntime).toBe(runtime)
+      expect(input.entries).toHaveLength(1)
+      expect(input.entries[0]?.payload.content).toContain('根因修复')
+      expect(input.existing.map(record => record.relativePath)).toContain(existing.relativePath)
+      const current = await readMemory(actualRuntime, 'private', existing.relativePath)
+      expect(current.content).toContain('fallback')
+      const updated = await writeMemory(actualRuntime, {
+        scope: 'private',
+        type: 'feedback',
+        name: 'Review rule',
+        description: 'User requires root-cause fixes instead of hack patches',
+        content: '规则：修改要从根因修复，不要用 fallback 或 hack 掩盖问题。',
+        relativePath: existing.relativePath,
+      })
+      return [updated]
     })
 
-    expect(calls).toBe(2)
+    expect(calls).toBe(1)
     expect(written).toHaveLength(1)
     const updated = await readMemory(runtime, 'private', existing.relativePath)
     expect(updated.content).toContain('根因修复')
-  })
-
-  it('rejects non-memory tools in automatic extraction output', async () => {
-    const root = await makeTempRoot()
-    const store = createTestPersistenceFacade(root)
-    await store.initialize()
-    const session = await store.createSession()
-    const thread = await store.createThread(session.id, '提取白名单')
-    const run = await store.createRun(session.id, '记住一个规则', { threadId: thread.id })
-    await store.appendTranscript({
-      threadId: thread.id,
-      runId: run.id,
-      kind: 'message',
-      payload: { role: 'user', content: '记住一个规则。' },
-    })
-    const runtime = createMemoryRuntime(path.join(root, 'runtime'), {
-      ...defaultRuntimeConfig().context,
-      memoryBaseDir: root,
-      privateMemoryDir: path.join(root, 'private'),
-      teamMemoryDir: path.join(root, 'team'),
-    }, root)
-
-    await expect(extractMemoriesFromThread(runtime, store, thread.id, run.id, async () => ({
-      operations: [{ tool: 'export_map', arguments: {} }],
-    }))).rejects.toThrow()
   })
 
   it('excludes current run entries when rebuilding session memory for the next prompt', async () => {
@@ -251,7 +223,7 @@ describe('memory core', () => {
     expect(memory.basedOnEntryId).toBe(previousAssistant.entryId)
   })
 
-  it('dreams memories with a lock, validated upserts, deletes, and minimum interval state', async () => {
+  it('dreams memories with a lock, real memory operations, and minimum interval state', async () => {
     const root = await makeTempRoot()
     const runtimeRoot = path.join(root, 'runtime')
     const runtime = createMemoryRuntime(runtimeRoot, {
@@ -277,18 +249,19 @@ describe('memory core', () => {
       content: '不要 hack，要根因修复。',
     })
 
-    const result = await dreamMemories(runtime, async () => ({
-      summary: '合并重复评审偏好',
-      upserts: [{
+    const result = await dreamMemories(runtime, async (actualRuntime, records) => {
+      expect(records).toHaveLength(2)
+      await writeMemory(actualRuntime, {
         scope: 'private',
         type: 'feedback',
         name: 'Review style',
         description: 'User wants root-cause fixes instead of fallback patches',
         content: '规则：优先从根因修复，不要用 fallback 或 hack 掩盖问题。\n\n**Why:** 用户多次纠正过 hack 式改法。\n\n**How to apply:** 审查方案时先定位事实源和状态边界。',
         relativePath: first.relativePath,
-      }],
-      deletes: [{ scope: 'private', relativePath: duplicate.relativePath, reason: '已合并到主记忆' }],
-    }), { force: true })
+      })
+      await deleteMemory(actualRuntime, 'private', duplicate.relativePath)
+      return { changed: true, summary: '合并重复评审偏好' }
+    }, { force: true })
 
     expect(result.changed).toBe(true)
     expect(result.records.map(record => record.relativePath)).toContain(first.relativePath)
@@ -297,7 +270,7 @@ describe('memory core', () => {
     const updated = await readMemory(runtime, 'private', first.relativePath)
     expect(updated.content).toContain('根因修复')
 
-    const skipped = await dreamMemories(runtime, async () => ({ summary: '', upserts: [], deletes: [] }))
+    const skipped = await dreamMemories(runtime, async () => ({ changed: false, summary: '' }))
     expect(skipped.changed).toBe(false)
     expect(skipped.message).toContain('距离上次')
   })

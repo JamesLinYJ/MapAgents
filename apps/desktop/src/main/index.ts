@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { app, session } from 'electron'
+import { app, session, utilityProcess } from 'electron'
 import {
   PLATFORM_DESKTOP_USER_MODEL_ID,
   PRODUCT_CODENAME,
@@ -26,6 +26,8 @@ import { createDesktopSystemLogger, type DesktopSystemLogger } from './desktopSy
 import { DesktopExportService } from './exportService.js'
 import { FileHandleRegistry } from './fileHandleRegistry.js'
 import { installDesktopIpcHandlers } from './ipcHandlers.js'
+import { DesktopDiagnosticExportService } from './diagnosticExportService.js'
+import { LocalDesktopIdentityBroker } from './localDesktopIdentityBroker.js'
 import { MicrophonePermissionGate } from './microphonePermissionGate.js'
 import { installNativeApplicationMenu } from './nativeMenus.js'
 import { installResourceProtocol } from './resourceProtocol.js'
@@ -88,7 +90,14 @@ async function startDesktop(logger: DesktopSystemLogger): Promise<void> {
 
   const files = new FileHandleRegistry()
   const windows = new WorkspaceWindowRegistry(files)
-  const auth = new DesktopAuthGateway(runtime.apiBaseUrl, { autoAuth: runtime.autoAuth })
+  const auth = new DesktopAuthGateway(runtime.apiBaseUrl, {
+    autoAuth: runtime.autoAuth,
+    managedIdentity: runtime.autoAuth
+      ? new LocalDesktopIdentityBroker(runtime, {
+        fork: (modulePath, args, options) => utilityProcess.fork(modulePath, args, options),
+      })
+      : null,
+  })
   const microphone = new MicrophonePermissionGate()
   const revokeMicrophoneOnAuthChange = auth.onAuthorizationChanged(() => {
     microphone.revokeAll()
@@ -112,6 +121,7 @@ async function startDesktop(logger: DesktopSystemLogger): Promise<void> {
     auth,
     control,
     downloads: new DesktopDownloadService(runtime.apiBaseUrl, auth),
+    diagnosticExports: new DesktopDiagnosticExportService(),
     exports: new DesktopExportService(runtime.apiBaseUrl, auth),
     files,
     logger,
@@ -138,6 +148,7 @@ async function startDesktop(logger: DesktopSystemLogger): Promise<void> {
     revokeMicrophoneOnAuthChange()
     control.close()
     supervisor.close()
+    void auth.close().catch(error => logger.error('desktop_identity_close_failed', error))
     logger.close()
   })
   app.on('activate', () => {

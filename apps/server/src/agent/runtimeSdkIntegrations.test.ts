@@ -27,9 +27,13 @@ import type { AgentsExecutionContext } from './agentsToolBridge.js'
 import { RunToolConcurrencyGate } from './runToolConcurrencyGate.js'
 
 describe('runtime SDK integrations', () => {
-  it('keeps the default runtime SDK config schema-valid and disabled', () => {
+  it('keeps the default runtime SDK config schema-valid with native web search enabled', () => {
     const parsed = agentRuntimeConfigSchema.parse(defaultRuntimeConfig())
 
+    expect(parsed.sdk.hostedTools.webSearch).toEqual({
+      enabled: true,
+      searchContextSize: 'medium',
+    })
     expect(parsed.sdk.mcp.enabled).toBe(false)
     expect(parsed.sdk.mcp.servers).toHaveLength(0)
     expect(parsed.sdk.skills.enabled).toBe(false)

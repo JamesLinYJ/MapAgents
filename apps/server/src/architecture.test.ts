@@ -315,12 +315,11 @@ describe('platform architecture', () => {
       path.join(repositoryRoot, 'infra/migrations/001_init_postgis.sql'),
       'utf8',
     )
-    const removalMigration = await readFile(
-      path.join(repositoryRoot, 'infra/migrations/005_remove_public_sharing.sql'),
-      'utf8',
-    )
     expect(baselineSource.includes(['share', 'token'].join('_'))).toBe(false)
-    expect(removalMigration).toContain(`DROP COLUMN IF EXISTS ${['share', 'token'].join('_')}`)
+    const migrationFiles = (await readdir(
+      path.join(repositoryRoot, 'infra/migrations'),
+    )).filter(file => file.endsWith('.sql')).sort()
+    expect(migrationFiles).toEqual(['001_init_postgis.sql'])
 
     const operationalSourceFiles = await collectProductionFiles([
       path.join(repositoryRoot, 'packages/operations-supervisor/src'),
@@ -1500,10 +1499,16 @@ describe('platform architecture', () => {
     await expect(stat(dedicatedRunner)).rejects.toMatchObject({ code: 'ENOENT' })
     expect(runtimeSource).not.toContain('shouldRunDeterministicNowcast')
     expect(runtimeSource).not.toContain('runDeterministicNowcast')
-    expect(automation.revision).toBe(6)
+    expect(automation.revision).toBe(7)
     expect(automation.defaultParameters.horizonMinutes).toBe(180)
     expect(automation.defaultParameters.regionLayerKey).toBe('hangzhou_districts')
     expect(automation.agentInvocation.enabled).toBe(true)
+    expect(automation.agentInvocation.requirements).toEqual([{
+      resource: 'meteorological_files',
+      scope: 'thread',
+      minimumCount: 2,
+      readyOnly: true,
+    }])
     expect(automation.graph.nodes.some(node => node.type === 'agent')).toBe(false)
     expect(automation.graph.nodes.some(node => node.type === 'tool' && node.config.toolName === 'answer_nowcast_question')).toBe(true)
     const files = automation.graph.nodes.find(node => node.nodeId === 'list_files')

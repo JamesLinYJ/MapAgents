@@ -15,12 +15,10 @@ import { z } from 'zod'
 import type { Database } from './connection.js'
 
 const REQUIRED_MIGRATIONS = [
-  '004_agents_sdk_native_runtime',
-  '005_remove_public_sharing',
-  '006_native_agent_runtime',
+  '001_init_postgis',
 ] as const
 
-export const CURRENT_DATABASE_SCHEMA_VERSION = 6
+export const CURRENT_DATABASE_SCHEMA_VERSION = 1
 
 const migrationRowsSchema = z.array(z.object({
   migration_id: z.string().min(1),
@@ -39,8 +37,8 @@ export async function verifyDatabaseSchemaCompatibility(
   const tableName = (tableResult.rows[0] as { table_name?: unknown } | undefined)?.table_name
   if (typeof tableName !== 'string') {
     throw new Error(
-      `数据库尚未启用版本跟踪。请按顺序应用 infra/migrations/004_agents_sdk_native_runtime.sql`
-      + '、005_remove_public_sharing.sql 和 006_native_agent_runtime.sql 后重新启动。',
+      '数据库尚未启用版本跟踪。请重建开发数据库并应用 '
+      + 'infra/migrations/001_init_postgis.sql 后重新启动。',
     )
   }
 
@@ -54,8 +52,8 @@ export async function verifyDatabaseSchemaCompatibility(
   const missing = REQUIRED_MIGRATIONS.filter(migrationId => !applied.has(migrationId))
   if (missing.length > 0) {
     throw new Error(
-      `数据库升级未完成，缺少迁移：${missing.join('、')}。`
-      + '请按编号顺序应用对应的 infra/migrations/*.sql，禁止跳过迁移或直接修改版本记录。',
+      `数据库不是当前基线，缺少：${missing.join('、')}。`
+      + '请重建开发数据库；禁止只补写版本记录。',
     )
   }
 
@@ -66,6 +64,23 @@ export async function verifyDatabaseSchemaCompatibility(
     throw new Error(
       `数据库版本高于当前服务支持的 v${CURRENT_DATABASE_SCHEMA_VERSION}：`
       + `${unsupported.map(entry => entry.migrationId).join('、')}。请升级 平台 服务，不能用旧服务连接新数据库。`,
+    )
+  }
+
+  const capabilityResult = await db.execute(sql`
+    SELECT to_regprocedure(
+      'public.geo_agent_platform_layer_tiles(integer,integer,integer,json)'
+    ) AS vector_tile_function
+  `)
+  const vectorTileFunction = (
+    capabilityResult.rows[0] as { vector_tile_function?: unknown } | undefined
+  )?.vector_tile_function
+  if (typeof vectorTileFunction !== 'string') {
+    throw new Error(
+      '数据库迁移记录与实际能力不一致：缺少 '
+      + 'geo_agent_platform_layer_tiles(integer, integer, integer, json)。'
+      + '请重建数据库并重新应用 infra/migrations/001_init_postgis.sql；'
+      + '禁止只补写迁移记录。',
     )
   }
 }

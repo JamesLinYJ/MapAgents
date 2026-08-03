@@ -49,9 +49,9 @@ export function evaluateTerminalDelivery(evidence: TerminalDeliveryEvidence): Te
 function terminalRepairInstruction(requirement: string): string {
   return [
     '<terminal_delivery_repair>',
-    '上一版结构化交付未通过终态证据校验，不能展示给用户。',
+    '上一版最终回答未通过终态证据校验，不能展示给用户。',
     requirement,
-    '获得结果后再提交完整的 supervisorDelivery；若工具失败，明确报告失败，不得把准备动作写成完成结果。',
+    '获得结果后直接提交完整的中文 Markdown 正文；若工具失败，明确报告失败，不得把准备动作写成完成结果。',
     '</terminal_delivery_repair>',
   ].join('\n')
 }

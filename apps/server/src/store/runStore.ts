@@ -191,6 +191,7 @@ export class RunStore {
         selectedDataSources: [],
         warnings: [],
         errors: [],
+        failure: null,
         denialCounts: {},
         runtimeStats: {},
         currentStep: 0,

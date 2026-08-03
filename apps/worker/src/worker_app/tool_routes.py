@@ -49,24 +49,56 @@ def register_tool_routes(
             )
             logger.info(
                 "Worker 工具执行完成",
-                extra={"trace_id": trace_id, "tool_name": tool_name, "duration_ms": round((time.perf_counter() - started) * 1000, 2)},
+                extra={
+                    "event": "tool.worker.completed",
+                    "category": "tool",
+                    "retention": "operational",
+                    "trace_id": trace_id,
+                    "tool_name": tool_name,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                    "status": "succeeded",
+                },
             )
             return {"message": f"{tool_name} 执行完成", "payload": payload, "warnings": payload.get("warnings", [])}
         except (ValueError, FileNotFoundError) as exc:
             logger.warning(
                 "Worker 工具请求无效",
-                extra={"trace_id": trace_id, "tool_name": tool_name, "duration_ms": round((time.perf_counter() - started) * 1000, 2), "detail": str(exc)},
+                extra={
+                    "event": "tool.worker.rejected",
+                    "category": "tool",
+                    "retention": "operational",
+                    "trace_id": trace_id,
+                    "tool_name": tool_name,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                    "status": "rejected",
+                },
             )
             raise HTTPException(400, str(exc)) from exc
         except TimeoutError as exc:
             logger.warning(
                 "Worker 工具执行超时",
-                extra={"trace_id": trace_id, "tool_name": tool_name, "duration_ms": round((time.perf_counter() - started) * 1000, 2)},
+                extra={
+                    "event": "tool.worker.timed_out",
+                    "category": "tool",
+                    "retention": "operational",
+                    "trace_id": trace_id,
+                    "tool_name": tool_name,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                    "status": "failed",
+                },
             )
             raise HTTPException(504, "Worker 工具执行超时") from exc
         except Exception as exc:
             logger.exception(
                 "Worker 工具执行失败",
-                extra={"trace_id": trace_id, "tool_name": tool_name, "duration_ms": round((time.perf_counter() - started) * 1000, 2)},
+                extra={
+                    "event": "tool.worker.failed",
+                    "category": "tool",
+                    "retention": "operational",
+                    "trace_id": trace_id,
+                    "tool_name": tool_name,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                    "status": "failed",
+                },
             )
             raise HTTPException(500, "Worker 工具执行失败，请查看 Worker 日志") from exc

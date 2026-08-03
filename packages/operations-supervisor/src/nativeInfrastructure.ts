@@ -38,6 +38,7 @@ export async function runNativeInfrastructure(input: {
       '-D', config.database.dataDirectory,
       '-h', config.database.host,
       '-p', String(config.database.port),
+      '-c', 'log_checkpoints=off',
     ]),
   }], config)
   const stopPostgres = installShutdownHandlers(postgres.commands)

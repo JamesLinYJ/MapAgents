@@ -21,6 +21,7 @@ export type HealthProbe =
       kind: 'http'
       portEnvironment: string | Record<OperationsProfile, string>
       path: string
+      livenessPath: string
       timeoutMs: number
       periodMs: number
       initialDelayMs: number
@@ -112,8 +113,9 @@ export const SERVICE_CATALOG: Readonly<Record<OperationsServiceId, ServiceDefini
       kind: 'http',
       portEnvironment: 'WORKER_PORT',
       path: '/health',
+      livenessPath: '/health/live',
       timeoutMs: 3_000,
-      periodMs: 2_000,
+      periodMs: 5_000,
       initialDelayMs: 2_000,
     },
     portEnvironments: { development: ['WORKER_PORT'], production: ['WORKER_PORT'] },
@@ -137,8 +139,9 @@ export const SERVICE_CATALOG: Readonly<Record<OperationsServiceId, ServiceDefini
       kind: 'http',
       portEnvironment: 'API_PORT',
       path: '/health',
+      livenessPath: '/health/live',
       timeoutMs: 5_000,
-      periodMs: 2_000,
+      periodMs: 5_000,
       initialDelayMs: 3_000,
     },
     portEnvironments: { development: ['API_PORT'], production: ['API_PORT'] },

@@ -17,7 +17,6 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -94,6 +93,7 @@ export type { DesktopDocument } from './documentTabs'
 
 export interface DesktopDocumentSlots {
   account: ReactNode
+  settings: ReactNode
   security: ReactNode
   debug: ReactNode
   terms: ReactNode
@@ -235,13 +235,7 @@ export function WorkspaceLayout(props: WorkspaceLayoutProps) {
     storage: localStorage,
     onlySaveAfterUserInteractions: true,
   })
-  const visibleRibbonTabs = useMemo(
-    () => RIBBON_TABS.filter(tab => tab.id !== 'manage'
-      || canAccessAccount
-      || canAccessDiagnostics
-      || canAccessSecurity),
-    [canAccessAccount, canAccessDiagnostics, canAccessSecurity],
-  )
+  const visibleRibbonTabs = RIBBON_TABS
 
   const effectiveRibbonTab = visibleRibbonTabs.some(tab => tab.id === ribbonTab)
     ? ribbonTab
@@ -386,7 +380,8 @@ export function WorkspaceLayout(props: WorkspaceLayoutProps) {
     else if (/结果|成果/u.test(normalized)) openDocument('results')
     else if (/账户|账号/u.test(normalized) && canAccessAccount) openDocument('account')
     else if (/安全|权限/u.test(normalized) && canAccessSecurity) openDocument('security')
-    else if (/配置|诊断/u.test(normalized) && canAccessDiagnostics) openDocument('debug')
+    else if (/诊断/u.test(normalized) && canAccessDiagnostics) openDocument('debug')
+    else if (/配置|设置|模型|路由/u.test(normalized)) openDocument('settings')
     else openDocument('map')
   }
 
@@ -603,7 +598,11 @@ export function WorkspaceLayout(props: WorkspaceLayoutProps) {
                 <PanelRightOpen size={15} />
               </button>
             </header>
-            <div className="gf-document-canvas" data-document={activeDocument}>
+            <div
+              key={activeDocument}
+              className="gf-document-canvas"
+              data-document={activeDocument}
+            >
               {renderDocument(activeDocument, {
                 mapSlot,
                 toolsSlot,
@@ -756,8 +755,9 @@ function RibbonContent(props: RibbonContentProps) {
     return (
       <div className="gf-ribbon-groups">
         <RibbonGroup label="平台">
+          <RibbonAction icon={<Settings2 />} label="模型与账号" large onClick={() => onOpenDocument('settings')} />
           {canAccessDiagnostics ? (
-            <RibbonAction icon={<Settings2 />} label="配置与诊断" large onClick={() => onOpenDocument('debug')} />
+            <RibbonAction icon={<Gauge />} label="运行诊断" onClick={() => onOpenDocument('debug')} />
           ) : null}
           {canAccessSecurity ? (
             <RibbonAction icon={<ShieldCheck />} label="安全管理" large onClick={() => onOpenDocument('security')} />
@@ -895,6 +895,7 @@ function renderDocument(
   if (document === 'tools') return slots.toolsSlot
   if (document === 'workflow') return slots.workflowSlot
   if (document === 'results') return slots.inspectorSlot
+  if (document === 'settings') return slots.desktopDocuments?.settings ?? <DocumentUnavailable />
   if (document === 'account') return slots.desktopDocuments?.account ?? <DocumentUnavailable />
   if (document === 'security') return slots.desktopDocuments?.security ?? <DocumentUnavailable />
   if (document === 'terms') return slots.desktopDocuments?.terms ?? <DocumentUnavailable />
@@ -913,6 +914,7 @@ function DocumentUnavailable() {
 }
 
 function documentIcon(document: DesktopDocument): ReactNode {
+  if (document === 'settings') return <Settings2 size={14} />
   if (document === 'tools') return <Settings2 size={14} />
   if (document === 'workflow') return <Workflow size={14} />
   if (document === 'results') return <Activity size={14} />
@@ -927,6 +929,7 @@ function documentTitleFor(document: DesktopDocument): string {
   if (document === 'tools') return '工具与自动化'
   if (document === 'workflow') return '智能体工作流'
   if (document === 'results') return '分析结果'
+  if (document === 'settings') return '模型与账号'
   if (document === 'account') return '账号中心'
   if (document === 'security') return '安全管理'
   if (document === 'terms') return '服务协议'

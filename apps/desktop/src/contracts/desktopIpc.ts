@@ -32,6 +32,8 @@ import {
 } from '@geo-agent-platform/shared-types'
 import {
   operationsLogEntrySchema,
+  operationsLogFilterSchema,
+  operationsLogPageSchema,
   operationsLogQuerySchema,
 } from '@geo-agent-platform/shared-types/operations'
 
@@ -367,6 +369,10 @@ export const desktopSupervisorCommandSchema = z.discriminatedUnion('command', [
     payload: z.object({}).strict(),
   }).strict(),
   z.object({
+    command: z.enum(['diagnostics_start', 'diagnostics_stop']),
+    payload: z.object({}).strict(),
+  }).strict(),
+  z.object({
     command: z.enum(['start', 'stop', 'restart']),
     payload: z.object({
       target: desktopOperationsTargetSchema,
@@ -377,7 +383,19 @@ export const desktopSupervisorCommandSchema = z.discriminatedUnion('command', [
 ])
 
 export const desktopSupervisorLogsQuerySchema = operationsLogQuerySchema
-export const desktopSupervisorLogsResponseSchema = z.array(operationsLogEntrySchema).max(10_000)
+export const desktopSupervisorLogsResponseSchema = operationsLogPageSchema
+  .superRefine(enforceDesktopControlFrameSize)
+export const desktopSupervisorLogSubscriptionSchema = z.object({
+  active: z.boolean(),
+  filter: operationsLogFilterSchema,
+}).strict()
+export const desktopDiagnosticExportRequestSchema = z.object({}).strict()
+  .superRefine(enforceDesktopControlFrameSize)
+export const desktopDiagnosticExportResultSchema = z.object({
+  canceled: z.boolean(),
+  displayName: z.string().min(1).max(260).nullable(),
+  entryCount: z.number().int().nonnegative(),
+}).strict().superRefine(enforceDesktopControlFrameSize)
 
 export const desktopControlResponsePayloadSchema = z.object({
   version: z.literal(DESKTOP_IPC_VERSION),
@@ -415,6 +433,7 @@ export const desktopEventPayloadSchema = z.object({
     'window:maximized',
     'window:restored',
     'supervisor:snapshot',
+    'supervisor:log',
     'supervisor:error',
     'transport:push',
     'transport:status',
@@ -457,6 +476,9 @@ export const DESKTOP_IPC_CHANNELS = {
   fileReadText: `${PLATFORM_IPC_CHANNEL_PREFIX}:file:read-text`,
   microphonePermission: `${PLATFORM_IPC_CHANNEL_PREFIX}:microphone:permission`,
   supervisorLogs: `${PLATFORM_IPC_CHANNEL_PREFIX}:supervisor:logs`,
+  supervisorLogHistory: `${PLATFORM_IPC_CHANNEL_PREFIX}:supervisor:log-history`,
+  supervisorLogSubscription: `${PLATFORM_IPC_CHANNEL_PREFIX}:supervisor:log-subscription`,
+  supervisorDiagnosticExport: `${PLATFORM_IPC_CHANNEL_PREFIX}:supervisor:diagnostic-export`,
   supervisorRequest: `${PLATFORM_IPC_CHANNEL_PREFIX}:supervisor:request`,
   windowCommand: `${PLATFORM_IPC_CHANNEL_PREFIX}:window:command`,
   event: `${PLATFORM_IPC_CHANNEL_PREFIX}:event`,
@@ -488,6 +510,7 @@ export type DesktopEventTransport = z.infer<typeof desktopEventTransportSchema>
 export type DesktopExportManifest = z.infer<typeof desktopExportManifestSchema>
 export type DesktopExportRequest = z.infer<typeof desktopExportRequestSchema>
 export type DesktopExportResult = z.infer<typeof desktopExportResultSchema>
+export type DesktopDiagnosticExportResult = z.infer<typeof desktopDiagnosticExportResultSchema>
 export type DesktopFileSelectionHandle = z.infer<typeof desktopFileSelectionHandleSchema>
 export type DesktopFileSelectionRequest = z.infer<typeof desktopFileSelectionRequestSchema>
 export type DesktopTextFileReadRequest = z.infer<typeof desktopTextFileReadRequestSchema>

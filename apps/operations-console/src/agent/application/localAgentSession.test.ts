@@ -50,14 +50,14 @@ describe('LocalAgentSession', () => {
     const client = new TestClient()
     const session = new LocalAgentSession({
       connectClient: async () => client,
-      model: 'deepseek-v4-pro',
+      model: 'deepseek-v4-flash',
     })
     await session.initialize()
 
     await session.submit('分析杭州强降水风险')
 
     expect(client.requests.find(request => request.type === 'run:start')?.payload)
-      .toMatchObject({ provider: 'deepseek', modelName: 'deepseek-v4-pro' })
+      .toMatchObject({ provider: 'deepseek', modelName: 'deepseek-v4-flash' })
   })
 
   it('rejects a model that is absent from the provider capability list before run creation', async () => {
@@ -205,11 +205,11 @@ function bootstrap() {
       displayName: 'DeepSeek',
       configured: true,
       defaultModel: 'deepseek-v4-flash',
-      availableModels: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+      availableModels: ['deepseek-v4-flash'],
       capabilities: ['agents_sdk_live_supervisor'],
       agentRuntime: {
-        transport: 'deepseek_chat_completions',
-        structuredOutput: 'json_object',
+        transport: 'deepseek_responses',
+        structuredOutput: 'json_schema',
         functionTools: true,
         localMcp: true,
         hostedTools: false,

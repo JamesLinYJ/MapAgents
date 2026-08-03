@@ -68,13 +68,14 @@ export function createAgentsTools(
     : registry.list().filter(supportsAgentExecution)
 
   return definitions.map(definition => {
+    const schemaMode = definition.agentSchemaMode ?? options.schemaMode
     const { jsonSchema } = ensureToolSchemas(definition)
     const enrichedSchema = withWorkflowStepIdentity(enrichValueRefDescriptions(jsonSchema), definition.name)
     const description = describeToolForAgent(definition, jsonSchema)
       + '\n工作流步骤身份：智能体工作流中调用本工具时，workflowStepId 必须填写本次执行对应的 stepId；它只用于绑定进度，不会传给工具实现。'
     const normalizeArguments = (input: unknown): Record<string, unknown> => {
       const args = requireArguments(definition.name, input)
-      return options.schemaMode === 'strict' ? stripNullObjectValues(args) : args
+      return schemaMode === 'strict' ? stripNullObjectValues(args) : args
     }
     const scope = (runContext?: RunContext<unknown>): AgentsToolExecutionScope => (
       options.executionScope ?? requireContext(runContext)
@@ -134,7 +135,7 @@ export function createAgentsTools(
         }]
       : []
 
-    if (options.schemaMode === 'compatible') {
+    if (schemaMode === 'compatible') {
       const parameters = parametersForCompatibleAgentsSdk(enrichedSchema)
       return tool<typeof parameters, AgentsExecutionContext>({
         name: definition.name,

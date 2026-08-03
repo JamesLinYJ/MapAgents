@@ -9,14 +9,28 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
+import SecurityAdminPage from './SecurityAdminPage.js'
 import {
   buildMembershipRemovalConfirmation,
   buildUserStatusConfirmation,
 } from './securityConfirmationPolicy.js'
 
 describe('SecurityAdminPage confirmation policy', () => {
+  it('uses localized column labels and a visible empty state', () => {
+    const html = renderToStaticMarkup(createElement(SecurityAdminPage))
+
+    expect(html).toContain('邮箱')
+    expect(html).toContain('显示名称')
+    expect(html).toContain('最后登录时间')
+    expect(html).toContain('当前视图暂无数据。')
+    expect(html).not.toContain('>displayName<')
+    expect(html).not.toContain('>lastLoginAt<')
+  })
+
   it('requires a danger confirmation before disabling an active user', () => {
     expect(buildUserStatusConfirmation({
       email: 'analyst@example.com',

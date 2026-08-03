@@ -13,7 +13,7 @@ import type { OperationsLogQuery } from '@geo-agent-platform/shared-types/operat
 import { describe, expect, it } from 'vitest'
 
 import {
-  desktopLogMessage,
+  parseDesktopFileLogRecord,
   projectDesktopLogLines,
   serializeDesktopFileLogRecord,
 } from './desktopLogRecords.js'
@@ -22,6 +22,10 @@ const baseQuery: OperationsLogQuery = {
   services: ['infra', 'worker', 'api'],
   levels: [],
   streams: [],
+  categories: [],
+  events: [],
+  retentions: [],
+  correlationId: '',
   search: '',
   includeSupervisor: true,
   afterSequence: null,
@@ -33,18 +37,24 @@ describe('desktop system log records', () => {
     const lines = [
       'legacy text line',
       serializeDesktopFileLogRecord({
-        version: 1,
+        version: 2,
         createdAt: '2026-07-29T09:00:00.000Z',
         level: 'error',
+        event: 'system.supervisor.unavailable',
+        category: 'system',
+        retention: 'operational',
+        correlation: {},
         scope: 'desktop',
         processId: 42,
         message: 'Supervisor 不可用',
+        errorStack: null,
+        attributes: {},
       }),
     ]
 
     expect(projectDesktopLogLines(lines, baseQuery)).toEqual([
       expect.objectContaining({
-        sequence: 1_000_000_001,
+        sequence: 1_500_000_001,
         serviceId: null,
         component: 'desktop',
         processId: 42,
@@ -56,12 +66,18 @@ describe('desktop system log records', () => {
 
   it('applies supervisor, level, stream, search and tail filters', () => {
     const lines = ['info', 'error'].map((message, index) => serializeDesktopFileLogRecord({
-      version: 1,
+      version: 2,
       createdAt: `2026-07-29T09:00:0${index}.000Z`,
       level: index === 0 ? 'info' : 'error',
+      event: `system.test.${message}`,
+      category: 'system',
+      retention: 'operational',
+      correlation: {},
       scope: 'desktop',
       processId: 42,
       message,
+      errorStack: null,
+      attributes: {},
     }))
 
     expect(projectDesktopLogLines(lines, {
@@ -77,8 +93,22 @@ describe('desktop system log records', () => {
     })).toEqual([])
   })
 
-  it('serializes structured message data without object coercion noise', () => {
-    expect(desktopLogMessage(['desktop_ready', { profile: 'development' }]))
-      .toBe('desktop_ready {"profile":"development"}')
+  it('round-trips the complete structured contract without coercing fields into message text', () => {
+    const record = {
+      version: 2 as const,
+      createdAt: '2026-07-29T09:00:00.000Z',
+      level: 'info' as const,
+      event: 'lifecycle.desktop.ready',
+      category: 'lifecycle' as const,
+      retention: 'operational' as const,
+      correlation: { requestId: 'request_1' },
+      scope: 'desktop',
+      processId: 42,
+      message: '桌面主进程已就绪。',
+      errorStack: null,
+      attributes: { profile: 'development' },
+    }
+
+    expect(parseDesktopFileLogRecord(JSON.parse(serializeDesktopFileLogRecord(record)))).toEqual(record)
   })
 })

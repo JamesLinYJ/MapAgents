@@ -36,6 +36,7 @@ import {
   desktopSupervisorCommandSchema,
   desktopSupervisorLogsQuerySchema,
   desktopSupervisorLogsResponseSchema,
+  desktopDiagnosticExportResultSchema,
   desktopTextFileReadRequestSchema,
   desktopTextFileReadResultSchema,
   desktopUploadOperationSchema,
@@ -256,7 +257,13 @@ describe('desktop IPC contracts', () => {
       processId: 42,
       stream: 'stdout' as const,
       level: 'info' as const,
+      event: 'request.http.completed',
+      category: 'request' as const,
+      retention: 'operational' as const,
+      correlation: { requestId: `request_${index}` },
       message: `日志 ${index} ${'运行信息'.repeat(30)}`,
+      errorStack: null,
+      attributes: {},
       createdAt: '2026-07-30T08:00:00.000Z',
     }))
     const serializedLogs = JSON.stringify(logs)
@@ -265,12 +272,20 @@ describe('desktop IPC contracts', () => {
       services: ['infra', 'worker', 'api'],
       levels: [],
       streams: [],
+      categories: [],
+      events: [],
+      retentions: [],
+      correlationId: '',
       search: '',
       includeSupervisor: true,
       afterSequence: null,
       tail: 2_000,
     }).success).toBe(true)
-    expect(desktopSupervisorLogsResponseSchema.safeParse(logs).success).toBe(true)
+    expect(desktopSupervisorLogsResponseSchema.safeParse({
+      entries: logs,
+      nextCursor: 1_000,
+      hasMore: false,
+    }).success).toBe(false)
     expect(desktopControlResponseSchema.safeParse({
       version: 1,
       requestId: crypto.randomUUID(),
@@ -280,6 +295,20 @@ describe('desktop IPC contracts', () => {
     expect(desktopClipboardWriteSchema.safeParse({ text: serializedLogs }).success).toBe(true)
     expect(desktopClipboardWriteSchema.safeParse({
       text: '测'.repeat(Math.floor(DESKTOP_CLIPBOARD_TEXT_MAX_BYTES / 3) + 1),
+    }).success).toBe(false)
+  })
+
+  it('returns only a display name after native diagnostic export', () => {
+    expect(desktopDiagnosticExportResultSchema.safeParse({
+      canceled: false,
+      displayName: 'diagnostics.jsonl',
+      entryCount: 12,
+    }).success).toBe(true)
+    expect(desktopDiagnosticExportResultSchema.safeParse({
+      canceled: false,
+      displayName: 'diagnostics.jsonl',
+      entryCount: 12,
+      filePath: 'C:\\private\\diagnostics.jsonl',
     }).success).toBe(false)
   })
 

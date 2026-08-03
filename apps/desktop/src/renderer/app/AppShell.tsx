@@ -31,6 +31,7 @@ import './styles/map.css'
 import './styles/layers.css'
 import './styles/layout.css'
 import './styles/tools-debug.css'
+import './styles/settings.css'
 import './styles/desktop.css'
 import { listAdminWorkspaces } from '../api/client'
 import { TopBar } from './layout/TopBar'
@@ -47,7 +48,12 @@ import {
   WorkspaceRestrictedConversation,
   WorkspaceRestrictedDocument,
 } from './layout/WorkspaceRestrictedPanels'
-import { AccountCenterPage, LegalPolicyPage, WorkspaceRouteHost } from './layout/WorkspaceRouteHost'
+import {
+  AccountCenterPage,
+  LegalPolicyPage,
+  ModelSettingsPage,
+  WorkspaceRouteHost,
+} from './layout/WorkspaceRouteHost'
 import { useWorkspaceMapActivation } from './layout/useWorkspaceMapActivation'
 import {
   formatUiError,
@@ -702,6 +708,18 @@ function AppShell() {
       <LazyMotion features={domAnimation}>
         <MotionConfig reducedMotion="user">
           <WorkspaceRouteHost
+            settings={(
+              <ModelSettingsPage
+                authMode={authMode}
+                canAccessAccount={workspaceAccess.canAccessAccount}
+                provider={provider}
+                model={model}
+                providers={providers}
+                onProviderChange={handleProviderChange}
+                onModelChange={setModel}
+                onOpenAccount={() => setActiveDesktopDocument('account')}
+              />
+            )}
             account={authMe && workspaceAccess.canAccessAccount
               ? <AccountCenterPage authMe={authMe} onLogout={handleLogout} />
               : <WorkspaceRestrictedDocument title="账号中心" reason={remoteUnavailableReason} />}

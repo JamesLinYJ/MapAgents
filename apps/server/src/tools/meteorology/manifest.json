@@ -1176,7 +1176,7 @@
     {
       "name": "generate_nowcast_forecast_text",
       "label": "生成短时临近预报（短临）预报文本",
-      "description": "保存基于短时临近预报（短临）分析事实生成并校验的模型文本",
+      "description": "保存领域 Worker 根据短时临近预报（短临）分析事实生成的确定性文本",
       "group": "气象",
       "tags": [
         "meteorology"

@@ -21,8 +21,14 @@ import { createServer } from 'node:http'
 import { getRequestListener } from '@hono/node-server'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { metricsResponse, observeHttpMetrics } from './observability/metrics.js'
-import { errorLogPayload, logger, logHttpRequestSummary, traceId, withLogContext } from './observability/logger.js'
+import { metricsResponse, normalizedRouteLabel, observeHttpMetrics } from './observability/metrics.js'
+import {
+  annotateHttpRequestFailure,
+  logger,
+  logHttpRequestSummary,
+  traceId,
+  withLogContext,
+} from './observability/logger.js'
 import { LocalAgentTracing } from './observability/agentTracing.js'
 import { getEnv } from './framework/env.js'
 import { artifactRoutes } from './routes/artifacts.js'
@@ -73,31 +79,28 @@ app.use('*', cors({
 }))
 app.use('*', async (c, next) => {
   const requestTraceId = traceId()
-  const pathname = new URL(c.req.url).pathname
   c.header('x-geo-agent-platform-trace-id', requestTraceId)
   const started = performance.now()
   await withLogContext({
     traceId: requestTraceId,
     httpMethod: c.req.method,
-    httpPath: pathname,
   }, async () => {
     try {
       await next()
     } finally {
-      const auth = (c as { get(key: string): unknown }).get('auth')
       logHttpRequestSummary({
         traceId: requestTraceId,
         method: c.req.method,
-        path: pathname,
+        route: normalizedRouteLabel(c),
         statusCode: c.res.status || 200,
         durationMs: Math.round((performance.now() - started) * 100) / 100,
-        userId: auth && typeof auth === 'object' && 'userId' in auth ? String(auth.userId) : undefined,
       })
     }
   })
 })
 app.use('*', observeHttpMetrics)
 app.use('*', serviceAdmissionMiddleware(admission))
+app.get('/health/live', c => c.json({ status: 'ok', live: true }))
 app.get('/health', async c => {
   const shutdown = shuttingDownHealth(admission)
   if (shutdown) return c.json(shutdown, 503)
@@ -129,7 +132,7 @@ app.route('/', meteorologyRoutes(container.runtimeRoot, container.runtimeFiles, 
 app.onError((error, c) => {
   if (error instanceof AuthorizationError) return c.json({ detail: error.message }, 403)
   if (error.message === '未登录。') return c.json({ detail: '未登录' }, 401)
-  logger.error({ error: errorLogPayload(error), path: c.req.path, method: c.req.method }, 'request failed')
+  annotateHttpRequestFailure(error)
   return c.json({ detail: '服务处理失败。请查看服务端日志。' }, 500)
 })
 app.notFound(platformNotFoundHandler)
@@ -167,6 +170,18 @@ installLifecycleManager({
 })
 
 server.listen(env.API_PORT, env.API_HOST, () => {
-  logger.info({ host: env.API_HOST, port: env.API_PORT }, 'server listening')
-  logger.info({ tools: container.toolRegistry.list().length, providers: container.toolRegistry.listProviders().length }, 'tool providers loaded')
+  logger.info({
+    event: 'lifecycle.api.listening',
+    category: 'lifecycle',
+    retention: 'operational',
+    host: env.API_HOST,
+    port: env.API_PORT,
+  }, 'API 服务已开始监听。')
+  logger.info({
+    event: 'tool.providers.loaded',
+    category: 'tool',
+    retention: 'operational',
+    tools: container.toolRegistry.list().length,
+    providers: container.toolRegistry.listProviders().length,
+  }, '工具 Provider 已加载。')
 })

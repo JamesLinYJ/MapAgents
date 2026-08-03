@@ -10,6 +10,7 @@
 // --------------------------------------------------------------------------
 
 import { describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
 import type { ModelAdapter, ModelAdapterRegistry } from './registry.js'
 import {
   ModelCompletionService,
@@ -52,17 +53,17 @@ describe('ModelCompletionService', () => {
     expect(chat).toHaveBeenCalledTimes(3)
   })
 
-  it('只在结构化输出通过 JSON object 校验后写入缓存', async () => {
-    const { service, cache, chat } = fixture('[]')
-    await expect(service.completeJson({
+  it('provider 不支持 SDK 原生结构化输出时明确失败且不解析自由文本', async () => {
+    const { service, cache, chat } = fixture('{"value":"不应解析"}')
+    await expect(service.completeStructured({
       workspaceId: 'workspace_1',
       provider: 'deepseek',
       purpose: 'tool_structured_analysis',
       prompt: '返回对象',
-    })).rejects.toThrow(/JSON object/u)
+    }, z.object({ value: z.string() }))).rejects.toThrow(/不支持 SDK 原生 JSON Schema/u)
 
     expect(cache.entries.size).toBe(0)
-    expect(chat).toHaveBeenCalledTimes(1)
+    expect(chat).not.toHaveBeenCalled()
   })
 
   it('合并同进程并发的相同请求', async () => {

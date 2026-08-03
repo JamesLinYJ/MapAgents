@@ -1,0 +1,312 @@
+/* +-------------------------------------------------------------------------
+ *
+ *   地理智能平台 - 模型与账号配置页样式
+ *
+ *   文件:       settings.css
+ *
+ *   日期:       2026年07月31日
+ *   作者:       JamesLinYJ
+ *   协助:       OpenAI Codex:GPT-5.6 Sol
+ * -------------------------------------------------------------------------- */
+
+.model-settings {
+  min-height: 100%;
+  padding: clamp(18px, 3vw, 34px);
+  color: #17242b;
+  background:
+    radial-gradient(circle at 8% 0%, rgb(17 167 177 / 0.14), transparent 27rem),
+    radial-gradient(circle at 100% 18%, rgb(54 121 181 / 0.11), transparent 30rem),
+    linear-gradient(180deg, #f2f8f9 0%, #fbfdfd 48%, #f7fafb 100%);
+  overflow: auto;
+}
+
+.model-settings__hero,
+.model-settings__section,
+.model-settings__identity {
+  width: min(1040px, 100%);
+  margin-inline: auto;
+  border: 1px solid rgb(68 103 118 / 0.13);
+  box-shadow: 0 22px 65px rgb(44 75 88 / 0.09);
+  backdrop-filter: blur(20px) saturate(135%);
+}
+
+.model-settings__hero {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(180px, auto);
+  align-items: center;
+  gap: 18px;
+  padding: clamp(20px, 3vw, 30px);
+  border-radius: 24px;
+  background: rgb(255 255 255 / 0.82);
+}
+
+.model-settings__hero-icon,
+.model-settings__identity-icon {
+  display: grid;
+  place-items: center;
+  color: #087f8c;
+  background: linear-gradient(145deg, rgb(215 248 248 / 0.95), rgb(231 242 251 / 0.82));
+}
+
+.model-settings__hero-icon {
+  width: 54px;
+  height: 54px;
+  border-radius: 17px;
+}
+
+.model-settings__hero h1,
+.model-settings__section h2,
+.model-settings__identity h2 {
+  margin: 4px 0 7px;
+  color: #17242b;
+  letter-spacing: -0.025em;
+}
+
+.model-settings__hero h1 {
+  font-size: clamp(24px, 3vw, 34px);
+}
+
+.model-settings__hero p,
+.model-settings__section-heading p,
+.model-settings__identity p {
+  margin: 0;
+  color: #657680;
+  line-height: 1.65;
+}
+
+.model-settings__eyebrow {
+  color: #16808b;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.model-settings__summary {
+  display: grid;
+  min-width: 190px;
+  padding: 14px 16px;
+  border: 1px solid rgb(31 139 148 / 0.14);
+  border-radius: 16px;
+  background: rgb(232 248 248 / 0.68);
+}
+
+.model-settings__summary span {
+  color: #5e747c;
+  font-size: 12px;
+}
+
+.model-settings__summary i {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #29b785;
+  box-shadow: 0 0 0 4px rgb(41 183 133 / 0.12);
+}
+
+.model-settings__summary strong {
+  margin-top: 7px;
+  font-size: 17px;
+}
+
+.model-settings__summary small {
+  margin-top: 2px;
+  color: #687a84;
+  overflow-wrap: anywhere;
+}
+
+.model-settings__section {
+  margin-top: 18px;
+  padding: clamp(18px, 2.5vw, 26px);
+  border-radius: 22px;
+  background: rgb(255 255 255 / 0.74);
+}
+
+.model-settings__section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.model-settings__section-heading > svg {
+  flex: 0 0 auto;
+  color: #2a7c89;
+}
+
+.model-settings__provider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.model-settings__provider {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid rgb(78 108 119 / 0.14);
+  border-radius: 17px;
+  color: inherit;
+  text-align: left;
+  background: rgb(255 255 255 / 0.72);
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.model-settings__provider:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgb(22 128 139 / 0.36);
+  box-shadow: 0 13px 30px rgb(41 84 98 / 0.09);
+}
+
+.model-settings__provider.is-active {
+  border-color: rgb(17 138 149 / 0.44);
+  background:
+    radial-gradient(circle at 0% 0%, rgb(187 242 241 / 0.58), transparent 48%),
+    rgb(247 253 253 / 0.92);
+  box-shadow: inset 0 0 0 1px rgb(15 130 141 / 0.08), 0 15px 34px rgb(44 106 118 / 0.1);
+}
+
+.model-settings__provider.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.model-settings__provider-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  color: #287a85;
+  background: #e9f6f7;
+}
+
+.model-settings__provider-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.model-settings__provider-copy small {
+  color: #687a84;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.model-settings__provider-state {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #177c86;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.model-settings__model-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+.model-settings__model-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px 15px;
+  border: 1px solid rgb(70 105 118 / 0.14);
+  border-radius: 15px;
+  color: #263841;
+  text-align: left;
+  background: rgb(255 255 255 / 0.72);
+  cursor: pointer;
+}
+
+.model-settings__model-list button.is-active {
+  color: #106f79;
+  border-color: rgb(18 132 142 / 0.4);
+  background: #edfafa;
+}
+
+.model-settings__model-list button span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.model-settings__model-list button strong {
+  overflow-wrap: anywhere;
+}
+
+.model-settings__model-list button small {
+  color: #71828a;
+}
+
+.model-settings__empty {
+  grid-column: 1 / -1;
+  padding: 24px;
+  border: 1px dashed rgb(75 108 121 / 0.22);
+  border-radius: 16px;
+  color: #71828a;
+  text-align: center;
+  background: rgb(246 250 251 / 0.72);
+}
+
+.model-settings__identity {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  margin-top: 18px;
+  padding: 20px 24px;
+  border-radius: 20px;
+  background: linear-gradient(135deg, rgb(238 250 249 / 0.92), rgb(246 249 253 / 0.88));
+}
+
+.model-settings__identity-icon {
+  width: 45px;
+  height: 45px;
+  border-radius: 14px;
+}
+
+.model-settings__identity button {
+  padding: 10px 14px;
+  border: 1px solid rgb(24 124 134 / 0.24);
+  border-radius: 12px;
+  color: #146f78;
+  font-weight: 650;
+  background: rgb(255 255 255 / 0.78);
+  cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  .model-settings__hero,
+  .model-settings__identity {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .model-settings__summary,
+  .model-settings__identity button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .model-settings__provider-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .model-settings__provider {
+    transition: none;
+  }
+}
+

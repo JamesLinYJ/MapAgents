@@ -33,9 +33,8 @@ function Initialize-PlatformDevEnvironment {
     Set-PlatformDefault 'BETTER_AUTH_MIN_PASSWORD_LENGTH' '12'
     Set-PlatformDefault 'CSRF_HEADER_NAME' 'x-geo-agent-platform-csrf'
     Set-PlatformDefault 'BOOTSTRAP_ADMIN_EMAIL' 'admin@example.com'
-    # 本机演示默认跳过登录表单，但仍建立真实 Better Auth 会话并由服务端授予权限。
+    # Desktop 默认使用根密钥派生的最小权限本机主体；人类账号是可选扩展。
     Set-PlatformDefault 'GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH' 'true'
-    Set-PlatformDefault 'GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_EMAIL' $env:BOOTSTRAP_ADMIN_EMAIL
     Set-PlatformValue 'DATABASE_URL' "postgresql://geo_agent:geo_agent@127.0.0.1:$($env:POSTGIS_PORT)/geo_agent"
     Set-PlatformValue 'WORKER_URL' "http://127.0.0.1:$($env:WORKER_PORT)"
     Set-PlatformValue 'APP_BASE_URL' "http://127.0.0.1:$($env:API_PORT)"

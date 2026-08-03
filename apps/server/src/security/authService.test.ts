@@ -75,6 +75,23 @@ describe('BetterAuthService local admin boundary', () => {
     })
   })
 
+  it('rejects Local Desktop identities at the public email authentication boundary', async () => {
+    const service = createService()
+    const response = await service.handler(new Request('http://127.0.0.1:8000/api/auth/sign-in/email', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        email: 'desktop@local-desktop.geo-agent-platform.invalid',
+        password: 'not-the-real-secret',
+      }),
+    }))
+
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toEqual({
+      detail: '该保留身份不能通过公共认证入口使用。',
+    })
+  })
+
   it('trusts the exact Better Auth Electron scheme without weakening origin checks', () => {
     const service = createService()
 

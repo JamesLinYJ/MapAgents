@@ -14,12 +14,12 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import pino from 'pino'
 
 // 日志严重度——模仿 Windows Event Log 的分级。
-// trace:  最高细节（函数进出、变量快照）
-// debug:  诊断级（请求参数、中间状态）
-// info:   正常事件（启动、注册、健康检查）
+// trace:  最高细节（只含有界元数据，不含业务正文）
+// debug:  诊断级（请求分类与中间状态，不含提示词、模型正文或完整工具参数）
+// info:   正常事件（启动、注册与状态变化；成功健康探测不记录）
 // warn:   可恢复异常（重试、降级、超时）
-// error:  操作失败（工具错误、Worker 失败、校验失败——包含完整上下文）
-// fatal:  进程级致命（无法启动、数据库断连——类似 minidump 全量快照）
+// error:  操作失败（工具错误、Worker 失败、校验失败——仅记录分类与关联 ID）
+// fatal:  进程级致命（无法启动、数据库断连——仅记录有界进程状态）
 const isTestRuntime = process.env.NODE_ENV === 'test' || process.env.VITEST === 'true'
 const defaultLevel = isTestRuntime ? 'silent' : process.env.NODE_ENV === 'production' ? 'info' : 'debug'
 const LEVEL = process.env.LOG_LEVEL || defaultLevel
@@ -93,6 +93,16 @@ export function withLogContext<T>(context: LogContext, fn: () => T): T {
   return logContextStore.run({ ...currentLogContext(), ...context }, fn)
 }
 
+/** 将请求失败分类附着到当前请求摘要，不再额外写一条重复错误日志。 */
+export function annotateHttpRequestFailure(error: unknown): void {
+  const context = logContextStore.getStore()
+  if (!context) return
+  const failure = errorLogPayload(error)
+  context.errorType = failure.name ?? 'Error'
+  if (failure.code) context.errorCode = failure.code
+  if (failure.status !== undefined) context.errorStatus = failure.status
+}
+
 export function currentLogContext(): LogContext {
   return logContextStore.getStore() ?? {}
 }
@@ -103,17 +113,30 @@ export function childLogger(context: LogContext): pino.Logger {
 
 export function logHttpRequestSummary(ctx: LogContext & {
   method: string
-  path: string
+  route: string
   statusCode: number
   durationMs: number
 }): void {
-  const level = ctx.statusCode >= 500 ? 'error' : ctx.statusCode >= 400 ? 'warn' : 'info'
+  if ((ctx.route === '/health' || ctx.route === '/health/live' || ctx.route === '/metrics') && ctx.statusCode < 500) {
+    return
+  }
+  const level = ctx.statusCode >= 500
+    ? 'error'
+    : ctx.statusCode === 429
+      ? 'warn'
+      : ctx.durationMs >= 2_000
+        ? 'info'
+        : 'debug'
+  const retention = level === 'debug' ? 'diagnostic' : 'operational'
   logger[level]({
     ...ctx,
     _summary: true,
+    event: 'request.http.completed',
+    category: 'request',
+    retention,
     httpMethod: ctx.method,
-    httpPath: ctx.path,
-  }, 'http request completed')
+    httpPath: ctx.route,
+  }, 'HTTP 请求已完成。')
 }
 
 export function sanitizeLogValue(value: unknown, depth = 0): unknown {
@@ -200,7 +223,7 @@ export function summary(ctx: LogContext & { durationMs: number; toolCalls?: numb
 }
 
 function shouldRedactKey(key: string): boolean {
-  const normalized = key.toLowerCase()
+  const normalized = key.replace(/[^a-z0-9]/giu, '').toLowerCase()
   return (
     normalized.includes('authorization') ||
     normalized.includes('cookie') ||
@@ -211,7 +234,12 @@ function shouldRedactKey(key: string): boolean {
     normalized === 'token' ||
     normalized.endsWith('token') ||
     normalized.endsWith('apikey') ||
-    normalized === 'apikey'
+    normalized === 'apikey' ||
+    SENSITIVE_CONTENT_FIELDS.has(normalized) ||
+    normalized.endsWith('prompt') ||
+    normalized.endsWith('requestbody') ||
+    normalized.endsWith('responsebody') ||
+    normalized.endsWith('toolarguments')
   )
 }
 
@@ -228,3 +256,15 @@ function sanitizeString(value: string): string {
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && Object.getPrototypeOf(value) === Object.prototype
 }
+
+const SENSITIVE_CONTENT_FIELDS = new Set([
+  'prompt',
+  'messages',
+  'input',
+  'output',
+  'body',
+  'arguments',
+  'params',
+  'parameters',
+  'headers',
+])

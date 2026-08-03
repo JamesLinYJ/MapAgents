@@ -7,6 +7,11 @@
 //   日期:       2026年07月08日
 //   作者:       JamesLinYJ
 //   协助:       OpenAI Codex:GPT-5.5
+//
+//   维护记录 (2026-07-31):
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
+//     说明: 增加 Responses API 原生工具配置，服务端能力与本地 MCP 分区管理。
 // --------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react'
@@ -16,6 +21,7 @@ import {
   CheckCircle2,
   Clock,
   FolderCog,
+  Globe2,
   KeyRound,
   Network,
   Plus,
@@ -253,6 +259,7 @@ export function SdkExtensionManagement({
           </div>
         ) : null}
         <div className="panel__section sdk-config-overview">
+          <CapabilityStat icon={Globe2} label="联网搜索" value={draft.sdk.hostedTools.webSearch.enabled ? '开启' : '关闭'} hint={`上下文：${searchContextSizeLabel(draft.sdk.hostedTools.webSearch.searchContextSize)}`} />
           <CapabilityStat icon={Network} label="MCP Server" value={`${mcpSummary.enabled}/${mcpSummary.total}`} hint={draft.sdk.mcp.enabled ? '运行时启用' : '运行时关闭'} />
           <CapabilityStat icon={FolderCog} label="Skill 目录" value={String(draft.sdk.skills.skillPaths.length + draft.sdk.skills.skillRoots.length)} hint={draft.sdk.skills.enabled ? '严格读取 SKILL.md' : '未启用'} />
           <CapabilityStat icon={Brain} label="长期记忆" value={draft.context.memoryEnabled ? '开启' : '关闭'} hint={`${memories.length} 条索引`} />
@@ -263,6 +270,61 @@ export function SdkExtensionManagement({
 
       {view === 'mcp' ? (
         <section className="sdk-config-grid">
+          <section className="panel sdk-config-panel">
+            <div className="panel__header">
+              <div>
+                <div className="panel__eyebrow">Responses API</div>
+                <h2>服务端联网搜索</h2>
+              </div>
+              <StatusPill
+                label={draft.sdk.hostedTools.webSearch.enabled ? '已启用' : '已关闭'}
+                tone={draft.sdk.hostedTools.webSearch.enabled ? 'success' : 'neutral'}
+              />
+            </div>
+            <div className="panel__section sdk-form-grid">
+              <ToggleField
+                label="允许模型联网搜索"
+                checked={draft.sdk.hostedTools.webSearch.enabled}
+                onChange={enabled => applyDraft(config => ({
+                  ...config,
+                  sdk: {
+                    ...config.sdk,
+                    hostedTools: {
+                      ...config.sdk.hostedTools,
+                      webSearch: {
+                        ...config.sdk.hostedTools.webSearch,
+                        enabled,
+                      },
+                    },
+                  },
+                }))}
+              />
+              <SelectField
+                label="搜索上下文"
+                value={draft.sdk.hostedTools.webSearch.searchContextSize}
+                options={[['low', '精简'], ['medium', '均衡'], ['high', '充分']]}
+                onChange={searchContextSize => applyDraft(config => ({
+                  ...config,
+                  sdk: {
+                    ...config.sdk,
+                    hostedTools: {
+                      ...config.sdk.hostedTools,
+                      webSearch: {
+                        ...config.sdk.hostedTools.webSearch,
+                        searchContextSize: searchContextSize as 'low' | 'medium' | 'high',
+                      },
+                    },
+                  },
+                }))}
+              />
+            </div>
+            <div className="panel__section">
+              <p className="sdk-config-note">
+                该工具由 Responses API 在模型服务端执行，不经过本机 MCP；关闭后模型只能使用平台已注册的数据与工具。
+              </p>
+            </div>
+          </section>
+
           <section className="panel sdk-config-panel">
             <div className="panel__header">
               <div>
@@ -619,6 +681,12 @@ function SelectField({
       </select>
     </label>
   )
+}
+
+function searchContextSizeLabel(value: 'low' | 'medium' | 'high'): string {
+  if (value === 'low') return '精简'
+  if (value === 'high') return '充分'
+  return '均衡'
 }
 
 function ToggleField({

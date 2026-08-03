@@ -22,6 +22,7 @@ import {
   type OperationsEvent,
   type OperationsLogEntry,
   type OperationsLogFilter,
+  type OperationsLogPage,
   type OperationsOperationResult,
   type OperationsRequest,
   type OperationsResponse,
@@ -59,6 +60,10 @@ type OperationsClientOperationInput = {
 export interface OperationsLogQueryOptions {
   levels?: OperationsLogEntry['level'][]
   streams?: OperationsLogEntry['stream'][]
+  categories?: OperationsLogEntry['category'][]
+  events?: string[]
+  retentions?: OperationsLogEntry['retention'][]
+  correlationId?: string
   search?: string
   includeSupervisor?: boolean
   afterSequence?: number | null
@@ -170,23 +175,50 @@ export class OperationsClient extends EventEmitter {
     services: readonly OperationsServiceId[],
     tail: number,
     options: OperationsLogQueryOptions = {},
-  ): Promise<OperationsLogEntry[]> {
+  ): Promise<OperationsLogPage> {
     const response = await this.send({
       kind: 'request',
       requestId: randomUUID(),
       action: 'logs',
-      query: {
-        services: [...services],
-        levels: options.levels ?? [],
-        streams: options.streams ?? [],
-        search: options.search ?? '',
-        includeSupervisor: options.includeSupervisor ?? false,
-        afterSequence: options.afterSequence ?? null,
-        tail,
-      },
+      query: logQuery(services, tail, options),
     })
     if (response.type !== 'logs') throw new Error('监督器日志响应类型不正确。')
-    return response.entries
+    return response.page
+  }
+
+  async historyLogs(
+    services: readonly OperationsServiceId[],
+    tail: number,
+    options: OperationsLogQueryOptions = {},
+  ): Promise<OperationsLogPage> {
+    const response = await this.send({
+      kind: 'request',
+      requestId: randomUUID(),
+      action: 'history_logs',
+      query: logQuery(services, tail, options),
+    })
+    if (response.type !== 'logs') throw new Error('监督器历史日志响应类型不正确。')
+    return response.page
+  }
+
+  async startDiagnostics(): Promise<OperationsSnapshot['observability']['diagnostics']> {
+    const response = await this.send({
+      kind: 'request',
+      requestId: randomUUID(),
+      action: 'diagnostics_start',
+    })
+    if (response.type !== 'diagnostics') throw new Error('监督器诊断模式响应类型不正确。')
+    return response.diagnostics
+  }
+
+  async stopDiagnostics(): Promise<OperationsSnapshot['observability']['diagnostics']> {
+    const response = await this.send({
+      kind: 'request',
+      requestId: randomUUID(),
+      action: 'diagnostics_stop',
+    })
+    if (response.type !== 'diagnostics') throw new Error('监督器诊断模式响应类型不正确。')
+    return response.diagnostics
   }
 
   async operate(input: OperationsClientOperationInput): Promise<OperationsOperationResult> {
@@ -305,4 +337,36 @@ function localUserName(): string {
 
 function safeMessage(error: unknown): string {
   return error instanceof Error ? error.message.replace(/[\r\n]+/gu, ' ').slice(0, 500) : '未知错误。'
+}
+
+function logQuery(
+  services: readonly OperationsServiceId[],
+  tail: number,
+  options: OperationsLogQueryOptions,
+): {
+  services: OperationsServiceId[]
+  levels: OperationsLogEntry['level'][]
+  streams: OperationsLogEntry['stream'][]
+  categories: OperationsLogEntry['category'][]
+  events: string[]
+  retentions: OperationsLogEntry['retention'][]
+  correlationId: string
+  search: string
+  includeSupervisor: boolean
+  afterSequence: number | null
+  tail: number
+} {
+  return {
+    services: [...services],
+    levels: options.levels ?? [],
+    streams: options.streams ?? [],
+    categories: options.categories ?? [],
+    events: options.events ?? [],
+    retentions: options.retentions ?? [],
+    correlationId: options.correlationId ?? '',
+    search: options.search ?? '',
+    includeSupervisor: options.includeSupervisor ?? false,
+    afterSequence: options.afterSequence ?? null,
+    tail,
+  }
 }

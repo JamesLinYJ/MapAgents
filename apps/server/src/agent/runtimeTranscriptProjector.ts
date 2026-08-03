@@ -54,11 +54,14 @@ export class RuntimeTranscriptProjector {
     itemSink: ItemSink,
   ): Promise<void> {
     if (event.type === 'raw_model_stream_event') {
-      // Supervisor 使用结构化 outputType；output_text_delta 是尚未闭合的 JSON，
-      // 不能直接进入用户时间线。先缓冲；只有同一响应确实发起工具调用时，
-      // 才把它作为工具前置说明投影，终态 JSON 则始终不会泄露给用户。
+      // Supervisor 使用 SDK 原生文本输出；模型正文增量可直接进入展示流。
+      // 无文字的 Responses 事件允许 delta 为 null，只忽略该事件，不影响后续流式输出。
       if (event.data.type === 'output_text_delta' && event.data.delta) {
+        if (!projection.assistantItemId) {
+          projection.assistantItemId = itemSink.startItem('message', { role: 'assistant' }).itemId
+        }
         projection.lastAssistantText += event.data.delta
+        itemSink.deltaItem(projection.assistantItemId, event.data.delta)
       }
       if (event.data.type === 'model') {
         const delta = extractReasoningDelta(event.data.event)
@@ -96,13 +99,24 @@ export class RuntimeTranscriptProjector {
     if (event.name === 'tool_called') {
       if (projection.lastAssistantText.trim()) {
         const text = projection.lastAssistantText.trim()
-        const item = itemSink.startItem('message', { role: 'assistant' })
-        itemSink.completeItem(item.itemId, { body: text })
-        projection.completedAssistantItems.push({ itemId: item.itemId, text, entryId: null })
+        const itemId = projection.assistantItemId
+          ?? itemSink.startItem('message', { role: 'assistant' }).itemId
+        itemSink.completeItem(itemId, { body: text })
+        projection.completedAssistantItems.push({ itemId, text, entryId: null })
+        projection.assistantItemId = null
         projection.lastAssistantText = ''
       }
       const raw = event.item.rawItem
-      if (raw.type === 'function_call' && assembly.subAgentToolNames.has(raw.name)) {
+      if (raw.type === 'hosted_tool_call') {
+        await this.appendSdkHostedToolCallCheckpoint(
+          assembly.context.runId,
+          assembly.threadId,
+          assembly.turnId,
+          raw,
+          itemSink,
+          sdkToolPresentation(raw.name, assembly),
+        )
+      } else if (raw.type === 'function_call' && assembly.subAgentToolNames.has(raw.name)) {
         const exists = (await this.store.activeTranscript(assembly.threadId))
           .some(entry => entry.kind === 'tool_call' && entry.payload.callId === raw.callId)
         if (!exists) {
@@ -153,8 +167,16 @@ export class RuntimeTranscriptProjector {
           : assembly.handoffToolNames.has(raw.name)
             ? 'Handoff 转交'
             : '工具调用'
+        : raw.type === 'hosted_tool_call'
+          ? sdkToolPresentation(raw.name, assembly).label
         : '工具调用'
-      eventSink.emit('tool.started', eventLabel, { sdkItemType: event.item.type })
+      eventSink.emit(
+        raw.type === 'hosted_tool_call' && raw.status === 'completed'
+          ? 'tool.completed'
+          : 'tool.started',
+        eventLabel,
+        { sdkItemType: event.item.type },
+      )
       return
     }
     if (event.name === 'tool_output') {
@@ -357,6 +379,64 @@ export class RuntimeTranscriptProjector {
     })
   }
 
+  async appendSdkHostedToolCallCheckpoint(
+    runId: string,
+    threadId: string,
+    turnId: string,
+    item: Extract<AgentInputItem, { type: 'hosted_tool_call' }>,
+    itemSink: ItemSink,
+    presentation: { label: string; source: string },
+  ): Promise<void> {
+    if (!item.id) throw new Error(`SDK 服务端工具 '${item.name}' 缺少响应项 ID`)
+    const entries = await this.store.activeTranscript(threadId)
+    const exists = entries.some(entry => (
+      entry.kind === 'checkpoint'
+      && entry.payload.type === 'sdk_hosted_tool_call'
+      && entry.payload.itemId === item.id
+    ))
+    if (exists) return
+
+    const argumentsText = item.arguments ?? JSON.stringify(item.providerData ?? {})
+    await this.store.appendTranscript({
+      threadId,
+      runId,
+      turnId,
+      kind: 'checkpoint',
+      payload: {
+        type: 'sdk_hosted_tool_call',
+        itemId: item.id,
+        name: item.name,
+        label: presentation.label,
+        arguments: argumentsText,
+        status: item.status ?? 'completed',
+        source: presentation.source,
+      },
+    })
+    const callItem = itemSink.startItem('function_call', {
+      name: item.name,
+      callId: item.id,
+      arguments: argumentsText,
+      metadata: {
+        toolLabel: presentation.label,
+        source: presentation.source,
+        sdkItemType: 'hosted_tool_call',
+      },
+    })
+    itemSink.completeItem(callItem.itemId, {
+      name: item.name,
+      callId: item.id,
+      body: item.status === 'failed'
+        ? `${presentation.label}失败`
+        : `${presentation.label}已执行`,
+      isError: item.status === 'failed',
+      metadata: {
+        toolLabel: presentation.label,
+        source: presentation.source,
+        sdkItemType: 'hosted_tool_call',
+      },
+    })
+  }
+
   async appendSdkRejectedToolCallTranscript(
     runId: string,
     threadId: string,
@@ -471,6 +551,9 @@ function sdkToolPresentation(
   toolName: string,
   assembly: RuntimeAssembly,
 ): { label: string; source: string } {
+  if (assembly.hostedToolNames.has(toolName) || toolName === 'web_search_call') {
+    return { label: '联网搜索', source: 'openai_agents_hosted_web_search' }
+  }
   if (assembly.handoffToolNames.has(toolName)) {
     return { label: 'Handoff 转交', source: 'openai_agents_handoff' }
   }

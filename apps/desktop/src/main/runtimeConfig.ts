@@ -10,11 +10,11 @@
 // --------------------------------------------------------------------------
 
 import { app } from 'electron'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { z } from 'zod'
 import {
   PLATFORM_TECHNICAL_ID,
-  PRODUCT_CODENAME,
 } from '@geo-agent-platform/shared-types/product-identity'
 
 import {
@@ -47,10 +47,7 @@ export interface DesktopRuntimeConfig {
 }
 
 export interface DesktopAutoAuthConfig {
-  email: string
-  displayName: string
-  credentialFile: string
-  allowAccountCreation: boolean
+  mode: 'local_managed'
 }
 
 export interface DesktopRuntimeResolutionContext {
@@ -71,8 +68,10 @@ export function resolveDesktopRuntimeConfig(
     : null
   const projectRoot = productionValues?.projectRoot
     ?? resolveDevelopmentProjectRoot(environment, context.applicationPath ?? app.getAppPath())
-  const runtimeRoot = productionValues?.runtimeRoot ?? absolutePathSchema.parse(
-    path.resolve(environment.RUNTIME_ROOT?.trim() || path.join(projectRoot, 'runtime')),
+  const runtimeRoot = productionValues?.runtimeRoot ?? resolveProjectPath(
+    projectRoot,
+    environment.RUNTIME_ROOT,
+    path.join(projectRoot, 'runtime'),
   )
   const apiBaseUrl = productionValues?.apiBaseUrl ?? httpBaseUrlSchema.parse(
     (environment.APP_BASE_URL?.trim() || `http://127.0.0.1:${parsePort(environment.API_PORT) ?? 8000}`)
@@ -84,11 +83,10 @@ export function resolveDesktopRuntimeConfig(
     runtimeRoot,
     apiBaseUrl,
   })
-  const supervisorTokenFile = productionValues?.supervisorTokenFile ?? absolutePathSchema.parse(
-    path.resolve(
-      environment.GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE?.trim()
-        || path.join(runtimeRoot, 'ops', 'supervisor.token'),
-    ),
+  const supervisorTokenFile = productionValues?.supervisorTokenFile ?? resolveProjectPath(
+    projectRoot,
+    environment.GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE,
+    path.join(runtimeRoot, 'ops', 'supervisor.token'),
   )
   return {
     projectRoot,
@@ -110,41 +108,14 @@ export function resolveDesktopAutoAuthConfig(input: {
   const enabled = parseBoolean(
     input.environment.GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH,
     'GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH',
-    input.profile === 'development',
+    true,
   )
   if (!enabled) return null
 
-  if (input.profile !== 'development') {
-    throw new Error('桌面自动认证只允许在显式 development 环境启用。')
-  }
   if (!isLoopbackUrl(input.apiBaseUrl)) {
-    throw new Error('桌面自动认证只允许连接本机回环 API。')
+    throw new Error('本机托管身份只允许连接本机回环 API；远程部署请启用扩展账号模式。')
   }
-
-  const bootstrapEmail = z.string().email().max(320).parse(
-    input.environment.BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase(),
-  )
-  const email = z.string().email().max(320).parse(
-    (input.environment.GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_EMAIL ?? bootstrapEmail).trim().toLowerCase(),
-  )
-  if (email !== bootstrapEmail) {
-    throw new Error('自动认证账户必须与 BOOTSTRAP_ADMIN_EMAIL 一致，权限仍由服务端 RBAC 投影。')
-  }
-
-  const displayName = z.string().trim().min(1).max(160).parse(
-    input.environment.GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_NAME
-      ?? `${PRODUCT_CODENAME} 本机演示管理员`,
-  )
-  const credentialFile = absolutePathSchema.parse(path.resolve(
-    input.environment.GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_SECRET_FILE?.trim()
-      || path.join(input.runtimeRoot, 'desktop', 'auto-auth.secret'),
-  ))
-  const allowAccountCreation = parseBoolean(
-    input.environment.BETTER_AUTH_ALLOW_SIGN_UP,
-    'BETTER_AUTH_ALLOW_SIGN_UP',
-    true,
-  )
-  return { email, displayName, credentialFile, allowAccountCreation }
+  return { mode: 'local_managed' }
 }
 
 function resolveDevelopmentProjectRoot(
@@ -152,8 +123,35 @@ function resolveDevelopmentProjectRoot(
   applicationPath: string,
 ): string {
   const configured = environment.GEO_AGENT_PLATFORM_ROOT?.trim()
-  if (configured) return absolutePathSchema.parse(path.resolve(configured))
-  return absolutePathSchema.parse(path.resolve(applicationPath, '..', '..'))
+  if (configured) return absolutePathSchema.parse(configured)
+
+  let candidate = path.resolve(applicationPath)
+  while (true) {
+    if (isWorkspaceRoot(candidate)) return absolutePathSchema.parse(candidate)
+    const parent = path.dirname(candidate)
+    if (parent === candidate) break
+    candidate = parent
+  }
+  throw new Error(
+    '无法从 Desktop 应用目录定位开发工作区；请通过 GEO_AGENT_PLATFORM_ROOT 显式指定项目根目录。',
+  )
+}
+
+function resolveProjectPath(projectRoot: string, configured: string | undefined, fallback: string): string {
+  const value = configured?.trim()
+  return absolutePathSchema.parse(value ? path.resolve(projectRoot, value) : fallback)
+}
+
+function isWorkspaceRoot(candidate: string): boolean {
+  try {
+    const manifest: unknown = JSON.parse(readFileSync(path.join(candidate, 'package.json'), 'utf8'))
+    if (!manifest || typeof manifest !== 'object' || !('workspaces' in manifest)) return false
+    return Array.isArray(manifest.workspaces)
+      && manifest.workspaces.every(workspace => typeof workspace === 'string')
+      && manifest.workspaces.length > 0
+  } catch {
+    return false
+  }
 }
 
 function resolveProductionRuntimeValues(
@@ -202,7 +200,7 @@ export function defaultDesktopRuntimeManifestPath(
       DESKTOP_RUNTIME_MANIFEST_FILENAME,
     )
   }
-  throw new Error(`${PRODUCT_CODENAME} Desktop 不支持当前生产平台：${platform}`)
+  throw new Error(`Desktop 不支持当前生产平台：${platform}`)
 }
 
 function parsePort(value: string | undefined): number | null {

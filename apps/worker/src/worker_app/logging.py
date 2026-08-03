@@ -25,6 +25,21 @@ class WorkerJsonFormatter(logging.Formatter):
     """输出结构化 JSON 日志，并在格式化阶段统一清理本地路径。"""
 
     _standard_keys = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys())
+    _allowed_fields = {
+        "category",
+        "content_length",
+        "duration_ms",
+        "event",
+        "failure_code",
+        "limit",
+        "request_id",
+        "retention",
+        "run_id",
+        "status",
+        "thread_id",
+        "tool_name",
+        "trace_id",
+    }
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
@@ -33,9 +48,16 @@ class WorkerJsonFormatter(logging.Formatter):
             "service": "geo-agent-platform-worker",
             "logger": record.name,
             "message": sanitize_log_text(record.getMessage()),
+            "event": getattr(record, "event", "worker.output"),
+            "category": getattr(record, "category", "system"),
+            "retention": getattr(
+                record,
+                "retention",
+                "diagnostic" if record.levelno <= logging.DEBUG else "operational",
+            ),
         }
         for key, value in record.__dict__.items():
-            if key in self._standard_keys or key.startswith("_"):
+            if key in self._standard_keys or key.startswith("_") or key not in self._allowed_fields:
                 continue
             if should_redact_key(key):
                 payload[key] = "[REDACTED]"
@@ -43,7 +65,13 @@ class WorkerJsonFormatter(logging.Formatter):
             if isinstance(value, (str, int, float, bool)) or value is None:
                 payload[key] = sanitize_log_text(value) if isinstance(value, str) else value
         if record.exc_info:
-            payload["error"] = sanitize_log_text(self.formatException(record.exc_info))
+            error_type = record.exc_info[0]
+            error_value = record.exc_info[1]
+            payload["error"] = {
+                "name": error_type.__name__ if error_type else "Exception",
+                "message": sanitize_log_text(str(error_value)) if error_value else "Worker 工具执行失败",
+                "stack": sanitize_log_text(self.formatException(record.exc_info)),
+            }
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -54,7 +82,12 @@ def configure_logging() -> None:
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)
-    root.setLevel(getattr(logging, level_name, logging.INFO))
+    root.setLevel(logging.WARNING)
+    logging.getLogger("worker").setLevel(getattr(logging, level_name, logging.INFO))
+    logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    for logger_name in ("asyncio", "fiona", "matplotlib", "numba", "rasterio"):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 
 def sanitize_log_text(value: str) -> str:

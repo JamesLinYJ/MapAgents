@@ -35,6 +35,12 @@ import {
   LOCAL_AGENT_EMAIL,
   LOCAL_AGENT_EMAIL_DOMAIN,
 } from './localAgentPrincipal.js'
+import {
+  deriveLocalDesktopCredential,
+  isLocalDesktopEmail,
+  LOCAL_DESKTOP_EMAIL,
+  LOCAL_DESKTOP_EMAIL_DOMAIN,
+} from './localDesktopPrincipal.js'
 
 const betterAuthSessionProjectionSchema = z.object({
   session: z.object({
@@ -115,6 +121,13 @@ export interface LocalConsoleAuthorization {
 }
 
 export interface LocalAgentAuthorization {
+  readonly authUserId: string
+  readonly keyVersion: string
+  readonly headers: Headers
+  readonly authContext: AuthContext
+}
+
+export interface LocalDesktopAuthorization {
   readonly authUserId: string
   readonly keyVersion: string
   readonly headers: Headers
@@ -235,6 +248,62 @@ export class BetterAuthService {
     }
   }
 
+  /**
+   * Desktop 使用独立的最小权限本机主体承载工作台会话。该主体只获得个人
+   * 工作区 analyst 角色；平台管理仍由可选的人类账号显式承担。
+   */
+  async withLocalDesktopAuthorization<T>(
+    rootSecret: string,
+    action: (authorization: LocalDesktopAuthorization) => Promise<T>,
+  ): Promise<T> {
+    const credential = deriveLocalDesktopCredential(rootSecret)
+    await this.withLocalConsoleAuthorization(rootSecret, async consoleAuthorization => {
+      const existing = await this.findLocalDesktopUser(consoleAuthorization)
+      const authUser = existing ?? localCreatedUserSchema.parse(await this.auth.api.createUser({
+        headers: consoleAuthorization.headers,
+        body: {
+          email: credential.email,
+          password: credential.password,
+          name: `${PRODUCT_CODENAME} Local Desktop`,
+          role: 'user',
+        },
+      })).user
+      await this.auth.api.setRole({
+        headers: consoleAuthorization.headers,
+        body: { userId: authUser.id, role: 'user' },
+      })
+      if (authUser.banned) {
+        await this.auth.api.unbanUser({
+          headers: consoleAuthorization.headers,
+          body: { userId: authUser.id },
+        })
+      }
+      await this.auth.api.setUserPassword({
+        headers: consoleAuthorization.headers,
+        body: { userId: authUser.id, newPassword: credential.password },
+      })
+      await this.auth.api.revokeUserSessions({
+        headers: consoleAuthorization.headers,
+        body: { userId: authUser.id },
+      })
+      await this.identity.ensureProjection({
+        platformUserId: platformUserIdFor(authUser.id),
+        authUserId: authUser.id,
+        email: credential.email,
+        displayName: `${PRODUCT_CODENAME} Local Desktop`,
+        personalWorkspaceId: personalWorkspaceIdFor(credential.email),
+        bootstrapAdmin: false,
+      })
+    })
+
+    const authorization = await this.signInLocalDesktop(credential)
+    try {
+      return await action(authorization)
+    } finally {
+      await this.auth.api.signOut({ headers: authorization.headers }).catch(() => undefined)
+    }
+  }
+
   /** 使用已认证的 Console 主体通过 Admin Plugin 官方 API 创建认证管理员。 */
   async createLocalAdminUser(
     authorization: LocalConsoleAuthorization,
@@ -324,6 +393,21 @@ export class BetterAuthService {
     return result.users.find(user => user.email.trim().toLowerCase() === LOCAL_AGENT_EMAIL) ?? null
   }
 
+  private async findLocalDesktopUser(
+    authorization: LocalConsoleAuthorization,
+  ): Promise<z.infer<typeof localAuthUserSchema> | null> {
+    const result = localListedUsersSchema.parse(await this.auth.api.listUsers({
+      headers: authorization.headers,
+      query: {
+        searchValue: `@${LOCAL_DESKTOP_EMAIL_DOMAIN}`,
+        searchField: 'email',
+        searchOperator: 'ends_with',
+        limit: 100,
+      },
+    }))
+    return result.users.find(user => user.email.trim().toLowerCase() === LOCAL_DESKTOP_EMAIL) ?? null
+  }
+
   private async signInLocalAgent(
     credential: ReturnType<typeof deriveLocalAgentCredential>,
   ): Promise<LocalAgentAuthorization> {
@@ -357,6 +441,48 @@ export class BetterAuthService {
     if (!authContext || !authContext.roles.some(role => role.role === 'platform_admin')) {
       await this.auth.api.signOut({ headers }).catch(() => undefined)
       throw new Error('本机 Agent 最高平台权限投影无效。')
+    }
+    return {
+      authUserId: session.user.id,
+      keyVersion: credential.keyVersion,
+      headers,
+      authContext,
+    }
+  }
+
+  private async signInLocalDesktop(
+    credential: ReturnType<typeof deriveLocalDesktopCredential>,
+  ): Promise<LocalDesktopAuthorization> {
+    const response = await this.auth.api.signInEmail({
+      body: {
+        email: credential.email,
+        password: credential.password,
+        rememberMe: false,
+      },
+      asResponse: true,
+    })
+    if (!response.ok) throw new Error('Better Auth 未能认证本机 Desktop 服务主体。')
+    const headers = cookieRequestHeaders(response.headers)
+    const sessionValue = await this.auth.api.getSession({
+      headers,
+      query: { disableCookieCache: true },
+    })
+    if (!sessionValue) throw new Error('Better Auth 未签发可验证的本机 Desktop 会话。')
+    const session = betterAuthSessionProjectionSchema.parse(sessionValue)
+    const roles = splitAuthRoles(session.user.role)
+    if (
+      session.user.email.toLowerCase() !== credential.email
+      || session.user.banned
+      || !roles.includes('user')
+      || roles.includes('admin')
+    ) {
+      await this.auth.api.signOut({ headers }).catch(() => undefined)
+      throw new Error('本机 Desktop 服务主体身份或 Better Auth 角色无效。')
+    }
+    const authContext = await this.authenticateHeaders(headers)
+    if (!authContext || !authContext.roles.some(role => role.role === 'analyst')) {
+      await this.auth.api.signOut({ headers }).catch(() => undefined)
+      throw new Error('本机 Desktop 个人工作区权限投影无效。')
     }
     return {
       authUserId: session.user.id,
@@ -615,14 +741,22 @@ async function requestContainsReservedLocalEmail(request: Request): Promise<bool
       return Object.entries(value).some(([name, field]) =>
         name.toLowerCase().includes('email')
         && typeof field === 'string'
-        && (isLocalConsoleEmail(field) || isLocalAgentEmail(field)))
+        && (
+          isLocalConsoleEmail(field)
+          || isLocalAgentEmail(field)
+          || isLocalDesktopEmail(field)
+        ))
     }
     if (contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data')) {
       const form = await request.clone().formData()
       return [...form.entries()].some(([name, field]) =>
         name.toLowerCase().includes('email')
         && typeof field === 'string'
-        && (isLocalConsoleEmail(field) || isLocalAgentEmail(field)))
+        && (
+          isLocalConsoleEmail(field)
+          || isLocalAgentEmail(field)
+          || isLocalDesktopEmail(field)
+        ))
     }
   } catch {
     return false

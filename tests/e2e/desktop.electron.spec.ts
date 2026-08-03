@@ -147,6 +147,29 @@ test('supports Ribbon commands and both dock-panel collapse cycles', async () =>
   await workspace.keyboard.press('Escape')
 })
 
+test('opens the model routing settings without requiring an account', async ({}, testInfo) => {
+  const manageRibbonTab = workspace.getByRole('tab', { name: '管理', exact: true })
+  await manageRibbonTab.click()
+  await expect(manageRibbonTab).toHaveAttribute('aria-selected', 'true')
+
+  await workspace.getByRole('button', { name: '模型与账号' }).click()
+  await expect(workspace.getByRole('heading', { name: '模型与账号', level: 1 })).toBeVisible()
+  await expect(workspace.getByRole('heading', { name: '选择模型服务' })).toBeVisible()
+  await expect(workspace.getByRole('heading', { name: '选择具体模型' })).toBeVisible()
+  await expect(workspace.getByText('账号是可选扩展，不影响本机工作台启动。')).toBeVisible()
+  await expect(workspace.getByRole('tab', { name: '模型与账号', exact: true })).toBeVisible()
+
+  await workspace.screenshot({
+    path: testInfo.outputPath('model-routing-settings.png'),
+    animations: 'disabled',
+  })
+
+  const mapRibbonTab = workspace.getByRole('tab', { name: '地图', exact: true })
+  await mapRibbonTab.click()
+  await workspace.getByRole('button', { name: '地图浏览' }).click()
+  await expect(workspace.getByRole('region', { name: '空间地图' })).toBeVisible()
+})
+
 test('traps system-log focus and restores it after keyboard dismissal', async () => {
   test.skip(realBackend, '系统日志入口只在本机后台不可用时常驻显示。')
 
@@ -420,12 +443,10 @@ function desktopEnvironment(): NodeJS.ProcessEnv {
     RUNTIME_ROOT: runtimeRoot,
     APP_BASE_URL: apiBaseUrl,
     API_PORT: new URL(apiBaseUrl).port || '8000',
-    GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH: 'true',
+    // 离线壳验收不启动数据库 Broker；真实后端验收覆盖本机托管身份。
+    GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH: realBackend ? 'true' : 'false',
     BOOTSTRAP_ADMIN_EMAIL:
       process.env.BOOTSTRAP_ADMIN_EMAIL ?? 'geo-agent-platform-e2e@example.com',
-    GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_EMAIL:
-      process.env.BOOTSTRAP_ADMIN_EMAIL ?? 'geo-agent-platform-e2e@example.com',
-    GEO_AGENT_PLATFORM_DESKTOP_AUTO_AUTH_NAME: `${PRODUCT_CODENAME} Electron 验收管理员`,
     BETTER_AUTH_ALLOW_SIGN_UP: process.env.BETTER_AUTH_ALLOW_SIGN_UP ?? 'true',
   }
 }

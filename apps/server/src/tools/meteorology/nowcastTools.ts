@@ -7,6 +7,11 @@
 //   日期:       2026年07月08日
 //   作者:       JamesLinYJ
 //   协助:       OpenAI Codex:GPT-5.5
+//
+//   维护记录 (2026-07-31):
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
+//     说明: 短临预报文本直接采用领域 Worker 的确定性结果，不再调用模型复述。
 // --------------------------------------------------------------------------
 
 import type { ToolContext, ToolDef, ToolResult, ValueRef } from '../../framework/types.js'
@@ -67,7 +72,7 @@ export function createNowcastMeteorologyTools(deps: MeteorologyToolDeps): ToolDe
       nowcast_analysis_ref: refParameter('短时临近预报（短临）分析引用', ['nowcast_analysis']),
       question: textParameter('问题'),
     }, withMeteorologyDeps(deps, answerNowcast), ['nowcast_analysis_ref', 'question'], AUTOMATION_TOOL_OPTIONS),
-    tool('generate_nowcast_forecast_text', '生成短时临近预报（短临）预报文本', '保存基于短时临近预报（短临）分析事实生成并校验的模型文本', {
+    tool('generate_nowcast_forecast_text', '生成短时临近预报（短临）预报文本', '保存领域 Worker 根据短时临近预报（短临）分析事实生成的确定性文本', {
       nowcast_analysis_ref: refParameter('短时临近预报（短临）分析引用', ['nowcast_analysis']),
     }, withMeteorologyDeps(deps, generateNowcastText), ['nowcast_analysis_ref'], AUTOMATION_TOOL_OPTIONS),
     tool('render_nowcast_raster', '渲染短时临近预报（短临）栅格', '生成短时临近预报候选时次 COG 地图与 PNG 预览', {
@@ -242,15 +247,16 @@ async function answerNowcast(args: Record<string, unknown>, ctx: ToolContext, de
 async function generateNowcastText(args: Record<string, unknown>, ctx: ToolContext, deps: MeteorologyToolDeps): Promise<ToolResult> {
   const analysis = requiredRefKind(ctx, args, 'nowcast_analysis_ref', ['nowcast_analysis']).value
   const facts = await deps.callWorker('generate_nowcast_forecast_text', { analysis }, ctx.signal)
-  const draft = typeof facts.payload.answer === 'string' ? facts.payload.answer.trim() : ''
-  if (!draft) throw new Error('短时临近预报（短临）领域服务未生成可用预报事实文本')
-  const structured = await ctx.invokeStructuredModel(
-    `返回 JSON 对象 {"forecastText":"..."}；forecastText 必须逐字等于 draft.answer，不得补充、删除或改写任何事实：\n${JSON.stringify({ facts: analysis, draft: facts.payload })}`,
-  )
-  const text = typeof structured.forecastText === 'string' ? structured.forecastText.trim() : ''
-  if (text !== draft) throw new Error('模型短时临近预报（短临）预报文本偏离确定性事实草稿')
-  const ref: ValueRef = { refId: makeId('ref'), kind: 'nowcast_forecast_text', label: '短时临近预报（短临）预报文本', value: { text, structured, facts: facts.payload } }
-  return result('generate_nowcast_forecast_text', '模型短时临近预报（短临）预报文本已通过校验', structured, [ref])
+  const text = typeof facts.payload.answer === 'string' ? facts.payload.answer.trim() : ''
+  if (!text) throw new Error('短时临近预报（短临）领域服务未生成可用预报事实文本')
+  const payload = { forecastText: text, facts: facts.payload }
+  const ref: ValueRef = {
+    refId: makeId('ref'),
+    kind: 'nowcast_forecast_text',
+    label: '短时临近预报（短临）预报文本',
+    value: { text, facts: facts.payload },
+  }
+  return result('generate_nowcast_forecast_text', '短时临近预报（短临）领域文本已生成', payload, [ref])
 }
 
 async function renderNowcastRaster(args: Record<string, unknown>, ctx: ToolContext, deps: MeteorologyToolDeps): Promise<ToolResult> {

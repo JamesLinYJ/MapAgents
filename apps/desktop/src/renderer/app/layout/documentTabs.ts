@@ -14,6 +14,7 @@ export type DesktopDocument =
   | 'tools'
   | 'workflow'
   | 'results'
+  | 'settings'
   | 'account'
   | 'security'
   | 'debug'

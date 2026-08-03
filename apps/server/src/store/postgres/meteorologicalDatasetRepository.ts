@@ -8,7 +8,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { and, desc, eq, sql, type SQL } from 'drizzle-orm'
+import { and, count, desc, eq, sql, type SQL } from 'drizzle-orm'
 
 import type { Database } from '../../db/connection.js'
 import { platformMeteorologicalDatasets } from '../../db/schema.js'
@@ -21,6 +21,7 @@ export interface ListMeteorologicalDatasetsFilters {
   sessionId?: string | null
   threadId?: string | null
   filename?: string | null
+  status?: string | null
   workspaceId?: string | null
   limit?: number
 }
@@ -49,6 +50,17 @@ export class MeteorologicalDatasetRepository {
       ? await query.where(and(...conditions))
       : await query
     return rows.map(mapDatasetRow)
+  }
+
+  async count(filters: ListMeteorologicalDatasetsFilters = {}): Promise<number> {
+    const conditions = buildConditions(filters)
+    const query = this.db
+      .select({ count: count() })
+      .from(platformMeteorologicalDatasets)
+    const rows = conditions.length > 0
+      ? await query.where(and(...conditions))
+      : await query
+    return rows[0]?.count ?? 0
   }
 
   async resolve(filters: ResolveMeteorologicalDatasetFilters): Promise<MeteorologicalDatasetRecord | null> {
@@ -115,6 +127,7 @@ function buildConditions(filters: ListMeteorologicalDatasetsFilters): SQL[] {
   if (filters.workspaceId) conditions.push(eq(platformMeteorologicalDatasets.workspaceId, filters.workspaceId))
   if (filters.sessionId) conditions.push(eq(platformMeteorologicalDatasets.sessionId, filters.sessionId))
   if (filters.threadId) conditions.push(eq(platformMeteorologicalDatasets.threadId, filters.threadId))
+  if (filters.status) conditions.push(eq(platformMeteorologicalDatasets.status, filters.status))
   if (filters.filename) {
     conditions.push(sql`lower(${platformMeteorologicalDatasets.filename}) = lower(${filters.filename})`)
   }

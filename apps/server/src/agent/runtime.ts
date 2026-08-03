@@ -13,18 +13,25 @@ import { errorLogPayload, logger } from '../observability/logger.js'
 import type { LocalAgentTracing } from '../observability/agentTracing.js'
 import type { ToolRegistry } from '../framework/registry.js'
 import type { ModelAdapterRegistry } from '../model/registry.js'
-import { recordModelCompletionUsage, type ModelCompletionService } from '../model/modelResultCache.js'
+import type { ModelCompletionService } from '../model/modelResultCache.js'
 import type { AnalysisRun } from '../schemas/types.js'
 import type { AgentRuntimeStore } from '../store/runtimePorts.js'
 import { ItemSink } from '../conversation/itemSink.js'
 import { makeId, nowUtc } from '../utils/ids.js'
-import { createMemoryRuntime, dreamMemories, extractMemoriesFromThread } from '../memory/service.js'
+import {
+  createMemoryRuntime,
+  dreamMemories,
+  extractMemoriesFromThread,
+} from '../memory/service.js'
+import {
+  createSdkMemoryDreamer,
+  createSdkMemoryExtractor,
+} from '../memory/sdkMemoryExtractor.js'
 import { RunEventSink, TurnFinalizer } from './turnRunner.js'
 import type { AuthContext } from '../security/types.js'
 import {
   errorMessage,
   functionCallId,
-  parseStructuredJson,
   requireString,
   requireThreadId,
 } from './runtimeSdkProjection.js'
@@ -35,7 +42,7 @@ import { RuntimeTranscriptProjector } from './runtimeTranscriptProjector.js'
 import { RuntimeApprovalPersistence } from './runtimeApprovalPersistence.js'
 import { RunSteeringController } from './runSteeringController.js'
 import type { RunOptions } from './runtimeTypes.js'
-import { runtimeFailureMessage } from './runtimeErrors.js'
+import { runtimeFailure } from './runtimeErrors.js'
 import { RuntimeSdkExecutor } from './runtimeSdkExecutor.js'
 import { RuntimeAssemblyFactory } from './runtimeAssembly.js'
 
@@ -65,7 +72,7 @@ export class OpenAIAgentsRuntime {
     private readonly toolRegistry: ToolRegistry,
     private readonly modelRegistry: ModelAdapterRegistry,
     private readonly runtimeOptions: OpenAIAgentsRuntimeOptions = {},
-    private readonly modelCompletions?: ModelCompletionService,
+    modelCompletions?: ModelCompletionService,
   ) {
     this.checkpoints = new AgentsCheckpointService(store)
     this.transcriptProjector = new RuntimeTranscriptProjector(store, toolRegistry)
@@ -103,7 +110,7 @@ export class OpenAIAgentsRuntime {
     this.abortControllers.set(options.runId, abort)
     let detachTracing = (): void => {}
     try {
-      detachTracing = this.runtimeOptions.agentTracing?.attachRun(options.runId, eventSink) ?? (() => {})
+      detachTracing = this.runtimeOptions.agentTracing?.attachRun(options.runId) ?? (() => {})
       await this.store.updateRunStatus(options.runId, 'running')
       if (!options.resume && options.executionMode === 'plan') {
         await this.store.updateRunState(options.runId, {
@@ -152,14 +159,22 @@ export class OpenAIAgentsRuntime {
       await this.maybeExtractLongTermMemories(options, threadId, eventSink)
       return this.store.getRun(options.runId)
     } catch (error) {
-      const message = runtimeFailureMessage(error)
-      logger.error({ error: errorLogPayload(error) }, 'run failed')
+      const current = this.store.getRun(options.runId)
+      const failure = runtimeFailure(error, { failedTool: current.state.failedTool })
+      const message = failure.message
+      logger.error({
+        error: errorLogPayload(error),
+        failureSource: failure.source,
+        failureCode: failure.code,
+      }, 'run failed')
       if (abort.signal.aborted) {
         await finalizer.cancel()
       } else {
-        const current = this.store.getRun(options.runId)
-        await this.store.updateRunState(options.runId, { errors: [...current.state.errors, message] })
-        await finalizer.fail(message)
+        await this.store.updateRunState(options.runId, {
+          errors: [...current.state.errors, message],
+          failure,
+        })
+        await finalizer.fail(message, [], failure)
       }
       return this.store.getRun(options.runId)
     } finally {
@@ -264,7 +279,7 @@ export class OpenAIAgentsRuntime {
     let detachTracing = (): void => {}
     const finalizer = new TurnFinalizer(eventSink, itemSink, status => this.store.completeRun(runId, status))
     try {
-      detachTracing = this.runtimeOptions.agentTracing?.attachRun(runId, eventSink) ?? (() => {})
+      detachTracing = this.runtimeOptions.agentTracing?.attachRun(runId) ?? (() => {})
       await this.store.updateRunStatus(runId, 'running')
       await this.steering.open(runId)
       const assembly = await this.assemblyFactory.create(
@@ -306,14 +321,22 @@ export class OpenAIAgentsRuntime {
       await this.maybeExtractLongTermMemories(options, run.threadId, eventSink)
       return this.store.getRun(runId)
     } catch (error) {
-      const message = runtimeFailureMessage(error)
-      logger.error({ error: errorLogPayload(error) }, 'approval continuation failed')
+      const current = this.store.getRun(runId)
+      const failure = runtimeFailure(error, { failedTool: current.state.failedTool })
+      const message = failure.message
+      logger.error({
+        error: errorLogPayload(error),
+        failureSource: failure.source,
+        failureCode: failure.code,
+      }, 'approval continuation failed')
       if (abort.signal.aborted) {
         await finalizer.cancel()
       } else {
-        const current = this.store.getRun(runId)
-        await this.store.updateRunState(runId, { errors: [...current.state.errors, message] })
-        await finalizer.fail(message)
+        await this.store.updateRunState(runId, {
+          errors: [...current.state.errors, message],
+          failure,
+        })
+        await finalizer.fail(message, [], failure)
       }
       return this.store.getRun(runId)
     } finally {
@@ -342,48 +365,25 @@ export class OpenAIAgentsRuntime {
     if (!config.memoryEnabled || !config.memoryAutoExtractEnabled) return
     if (!this.memoryToolsAvailable()) return
     try {
-      const selector = this.makeStructuredSelector(options)
+      const adapter = this.modelRegistry.resolveProvider(options.runtimeConfig.context.summaryProvider ?? options.provider)
+      const model = options.runtimeConfig.context.summaryModel
+        ?? adapter.subagentModel
+        ?? options.modelName
+        ?? adapter.defaultModel
+      if (!model) throw new Error('未配置记忆提取模型')
       const runtimeMemory = createMemoryRuntime(this.store.runtimeRoot, config)
       await extractMemoriesFromThread(
         runtimeMemory,
         this.store,
         threadId,
         options.runId,
-        selector,
+        createSdkMemoryExtractor(adapter, model, options.signal),
       )
       if (config.memoryAutoDreamEnabled) {
-        await dreamMemories(runtimeMemory, selector)
+        await dreamMemories(runtimeMemory, createSdkMemoryDreamer(adapter, model, options.signal))
       }
     } catch (error) {
       await this.recordWarning(options.runId, `长期记忆自动提取失败：${errorMessage(error)}`, eventSink)
-    }
-  }
-
-  private makeStructuredSelector(options: RunOptions): (prompt: string) => Promise<Record<string, unknown>> {
-    const adapter = this.modelRegistry.resolveProvider(options.runtimeConfig.context.summaryProvider ?? options.provider)
-    const model = options.runtimeConfig.context.summaryModel
-      ?? adapter.subagentModel
-      ?? options.modelName
-      ?? adapter.defaultModel
-    if (!model) throw new Error('未配置记忆选择模型')
-    return async (prompt: string) => {
-      const workspaceId = this.store.getRun(options.runId).workspaceId
-      if (this.modelCompletions && workspaceId) {
-        const response = await this.modelCompletions.completeJson({
-          workspaceId,
-          runId: options.runId,
-          provider: adapter.provider,
-          model,
-          purpose: 'memory_selection',
-          prompt,
-        })
-        await recordModelCompletionUsage(this.store, options.runId, response)
-        return response.content
-      }
-      const response = await adapter.chat(prompt, { model, reasoning: false })
-      const content = response.content
-      if (typeof content !== 'string' || !content.trim()) throw new Error('记忆选择模型未返回文本')
-      return parseStructuredJson(content)
     }
   }
 

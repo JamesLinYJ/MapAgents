@@ -38,4 +38,16 @@ describe('configuration and diagnostics responsive layout', () => {
     expect(source).toContain('overflow-x: auto;')
     expect(source).toContain('overflow-wrap: anywhere;')
   })
+
+  it('摘要卡按文档画布宽度自动换列，不使用窗口断点强塞六列', async () => {
+    const source = await readFile(
+      path.resolve(process.cwd(), 'src', 'renderer', 'app', 'styles', 'tools-debug.css'),
+      'utf8',
+    )
+
+    expect(source).toContain(
+      'grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));',
+    )
+    expect(source).not.toContain('grid-template-columns: repeat(6,')
+  })
 })

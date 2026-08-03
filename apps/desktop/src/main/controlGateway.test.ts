@@ -14,6 +14,8 @@ import { describe, expect, it, vi } from 'vitest'
 
 const socketState = vi.hoisted(() => ({
   sentFrames: [] as string[],
+  closedWith: [] as Array<{ code: number; reason: string }>,
+  nextResponse: null as string | null,
 }))
 
 vi.mock('electron', () => {
@@ -44,18 +46,20 @@ vi.mock('electron', () => {
       const frame = JSON.parse(value) as { id: string }
       queueMicrotask(() => {
         this.onmessage?.({
-          data: JSON.stringify({
-            type: 'response',
-            id: frame.id,
-            payload: { ok: true, data: { id: 'session_1' } },
-          }),
+          data: socketState.nextResponse ?? JSON.stringify({
+              type: 'response',
+              id: frame.id,
+              payload: { ok: true, data: { id: 'session_1' } },
+            }),
         })
+        socketState.nextResponse = null
       })
     }
 
     close(code = 1000, reason = ''): void {
+      socketState.closedWith.push({ code, reason })
       this.readyState = MockWebSocket.CLOSED
-      this.onclose?.({ code, reason })
+      queueMicrotask(() => this.onclose?.({ code, reason }))
     }
   }
 
@@ -74,6 +78,7 @@ import {
 describe('DesktopControlGateway authorization', () => {
   it('builds WS CSRF metadata exclusively from the Main authorization context', async () => {
     socketState.sentFrames.length = 0
+    socketState.closedWith.length = 0
     const authorization: DesktopControlAuthorization = {
       cookieHeader: () => 'better-auth.session_token=main-only-cookie',
       requireAuthorizationContext: () => ({
@@ -105,6 +110,7 @@ describe('DesktopControlGateway authorization', () => {
 
   it('rejects control commands before opening a socket when Main has no authorization', async () => {
     socketState.sentFrames.length = 0
+    socketState.closedWith.length = 0
     const authorization: DesktopControlAuthorization = {
       cookieHeader: () => '',
       requireAuthorizationContext: () => {
@@ -126,6 +132,42 @@ describe('DesktopControlGateway authorization', () => {
       error: { code: 'unauthorized' },
     })
     expect(socketState.sentFrames).toEqual([])
+    gateway.close()
+  })
+
+  it('用应用关闭码拒绝无效控制帧，不触发 Electron InvalidAccessError', async () => {
+    socketState.sentFrames.length = 0
+    socketState.closedWith.length = 0
+    socketState.nextResponse = 'not-json'
+    const authorization: DesktopControlAuthorization = {
+      cookieHeader: () => 'better-auth.session_token=test',
+      requireAuthorizationContext: () => ({
+        userId: 'user_1',
+        csrfToken: 'csrf',
+        revision: 1,
+      }),
+      onAuthorizationChanged: () => () => undefined,
+    }
+    const gateway = new DesktopControlGateway('http://127.0.0.1:8000', authorization)
+
+    const response = await gateway.handle(fakeWindow(), {
+      version: 1,
+      requestId: crypto.randomUUID(),
+      command: 'session:get-default',
+      payload: {},
+    })
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: {
+        code: 'control_unavailable',
+        message: '服务端返回了无效控制帧。',
+      },
+    })
+    expect(socketState.closedWith).toContainEqual({
+      code: 4002,
+      reason: '服务端返回了无效控制帧。',
+    })
     gateway.close()
   })
 })

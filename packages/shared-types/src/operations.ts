@@ -11,7 +11,7 @@
 
 import { z } from 'zod'
 
-export const OPERATIONS_PROTOCOL_VERSION = 3 as const
+export const OPERATIONS_PROTOCOL_VERSION = 5 as const
 
 export const operationsServiceIdSchema = z.enum(['infra', 'worker', 'api'])
 export const operationsProfileSchema = z.enum(['development', 'production'])
@@ -82,6 +82,22 @@ export const operationsSnapshotSchema = z.object({
   sequence: z.number().int().nonnegative(),
   host: operationsHostSnapshotSchema,
   services: z.array(operationsServiceSnapshotSchema).length(3),
+  observability: z.object({
+    diagnostics: z.object({
+      enabled: z.boolean(),
+      expiresAt: z.string().datetime().nullable(),
+      retainedEntries: z.number().int().nonnegative(),
+      retainedBytes: z.number().int().nonnegative(),
+      maxBytes: z.number().int().positive(),
+      oldestCreatedAt: z.string().datetime().nullable(),
+    }).strict(),
+    persistence: z.object({
+      state: z.enum(['healthy', 'degraded', 'retrying']),
+      message: z.string().min(1),
+      lastSuccessAt: z.string().datetime().nullable(),
+      lastErrorAt: z.string().datetime().nullable(),
+    }).strict(),
+  }).strict(),
 }).strict().superRefine((value, context) => {
   if (new Set(value.services.map(service => service.serviceId)).size !== 3) {
     context.addIssue({ code: 'custom', message: '服务快照必须且只能包含三个固定后台服务。', path: ['services'] })
@@ -90,6 +106,32 @@ export const operationsSnapshotSchema = z.object({
 
 export const operationsLogLevelSchema = z.enum(['debug', 'info', 'warn', 'error', 'unknown'])
 export const operationsLogStreamSchema = z.enum(['stdout', 'stderr', 'supervisor'])
+export const operationsLogCategorySchema = z.enum([
+  'lifecycle',
+  'health',
+  'request',
+  'agent',
+  'model',
+  'tool',
+  'storage',
+  'security',
+  'ui',
+  'system',
+])
+export const operationsLogRetentionSchema = z.enum(['operational', 'diagnostic'])
+export const operationsLogCorrelationSchema = z.object({
+  traceId: z.string().min(1).max(160).optional(),
+  runId: z.string().min(1).max(160).optional(),
+  threadId: z.string().min(1).max(160).optional(),
+  requestId: z.string().min(1).max(160).optional(),
+  responseId: z.string().min(1).max(160).optional(),
+}).strict()
+export const operationsLogAttributeValueSchema = z.union([
+  z.string().max(1_000),
+  z.number().finite(),
+  z.boolean(),
+  z.null(),
+])
 export const operationsLogEntrySchema = z.object({
   sequence: z.number().int().nonnegative(),
   serviceId: operationsServiceIdSchema.nullable(),
@@ -97,7 +139,16 @@ export const operationsLogEntrySchema = z.object({
   processId: z.number().int().positive().nullable(),
   stream: operationsLogStreamSchema,
   level: operationsLogLevelSchema,
+  event: z.string().regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u).max(120),
+  category: operationsLogCategorySchema,
+  retention: operationsLogRetentionSchema,
+  correlation: operationsLogCorrelationSchema,
   message: z.string(),
+  errorStack: z.string().max(8_000).nullable(),
+  attributes: z.record(
+    z.string().min(1).max(80),
+    operationsLogAttributeValueSchema,
+  ).default({}),
   createdAt: z.string().datetime(),
 }).strict()
 
@@ -105,6 +156,10 @@ export const operationsLogFilterSchema = z.object({
   services: z.array(operationsServiceIdSchema).min(1).max(3),
   levels: z.array(operationsLogLevelSchema).max(5).default([]),
   streams: z.array(operationsLogStreamSchema).max(3).default([]),
+  categories: z.array(operationsLogCategorySchema).max(10).default([]),
+  events: z.array(z.string().min(1).max(120)).max(50).default([]),
+  retentions: z.array(operationsLogRetentionSchema).max(2).default([]),
+  correlationId: z.string().trim().max(160).default(''),
   search: z.string().trim().max(200).default(''),
   includeSupervisor: z.boolean().default(false),
   afterSequence: z.number().int().nonnegative().nullable().default(null),
@@ -112,6 +167,12 @@ export const operationsLogFilterSchema = z.object({
 
 export const operationsLogQuerySchema = operationsLogFilterSchema.extend({
   tail: z.number().int().min(0).max(10_000),
+}).strict()
+
+export const operationsLogPageSchema = z.object({
+  entries: z.array(operationsLogEntrySchema),
+  nextCursor: z.number().int().nonnegative().nullable(),
+  hasMore: z.boolean(),
 }).strict()
 
 export const operationsActionSchema = z.enum(['start', 'stop', 'restart', 'shutdown'])
@@ -155,9 +216,15 @@ export const operationsRequestSchema = z.discriminatedUnion('action', [
     query: operationsLogQuerySchema,
   }).strict(),
   requestBaseSchema.extend({
+    action: z.literal('history_logs'),
+    query: operationsLogQuerySchema,
+  }).strict(),
+  requestBaseSchema.extend({
     action: z.literal('operation_result'),
     operationId: z.string().uuid(),
   }).strict(),
+  requestBaseSchema.extend({ action: z.literal('diagnostics_start') }).strict(),
+  requestBaseSchema.extend({ action: z.literal('diagnostics_stop') }).strict(),
   requestBaseSchema.extend({
     action: z.literal('shutdown'),
     operationId: z.string().uuid(),
@@ -167,7 +234,11 @@ export const operationsRequestSchema = z.discriminatedUnion('action', [
 export const operationsResponsePayloadSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('snapshot'), snapshot: operationsSnapshotSchema }).strict(),
   z.object({ type: z.literal('subscribed') }).strict(),
-  z.object({ type: z.literal('logs'), entries: z.array(operationsLogEntrySchema) }).strict(),
+  z.object({ type: z.literal('logs'), page: operationsLogPageSchema }).strict(),
+  z.object({
+    type: z.literal('diagnostics'),
+    diagnostics: operationsSnapshotSchema.shape.observability.shape.diagnostics,
+  }).strict(),
   z.object({ type: z.literal('operation'), operation: operationsOperationResultSchema.nullable() }).strict(),
 ])
 
@@ -235,8 +306,11 @@ export type OperationsServiceSnapshot = z.infer<typeof operationsServiceSnapshot
 export type OperationsHostSnapshot = z.infer<typeof operationsHostSnapshotSchema>
 export type OperationsSnapshot = z.infer<typeof operationsSnapshotSchema>
 export type OperationsLogEntry = z.infer<typeof operationsLogEntrySchema>
+export type OperationsLogCategory = z.infer<typeof operationsLogCategorySchema>
+export type OperationsLogRetention = z.infer<typeof operationsLogRetentionSchema>
 export type OperationsLogFilter = z.infer<typeof operationsLogFilterSchema>
 export type OperationsLogQuery = z.infer<typeof operationsLogQuerySchema>
+export type OperationsLogPage = z.infer<typeof operationsLogPageSchema>
 export type OperationsOperationResult = z.infer<typeof operationsOperationResultSchema>
 export type OperationsRequest = z.infer<typeof operationsRequestSchema>
 export type OperationsResponse = z.infer<typeof operationsResponseSchema>

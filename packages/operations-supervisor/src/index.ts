@@ -18,3 +18,8 @@ export * from './logBuffer.js'
 export * from './metrics.js'
 export * from './paths.js'
 export * from './supervisor.js'
+export {
+  createActualUtcRotationNameGenerator,
+  RetryingRotatingFileSink,
+  rotatedLogFileName,
+} from './systemLogger.js'

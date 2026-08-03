@@ -188,12 +188,12 @@ export const METEOROLOGY_TOOL_PROMPTS: Record<string, string> = {
 - 本工具是短时临近预报问答的最终交付边界；调用后不要再自行追加标题、表格、emoji、数据源说明或改写预报事实。
 - 如果分析事实不足以回答问题，应失败或请求澄清，不要编造天气预报。`,
 
-  generate_nowcast_forecast_text: `用于保存基于短时临近预报分析事实生成并校验的模型文本。
+  generate_nowcast_forecast_text: `用于保存领域 Worker 根据短时临近预报分析事实生成的确定性文本。
 
 使用规则：
 - nowcast_analysis_ref 必须来自 meteorological_precipitation_nowcast。
 - 本工具用于需要可复用 forecast_text_ref 的自动化流程，不替代 answer_nowcast_question 的最终问答交付。
-- 文本必须严格基于分析事实，不得增加未计算的降水等级、影响区域或时间段。
+- 文本由领域 Worker 根据分析事实生成，不再交给模型复述或改写。
 - 后续报告或展示应传 forecast_text_ref，而不是复制长文本。`,
 
   render_nowcast_raster: `用于把短时临近预报候选时次渲染为地图 PNG。

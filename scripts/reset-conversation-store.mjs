@@ -7,6 +7,11 @@
 //   日期:       2026年06月22日
 //   作者:       JamesLinYJ
 //   协助:       OpenAI Codex:GPT-5.5
+//
+//   维护记录 (2026-07-31):
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
+//     说明: 会话事实重置同步清理 Markdown 记忆正文，避免数据库重建后残留孤儿内容。
 // --------------------------------------------------------------------------
 
 import { rm } from 'node:fs/promises'
@@ -23,7 +28,7 @@ if (!process.argv.includes('--confirm')) {
 }
 
 const root = path.resolve(process.cwd(), process.env.RUNTIME_ROOT || 'runtime')
-for (const name of ['sessions', 'conversations', 'uploads', 'artifacts', 'objects']) {
+for (const name of ['sessions', 'conversations', 'uploads', 'artifacts', 'objects', 'memory']) {
   const target = path.resolve(root, name)
   if (target !== root && target.startsWith(`${root}${path.sep}`)) {
     await rm(target, { recursive: true, force: true })

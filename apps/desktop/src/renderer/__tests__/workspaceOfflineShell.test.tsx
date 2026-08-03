@@ -99,7 +99,7 @@ describe('offline desktop workspace', () => {
     expect(html).toContain('服务恢复并完成认证后即可输入消息')
     expect(html).toContain('身份状态：未验证')
     expect(html).toContain('disabled=""')
-    expect(html).not.toContain('>管理<')
+    expect(html).toContain('>管理<')
     expect(html).not.toContain('安全管理')
     expect(html).not.toContain('配置与诊断')
     expect(html).not.toContain('账号中心')

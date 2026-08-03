@@ -47,7 +47,8 @@ $Arguments = @(
     'worker_app.sidecar:app',
     '--app-dir', 'apps/worker/src',
     '--host', '127.0.0.1',
-    '--port', [string]$WorkerPort
+    '--port', [string]$WorkerPort,
+    '--no-access-log'
 )
 
 if ($env:NODE_ENV -eq 'production') {

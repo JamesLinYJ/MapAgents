@@ -53,7 +53,6 @@ export class ModelAdapterRegistry {
       baseUrl: env.DEEPSEEK_BASE_URL ?? '',
       apiKey: env.DEEPSEEK_API_KEY ?? '',
       defaultModel: (env.DEEPSEEK_MODEL ?? dmf('deepseek')),
-      ...(env.DEEPSEEK_SUBAGENT_MODEL ? { subagentModel: env.DEEPSEEK_SUBAGENT_MODEL } : {}),
       toolSchemaMode: env.DEEPSEEK_TOOL_SCHEMA_MODE,
     }))
     this.register(createAnthropicAdapter({
@@ -99,7 +98,11 @@ export class ModelAdapterRegistry {
   descriptors(): ModelProviderDescriptor[] {
     return [...this.adapters.values()].map(a => {
       const labels = a.createAgentModel
-        ? ['agents_sdk_live_supervisor', 'agents_sdk_chat_completions', `tool_schema_${a.agentToolSchemaMode}`]
+        ? [
+            'agents_sdk_live_supervisor',
+            `agents_sdk_transport_${a.agentRuntimeCapabilities.transport}`,
+            `tool_schema_${a.agentToolSchemaMode}`,
+          ]
         : []
 
       return {

@@ -120,18 +120,25 @@ async function runDaemon(paths: OperationsPaths, profile: OperationsProfile): Pr
   }
   const token = await ensureSecretFile(paths.tokenFile, profile === 'development')
   if (profile === 'production') await assertProductionSecretPermissions(paths.tokenFile)
-  const systemLogger = createSupervisorLogger(paths)
-  const logger = systemLogger.logger
-  const logBuffer = new OperationsLogBuffer(secretValues({
+  const secrets = secretValues({
     ...process.env,
     GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN: token,
-  }))
+  })
+  const systemLogger = createSupervisorLogger(paths, undefined, {
+    secrets,
+    // 后台 daemon 的 stdout 已由启动器接管；正常事件只写统一 JSONL，避免重复落盘。
+    includeStdout: process.stdout.isTTY === true,
+  })
+  const logger = systemLogger.logger
+  const logBuffer = new OperationsLogBuffer(secrets)
   const supervisor = new OperationsSupervisor({
     paths,
     profile,
     environment: { ...process.env },
     logBuffer,
     logger,
+    persistenceState: systemLogger.persistenceState,
+    historyReader: systemLogger.readHistory,
   })
   let resolveShutdown: (() => void) | null = null
   const shutdownRequested = new Promise<void>(resolve => { resolveShutdown = resolve })
@@ -182,6 +189,10 @@ async function runClientCommand(paths: OperationsPaths, command: string): Promis
         {
           levels: parseCsv(parsedArgs.values.level, operationsLogLevelSchema),
           streams: parseCsv(parsedArgs.values.stream, operationsLogStreamSchema),
+          categories: [],
+          events: [],
+          retentions: [],
+          correlationId: '',
           search: parsedArgs.values.search?.trim() ?? '',
           includeSupervisor: Boolean(parsedArgs.values.supervisor),
           afterSequence: null,
@@ -220,7 +231,7 @@ async function showLogs(
   const services: OperationsServiceId[] = target === 'all'
     ? ['infra', 'worker', 'api']
     : [target]
-  for (const entry of await client.logs(services, tail, filters)) printLog(entry)
+  for (const entry of (await client.logs(services, tail, filters)).entries) printLog(entry)
   if (!follow) return
   const allowed = new Set(services)
   const dispose = client.onEvent(event => {

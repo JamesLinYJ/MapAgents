@@ -7,6 +7,11 @@
 //   日期:       2026年06月22日
 //   作者:       JamesLinYJ
 //   协助:       OpenAI Codex:GPT-5.5
+//
+//   维护记录 (2026-07-31):
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
+//     说明: SDK 默认配置启用 Responses API 原生联网搜索，并保留显式关闭入口。
 // --------------------------------------------------------------------------
 
 import type { AgentRuntimeConfig, RuntimeSandboxConfig } from '../schemas/types.js'
@@ -33,6 +38,12 @@ export function defaultRuntimeConfig(options: DefaultRuntimeConfigOptions = {}):
     maxFunctionToolConcurrency: 4,
     sandbox,
     sdk: {
+      hostedTools: {
+        webSearch: {
+          enabled: true,
+          searchContextSize: 'medium',
+        },
+      },
       mcp: {
         enabled: false,
         connectTimeoutMs: 10_000,

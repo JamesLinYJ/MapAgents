@@ -18,6 +18,7 @@ import type {
   DesktopRendererDiagnostic,
   DesktopDownloadRequest,
   DesktopDownloadResult,
+  DesktopDiagnosticExportResult,
   DesktopEvent,
   DesktopExportRequest,
   DesktopExportResult,
@@ -32,6 +33,8 @@ import type {
 import type {
   OperationsOperationResult,
   OperationsLogEntry,
+  OperationsLogFilter,
+  OperationsLogPage,
   OperationsLogQuery,
   OperationsSnapshot,
 } from '@geo-agent-platform/shared-types/operations'
@@ -71,7 +74,12 @@ export interface DesktopBridge {
   readonly supervisor: {
     status(): Promise<OperationsSnapshot>
     startAll(operationId: string): Promise<OperationsOperationResult>
-    logs(query: OperationsLogQuery): Promise<OperationsLogEntry[]>
+    logs(query: OperationsLogQuery): Promise<OperationsLogPage>
+    history(query: OperationsLogQuery): Promise<OperationsLogPage>
+    subscribeLogs(active: boolean, filter: OperationsLogFilter): Promise<void>
+    startDiagnostics(): Promise<OperationsSnapshot['observability']['diagnostics']>
+    stopDiagnostics(): Promise<OperationsSnapshot['observability']['diagnostics']>
+    exportDiagnostics(): Promise<DesktopDiagnosticExportResult>
   }
   readonly window: {
     command(command: DesktopWindowCommand): Promise<void>

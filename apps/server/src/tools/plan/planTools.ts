@@ -121,6 +121,7 @@ export const submitAgentWorkflowTool: ToolDef = {
   prompt: SUBMIT_AGENT_WORKFLOW_PROMPT,
   group: '系统',  tags: ['plan', 'system'],
   isReadOnly: true, isDestructive: false,
+  agentSchemaMode: 'compatible',
 
   jsonSchema: {
     type: 'object',
@@ -177,6 +178,7 @@ export const reviseAgentWorkflowTool: ToolDef = {
   prompt: REVISE_AGENT_WORKFLOW_PROMPT,
   group: '系统', tags: ['plan', 'workflow', 'system'],
   isReadOnly: true, isDestructive: false,
+  agentSchemaMode: 'compatible',
   jsonSchema: {
     type: 'object',
     properties: {

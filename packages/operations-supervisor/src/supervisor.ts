@@ -25,6 +25,7 @@ import { promisify } from 'node:util'
 
 import type {
   OperationsLogEntry,
+  OperationsLogPage,
   OperationsLogQuery,
   OperationsOperationResult,
   OperationsProfile,
@@ -104,6 +105,8 @@ export interface OperationsSupervisorOptions {
   environment: NodeJS.ProcessEnv
   logBuffer: OperationsLogBuffer
   logger: Logger
+  persistenceState?: () => OperationsSnapshot['observability']['persistence']
+  historyReader?: (query: OperationsLogQuery) => Promise<OperationsLogPage>
 }
 
 export class OperationsSupervisor {
@@ -118,6 +121,8 @@ export class OperationsSupervisor {
   private sequence = 0
   private subscribers = 0
   private metricsTimer: NodeJS.Timeout | null = null
+  private diagnosticsExpiresAt: Date | null = null
+  private diagnosticsTimer: NodeJS.Timeout | null = null
   private hostMetrics = {
     cpuPercent: unavailable('尚无指标订阅。'),
     memoryUsedBytes: unavailable('尚无指标订阅。'),
@@ -229,6 +234,15 @@ export class OperationsSupervisor {
           blockedBy,
         }
       }),
+      observability: {
+        diagnostics: this.diagnosticsState(),
+        persistence: this.options.persistenceState?.() ?? {
+          state: 'healthy',
+          message: '未检测到日志持久化异常。',
+          lastSuccessAt: null,
+          lastErrorAt: null,
+        },
+      },
     }
   }
 
@@ -236,8 +250,37 @@ export class OperationsSupervisor {
     return this.options.logBuffer.tail(services, tail)
   }
 
-  queryLogs(query: OperationsLogQuery): OperationsLogEntry[] {
-    return this.options.logBuffer.query(query)
+  queryLogs(query: OperationsLogQuery): OperationsLogPage {
+    return this.options.logBuffer.page(query)
+  }
+
+  async queryHistoryLogs(query: OperationsLogQuery): Promise<OperationsLogPage> {
+    return await this.options.historyReader?.(query) ?? {
+      entries: [],
+      nextCursor: query.afterSequence,
+      hasMore: false,
+    }
+  }
+
+  startDiagnostics(): OperationsSnapshot['observability']['diagnostics'] {
+    if (this.diagnosticsTimer) clearTimeout(this.diagnosticsTimer)
+    this.diagnosticsExpiresAt = new Date(Date.now() + 30 * 60_000)
+    this.options.logBuffer.setDiagnosticMode(true)
+    this.diagnosticsTimer = setTimeout(() => this.disableDiagnostics('expired'), 30 * 60_000)
+    this.diagnosticsTimer.unref()
+    this.appendSupervisorLog(
+      'info',
+      '详细诊断已开启 30 分钟；诊断记录仅保留在内存。',
+      null,
+      { event: 'system.diagnostics.started', category: 'system', retention: 'operational' },
+    )
+    this.emitSnapshot()
+    return this.diagnosticsState()
+  }
+
+  stopDiagnostics(): OperationsSnapshot['observability']['diagnostics'] {
+    this.disableDiagnostics('manual')
+    return this.diagnosticsState()
   }
 
   operationResult(operationId: string): OperationsOperationResult | null {
@@ -349,6 +392,8 @@ export class OperationsSupervisor {
   async close(): Promise<void> {
     if (this.metricsTimer) clearInterval(this.metricsTimer)
     this.metricsTimer = null
+    if (this.diagnosticsTimer) clearTimeout(this.diagnosticsTimer)
+    this.diagnosticsTimer = null
     for (const record of this.records.values()) {
       if (record.healthTimer) clearInterval(record.healthTimer)
       if (record.restartTimer) clearTimeout(record.restartTimer)
@@ -439,6 +484,8 @@ export class OperationsSupervisor {
       GEO_AGENT_PLATFORM_ROOT: this.options.paths.projectRoot,
       RUNTIME_ROOT: this.options.paths.runtimeRoot,
       FORCE_COLOR: '0',
+      ...(serviceId === 'api' ? { LOG_LEVEL: 'debug' } : {}),
+      ...(serviceId === 'worker' ? { WORKER_LOG_LEVEL: 'DEBUG' } : {}),
     })
     const result = concurrently([{
       command: markedCommand,
@@ -691,12 +738,18 @@ export class OperationsSupervisor {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
       this.assertCurrentCommand(record, command, generation)
-      const result = await this.probe(record)
+      const result = await this.probe(record, 'readiness')
       this.assertCurrentCommand(record, command, generation)
       if (result.ok) {
         record.state = 'healthy'
         record.healthMessage = result.message
         record.healthFailures = 0
+        this.appendSupervisorLog(
+          'info',
+          `${record.definition.displayName} 已就绪。`,
+          record.definition.serviceId,
+          { event: 'health.service.ready', category: 'health', retention: 'operational' },
+        )
         this.emitSnapshot()
         return
       }
@@ -731,33 +784,87 @@ export class OperationsSupervisor {
     ) return
     record.healthProbeInFlight = true
     try {
-      const result = await this.probe(record)
+      const result = await this.probe(record, 'liveness')
       // probe 是异步边界。期间 close/stop 可以清空或替换命令句柄；旧探针
       // 不得再改写新状态，更不能把 null 传给 concurrently 的 canKill。
       if (!this.isCurrentCommand(record, observedCommand, observedGeneration) || record.stopping) return
       if (result.ok) {
+        const recovered = record.healthFailures > 0 || record.state === 'degraded'
+        const changed = recovered || record.state !== 'healthy' || record.healthMessage !== result.message
         record.healthFailures = 0
         record.state = 'healthy'
         record.healthMessage = result.message
         if (record.startedAt && Date.now() - record.startedAt.getTime() >= 10 * 60_000) record.failureTimes = []
+        if (recovered) {
+          this.appendSupervisorLog(
+            'info',
+            `${record.definition.displayName} 存活检查已恢复。`,
+            record.definition.serviceId,
+            { event: 'health.service.recovered', category: 'health', retention: 'operational' },
+          )
+        }
+        if (changed) this.emitSnapshot()
       } else {
         record.healthFailures += 1
+        if (record.healthFailures === 1) {
+          record.healthMessage = result.message
+          this.appendSupervisorLog(
+            'warn',
+            `${record.definition.displayName} 首次存活检查失败。`,
+            record.definition.serviceId,
+            {
+              event: 'health.probe.failed',
+              category: 'health',
+              retention: 'operational',
+              failureCount: record.healthFailures,
+            },
+          )
+          this.emitSnapshot()
+        }
         if (record.healthFailures >= 3) {
+          const transitioned = record.state !== 'degraded'
           record.state = 'degraded'
           record.healthMessage = result.message
+          if (transitioned) {
+            this.appendSupervisorLog(
+              'error',
+              `${record.definition.displayName} 已降级：连续存活检查失败。`,
+              record.definition.serviceId,
+              {
+                event: 'health.service.degraded',
+                category: 'health',
+                retention: 'operational',
+                failureCount: record.healthFailures,
+              },
+            )
+            this.emitSnapshot()
+          }
         }
         if (record.healthFailures >= 10 && record.definition.dependencies.every(id => this.requireRecord(id).state === 'healthy')) {
           record.healthMessage = '连续健康失败，正在自动重启。'
+          this.appendSupervisorLog(
+            'error',
+            `${record.definition.displayName} 连续存活检查失败，正在自动重启。`,
+            record.definition.serviceId,
+            {
+              event: 'health.service.restart_requested',
+              category: 'health',
+              retention: 'operational',
+              failureCount: record.healthFailures,
+            },
+          )
           if (Command.canKill(observedCommand)) observedCommand.kill('SIGTERM')
         }
       }
-      this.emitSnapshot()
     } finally {
       record.healthProbeInFlight = false
     }
   }
 
-  private async probe(record: ManagedService): Promise<{ ok: boolean; message: string }> {
+  private async probe(
+    record: ManagedService,
+    purpose: 'readiness' | 'liveness',
+  ): Promise<{ ok: boolean; message: string }> {
     const probe = record.definition.health
     try {
       if (probe.kind === 'http') {
@@ -768,10 +875,11 @@ export class OperationsSupervisor {
         const controller = new AbortController()
         const timeout = setTimeout(() => controller.abort(), probe.timeoutMs)
         try {
-          const response = await fetch(`http://127.0.0.1:${port}${probe.path}`, { signal: controller.signal })
+          const requestPath = purpose === 'liveness' ? probe.livenessPath : probe.path
+          const response = await fetch(`http://127.0.0.1:${port}${requestPath}`, { signal: controller.signal })
           return response.ok
-            ? { ok: true, message: `健康检查通过（HTTP ${response.status}）` }
-            : { ok: false, message: `健康检查返回 HTTP ${response.status}` }
+            ? { ok: true, message: `${purpose === 'liveness' ? '存活' : '就绪'}检查通过（HTTP ${response.status}）` }
+            : { ok: false, message: `${purpose === 'liveness' ? '存活' : '就绪'}检查返回 HTTP ${response.status}` }
         } finally {
           clearTimeout(timeout)
         }
@@ -875,13 +983,20 @@ export class OperationsSupervisor {
       const entry = this.options.logBuffer.append({ serviceId, stream, message, processId })
       this.events.emit('log', entry)
       const context = {
+        ...entry.attributes,
+        event: entry.event,
+        category: entry.category,
+        retention: entry.retention,
+        ...entry.correlation,
         serviceId,
         component: entry.component,
         childProcessId: entry.processId,
         stream,
         sourceLevel: entry.level,
         logSequence: entry.sequence,
+        ...(entry.errorStack ? { errorStack: entry.errorStack } : {}),
       }
+      if (entry.retention === 'diagnostic') continue
       if (entry.level === 'error') this.options.logger.error(context, entry.message)
       else if (entry.level === 'warn') this.options.logger.warn(context, entry.message)
       else if (entry.level === 'debug') this.options.logger.debug(context, entry.message)
@@ -902,6 +1017,7 @@ export class OperationsSupervisor {
       stream: 'supervisor',
       level,
       message,
+      attributes: context,
     })
     this.events.emit('log', entry)
     this.options.logger[level]({
@@ -912,11 +1028,41 @@ export class OperationsSupervisor {
       stream: 'supervisor',
       sourceLevel: level,
       logSequence: entry.sequence,
+      event: entry.event,
+      category: entry.category,
+      retention: entry.retention,
+      ...entry.correlation,
     }, entry.message)
   }
 
   private emitSnapshot(): void {
     this.events.emit('snapshot', this.snapshot())
+  }
+
+  private diagnosticsState(): OperationsSnapshot['observability']['diagnostics'] {
+    const stats = this.options.logBuffer.stats()
+    return {
+      enabled: this.diagnosticsExpiresAt !== null && this.diagnosticsExpiresAt.getTime() > Date.now(),
+      expiresAt: this.diagnosticsExpiresAt?.toISOString() ?? null,
+      ...stats,
+    }
+  }
+
+  private disableDiagnostics(reason: 'manual' | 'expired'): void {
+    if (this.diagnosticsTimer) clearTimeout(this.diagnosticsTimer)
+    const wasEnabled = this.diagnosticsExpiresAt !== null
+    this.diagnosticsTimer = null
+    this.diagnosticsExpiresAt = null
+    this.options.logBuffer.setDiagnosticMode(false)
+    if (wasEnabled) {
+      this.appendSupervisorLog(
+        'info',
+        reason === 'expired' ? '详细诊断已到期，内存预算恢复为日常模式。' : '详细诊断已关闭。',
+        null,
+        { event: 'system.diagnostics.stopped', category: 'system', retention: 'operational', reason },
+      )
+      this.emitSnapshot()
+    }
   }
 
   private requireRecord(serviceId: OperationsServiceId): ManagedService {

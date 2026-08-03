@@ -40,6 +40,8 @@ import {
   desktopRendererDiagnosticSchema,
   desktopDownloadRequestSchema,
   desktopDownloadResultSchema,
+  desktopDiagnosticExportRequestSchema,
+  desktopDiagnosticExportResultSchema,
   desktopExportRequestSchema,
   desktopExportResultSchema,
   desktopFileSelectionHandlesSchema,
@@ -50,6 +52,7 @@ import {
   desktopMicrophonePermissionResultSchema,
   desktopSupervisorLogsQuerySchema,
   desktopSupervisorLogsResponseSchema,
+  desktopSupervisorLogSubscriptionSchema,
   desktopWindowCommandSchema,
   type DesktopAuthCommand,
   type DesktopControlResponse,
@@ -200,6 +203,36 @@ const bridge: DesktopBridge = {
         ),
       )
     },
+    async history(query) {
+      return desktopSupervisorLogsResponseSchema.parse(
+        await ipcRenderer.invoke(
+          DESKTOP_IPC_CHANNELS.supervisorLogHistory,
+          desktopSupervisorLogsQuerySchema.parse(query),
+        ),
+      )
+    },
+    async subscribeLogs(active, filter) {
+      await ipcRenderer.invoke(
+        DESKTOP_IPC_CHANNELS.supervisorLogSubscription,
+        desktopSupervisorLogSubscriptionSchema.parse({ active, filter }),
+      )
+    },
+    async startDiagnostics() {
+      const snapshot = await invokeSupervisor('diagnostics_start', {})
+      return operationsSnapshotSchema.shape.observability.shape.diagnostics.parse(snapshot)
+    },
+    async stopDiagnostics() {
+      const snapshot = await invokeSupervisor('diagnostics_stop', {})
+      return operationsSnapshotSchema.shape.observability.shape.diagnostics.parse(snapshot)
+    },
+    async exportDiagnostics() {
+      return desktopDiagnosticExportResultSchema.parse(
+        await ipcRenderer.invoke(
+          DESKTOP_IPC_CHANNELS.supervisorDiagnosticExport,
+          desktopDiagnosticExportRequestSchema.parse({}),
+        ),
+      )
+    },
   },
   window: {
     async command(input) {
@@ -225,7 +258,7 @@ const bridge: DesktopBridge = {
 contextBridge.exposeInMainWorld('platformDesktop', bridge)
 
 async function invokeSupervisor(
-  command: 'status' | 'start',
+  command: 'status' | 'start' | 'diagnostics_start' | 'diagnostics_stop',
   payload: Record<string, unknown>,
 ): Promise<unknown> {
   const request = desktopControlRequestSchema.parse({

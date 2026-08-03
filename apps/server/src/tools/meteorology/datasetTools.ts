@@ -7,8 +7,14 @@
 //   日期:       2026年07月08日
 //   作者:       JamesLinYJ
 //   协助:       OpenAI Codex:GPT-5.5
+//
+//   维护记录 (2026-07-31):
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
+//     说明: 模型气象解读改用 SDK 原生 JSON Schema 结构化输出。
 // --------------------------------------------------------------------------
 
+import { z } from 'zod'
 import type { ToolContext, ToolDef, ToolResult, ValueRef } from '../../framework/types.js'
 import { makeId } from '../../utils/ids.js'
 import type { MeteorologyWorkerToolName } from './meteorologyWorkerClient.js'
@@ -36,6 +42,15 @@ import {
   resultRefs,
   writeJsonArtifact,
 } from './toolRuntime.js'
+
+const meteorologicalInterpretationSchema = z.object({
+  reportText: z.string().min(20),
+  summary: z.string().min(1),
+  keyFindings: z.array(z.string()),
+  riskSignals: z.array(z.string()),
+  methodNotes: z.array(z.string()),
+  recommendedNextSteps: z.array(z.string()),
+})
 
 export function createDatasetMeteorologyTools(deps: MeteorologyToolDeps): ToolDef[] {
   return [
@@ -180,10 +195,11 @@ async function interpretDataset(args: Record<string, unknown>, ctx: ToolContext)
   const dataset = datasetValue(ctx, datasetRef)
   const source = isRecord(datasetRef.value) ? datasetRef.value : {}
   const structured = await ctx.invokeStructuredModel(
-    `仅根据以下气象数据 metadata 生成 JSON 对象，必须包含 reportText、summary、keyFindings、riskSignals、methodNotes、recommendedNextSteps：\n${JSON.stringify(source.metadata ?? {})}`,
+    `仅根据以下气象数据 metadata 生成气象解读，不得补充 metadata 中不存在的观测事实：\n${JSON.stringify(source.metadata ?? {})}`,
+    meteorologicalInterpretationSchema,
+    { schemaVersion: 'meteorological_interpretation_v1' },
   )
-  const text = typeof structured.reportText === 'string' ? structured.reportText.trim() : ''
-  if (text.length < 20) throw new Error('模型气象解读正文过短')
+  const text = structured.reportText.trim()
   const ref: ValueRef = {
     refId: makeId('ref'), kind: 'meteorological_interpretation', label: `${dataset.name} 模型解读`,
     value: { datasetRelativePath: dataset.relativePath, text, structured },

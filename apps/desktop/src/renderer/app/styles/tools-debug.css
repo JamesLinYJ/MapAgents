@@ -52,6 +52,7 @@
 .debug-overview {
   margin-bottom: 16px;
   gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
 }
 
 .debug-columns {
@@ -106,6 +107,7 @@
 }
 
 .overview-card {
+  min-width: 0;
   border-radius: 12px;
 }
 
@@ -116,6 +118,10 @@
 .panel__title,
 .overview-card__value {
   color: #151d24;
+}
+
+.overview-card__value {
+  overflow-wrap: anywhere;
 }
 
 .panel__subtitle,
@@ -881,10 +887,6 @@
   .debug-shell__header {
     margin-bottom: 12px;
     border-radius: 18px;
-  }
-
-  .debug-overview {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .tool-management {

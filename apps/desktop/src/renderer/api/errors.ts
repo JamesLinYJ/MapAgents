@@ -1,4 +1,3 @@
-import { isRecord } from '../shared/utils/guards'
 // +-------------------------------------------------------------------------
 //
 //   地理智能平台 - 桌面传输错误归一化
@@ -9,6 +8,8 @@ import { isRecord } from '../shared/utils/guards'
 //   作者:       JamesLinYJ
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
+
+import { isRecord } from '../shared/utils/guards'
 
 export const API_UNAVAILABLE_MESSAGE = '工作台 API 未连接，请启动 Node API 服务。'
 
@@ -63,8 +64,20 @@ const API_UNAVAILABLE_PATTERNS = [
 // 代理层和浏览器网络异常不是认证失败；统一翻译成可执行的服务状态提示。
 // 这里不吞掉后端业务错误，只有明确 API 不可达时才替换为固定文案。
 export function normalizeApiErrorMessage(error: unknown, fallback = API_UNAVAILABLE_MESSAGE): string {
-  const message = extractErrorMessage(error, fallback)
+  const message = normalizeBoundaryErrorMessage(error, fallback)
   return isApiUnavailableMessage(message) ? API_UNAVAILABLE_MESSAGE : message
+}
+
+/**
+ * 把跨进程和 schema 边界抛出的异常投影为可直接展示的单行消息。
+ * Zod 的 issues 是结构化事实，界面不应暴露其 JSON 序列化格式。
+ */
+export function normalizeBoundaryErrorMessage(error: unknown, fallback: string): string {
+  const structuredMessage = formatValidationIssues(error)
+  if (structuredMessage) return structuredMessage
+
+  const message = extractErrorMessage(error, fallback)
+  return formatSerializedValidationIssues(message) ?? message
 }
 
 export function formatApiError(prefix: string, detail?: string): string {
@@ -86,5 +99,37 @@ function extractErrorMessage(error: unknown, fallback: string): string {
     if (typeof detail === 'string' && detail.trim()) return detail
   }
   return fallback
+}
+
+function formatSerializedValidationIssues(message: string): string | null {
+  const trimmed = message.trim()
+  if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) return null
+  try {
+    return formatValidationIssues(JSON.parse(trimmed))
+  } catch {
+    return null
+  }
+}
+
+function formatValidationIssues(value: unknown): string | null {
+  const issues = Array.isArray(value)
+    ? value
+    : isRecord(value) && Array.isArray(value.issues)
+      ? value.issues
+      : null
+  if (!issues) return null
+
+  const messages = issues
+    .slice(0, 5)
+    .map((issue) => {
+      if (!isRecord(issue) || typeof issue.message !== 'string' || !issue.message.trim()) return null
+      const path = Array.isArray(issue.path)
+        ? issue.path.filter(part => typeof part === 'string' || typeof part === 'number').join('.')
+        : ''
+      return path ? `${path}：${issue.message.trim()}` : issue.message.trim()
+    })
+    .filter((message): message is string => Boolean(message))
+
+  return messages.length > 0 ? messages.join('；') : null
 }
 

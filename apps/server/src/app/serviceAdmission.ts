@@ -37,6 +37,7 @@ export function serviceAdmissionMiddleware(admission: ServiceAdmission): Middlew
     if (
       admission.isAccepting()
       || c.req.path === '/health'
+      || c.req.path === '/health/live'
       || c.req.path === '/metrics'
     ) {
       await next()

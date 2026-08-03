@@ -22,15 +22,15 @@ const deepSeekProvider: ModelProviderDescriptor = {
   displayName: 'DeepSeek',
   configured: true,
   defaultModel: 'deepseek-v4-flash',
-  availableModels: ['deepseek-v4-flash', 'deepseek-v4-pro'],
-  capabilities: ['agents_sdk', 'chat_completions', 'tool_calls'],
+  availableModels: ['deepseek-v4-flash'],
+  capabilities: ['agents_sdk_live_supervisor', 'responses', 'tool_calls'],
   contextWindowTokens: 128000,
   agentRuntime: {
-    transport: 'deepseek_chat_completions',
-    structuredOutput: 'json_object',
+    transport: 'deepseek_responses',
+    structuredOutput: 'json_schema',
     functionTools: true,
     localMcp: true,
-    hostedTools: false,
+    hostedTools: true,
     handoffs: true,
     multiToolResponse: true,
     providerParallelToolControl: false,
@@ -43,8 +43,15 @@ describe('providerCapabilities', () => {
   it('describes the real DeepSeek Agent runtime boundary', () => {
     expect(supportsAgentSdkLiveSupervisor(deepSeekProvider)).toBe(true)
     expect(agentRuntimeCapabilitySummary(deepSeekProvider)).toBe(
-      'DeepSeek Chat Completions · 支持同轮多工具响应 · 由平台本地安全闸门控制并发 · Hosted Tools、远程 Conversation、服务端压缩不可用',
+      'DeepSeek Responses API · 支持同轮多工具响应 · 由平台本地安全闸门控制并发 · 支持服务端联网搜索 · 远程 Conversation、服务端压缩不可用',
     )
+  })
+
+  it('requires the explicit live-supervisor capability instead of inferring it from transport labels', () => {
+    expect(supportsAgentSdkLiveSupervisor({
+      ...deepSeekProvider,
+      capabilities: ['responses', 'tool_calls'],
+    })).toBe(false)
   })
 
   it('does not imply Agent support when no transport is available', () => {

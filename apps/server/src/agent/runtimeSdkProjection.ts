@@ -132,6 +132,9 @@ export function toolResultText(output: Extract<AgentInputItem, { type: 'function
 
 export function extractReasoningDelta(value: unknown): string {
   if (!isRecord(value)) return ''
+  if (value.type === 'response.reasoning_text.delta' && typeof value.delta === 'string') {
+    return value.delta
+  }
   const choices = Array.isArray(value.choices) ? value.choices : []
   const first = choices[0]
   if (!isRecord(first) || !isRecord(first.delta)) return ''
@@ -147,13 +150,6 @@ export function functionCallId(interruption: RunToolApprovalItem): string | null
 export function parseArguments(value: string | undefined): Record<string, unknown> {
   const parsed: unknown = JSON.parse(value ?? '{}')
   if (!isRecord(parsed)) throw new Error('审批工具参数必须为 JSON object')
-  return parsed
-}
-
-export function parseStructuredJson(value: string): Record<string, unknown> {
-  const cleaned = value.trim().replace(/^```json\s*|\s*```$/gu, '')
-  const parsed: unknown = JSON.parse(cleaned)
-  if (!isRecord(parsed)) throw new Error('结构化模型输出必须是 JSON object')
   return parsed
 }
 

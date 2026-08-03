@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   地理智能平台 - Electron Forge Windows 打包配置
+//   地理智能平台 - Electron Forge 桌面打包配置
 //
 //   文件:       forge.config.mjs
 //
@@ -12,6 +12,11 @@
 //     作者: JamesLinYJ
 //     协助: OpenAI Codex:GPT-5.6 Sol
 //     说明: ZIP 构建改用项目内跨版本 Maker，解除 cross-zip 对 Node 24 的隐式绑定。
+//
+//   维护记录 (2026-07-31):
+//     作者: JamesLinYJ
+//     协助: OpenAI Codex:GPT-5.6 Sol
+//     说明: 增加基于 Electron Forge 官方 Maker 的 Linux RPM 发布链路。
 // --------------------------------------------------------------------------
 
 import { FuseV1Options, FuseVersion } from '@electron/fuses'
@@ -19,6 +24,7 @@ import {
   PLATFORM_DESKTOP_APPLICATION_ID,
   PLATFORM_DESKTOP_PROTOCOL_SCHEME,
   PLATFORM_MACHINE_ID,
+  PLATFORM_TECHNICAL_ID,
   PRODUCT_CODENAME,
   PRODUCT_DESKTOP_NAME,
   PRODUCT_EXECUTABLE_BASENAME,
@@ -87,10 +93,24 @@ export default {
       },
     },
     new DesktopZipMaker({}, ['win32']),
+    {
+      name: '@electron-forge/maker-rpm',
+      config: {
+        options: {
+          name: `${PLATFORM_TECHNICAL_ID}-desktop`,
+          productName: PRODUCT_DESKTOP_NAME,
+          genericName: '地理智能工作台',
+          description: PRODUCT_DESKTOP_NAME,
+          productDescription: '本机地理空间分析、气象数据处理与智能体工作台',
+          categories: ['Science', 'Utility'],
+          license: 'UNLICENSED',
+        },
+      },
+    },
   ],
   hooks: {
     postPackage: async (_forgeConfig, packageResult) => {
-      if (!unsignedTestBuild) return
+      if (!unsignedTestBuild || packageResult.platform !== 'win32') return
       await Promise.all(packageResult.outputPaths.map(outputPath => writeFile(
         path.join(outputPath, 'UNSIGNED-TEST-BUILD.txt'),
         [

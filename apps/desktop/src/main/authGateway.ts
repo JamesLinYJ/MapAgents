@@ -10,7 +10,6 @@
 // --------------------------------------------------------------------------
 
 import { electronClient } from '@better-auth/electron/client'
-import { ensureSecretFile } from '@geo-agent-platform/operations-supervisor'
 import { authMeSchema } from '@geo-agent-platform/shared-types'
 import type { PlatformRole } from '@geo-agent-platform/shared-types'
 import {
@@ -20,7 +19,6 @@ import {
 import { createAuthClient } from 'better-auth/client'
 import type { BetterAuthClientPlugin } from 'better-auth'
 import { net } from 'electron'
-import { z } from 'zod'
 
 import {
   desktopAuthBootstrapResultSchema,
@@ -32,13 +30,15 @@ import {
   type DesktopControlResponse,
 } from '../contracts/desktopIpc.js'
 import type { DesktopAutoAuthConfig } from './runtimeConfig.js'
+import type { DesktopManagedIdentityPort } from './localDesktopIdentityBroker.js'
 import { SecureAuthStorage } from './secureAuthStorage.js'
 
 export class DesktopAuthGateway {
   private readonly client: DesktopAuthClientPort
   private readonly autoAuth: DesktopAutoAuthConfig | null
-  private readonly readAutoAuthSecret: (filePath: string) => Promise<string>
+  private readonly managedIdentity: DesktopManagedIdentityPort | null
   private readonly fetchApi: DesktopAuthFetch
+  private managedCookie = ''
   private authorization: DesktopAuthenticatedIdentity | null = null
   private authorizationRevision = 0
   private readonly authorizationListeners = new Set<() => void>()
@@ -46,8 +46,7 @@ export class DesktopAuthGateway {
   constructor(apiBaseUrl: string, options: DesktopAuthGatewayOptions = {}) {
     this.client = options.client ?? createDesktopAuthClient(apiBaseUrl)
     this.autoAuth = options.autoAuth ?? null
-    this.readAutoAuthSecret = options.readAutoAuthSecret
-      ?? (filePath => ensureSecretFile(filePath, true))
+    this.managedIdentity = options.managedIdentity ?? null
     this.fetchApi = options.fetchApi ?? ((url, init) => net.fetch(url, init))
     this.apiBaseUrl = apiBaseUrl
   }
@@ -55,7 +54,7 @@ export class DesktopAuthGateway {
   private readonly apiBaseUrl: string
 
   cookieHeader(): string {
-    return this.client.getCookie()
+    return this.managedCookie || this.client.getCookie()
   }
 
   requireAuthorizationContext(): DesktopAuthenticatedIdentity {
@@ -108,7 +107,12 @@ export class DesktopAuthGateway {
         await this.refreshProjection()
         data = null
       } else if (command.command === 'sign-out') {
-        await requireAuthSuccess(this.client.signOut(), '退出登录失败。')
+        if (this.managedCookie) {
+          await this.managedIdentity?.close()
+          this.managedCookie = ''
+        } else {
+          await requireAuthSuccess(this.client.signOut(), '退出登录失败。')
+        }
         this.invalidateAuthorizationContext()
         data = null
       } else {
@@ -131,7 +135,11 @@ export class DesktopAuthGateway {
       })
     }
     try {
-      await this.ensureAutoAuthSession(this.autoAuth)
+      if (!this.managedIdentity) {
+        throw new Error('本机托管身份 Broker 未装配。')
+      }
+      const authorization = await this.managedIdentity.open()
+      this.managedCookie = authorization.cookie
       return desktopAuthBootstrapResultSchema.parse({
         mode: 'local_auto',
         status: 'authenticated',
@@ -146,52 +154,10 @@ export class DesktopAuthGateway {
     }
   }
 
-  private async ensureAutoAuthSession(config: DesktopAutoAuthConfig): Promise<void> {
-    const currentSession = await this.readSession()
-    if (currentSession?.user.email.toLowerCase() === config.email) return
-    if (currentSession) {
-      await requireAuthSuccess(this.client.signOut(), '无法切换到本机自动认证账户。')
-    }
-
-    const password = await this.readAutoAuthSecret(config.credentialFile)
-    try {
-      await requireAuthSuccess(
-        this.client.signIn.email({ email: config.email, password }),
-        '本机自动认证登录失败。',
-      )
-    } catch (signInError) {
-      if (!config.allowAccountCreation) {
-        throw new Error(
-          '自动认证账户尚未建立，且当前已关闭 Better Auth 注册。请先通过本机运维台创建该管理员。',
-          { cause: signInError },
-        )
-      }
-      try {
-        await requireAuthSuccess(
-          this.client.signUp.email({
-            name: config.displayName,
-            email: config.email,
-            password,
-          }),
-          '本机自动认证账户创建失败。',
-        )
-      } catch (signUpError) {
-        throw new Error(
-          '自动认证账户无法登录或创建。若该邮箱已存在，请通过本机运维台重置账户后重试。',
-          { cause: signUpError },
-        )
-      }
-    }
-
-    const verifiedSession = await this.readSession()
-    if (verifiedSession?.user.email.toLowerCase() !== config.email) {
-      throw new Error('Better Auth 未返回匹配的本机自动认证会话。')
-    }
-  }
-
-  private async readSession(): Promise<DesktopSessionProjection | null> {
-    const data = await requireAuthSuccess(this.client.getSession(), '读取登录会话失败。')
-    return desktopSessionProjectionSchema.nullable().parse(data)
+  async close(): Promise<void> {
+    await this.managedIdentity?.close()
+    this.managedCookie = ''
+    this.invalidateAuthorizationContext()
   }
 
   private async refreshProjection(): Promise<DesktopAuthProjection> {
@@ -300,14 +266,13 @@ export interface DesktopAuthClientPort {
     email(input: { name: string; email: string; password: string }): Promise<BetterAuthOperationResult>
   }
   signOut(): Promise<BetterAuthOperationResult>
-  getSession(): Promise<BetterAuthOperationResult>
 }
 
 export interface DesktopAuthGatewayOptions {
   autoAuth?: DesktopAutoAuthConfig | null
+  managedIdentity?: DesktopManagedIdentityPort | null
   client?: DesktopAuthClientPort
   fetchApi?: DesktopAuthFetch
-  readAutoAuthSecret?: (filePath: string) => Promise<string>
 }
 
 export interface DesktopAuthorizationContext {
@@ -325,14 +290,6 @@ export type DesktopAuthFetch = (
   url: string,
   init: RequestInit,
 ) => Promise<Response>
-
-const desktopSessionProjectionSchema = z.object({
-  user: z.object({
-    email: z.string().email(),
-  }).passthrough(),
-}).passthrough()
-
-type DesktopSessionProjection = z.infer<typeof desktopSessionProjectionSchema>
 
 async function requireAuthSuccess(
   operation: Promise<BetterAuthOperationResult>,

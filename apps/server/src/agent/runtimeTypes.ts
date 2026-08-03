@@ -12,7 +12,7 @@
 import type { Agent, Runner } from '@openai/agents'
 import type { SandboxRunConfig } from '@openai/agents/sandbox'
 
-import type { AgentRuntimeConfig, supervisorDeliverySchema } from '@geo-agent-platform/shared-types/runtime'
+import type { AgentRuntimeConfig } from '@geo-agent-platform/shared-types/runtime'
 import type { ModelAdapter } from '../model/registry.js'
 import type { AuthContext } from '../security/types.js'
 import type { FileAgentsSession } from './fileAgentsSession.js'
@@ -37,12 +37,13 @@ export interface RunOptions {
 }
 
 export interface RuntimeAssembly {
-  agent: Agent<AgentsExecutionContext, typeof supervisorDeliverySchema>
+  agent: Agent<AgentsExecutionContext>
   runner: Runner
   session: FileAgentsSession
   context: AgentsExecutionContext
   coordinator: ToolExecutionCoordinator
   adapter: ModelAdapter
+  modelName: string
   sandbox?: SandboxRunConfig
   sdkIntegration: RuntimeSdkIntegration
   modelInput: RuntimeModelInputController
@@ -54,6 +55,7 @@ export interface RuntimeAssembly {
   handoffToolNames: ReadonlySet<string>
   handoffAgentNames: ReadonlySet<string>
   mcpToolNames: ReadonlySet<string>
+  hostedToolNames: ReadonlySet<string>
   completeHandoff: (agentId: string, summary: string) => Promise<void>
   failHandoff: (agentId: string, message: string) => Promise<void>
   flushPendingSessionAssistantMessage: () => Promise<void>
