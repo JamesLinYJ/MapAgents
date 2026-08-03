@@ -12,9 +12,9 @@
 // 导出文件必须进入统一 artifact store；payload 和 valueRef 不暴露绝对路径。
 // 文件名只用于展示，真实存储路径由 artifactId 决定。
 
-import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { ToolDef } from '../../framework/types.js'
+import { atomicWriteText } from '../../store/durableFileIo.js'
 import { makeId } from '../../utils/ids.js'
 import { geoJsonInputSchema, resolveGeoJsonInput } from '../spatial/geoJsonInput.js'
 import { MAP_EXPORT_PROMPT } from '../spatial/prompts.js'
@@ -43,9 +43,8 @@ export function createMapExportTool(runtimeRoot: string): ToolDef {
       const artifactId = makeId('artifact')
       const relativePath = path.posix.join('artifacts', ctx.runId, `${artifactId}.geojson`)
       const target = resolveRuntimePath(runtimeRoot, relativePath)
-      await mkdir(path.dirname(target), { recursive: true })
       const serialized = JSON.stringify(geojson, null, 2)
-      await writeFile(target, serialized, 'utf8')
+      await atomicWriteText(target, serialized)
       const bounds = geoJsonBounds(geojson)
 
       return {

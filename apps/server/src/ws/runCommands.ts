@@ -75,12 +75,14 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
       const sessionId = payload.sessionId ?? (threadId ? context.dependencies.store.getThread(threadId).sessionId : null)
       if (!sessionId) throw new Error('sessionId 不能为空')
       context.dependencies.usageStats.assertWorkspaceCanStartModelRun(auth)
-      if (!threadId) threadId = (await context.dependencies.store.createThread(sessionId, payload.query.slice(0, 32))).id
       const config = await resolveRuntimeConfig(context.dependencies.store.runtimeConfiguration, context.dependencies.defaultRuntimeConfig)
       const selectedProvider = payload.provider
         ?? payload.modelProvider
         ?? context.dependencies.modelRegistry.defaultProvider
       if (!selectedProvider) throw new Error('必须显式指定模型 provider，或配置 DEFAULT_MODEL_PROVIDER')
+      // 先完成所有不会写入 Thread 的配置与 provider 校验，避免请求失败时
+      // 留下没有 Run 的空 Thread。Thread/Run 创建仍由持久化生命周期事务负责。
+      if (!threadId) threadId = (await context.dependencies.store.createThread(sessionId, payload.query.slice(0, 32))).id
       const run = await context.dependencies.store.createRun(sessionId, payload.query, {
         threadId,
         modelProvider: selectedProvider,

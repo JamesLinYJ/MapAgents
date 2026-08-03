@@ -10,7 +10,7 @@
 
 import { eq } from 'drizzle-orm'
 
-import type { Database } from '../../db/connection.js'
+import type { Database, DatabaseTransaction } from '../../db/connection.js'
 import { platformThreads } from '../../db/schema.js'
 import type { ArtifactRef } from '../../schemas/types.js'
 import { ArtifactMapProjectionRepository } from './artifactMapProjectionRepository.js'
@@ -35,24 +35,30 @@ export class ArtifactPublicationRepository implements ArtifactRepository {
   }
 
   async persistArtifact(artifact: ArtifactRef, owner: ArtifactOwnerProjection): Promise<void> {
+    await this.db.transaction(tx => this.persistInTransaction(tx, artifact, owner))
+  }
+
+  async persistInTransaction(
+    tx: DatabaseTransaction,
+    artifact: ArtifactRef,
+    owner: ArtifactOwnerProjection,
+  ): Promise<void> {
     const relativePath = typeof artifact.metadata.relativePath === 'string'
       ? artifact.metadata.relativePath
       : ''
     if (!relativePath) throw new Error(`Artifact "${artifact.artifactId}" 缺少 relativePath`)
 
-    await this.db.transaction(async tx => {
-      await this.metadata.upsert(tx, artifact, owner, relativePath)
-      await this.mapProjection.publish(tx, artifact, owner)
-      if (!artifact.isIntermediate && owner.threadId) {
-        const updated = await tx.update(platformThreads).set({
-          latestArtifactId: artifact.artifactId,
-          latestArtifactName: artifact.name,
-          updatedAt: new Date(),
-        }).where(eq(platformThreads.threadId, owner.threadId))
-          .returning({ threadId: platformThreads.threadId })
-        if (!updated[0]) throw new Error(`Artifact 所属线程 '${owner.threadId}' 不存在`)
-      }
-    })
+    await this.metadata.upsert(tx, artifact, owner, relativePath)
+    await this.mapProjection.publish(tx, artifact, owner)
+    if (!artifact.isIntermediate && owner.threadId) {
+      const updated = await tx.update(platformThreads).set({
+        latestArtifactId: artifact.artifactId,
+        latestArtifactName: artifact.name,
+        updatedAt: new Date(),
+      }).where(eq(platformThreads.threadId, owner.threadId))
+        .returning({ threadId: platformThreads.threadId })
+      if (!updated[0]) throw new Error(`Artifact 所属线程 '${owner.threadId}' 不存在`)
+    }
   }
 
   deleteRunArtifacts(runId: string): Promise<void> {

@@ -162,6 +162,16 @@ export class PlatformPersistenceFacade {
     await this.artifactStore.persist(artifact)
   }
 
+  async commitToolResult(
+    runId: string,
+    resultId: string,
+    mutation: (state: AgentState) => Partial<AgentState>,
+    values: readonly ToolValueRef[],
+    artifacts: readonly ArtifactRef[],
+  ): Promise<boolean> {
+    return this.runStore.commitToolResult(runId, resultId, mutation, values, artifacts)
+  }
+
   async listArtifactsVisibleToRun(
     runId: string,
     options: VisibleArtifactOptions = {},

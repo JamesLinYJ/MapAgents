@@ -11,6 +11,7 @@
 import {
   type AgentThreadRecord,
   type AnalysisRun,
+  type ArtifactRef,
   type CompactionRecord,
   type ConversationItem,
   type RunCheckpoint,
@@ -35,6 +36,7 @@ import type {
   RunInputRepository,
   RunLifecycleResult,
   RunRepository,
+  ToolResultCommitter,
   ThreadHistoryPage,
   ThreadLifecycleResult,
   ThreadMemoryVersionReference,
@@ -59,7 +61,7 @@ export class PostgresConversationPersistence implements ConversationPersistence 
   private readonly snapshots: ConversationSnapshotRepository
   private readonly sessions: SessionRepository
   private readonly threads: ThreadRepository
-  private readonly runs: RunRepository
+  private readonly runs: RunRepository & ToolResultCommitter
   private readonly objectReferences: ObjectReferenceRepository
 
   constructor(db: Database) {
@@ -168,6 +170,15 @@ export class PostgresConversationPersistence implements ConversationPersistence 
 
   async appendToolValue(runId: string, value: ToolValueRef): Promise<void> {
     await this.runs.appendToolValue(runId, value)
+  }
+
+  async commitToolResult(
+    run: AnalysisRun,
+    resultId: string,
+    values: readonly ToolValueRef[],
+    artifacts: readonly ArtifactRef[],
+  ): Promise<boolean> {
+    return this.runs.commitToolResult(run, resultId, values, artifacts)
   }
 
   async listToolValues(runId: string): Promise<ToolValueRef[]> {

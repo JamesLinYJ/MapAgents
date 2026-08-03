@@ -11,6 +11,7 @@
 
 import type {
   AnalysisRun,
+  ArtifactRef,
   ConversationItem,
   RunCheckpoint,
   RunEvent,
@@ -29,17 +30,20 @@ import { PostgresRunCheckpointRepository } from './runCheckpointRepository.js'
 import type { RunRecordAppender } from './runRecordAppender.js'
 import { PostgresRunRecordRepository } from './runRecordRepository.js'
 import { PostgresRunStateRepository } from './runStateRepository.js'
+import { PostgresToolResultCommitRepository } from './toolResultCommitRepository.js'
 
 /** 组合 Run 状态、checkpoint 和记录流端口，不直接访问数据库表。 */
 export class PostgresRunRepository implements RunRepository {
   private readonly state: RunStateRepository
   private readonly checkpoints: RunCheckpointRepository
   private readonly records: RunRecordRepository
+  private readonly toolResults: PostgresToolResultCommitRepository
 
   constructor(db: Database, runMutations: RunMutationQueue, runRecords: RunRecordAppender) {
     this.state = new PostgresRunStateRepository(db, runMutations)
     this.checkpoints = new PostgresRunCheckpointRepository(db, runMutations)
     this.records = new PostgresRunRecordRepository(db, runMutations, runRecords)
+    this.toolResults = new PostgresToolResultCommitRepository(db)
   }
 
   createRunLifecycle(run: AnalysisRun): Promise<RunLifecycleResult> {
@@ -103,5 +107,14 @@ export class PostgresRunRepository implements RunRepository {
 
   listToolValues(runId: string): Promise<ToolValueRef[]> {
     return this.records.listToolValues(runId)
+  }
+
+  commitToolResult(
+    run: AnalysisRun,
+    resultId: string,
+    values: readonly ToolValueRef[],
+    artifacts: readonly ArtifactRef[],
+  ): Promise<boolean> {
+    return this.toolResults.commit(run, resultId, values, artifacts)
   }
 }

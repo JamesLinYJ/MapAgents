@@ -9,11 +9,11 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
-import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import type { ToolArtifact, ToolContext, ToolResult, ValueRef } from '../../framework/types.js'
 import type { ArtifactDisplay, MapBounds, MapLayerStyle } from '../../schemas/types.js'
+import { atomicWriteText } from '../../store/durableFileIo.js'
 import { makeId } from '../../utils/ids.js'
 import type { MeteorologyToolDeps } from './toolDefinition.js'
 
@@ -433,8 +433,7 @@ async function writeRuntimeJson(deps: MeteorologyToolDeps, relativePath: string,
   const root = path.resolve(deps.runtimeRoot)
   const target = path.resolve(root, relativePath)
   if (!target.startsWith(root + path.sep)) throw new Error('artifact 路径越出 runtime 根目录')
-  await mkdir(path.dirname(target), { recursive: true })
-  await writeFile(target, JSON.stringify(payload), 'utf8')
+  await atomicWriteText(target, JSON.stringify(payload))
 }
 
 export function inputKind(name: string): 'dataset' | 'radar' | 'boundary' {

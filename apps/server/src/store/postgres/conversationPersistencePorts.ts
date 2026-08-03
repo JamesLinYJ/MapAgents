@@ -11,6 +11,7 @@
 import type {
   AgentThreadRecord,
   AnalysisRun,
+  ArtifactRef,
   CompactionRecord,
   ConversationItem,
   RunCheckpoint,
@@ -182,6 +183,15 @@ export interface RunRepository extends
   RunCheckpointRepository,
   RunRecordRepository {}
 
+export interface ToolResultCommitter {
+  commitToolResult(
+    run: AnalysisRun,
+    resultId: string,
+    values: readonly ToolValueRef[],
+    artifacts: readonly ArtifactRef[],
+  ): Promise<boolean>
+}
+
 export interface ObjectReferenceRepository {
   listReferencedObjectHashes(): Promise<string[]>
 }
@@ -198,4 +208,5 @@ export interface ConversationPersistence extends
   ThreadRepository,
   RunRepository,
   ObjectReferenceRepository,
-  RunInputRepository {}
+  RunInputRepository,
+  ToolResultCommitter {}

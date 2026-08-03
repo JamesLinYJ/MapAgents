@@ -635,6 +635,15 @@ function coordinatorHarness(
     appendToolValue: vi.fn(async () => undefined),
     persistArtifact: vi.fn(async () => undefined),
     getRun: vi.fn(() => ({ workspaceId: 'workspace_1', state })),
+    commitToolResult: vi.fn(async (
+      _runId: string,
+      _resultId: string,
+      mutation: (current: typeof state) => Partial<typeof state>,
+      _values: readonly unknown[],
+      _artifacts: readonly unknown[],
+    ) => {
+      state = { ...state, ...mutation(state) }
+    }),
     mutateRunState: vi.fn(async (_runId: string, mutation: (current: typeof state) => Partial<typeof state>) => {
       state = { ...state, ...mutation(state) }
       return { workspaceId: 'workspace_1', state }

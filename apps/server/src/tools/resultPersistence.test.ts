@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -46,6 +46,38 @@ describe('tool result persistence', () => {
     }
   })
 
+  it('does not duplicate a retried result with the same resultId', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-result-idempotent-'))
+    let store: PlatformPersistenceFacade | undefined
+    try {
+      store = createTestPersistenceFacade(path.join(root, 'sessions'))
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '幂等结果测试')
+      const run = await store.createRun(session.id, '重复提交工具结果', { threadId: thread.id })
+      const result = {
+        message: '检查完成',
+        payload: { route: line() },
+        warnings: [],
+        resultId: 'result_retry',
+        source: 'test',
+      }
+
+      await Promise.all([
+        persistToolExecutionResult(store, run.id, 'inspect_dataset', '检查数据集', {}, result),
+        persistToolExecutionResult(store, run.id, 'inspect_dataset', '检查数据集', {}, result),
+      ])
+
+      const latest = store.getRun(run.id)
+      expect(latest.state.toolResults.filter(item => item.resultId === result.resultId)).toHaveLength(1)
+      const artifactFiles = await readdir(path.join(root, 'artifacts', run.id))
+      expect(artifactFiles.filter(file => file.endsWith('.geojson'))).toHaveLength(1)
+    } finally {
+      await store?.flushConversationStore()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('persists inline GeoJSON identically for direct and agent tool paths', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-result-'))
     let store: PlatformPersistenceFacade | undefined
@@ -68,6 +100,7 @@ describe('tool result persistence', () => {
       expect(latest.state.artifacts).toHaveLength(1)
       expect(latest.state.toolValueRefs[0].refId).toBe('ref_route')
       expect(latest.state.toolResults[0]?.toolLabel).toBe('路径规划')
+      expect(store.getThread(thread.id).latestArtifactId).toBe(latest.state.artifacts[0].artifactId)
       const relativePath = String(latest.state.artifacts[0].metadata.relativePath)
       expect(JSON.parse(await readFile(path.join(root, relativePath), 'utf8'))).toEqual(line())
     } finally {

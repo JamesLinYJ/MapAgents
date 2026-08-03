@@ -94,6 +94,13 @@ export interface AgentRuntimeStore {
   readConversationObject(reference: ContentRef): Promise<Uint8Array>
   appendToolValue(runId: string, value: ToolValueRef): Promise<void>
   persistArtifact(artifact: ArtifactRef): Promise<void>
+  commitToolResult: (
+    runId: string,
+    resultId: string,
+    mutation: (state: AgentState) => Partial<AgentState>,
+    values: readonly ToolValueRef[],
+    artifacts: readonly ArtifactRef[],
+  ) => Promise<boolean>
   listArtifactsVisibleToRun(
     runId: string,
     options?: { artifactIds?: readonly string[]; limit?: number },
@@ -127,6 +134,7 @@ export type ToolExecutionStore = Pick<AgentRuntimeStore,
   | 'activeTranscript'
   | 'appendToolValue'
   | 'appendTranscript'
+  | 'commitToolResult'
   | 'getRun'
   | 'meteorology'
   | 'persistArtifact'

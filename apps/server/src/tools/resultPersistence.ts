@@ -9,14 +9,15 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
-// Agent 自动调用与 Debug 工作台直跑必须共享同一条结果持久化路径。
-// run state 是实时快照，分片 run 文件是历史事实源，Postgres 只保存 artifact 可重建索引。
+// Agent 自动调用与 Debug 工作台直跑必须共享同一条结果持久化路径。PostgreSQL
+// 是 Run、Tool Value 和 Artifact 元数据的结构化事实源；文件只保存 Artifact 内容。
 
-import { mkdir, writeFile } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import path from 'node:path'
 import type { ToolResult, ValueRef } from '../framework/types.js'
-import type { ArtifactRef, ClarificationState, DecisionRequest, AgentWorkflow, TodoItem, ToolValueRef } from '../schemas/types.js'
+import type { AgentState, ArtifactRef, ClarificationState, DecisionRequest, AgentWorkflow, TodoItem, ToolValueRef } from '../schemas/types.js'
 import type { ToolExecutionStore } from '../store/runtimePorts.js'
+import { atomicWriteText } from '../store/durableFileIo.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 import { createAgentWorkflow, reviseAgentWorkflow } from '../agent/agentWorkflowState.js'
 
@@ -48,36 +49,42 @@ export async function persistToolExecutionResult(
   }))
   const generatedArtifacts = await createGeoArtifacts(result, runId, store.runtimeRoot)
   const artifacts = dedupeArtifacts([...explicitArtifacts, ...generatedArtifacts])
-  await store.mutateRunState(runId, state => ({
+  const toolResult = {
+    stepId: makeId('step'),
+    tool: toolName,
+    toolLabel,
+    args,
+    status: 'completed' as const,
+    message: result.message,
+    startedAt: null,
+    completedAt: nowUtc(),
+    resultId: result.resultId,
+    source: result.source,
+    confidence: null,
+    usedQuery: null,
+    provenance: result.provenance ?? {},
+    crs: {},
+    geometryType: null,
+    featureCount: null,
+    valueRefs: refs,
+  }
+  const mutation = (state: AgentState): Partial<AgentState> => ({
     toolValueRefs: dedupeValueRefs([...state.toolValueRefs, ...refs]),
     artifacts: dedupeArtifacts([...state.artifacts, ...artifacts]),
     ...agentWorkflowControlState(result.payload, state.agentWorkflow, state.todos),
     ...clarificationControlState(result.payload, state.decisions),
     ...todoControlState(result.payload),
-    toolResults: [...state.toolResults, {
-      stepId: makeId('step'),
-      tool: toolName,
-      toolLabel,
-      args,
-      status: 'completed',
-      message: result.message,
-      startedAt: null,
-      completedAt: nowUtc(),
-      resultId: result.resultId,
-      source: result.source,
-      confidence: null,
-      usedQuery: null,
-      provenance: result.provenance ?? {},
-      crs: {},
-      geometryType: null,
-      featureCount: null,
-      valueRefs: refs,
-    }],
-  }))
-  // value 与 Artifact 元数据写入 PostgreSQL 事实源。按结果声明顺序持久化，
-  // 避免 Promise.all 让同一次工具调用的记录顺序依赖调度时机。
-  for (const ref of refs) await store.appendToolValue(runId, ref)
-  for (const artifact of artifacts) await store.persistArtifact(artifact)
+    toolResults: [
+      ...state.toolResults.filter(item => item.resultId !== result.resultId),
+      toolResult,
+    ],
+  })
+  const committed = await store.commitToolResult(runId, result.resultId, mutation, refs, artifacts)
+  if (!committed) {
+    // 幂等重试已经有 durable 结果；本次尝试生成的文件没有对应 metadata，
+    // 立即删除，避免相同 resultId 在重试时积累孤儿 Artifact 内容。
+    await removeGeneratedArtifactFiles(store.runtimeRoot, generatedArtifacts)
+  }
 }
 
 // 智能体工作流由系统工具提交或修订。结构和依赖图在领域状态机中验证，
@@ -244,8 +251,10 @@ async function writeGeoArtifact(
   const root = path.resolve(runtimeRoot)
   const target = path.resolve(root, relativePath)
   if (!target.startsWith(root + path.sep)) throw new Error('artifact 路径越出 runtime 根目录')
-  await mkdir(path.dirname(target), { recursive: true })
-  await writeFile(target, content, 'utf8')
+  // 先写同目录 staging 文件，再原子 rename，避免读请求看到半截 GeoJSON。
+  // 数据库元数据随后在同一个 Tool Result 事务中提交；事务失败时不会留下
+  // 指向半截内容的 Artifact 元数据，失败发布文件由后续运行目录维护回收。
+  await atomicWriteText(target, content)
   return {
     artifactId,
     runId,
@@ -283,6 +292,22 @@ async function writeGeoArtifact(
     },
     metadata: { relativePath, kind },
     isIntermediate: false,
+  }
+}
+
+async function removeGeneratedArtifactFiles(
+  runtimeRoot: string,
+  artifacts: readonly ArtifactRef[],
+): Promise<void> {
+  const root = path.resolve(runtimeRoot)
+  for (const artifact of artifacts) {
+    const relativePath = typeof artifact.metadata.relativePath === 'string'
+      ? artifact.metadata.relativePath
+      : ''
+    if (!relativePath) continue
+    const target = path.resolve(root, relativePath)
+    if (!target.startsWith(root + path.sep)) throw new Error('artifact 路径越出 runtime 根目录')
+    await rm(target, { force: true })
   }
 }
 

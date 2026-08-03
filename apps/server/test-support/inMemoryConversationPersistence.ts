@@ -19,6 +19,7 @@ import {
   transcriptEntrySchema,
   type AgentThreadRecord,
   type AnalysisRun,
+  type ArtifactRef,
   type CompactionRecord,
   type ConversationItem,
   type RunEvent,
@@ -37,6 +38,7 @@ import type {
   DeletedThreadRecord,
   EnqueueRunInput,
   RunLifecycleResult,
+  ToolResultCommitter,
   ThreadLifecycleResult,
   ThreadHistoryPage,
   ThreadMemoryVersionReference,
@@ -68,7 +70,7 @@ type CheckpointMetadata = Omit<RunCheckpoint, 'run'>
 
 // 仅用于单元测试的明确端口替身。它模拟 PostgreSQL Repository 的领域语义，
 // 不进入生产 container，也不让生产代码识别残缺的假 Database。
-export class InMemoryConversationPersistence implements ConversationPersistence {
+export class InMemoryConversationPersistence implements ConversationPersistence, ToolResultCommitter {
   private readonly sessions = new Map<string, SessionRecord>()
   private readonly threads = new Map<string, ThreadState>()
   private readonly runs = new Map<string, AnalysisRun>()
@@ -77,6 +79,7 @@ export class InMemoryConversationPersistence implements ConversationPersistence 
   private readonly items = new Map<string, ConversationItem[]>()
   private readonly events = new Map<string, RunEvent[]>()
   private readonly values = new Map<string, ToolValueRef[]>()
+  private readonly committedToolResults = new Set<string>()
   private readonly inputs = new Map<string, RunSteeringRecord[]>()
   private readonly memoryVersions = new Map<string, ThreadMemoryVersionReference[]>()
   private readonly compactions = new Map<string, CompactionRecord[]>()
@@ -370,6 +373,22 @@ export class InMemoryConversationPersistence implements ConversationPersistence 
     this.requireRun(runId)
     const parsed = toolValueRefSchema.parse(value)
     this.values.set(runId, [...(this.values.get(runId) ?? []), clone(parsed)])
+  }
+
+  async commitToolResult(
+    run: AnalysisRun,
+    resultId: string,
+    values: readonly ToolValueRef[],
+    _artifacts: readonly ArtifactRef[],
+  ): Promise<boolean> {
+    this.requireRun(run.id)
+    const commitKey = `${run.id}:${resultId}`
+    if (this.committedToolResults.has(commitKey)) return false
+    this.committedToolResults.add(commitKey)
+    this.runs.set(run.id, clone(run))
+    const current = this.values.get(run.id) ?? []
+    this.values.set(run.id, [...current, ...values.map(value => clone(toolValueRefSchema.parse(value)))])
+    return true
   }
 
   async listToolValues(runId: string): Promise<ToolValueRef[]> {

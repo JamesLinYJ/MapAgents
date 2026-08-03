@@ -13,6 +13,7 @@ import type {
   AgentRuntimeConfig,
   AgentState,
   AnalysisRun,
+  ArtifactRef,
   ConversationItem,
   RunCheckpoint,
   RunEvent,
@@ -34,7 +35,7 @@ import {
   toRunSummary,
 } from './runProjection.js'
 import type { SessionStore } from './sessionStore.js'
-import type { RunRepository, ThreadLifecycleRepository } from './postgres/conversationPersistencePorts.js'
+import type { RunRepository, ThreadLifecycleRepository, ToolResultCommitter } from './postgres/conversationPersistencePorts.js'
 
 export interface RunStoreEvents {
   runBus: InMemoryEventBus<AnalysisRun>
@@ -52,7 +53,7 @@ export class RunStore {
     private readonly index: ConversationProjectionIndex,
     private readonly payloadStore: ConversationPayloadStore,
     private readonly sessionStore: SessionStore,
-    private readonly repository: RunRepository,
+    private readonly repository: RunRepository & ToolResultCommitter,
     private readonly threadWriter: Pick<ThreadLifecycleRepository, 'saveThread'>,
     private readonly events: RunStoreEvents,
   ) {}
@@ -221,6 +222,27 @@ export class RunStore {
 
   async updateState(runId: string, updates: Partial<AgentState>): Promise<AnalysisRun> {
     return this.mutateState(runId, () => updates)
+  }
+
+  async commitToolResult(
+    runId: string,
+    resultId: string,
+    mutation: (state: AgentState) => Partial<AgentState>,
+    values: readonly ToolValueRef[],
+    artifacts: readonly ArtifactRef[],
+  ): Promise<boolean> {
+    let committed = false
+    await this.serializeStateMutation(runId, async () => {
+      const run = this.get(runId)
+      const updates = mutation(run.state)
+      const next = { ...run, state: { ...run.state, ...updates }, updatedAt: nowUtc() }
+      committed = await this.repository.commitToolResult(next, resultId, values, artifacts)
+      if (!committed) return
+      this.index.setRun(next)
+      this.updateThreadProjectionFromArtifacts(next, artifacts)
+      this.events.runBus.publish(runId, structuredClone(next))
+    })
+    return committed
   }
 
   // Run 状态的读-改-写必须在同一串行边界内完成。仅序列化数据库 save
@@ -398,6 +420,22 @@ export class RunStore {
     if (next === thread) return
     next = { ...next, updatedAt: nowUtc() }
     this.index.setThread(next)
+  }
+
+  private updateThreadProjectionFromArtifacts(
+    run: AnalysisRun,
+    artifacts: readonly ArtifactRef[],
+  ): void {
+    const latest = [...artifacts].reverse().find(artifact => !artifact.isIntermediate)
+    if (!latest || !run.threadId) return
+    const thread = this.index.getThreadOrNull(run.threadId)
+    if (!thread) return
+    this.index.setThread({
+      ...thread,
+      latestArtifactId: latest.artifactId,
+      latestArtifactName: latest.name,
+      updatedAt: nowUtc(),
+    })
   }
 
   private shouldPersistItem(item: ConversationItem): boolean {
