@@ -183,10 +183,16 @@ test('traps system-log focus and restores it after keyboard dismissal', async ()
   const search = dialog.getByRole('textbox', { name: '搜索' })
   await expect(search).toBeFocused()
 
-  const lastControl = dialog.getByRole('checkbox', { name: 'Supervisor' })
-  await lastControl.focus()
+  const tabbableControls = dialog.locator([
+    'button:visible:not([disabled])',
+    'input:visible:not([disabled])',
+    'select:visible:not([disabled])',
+    '[href]:visible',
+    '[tabindex]:visible:not([tabindex="-1"])',
+  ].join(', '))
+  await tabbableControls.last().focus()
   await workspace.keyboard.press('Tab')
-  await expect(dialog.getByRole('button', { name: '复制', exact: true })).toBeFocused()
+  await expect(tabbableControls.first()).toBeFocused()
 
   await workspace.keyboard.press('Escape')
   await expect(dialog).toHaveCount(0)
@@ -659,44 +665,44 @@ async function expectMapRuntimeReady(page: Page): Promise<void> {
 }
 
 async function expectWorkbenchFitsViewport(page: Page): Promise<void> {
-  const fit = await page.evaluate((productCodename) => {
-    const required = [
-      document.querySelector(`[aria-label="${productCodename} 功能区"]`),
-      document.querySelector('[aria-label="内容"]'),
-      document.querySelector('[aria-label="空间地图"]'),
-      document.querySelector('[aria-label="智能对话"]'),
-      document.querySelector('footer[aria-label="地图状态"]'),
-    ]
-    const viewport = { width: window.innerWidth, height: window.innerHeight }
-    return {
-      viewport,
-      documentOverflowX:
-        document.documentElement.scrollWidth - document.documentElement.clientWidth,
-      documentOverflowY:
-        document.documentElement.scrollHeight - document.documentElement.clientHeight,
-      regions: required.map(element => {
+  await expect.poll(async () => {
+    const fit = await page.evaluate((productCodename) => {
+      const required = [
+        document.querySelector(`[aria-label="${productCodename} 功能区"]`),
+        document.querySelector('[aria-label="内容"]'),
+        document.querySelector('[aria-label="空间地图"]'),
+        document.querySelector('[aria-label="智能对话"]'),
+        document.querySelector('footer[aria-label="地图状态"]'),
+      ]
+      const viewport = { width: window.innerWidth, height: window.innerHeight }
+      const regions = required.map(element => {
         const rect = element?.getBoundingClientRect()
-        return rect
-          ? {
-              visible: rect.width > 0 && rect.height > 0,
-              inside:
-                rect.left >= -1
-                && rect.top >= -1
-                && rect.right <= viewport.width + 1
-                && rect.bottom <= viewport.height + 1,
-            }
-          : { visible: false, inside: false }
-      }),
-    }
-  }, PRODUCT_CODENAME)
-  expect(fit.documentOverflowX).toBeLessThanOrEqual(1)
-  expect(fit.documentOverflowY).toBeLessThanOrEqual(1)
-  expect(fit.regions).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ visible: true, inside: true }),
-    ]),
-  )
-  expect(fit.regions.every(region => region.visible && region.inside)).toBe(true)
+        const visible = Boolean(rect && rect.width > 0 && rect.height > 0)
+        const inside = Boolean(
+          rect
+          && rect.left >= -1
+          && rect.top >= -1
+          && rect.right <= viewport.width + 1
+          && rect.bottom <= viewport.height + 1,
+        )
+        return { visible, inside }
+      })
+      return {
+        overflowXOk:
+          document.documentElement.scrollWidth - document.documentElement.clientWidth <= 1,
+        overflowYOk:
+          document.documentElement.scrollHeight - document.documentElement.clientHeight <= 1,
+        visibleRegions: regions.filter(region => region.visible).length,
+        insideRegions: regions.filter(region => region.inside).length,
+      }
+    }, PRODUCT_CODENAME)
+    return fit
+  }, { timeout: 15_000 }).toEqual({
+    overflowXOk: true,
+    overflowYOk: true,
+    visibleRegions: 5,
+    insideRegions: 5,
+  })
 }
 
 function trackUnexpectedRendererErrors(page: Page, errors: string[]): void {

@@ -221,13 +221,22 @@ def test_nowcast_answer_standard_for_citywide_and_location_questions() -> None:
         "warnings": [],
     }
 
-    assert text.build_draft_answer(facts=no_rain, question="接下来天气怎么样？")["answer"] == "未来三小时不会下雨，您可以放心出门。"
-    assert text.build_draft_answer(facts=no_rain, question="市民中心天气怎么样？")["answer"] == "未来3小时不会下雨，您可以放心出门。"
-    assert text.build_draft_answer(facts=ending, question="市民中心天气怎么样？")["answer"] == "15分钟后将下小雨，30分钟后雨量变大，2个小时后雨量渐停。"
-    assert text.build_draft_answer(facts=continuous, question="市民中心天气怎么样？")["answer"] == "当前到未来短时将下小雨，未来3小时持续下雨。"
+    assert text.build_draft_answer(facts=no_rain, question="接下来天气怎么样？")["answer"] == "各分析区域在预报时段内未检出达到有效阈值的降雨。"
+    assert text.build_draft_answer(facts=no_rain, question="市民中心天气怎么样？")["answer"] == "市民中心在预报时段内未检出达到有效阈值的降雨。"
+    assert text.build_draft_answer(facts=ending, question="市民中心天气怎么样？")["answer"] == (
+        "15分钟后市民中心开始出现达到有效阈值的降雨，"
+        "30分钟后市民中心降雨强度达到峰值，峰值等级为小雨，2个小时后雨量渐停。"
+    )
+    assert text.build_draft_answer(facts=continuous, question="市民中心天气怎么样？")["answer"] == (
+        "当前到未来短时市民中心开始出现达到有效阈值的降雨，"
+        "当前到未来短时市民中心降雨强度达到峰值，峰值等级为小雨，"
+        "起雨后持续至预报末端，整体雨势变化不大。"
+    )
     assert text.build_draft_answer(facts=citywide_rain, question="接下来天气怎么样？")["answer"] == (
-        "15分钟后富阳区、淳安县将下小雨；30分钟后富阳区雨量变大；"
-        "45分钟后淳安县雨量变大；未来三小时持续降雨且雨势增强。"
+        "15分钟后富阳区、淳安县开始出现达到有效阈值的降雨；"
+        "30分钟后富阳区降雨强度达到峰值，峰值等级为小雨；"
+        "45分钟后淳安县降雨强度达到峰值，峰值等级为小雨；"
+        "富阳区、淳安县起雨后雨势持续增强。"
     )
 
 
