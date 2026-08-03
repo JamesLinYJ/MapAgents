@@ -12,7 +12,10 @@
 import { describe, expect, it } from 'vitest'
 
 import { encodeDesktopEvent } from '../main/eventTransportEncoder.js'
-import { decodeDesktopEvent } from './eventTransportDecoder.js'
+import {
+  createOrderedDesktopEventDispatcher,
+  decodeDesktopEvent,
+} from './eventTransportDecoder.js'
 
 describe('sandboxed desktop event transport decoder', () => {
   it('roundtrips a compressed Agent run event', async () => {
@@ -23,5 +26,31 @@ describe('sandboxed desktop event transport decoder', () => {
     }
 
     expect(await decodeDesktopEvent(encodeDesktopEvent(event))).toEqual(event)
+  })
+
+  it('delivers a compressed event before a later direct event', async () => {
+    const compressedEvent = {
+      version: 1 as const,
+      event: 'transport:push' as const,
+      payload: { content: '先到的大型运行推送'.repeat(40_000) },
+    }
+    const directEvent = {
+      version: 1 as const,
+      event: 'transport:push' as const,
+      payload: { content: '后到的小型运行推送' },
+    }
+    const delivered: Array<typeof compressedEvent | typeof directEvent> = []
+    const dispatch = createOrderedDesktopEventDispatcher(
+      (event) => delivered.push(event as typeof compressedEvent | typeof directEvent),
+      (error) => {
+        throw error
+      },
+    )
+
+    const firstDelivery = dispatch(encodeDesktopEvent(compressedEvent))
+    const secondDelivery = dispatch(encodeDesktopEvent(directEvent))
+
+    await Promise.all([firstDelivery, secondDelivery])
+    expect(delivered).toEqual([compressedEvent, directEvent])
   })
 })

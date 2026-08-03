@@ -36,6 +36,7 @@ export async function validateToolContracts(
   workerSharedSecret: string,
 ): Promise<ContractValidationReport> {
   const registryTools = new Set(registry.list().map(t => t.name))
+  const registryByName = new Map(registry.list().map(tool => [tool.name, tool]))
   const requiredWorkerTools = new Set<string>(REQUIRED_METEOROLOGY_WORKER_TOOLS)
   const report: ContractValidationReport = {
     passed: true,
@@ -80,6 +81,29 @@ export async function validateToolContracts(
     if (tool.contract.toolName !== tool.toolName) {
       report.errors.push(`Worker 工具 "${tool.toolName}" 的 contract.toolName 不一致`)
       report.passed = false
+    }
+    if (tool.route !== `/tools/${tool.toolName}`) {
+      report.errors.push(`Worker 工具 "${tool.toolName}" 的 route 不符合固定工具入口`)
+      report.passed = false
+    }
+    if (tool.contract.providerId !== 'geo-platform-meteorology-worker') {
+      report.errors.push(`Worker 工具 "${tool.toolName}" 的 providerId 不符合气象 Worker 契约`)
+      report.passed = false
+    }
+    const registryTool = registryByName.get(tool.toolName)
+    if (registryTool) {
+      if (registryTool.isReadOnly !== tool.contract.readOnly) {
+        report.errors.push(
+          `工具 "${tool.toolName}" 的只读语义不一致（Node=${String(registryTool.isReadOnly)}，Worker=${String(tool.contract.readOnly)}）`,
+        )
+        report.passed = false
+      }
+      if (registryTool.isDestructive !== tool.contract.destructive) {
+        report.errors.push(
+          `工具 "${tool.toolName}" 的破坏性语义不一致（Node=${String(registryTool.isDestructive)}，Worker=${String(tool.contract.destructive)}）`,
+        )
+        report.passed = false
+      }
     }
     if (tool.schemaHash !== workerContractHash(tool.contract)) {
       report.errors.push(`Worker 工具 "${tool.toolName}" schemaHash 与 Pydantic catalog 内容不一致`)

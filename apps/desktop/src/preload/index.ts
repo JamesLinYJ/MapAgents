@@ -58,7 +58,7 @@ import {
   type DesktopControlResponse,
 } from '../contracts/desktopIpc.js'
 import { decodeDesktopControlResponse } from './controlResponseDecoder.js'
-import { decodeDesktopEvent } from './eventTransportDecoder.js'
+import { createOrderedDesktopEventDispatcher } from './eventTransportDecoder.js'
 
 const desktopPlatform = readDesktopPlatform(process.platform)
 
@@ -244,10 +244,11 @@ const bridge: DesktopBridge = {
   },
   events: {
     subscribe(listener) {
+      const dispatch = createOrderedDesktopEventDispatcher(listener, (error: unknown) => {
+        console.error(error instanceof Error ? error.message : String(error))
+      })
       const handler = (_event: Electron.IpcRendererEvent, input: unknown) => {
-        void decodeDesktopEvent(input).then(listener).catch((error: unknown) => {
-          console.error(error instanceof Error ? error.message : String(error))
-        })
+        void dispatch(input)
       }
       ipcRenderer.on(DESKTOP_IPC_CHANNELS.event, handler)
       return () => ipcRenderer.removeListener(DESKTOP_IPC_CHANNELS.event, handler)

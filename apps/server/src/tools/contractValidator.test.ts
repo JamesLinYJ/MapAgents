@@ -69,6 +69,21 @@ describe('validateToolContracts', () => {
     expect(report.passed).toBe(false)
     expect(report.errors.join('\n')).toContain('catalog hash 不一致')
   })
+
+  it('rejects Node and Worker read/write semantic drift', async () => {
+    const registry = registryWithMeteorology()
+    const catalog = fullCatalog()
+    const reportTool = catalog.tools.find(tool => tool.toolName === 'meteorological_report')
+    if (!reportTool) throw new Error('测试目录缺少 meteorological_report')
+    reportTool.contract.readOnly = true
+    reportTool.schemaHash = workerContractHash(reportTool.contract)
+    stubCatalog(catalog)
+
+    const report = await validateToolContracts(registry, 'http://worker-semantic-drift', 'secret')
+
+    expect(report.passed).toBe(false)
+    expect(report.errors.join('\n')).toContain('只读语义不一致')
+  })
 })
 
 function registryWithMeteorology(): ToolRegistry {
@@ -98,7 +113,7 @@ function fullCatalog(): WorkerToolCatalog {
       resultSchema: { type: 'object', additionalProperties: true },
       valueRefInputs: [],
       valueRefOutputs: [],
-      readOnly: toolName !== 'meteorological_report',
+      readOnly: !['meteorological_report', 'meteorological_nowcast_report'].includes(toolName),
       destructive: false,
       timeoutSeconds: 300,
       displaySurfaces: [],
