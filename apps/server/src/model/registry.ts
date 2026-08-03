@@ -34,6 +34,7 @@ export interface ModelAdapter {
   capabilities(): string[]
   createAgentModel?(modelName?: string | null): Model
   chat(prompt: string, kwargs?: Record<string, unknown>): Promise<Record<string, unknown>>
+  close?(): Promise<void>
 }
 
 // --- Registry ---
@@ -120,6 +121,10 @@ export class ModelAdapterRegistry {
         contextWindowTokens: a.contextWindowTokens ?? inferContextWindow(a.defaultModel),
       }
     })
+  }
+
+  async close(): Promise<void> {
+    await Promise.all([...this.adapters.values()].map(adapter => adapter.close?.()))
   }
 }
 

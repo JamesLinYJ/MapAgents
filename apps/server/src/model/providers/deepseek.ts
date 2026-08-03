@@ -23,6 +23,10 @@ import {
   recordModelRequestCompletion,
   recordModelRequestFailure,
 } from '../../observability/modelRequestTelemetry.js'
+import {
+  OpenAIProviderTransport,
+  type OpenAIClientTransport,
+} from './openaiTransport.js'
 
 export const DEEPSEEK_RESPONSES_MODEL = 'deepseek-v4-flash'
 
@@ -32,10 +36,19 @@ export interface DeepSeekOptions {
   defaultModel: string
   displayName?: string
   toolSchemaMode: AgentToolSchemaMode
+  transport?: OpenAIClientTransport
 }
 export function createDeepSeekAdapter(opts: DeepSeekOptions): ModelAdapter {
   const baseUrl = opts.baseUrl.replace(/\/$/, '')
-  const client = opts.apiKey ? new OpenAI({ baseURL: baseUrl, apiKey: opts.apiKey }) : null
+  const transport = opts.apiKey && baseUrl
+    ? opts.transport ?? new OpenAIProviderTransport(baseUrl)
+    : null
+  const client = transport ? new OpenAI({
+    baseURL: baseUrl,
+    apiKey: opts.apiKey,
+    fetch: transport.fetch,
+    maxRetries: 0,
+  }) : null
   const availableModels = [DEEPSEEK_RESPONSES_MODEL]
 
   return {
@@ -82,6 +95,10 @@ export function createDeepSeekAdapter(opts: DeepSeekOptions): ModelAdapter {
       'hosted_web_search',
     ],
 
+    async close(): Promise<void> {
+      await transport?.close()
+    },
+
     async chat(prompt: string, kwargs?: Record<string, unknown>): Promise<Record<string, unknown>> {
       if (!client) throw new Error('DeepSeek provider 未配置 API key')
       const requestedModel = typeof kwargs?.model === 'string' ? kwargs.model : opts.defaultModel
@@ -107,6 +124,7 @@ export function createDeepSeekAdapter(opts: DeepSeekOptions): ModelAdapter {
           context: { provider: 'deepseek', model, transport: 'deepseek_responses' },
           responseId: null,
           durationMs: elapsedMilliseconds(startedAt),
+          timeToResponseStartedMs: null,
           error,
         })
         throw error
@@ -119,6 +137,7 @@ export function createDeepSeekAdapter(opts: DeepSeekOptions): ModelAdapter {
         responseId: response.id,
         requestId: response._request_id ?? null,
         durationMs: elapsedMilliseconds(startedAt),
+        timeToResponseStartedMs: null,
         timeToFirstTextDeltaMs: null,
         usage: {
           inputTokens: usage?.input_tokens ?? 0,

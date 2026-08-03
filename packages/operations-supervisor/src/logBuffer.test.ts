@@ -115,6 +115,9 @@ describe('OperationsLogBuffer', () => {
         name: 'http',
         traceId: 'trace_1',
         runId: 'run_1',
+        durationMs: 12_000,
+        timeToResponseStartedMs: 11_000,
+        timeToFirstTextDeltaMs: 11_800,
         error: {
           name: 'DatabaseError',
           message: '函数不存在',
@@ -143,6 +146,9 @@ describe('OperationsLogBuffer', () => {
         runId: 'run_1',
       },
       attributes: {
+        durationMs: 12_000,
+        timeToResponseStartedMs: 11_000,
+        timeToFirstTextDeltaMs: 11_800,
         errorName: 'DatabaseError',
         errorMessage: '函数不存在',
         errorCode: '42883',

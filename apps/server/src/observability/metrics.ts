@@ -106,9 +106,16 @@ export const modelRequestDurationMs = new Histogram({
   buckets: [100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000, 180000],
 })
 
+export const modelTimeToResponseStartedMs = new Histogram({
+  name: 'geo_agent_platform_model_time_to_response_started_ms',
+  help: '模型请求从发起到收到 response_started 的耗时 (ms)',
+  labelNames: ['provider', 'model', 'transport'],
+  buckets: [50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000],
+})
+
 export const modelTimeToFirstTextDeltaMs = new Histogram({
   name: 'geo_agent_platform_model_first_text_delta_ms',
-  help: '模型首个文本增量耗时 (ms)',
+  help: '模型请求从发起到首个文本增量的耗时 (ms)',
   labelNames: ['provider', 'model', 'transport'],
   buckets: [50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000],
 })

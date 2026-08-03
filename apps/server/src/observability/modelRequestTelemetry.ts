@@ -15,13 +15,15 @@ import { aggregateModelUsage } from '../agent/modelUsage.js'
 import {
   modelRequestDurationMs,
   modelRequestsTotal,
+  modelTimeToResponseStartedMs,
   modelTimeToFirstTextDeltaMs,
   modelTokensTotal,
 } from './metrics.js'
 import { logger } from './logger.js'
 
 interface ActiveModelRequest {
-  startedAt: number
+  dispatchedAt: number
+  responseStartedAt: number | null
   firstTextDeltaAt: number | null
   responseId: string | null
 }
@@ -45,7 +47,8 @@ export interface ModelTelemetryUsage {
 /** 只记录 Responses 请求的计量与关联标识，绝不接触提示词和模型正文。 */
 export class ModelRequestTelemetry {
   private active: ActiveModelRequest | null = {
-    startedAt: performance.now(),
+    dispatchedAt: performance.now(),
+    responseStartedAt: null,
     firstTextDeltaAt: null,
     responseId: null,
   }
@@ -55,11 +58,16 @@ export class ModelRequestTelemetry {
   observe(event: RunStreamEvent): void {
     if (event.type !== 'raw_model_stream_event') return
     if (event.data.type === 'response_started') {
-      this.active = {
-        startedAt: performance.now(),
+      const observedAt = performance.now()
+      const active = this.active ?? {
+        dispatchedAt: observedAt,
+        responseStartedAt: null,
         firstTextDeltaAt: null,
-        responseId: responseIdFromStartedEvent(event.data.providerData),
+        responseId: null,
       }
+      active.responseStartedAt ??= observedAt
+      active.responseId = responseIdFromStartedEvent(event.data.providerData) ?? active.responseId
+      this.active = active
       return
     }
     if (event.data.type === 'output_text_delta') {
@@ -72,7 +80,8 @@ export class ModelRequestTelemetry {
 
     const completedAt = performance.now()
     const active = this.active ?? {
-      startedAt: completedAt,
+      dispatchedAt: completedAt,
+      responseStartedAt: null,
       firstTextDeltaAt: null,
       responseId: null,
     }
@@ -85,10 +94,13 @@ export class ModelRequestTelemetry {
         ? { inputTokensDetails: responseUsage.inputTokensDetails }
         : {}),
     } }])
-    const durationMs = roundMilliseconds(completedAt - active.startedAt)
+    const durationMs = roundMilliseconds(completedAt - active.dispatchedAt)
+    const responseStartedMs = active.responseStartedAt === null
+      ? null
+      : roundMilliseconds(active.responseStartedAt - active.dispatchedAt)
     const firstTextDeltaMs = active.firstTextDeltaAt === null
       ? null
-      : roundMilliseconds(active.firstTextDeltaAt - active.startedAt)
+      : roundMilliseconds(active.firstTextDeltaAt - active.dispatchedAt)
     const responseId = event.data.response.id || active.responseId
     const requestId = event.data.response.requestId
     recordModelRequestCompletion({
@@ -96,6 +108,7 @@ export class ModelRequestTelemetry {
       responseId,
       requestId: requestId ?? null,
       durationMs,
+      timeToResponseStartedMs: responseStartedMs,
       timeToFirstTextDeltaMs: firstTextDeltaMs,
       usage,
     })
@@ -105,11 +118,15 @@ export class ModelRequestTelemetry {
   fail(error: unknown): void {
     const active = this.active
     if (!active) return
-    const durationMs = roundMilliseconds(performance.now() - active.startedAt)
+    const durationMs = roundMilliseconds(performance.now() - active.dispatchedAt)
+    const responseStartedMs = active.responseStartedAt === null
+      ? null
+      : roundMilliseconds(active.responseStartedAt - active.dispatchedAt)
     recordModelRequestFailure({
       context: this.context,
       responseId: active.responseId,
       durationMs,
+      timeToResponseStartedMs: responseStartedMs,
       error,
     })
     this.active = null
@@ -121,12 +138,16 @@ export function recordModelRequestCompletion(input: {
   responseId: string | null
   requestId: string | null
   durationMs: number
+  timeToResponseStartedMs: number | null
   timeToFirstTextDeltaMs: number | null
   usage: ModelTelemetryUsage
 }): void {
   const labels = metricLabels(input.context)
   modelRequestsTotal.inc({ ...labels, status: 'succeeded' })
   modelRequestDurationMs.observe(labels, input.durationMs)
+  if (input.timeToResponseStartedMs !== null) {
+    modelTimeToResponseStartedMs.observe(labels, input.timeToResponseStartedMs)
+  }
   if (input.timeToFirstTextDeltaMs !== null) {
     modelTimeToFirstTextDeltaMs.observe(labels, input.timeToFirstTextDeltaMs)
   }
@@ -141,6 +162,7 @@ export function recordModelRequestCompletion(input: {
     ...(input.responseId ? { responseId: input.responseId } : {}),
     ...(input.requestId ? { requestId: input.requestId } : {}),
     durationMs: input.durationMs,
+    timeToResponseStartedMs: input.timeToResponseStartedMs,
     timeToFirstTextDeltaMs: input.timeToFirstTextDeltaMs,
     ...input.usage,
   }, '模型请求已完成。')
@@ -150,12 +172,16 @@ export function recordModelRequestFailure(input: {
   context: ModelTelemetryContext
   responseId: string | null
   durationMs: number
+  timeToResponseStartedMs: number | null
   error: unknown
 }): void {
   const failure = classifyFailure(input.error)
   const labels = metricLabels(input.context)
   modelRequestsTotal.inc({ ...labels, status: 'failed' })
   modelRequestDurationMs.observe(labels, input.durationMs)
+  if (input.timeToResponseStartedMs !== null) {
+    modelTimeToResponseStartedMs.observe(labels, input.timeToResponseStartedMs)
+  }
   logger.error({
     event: 'model.request.failed',
     category: 'model',
@@ -166,6 +192,7 @@ export function recordModelRequestFailure(input: {
       : {}),
     ...(failure.requestId ? { requestId: failure.requestId } : {}),
     durationMs: input.durationMs,
+    timeToResponseStartedMs: input.timeToResponseStartedMs,
     errorType: failure.type,
     ...(failure.code ? { errorCode: failure.code } : {}),
     ...(failure.status !== null ? { statusCode: failure.status } : {}),

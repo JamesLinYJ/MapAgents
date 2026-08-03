@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createDeepSeekAdapter,
   DEEPSEEK_RESPONSES_MODEL,
+  type DeepSeekOptions,
 } from './deepseek.js'
 
 describe('DeepSeek configured model boundary', () => {
@@ -54,6 +55,7 @@ describe('DeepSeek configured model boundary', () => {
       apiKey: 'test-key',
       defaultModel: 'gpt-5.6-sol',
       toolSchemaMode: 'compatible',
+      transport: testTransport(),
     })
 
     expect(adapter.isConfigured()).toBe(false)
@@ -108,6 +110,26 @@ describe('DeepSeek configured model boundary', () => {
     })
     expect(requests[0]?.body).not.toHaveProperty('messages')
   })
+
+  it('does not retry an HTTP failure inside the OpenAI client', async () => {
+    const request = vi.fn(async () => new Response(JSON.stringify({
+      error: { message: 'temporary upstream failure', type: 'server_error' },
+    }), {
+      status: 500,
+      headers: { 'content-type': 'application/json' },
+    }))
+    const adapter = createDeepSeekAdapter({
+      baseUrl: 'https://api.deepseek.example',
+      apiKey: 'test-key',
+      defaultModel: DEEPSEEK_RESPONSES_MODEL,
+      toolSchemaMode: 'compatible',
+      transport: testTransport(request),
+    })
+
+    await expect(adapter.chat('请回复 OK。', { reasoning: false })).rejects.toThrow()
+
+    expect(request).toHaveBeenCalledOnce()
+  })
 })
 
 function createAdapter() {
@@ -116,5 +138,15 @@ function createAdapter() {
     apiKey: 'test-key',
     defaultModel: DEEPSEEK_RESPONSES_MODEL,
     toolSchemaMode: 'compatible',
+    transport: testTransport(),
   })
+}
+
+function testTransport(
+  request: typeof globalThis.fetch = (...args) => globalThis.fetch(...args),
+): NonNullable<DeepSeekOptions['transport']> {
+  return {
+    fetch: request,
+    close: async () => undefined,
+  }
 }

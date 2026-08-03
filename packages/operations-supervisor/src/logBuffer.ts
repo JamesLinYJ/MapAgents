@@ -46,6 +46,7 @@ const STRUCTURED_ATTRIBUTE_KEYS = new Set([
   'failureCode',
   'transport',
   'durationMs',
+  'timeToResponseStartedMs',
   'timeToFirstTextDeltaMs',
   'inputTokens',
   'outputTokens',

@@ -274,7 +274,7 @@ export async function createAppContainer(input: {
     shutdown: async () => {
       await jobQueue.stop()
       await Promise.all([runTasks.drain(), backgroundTasks.drain(), mapTileGateway.close()])
-      await agentTracing?.shutdown()
+      await Promise.all([modelRegistry.close(), agentTracing?.shutdown()])
     },
     checkReadiness: () => checkReadiness({ db, managedLayers, instanceLock, env }),
   }
@@ -285,6 +285,9 @@ export async function createAppContainer(input: {
         logger.error({ error: errorLogPayload(cleanupError) }, 'job queue cleanup after startup failure failed')
       })
     }
+    await modelRegistry.close().catch(cleanupError => {
+      logger.error({ error: errorLogPayload(cleanupError) }, 'model transport cleanup after startup failure failed')
+    })
     await mapTileGateway.close().catch(cleanupError => {
       logger.error({ error: errorLogPayload(cleanupError) }, 'map tile renderer cleanup after startup failure failed')
     })
