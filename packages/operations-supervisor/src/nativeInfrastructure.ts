@@ -9,6 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
+import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -166,7 +167,7 @@ async function ensurePostgresCluster(config: NativeInfrastructureConfig): Promis
       '--username', config.database.user,
       '--pwfile', passwordFile,
       '--auth-host', 'scram-sha-256',
-      '--auth-local', 'trust',
+      '--auth-local', 'scram-sha-256',
       '--encoding', 'UTF8',
     ], {
       cwd: config.projectRoot,
@@ -205,15 +206,50 @@ async function ensureDatabase(config: NativeInfrastructureConfig): Promise<void>
 
 async function applyMigrations(config: NativeInfrastructureConfig): Promise<void> {
   const migrationDirectory = path.join(config.projectRoot, 'infra', 'migrations')
-  const entries = (await fs.readdir(migrationDirectory, { withFileTypes: true }))
-    .filter(entry => entry.isFile() && /^\d{3}_[a-z0-9_]+\.sql$/u.test(entry.name))
-    .sort((left, right) => left.name.localeCompare(right.name))
+  const entries = await loadMigrationEntries(migrationDirectory)
   if (!entries.length) throw new Error('未找到数据库 migration，原生基础设施拒绝启动。')
+
+  const applied = await readAppliedMigrations(config)
+  const knownIds = new Set(entries.map(entry => entry.id))
+  const unknownApplied = [...applied.keys()].filter(id => !knownIds.has(id))
+  if (unknownApplied.length > 0) {
+    throw new Error(
+      `数据库包含当前发布未提供的 migration：${unknownApplied.join('、')}。`
+      + '请先安装匹配的服务制品，禁止继续启动。',
+    )
+  }
+
+  const pending = []
   for (const entry of entries) {
+    const previous = applied.get(entry.id)
+    if (previous?.checksum && previous.checksum !== entry.checksum) {
+      throw new Error(
+        `migration ${entry.id} 的 checksum 已变化（数据库 ${previous.checksum}，文件 ${entry.checksum}）。`
+        + '已应用 migration 不得修改，请恢复原文件并创建新的增量 migration。',
+      )
+    }
+    if (!previous || !previous.checksum) pending.push(entry)
+  }
+  if (!pending.length) return
+
+  const release = config.environment.RELEASE_VERSION
+    ?? config.environment.APP_VERSION
+    ?? 'development'
+  const wrapperPath = path.join(
+    config.runtimeRoot,
+    'native',
+    `.migration-run-${process.pid}-${Date.now()}.sql`,
+  )
+  await fs.mkdir(path.dirname(wrapperPath), { recursive: true })
+  await fs.writeFile(wrapperPath, buildMigrationWrapper(pending, release), {
+    encoding: 'utf8',
+    mode: 0o600,
+  })
+  try {
     await execFileAsync(config.database.binaries.psql, [
       ...databaseArguments(config, config.database.name),
       '-v', 'ON_ERROR_STOP=1',
-      '-f', path.join(migrationDirectory, entry.name),
+      '-f', wrapperPath,
     ], {
       cwd: config.projectRoot,
       env: processEnvironment(config),
@@ -221,7 +257,124 @@ async function applyMigrations(config: NativeInfrastructureConfig): Promise<void
       windowsHide: true,
       maxBuffer: 16 * 1024 * 1024,
     })
+  } finally {
+    await fs.rm(wrapperPath, { force: true })
   }
+}
+
+interface MigrationEntry {
+  id: string
+  filePath: string
+  checksum: string
+}
+
+interface AppliedMigration {
+  checksum: string | null
+}
+
+async function loadMigrationEntries(migrationDirectory: string): Promise<MigrationEntry[]> {
+  const entries = (await fs.readdir(migrationDirectory, { withFileTypes: true }))
+    .filter(entry => entry.isFile() && /^\d{3}_[a-z0-9_]+\.sql$/u.test(entry.name))
+    .sort((left, right) => left.name.localeCompare(right.name))
+  const migrations: MigrationEntry[] = []
+  for (const entry of entries) {
+    const filePath = path.join(migrationDirectory, entry.name)
+    const content = await fs.readFile(filePath)
+    migrations.push({
+      id: entry.name.replace(/\.sql$/u, ''),
+      filePath,
+      // Git/Windows may materialize SQL with CRLF; checksum the logical SQL
+      // text so a checkout on another platform does not look like migration drift.
+      checksum: createHash('sha256')
+        .update(content.toString('utf8').replace(/\r\n?/gu, '\n'))
+        .digest('hex'),
+    })
+  }
+  return migrations
+}
+
+async function readAppliedMigrations(
+  config: NativeInfrastructureConfig,
+): Promise<Map<string, AppliedMigration>> {
+  const tableResult = await execFileAsync(config.database.binaries.psql, [
+    ...databaseArguments(config, config.database.name),
+    '-X',
+    '-qAt',
+    '-v', 'ON_ERROR_STOP=1',
+    '-c', "SELECT to_regclass('public.platform_schema_migrations');",
+  ], {
+    env: processEnvironment(config),
+    timeout: 15_000,
+    windowsHide: true,
+  })
+  if (!tableResult.stdout.trim()) return new Map()
+
+  const checksumColumnResult = await execFileAsync(config.database.binaries.psql, [
+    ...databaseArguments(config, config.database.name),
+    '-X',
+    '-qAt',
+    '-v', 'ON_ERROR_STOP=1',
+    '-c', [
+      'SELECT 1 FROM information_schema.columns',
+      "WHERE table_schema = 'public'",
+      "AND table_name = 'platform_schema_migrations'",
+      "AND column_name = 'checksum';",
+    ].join(' '),
+  ], {
+    env: processEnvironment(config),
+    timeout: 15_000,
+    windowsHide: true,
+  })
+  const query = checksumColumnResult.stdout.trim() === '1'
+    ? 'SELECT migration_id, checksum FROM platform_schema_migrations ORDER BY migration_id;'
+    : 'SELECT migration_id FROM platform_schema_migrations ORDER BY migration_id;'
+  const result = await execFileAsync(config.database.binaries.psql, [
+    ...databaseArguments(config, config.database.name),
+    '-X',
+    '-qAt',
+    '-F', '\t',
+    '-v', 'ON_ERROR_STOP=1',
+    '-c', query,
+  ], {
+    env: processEnvironment(config),
+    timeout: 15_000,
+    windowsHide: true,
+  })
+  return parseAppliedMigrationRows(result.stdout)
+}
+
+function parseAppliedMigrationRows(output: string): Map<string, AppliedMigration> {
+  const applied = new Map<string, AppliedMigration>()
+  for (const line of output.split(/\r?\n/u).map(value => value.trim()).filter(Boolean)) {
+    const [id, checksum] = line.split('\t')
+    if (!id) continue
+    applied.set(id, { checksum: checksum || null })
+  }
+  return applied
+}
+
+export function buildMigrationWrapper(entries: readonly MigrationEntry[], release: string): string {
+  const lines = [
+    '\\set ON_ERROR_STOP on',
+    "SELECT pg_advisory_lock(hashtext('geo-agent-platform:migrations'));",
+  ]
+  for (const entry of entries) {
+    lines.push(`\\i ${sqlLiteral(path.resolve(entry.filePath).replaceAll('\\', '/'))}`)
+    lines.push(
+      'INSERT INTO platform_schema_migrations '
+      + '(migration_id, checksum, applied_at, application_release) '
+      + `VALUES (${sqlLiteral(entry.id)}, ${sqlLiteral(entry.checksum)}, NOW(), ${sqlLiteral(release)}) `
+      + 'ON CONFLICT (migration_id) DO UPDATE SET '
+      + 'checksum = EXCLUDED.checksum, '
+      + 'application_release = EXCLUDED.application_release;',
+    )
+  }
+  lines.push('SELECT pg_advisory_unlock(hashtext(\'geo-agent-platform:migrations\'));')
+  return `${lines.join('\n')}\n`
+}
+
+function sqlLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`
 }
 
 async function waitForPostgres(config: NativeInfrastructureConfig, timeoutMs: number): Promise<void> {

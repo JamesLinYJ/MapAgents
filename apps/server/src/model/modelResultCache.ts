@@ -310,27 +310,6 @@ export async function recordModelCompletionUsage(
   })
 }
 
-export async function ensureModelResultCacheTable(db: Database): Promise<void> {
-  // DDL 是启动期 schema 建立的明确例外；在线读写只使用 Drizzle query builder。
-  await db.execute(sql`
-    CREATE TABLE IF NOT EXISTS platform_model_result_cache (
-      cache_key text PRIMARY KEY,
-      workspace_id text NOT NULL REFERENCES platform_workspaces(workspace_id) ON DELETE CASCADE,
-      provider text NOT NULL,
-      model text NOT NULL,
-      purpose text NOT NULL,
-      content text NOT NULL,
-      usage_json jsonb NOT NULL DEFAULT '{}'::jsonb,
-      hit_count integer NOT NULL DEFAULT 0 CHECK (hit_count >= 0),
-      created_at timestamptz NOT NULL DEFAULT now(),
-      expires_at timestamptz NOT NULL,
-      last_accessed_at timestamptz NOT NULL DEFAULT now()
-    )
-  `)
-  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_model_result_cache_workspace_expiry ON platform_model_result_cache(workspace_id, expires_at)`)
-  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_model_result_cache_expiry ON platform_model_result_cache(expires_at)`)
-}
-
 function modelCacheKey(input: ModelCompletionRequest & { provider: string; model: string; cacheNamespace: string }): string {
   const stable = JSON.stringify({
     version: 1,

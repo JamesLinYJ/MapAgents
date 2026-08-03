@@ -27,7 +27,7 @@ import { MapTileGateway } from '../map/mapTileGateway.js'
 import { PostgisVectorTileSource } from '../map/postgisVectorTileSource.js'
 import { seedLayersFromDirectory } from '../gis/seedLayers.js'
 import { ModelAdapterRegistry } from '../model/registry.js'
-import { ensureModelResultCacheTable, ModelCompletionService, ModelResultCacheStore } from '../model/modelResultCache.js'
+import { ModelCompletionService, ModelResultCacheStore } from '../model/modelResultCache.js'
 import { errorLogPayload, logger } from '../observability/logger.js'
 import type { LocalAgentTracing } from '../observability/agentTracing.js'
 import { ensureMeteorologicalTables } from '../routes/meteorology.js'
@@ -155,7 +155,6 @@ export async function createAppContainer(input: {
     await verifyDatabaseSchemaCompatibility(db)
     await ensureMeteorologicalTables(db)
     await ensureSecurityTables(db)
-    await ensureModelResultCacheTable(db)
     await store.initialize()
     await new RuntimeIntegrityChecker(
       new PostgresRuntimeIntegrityCatalog(db),

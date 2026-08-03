@@ -11,39 +11,11 @@
 --   用途:       创建全部核心表、索引、约束。
 --               不包含旧登录/session 兼容代码。
 --               应在首次部署或 reset 后作为第一步执行。
---
---   维护记录 (2026-07-31):
---     作者: JamesLinYJ
---     协助: OpenAI Codex:GPT-5.6 Sol
---     说明: 将历史增量 SQL 合并为单一事务化基线；旧数据库必须显式重建，
---           不再通过兼容补丁逐级升级。
 -- --------------------------------------------------------------------------
 
 BEGIN;
 
 CREATE EXTENSION IF NOT EXISTS postgis;
-
-CREATE TABLE IF NOT EXISTS platform_schema_migrations (
-  migration_id TEXT PRIMARY KEY,
-  applied_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-DO $baseline$
-BEGIN
-  IF EXISTS (
-    SELECT 1
-    FROM platform_schema_migrations
-    WHERE migration_id <> '001_init_postgis'
-  ) AND NOT EXISTS (
-    SELECT 1
-    FROM platform_schema_migrations
-    WHERE migration_id = '001_init_postgis'
-  ) THEN
-    RAISE EXCEPTION
-      '检测到旧数据库迁移链；当前基线只支持全新数据库，请先执行开发数据库重建。';
-  END IF;
-END
-$baseline$;
 
 -- ==========================================================================
 -- Better Auth 认证表（auth_user / auth_session / auth_account / auth_verification）
@@ -698,9 +670,5 @@ CREATE INDEX IF NOT EXISTS idx_automation_runs_workspace_started
   ON platform_automation_runs (workspace_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_automation_runs_scheduled_task_started
   ON platform_automation_runs (scheduled_task_id, started_at);
-
-INSERT INTO platform_schema_migrations (migration_id)
-VALUES ('001_init_postgis')
-ON CONFLICT (migration_id) DO NOTHING;
 
 COMMIT;

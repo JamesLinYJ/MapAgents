@@ -319,7 +319,17 @@ describe('platform architecture', () => {
     const migrationFiles = (await readdir(
       path.join(repositoryRoot, 'infra/migrations'),
     )).filter(file => file.endsWith('.sql')).sort()
-    expect(migrationFiles).toEqual(['001_init_postgis.sql'])
+    expect(migrationFiles).toEqual([
+      '000_schema_migrations.sql',
+      '001_init_postgis.sql',
+      '002_automation_reliability_constraints.sql',
+      '003_better_auth_admin.sql',
+      '004_agents_sdk_native_runtime.sql',
+      '005_remove_public_sharing.sql',
+      '006_native_agent_runtime.sql',
+      '007_model_result_cache.sql',
+      '008_tool_result_commit_idempotency.sql',
+    ])
 
     const operationalSourceFiles = await collectProductionFiles([
       path.join(repositoryRoot, 'packages/operations-supervisor/src'),

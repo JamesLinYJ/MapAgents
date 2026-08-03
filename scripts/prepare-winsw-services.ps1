@@ -20,6 +20,10 @@ if (-not $IsWindows) { throw 'WinSW 服务包只能在 Windows 上生成。' }
 $Root = [IO.Path]::GetFullPath((Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)))
 $ServiceRoot = [IO.Path]::GetFullPath($ServiceRoot)
 $PowerShell = (Get-Command pwsh.exe -ErrorAction Stop).Source
+$ServiceScript = Join-Path $Root 'scripts\run-windows-service.ps1'
+if (-not (Test-Path -LiteralPath $ServiceScript -PathType Leaf)) {
+    throw "WinSW 服务入口脚本不存在：$ServiceScript"
+}
 $WinSW = (& (Join-Path $Root 'scripts\install-winsw.ps1') | Select-Object -Last 1)
 if (-not $WinSW -or -not (Test-Path -LiteralPath $WinSW -PathType Leaf)) { throw 'WinSW 固定版本安装失败。' }
 
@@ -50,6 +54,9 @@ foreach ($Service in $Services) {
     foreach ($Entry in $Values.GetEnumerator()) {
         $Escaped = [Security.SecurityElement]::Escape([string]$Entry.Value)
         $Xml = $Xml.Replace([string]$Entry.Key, $Escaped)
+    }
+    if (-not $Xml.Contains('run-windows-service.ps1')) {
+        throw "WinSW 模板未指向受校验的服务入口脚本：$TemplatePath"
     }
     [xml]$Validated = $Xml
     $Validated.Save($Configuration)

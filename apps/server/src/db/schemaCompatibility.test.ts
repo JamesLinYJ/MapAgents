@@ -13,6 +13,22 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { verifyDatabaseSchemaCompatibility } from './schemaCompatibility.js'
 
+const migrationIds = [
+  '000_schema_migrations',
+  '001_init_postgis',
+  '002_automation_reliability_constraints',
+  '003_better_auth_admin',
+  '004_agents_sdk_native_runtime',
+  '005_remove_public_sharing',
+  '006_native_agent_runtime',
+  '007_model_result_cache',
+  '008_tool_result_commit_idempotency',
+] as const
+
+function currentMigrations() {
+  return migrationIds.map(migration_id => ({ migration_id, checksum: 'a'.repeat(64) }))
+}
+
 function databaseWithRows(...rows: unknown[][]) {
   return {
     execute: vi.fn()
@@ -26,8 +42,11 @@ describe('verifyDatabaseSchemaCompatibility', () => {
   it('接受当前单一基线', async () => {
     const db = databaseWithRows(
       [{ table_name: 'platform_schema_migrations' }],
-      [{ migration_id: '001_init_postgis' }],
-      [{ vector_tile_function: 'geo_agent_platform_layer_tiles(integer,integer,integer,json)' }],
+      currentMigrations(),
+      [{
+        vector_tile_function: 'geo_agent_platform_layer_tiles(integer,integer,integer,json)',
+        model_result_cache_table: 'platform_model_result_cache',
+      }],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never)).resolves.toBeUndefined()
@@ -37,7 +56,7 @@ describe('verifyDatabaseSchemaCompatibility', () => {
     const db = databaseWithRows([{ table_name: null }])
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
-      .rejects.toThrow(/001_init_postgis/u)
+      .rejects.toThrow(/000_schema_migrations/u)
   })
 
   it('拒绝没有当前基线记录的数据库', async () => {
@@ -53,10 +72,7 @@ describe('verifyDatabaseSchemaCompatibility', () => {
   it('拒绝让旧服务连接未来版本数据库', async () => {
     const db = databaseWithRows(
       [{ table_name: 'platform_schema_migrations' }],
-      [
-        { migration_id: '001_init_postgis' },
-        { migration_id: '002_future_change' },
-      ],
+      [...currentMigrations(), { migration_id: '009_future_change', checksum: 'b'.repeat(64) }],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
@@ -66,11 +82,37 @@ describe('verifyDatabaseSchemaCompatibility', () => {
   it('拒绝迁移记录存在但固定瓦片函数缺失的半升级数据库', async () => {
     const db = databaseWithRows(
       [{ table_name: 'platform_schema_migrations' }],
-      [{ migration_id: '001_init_postgis' }],
-      [{ vector_tile_function: null }],
+      currentMigrations(),
+      [{ vector_tile_function: null, model_result_cache_table: 'platform_model_result_cache' }],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
       .rejects.toThrow(/geo_agent_platform_layer_tiles\(integer, integer, integer, json\)/u)
+  })
+
+  it('拒绝没有 checksum 的遗留迁移记录', async () => {
+    const db = databaseWithRows(
+      [{ table_name: 'platform_schema_migrations' }],
+      currentMigrations().map(row => row.migration_id === '001_init_postgis'
+        ? { migration_id: row.migration_id, checksum: null }
+        : row),
+    )
+
+    await expect(verifyDatabaseSchemaCompatibility(db as never))
+      .rejects.toThrow(/没有 checksum/u)
+  })
+
+  it('拒绝缓存表缺失的半升级数据库', async () => {
+    const db = databaseWithRows(
+      [{ table_name: 'platform_schema_migrations' }],
+      currentMigrations(),
+      [{
+        vector_tile_function: 'geo_agent_platform_layer_tiles(integer,integer,integer,json)',
+        model_result_cache_table: null,
+      }],
+    )
+
+    await expect(verifyDatabaseSchemaCompatibility(db as never))
+      .rejects.toThrow(/platform_model_result_cache/u)
   })
 })

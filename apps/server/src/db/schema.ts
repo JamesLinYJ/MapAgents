@@ -287,6 +287,14 @@ export const platformRunRecords = pgTable('platform_run_records', {
   traceIdx: index('idx_run_records_trace').on(table.traceId),
 }))
 
+export const platformToolResultCommits = pgTable('platform_tool_result_commits', {
+  runId: text('run_id').notNull().references(() => platformRuns.runId, { onDelete: 'cascade' }),
+  resultId: text('result_id').notNull(),
+  committedAt: timestamp('committed_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  primaryKey: primaryKey({ columns: [table.runId, table.resultId] }),
+}))
+
 export const platformRunInputs = pgTable('platform_run_inputs', {
   inputId: text('input_id').primaryKey(),
   runId: text('run_id').notNull().references(() => platformRuns.runId, { onDelete: 'cascade' }),

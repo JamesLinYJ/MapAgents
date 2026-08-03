@@ -14,14 +14,23 @@ import { z } from 'zod'
 
 import type { Database } from './connection.js'
 
-const REQUIRED_MIGRATIONS = [
+export const REQUIRED_MIGRATIONS = [
+  '000_schema_migrations',
   '001_init_postgis',
+  '002_automation_reliability_constraints',
+  '003_better_auth_admin',
+  '004_agents_sdk_native_runtime',
+  '005_remove_public_sharing',
+  '006_native_agent_runtime',
+  '007_model_result_cache',
+  '008_tool_result_commit_idempotency',
 ] as const
 
-export const CURRENT_DATABASE_SCHEMA_VERSION = 1
+export const CURRENT_DATABASE_SCHEMA_VERSION = 8
 
 const migrationRowsSchema = z.array(z.object({
   migration_id: z.string().min(1),
+  checksum: z.string().nullable().optional(),
 }))
 
 /**
@@ -38,12 +47,14 @@ export async function verifyDatabaseSchemaCompatibility(
   if (typeof tableName !== 'string') {
     throw new Error(
       '数据库尚未启用版本跟踪。请重建开发数据库并应用 '
-      + 'infra/migrations/001_init_postgis.sql 后重新启动。',
+      + 'infra/migrations/000_schema_migrations.sql 至 008_tool_result_commit_idempotency.sql '
+      + '后重新启动。',
     )
   }
 
   const migrationResult = await db.execute(sql`
     SELECT migration_id
+      , checksum
     FROM platform_schema_migrations
     ORDER BY migration_id
   `)
@@ -53,7 +64,18 @@ export async function verifyDatabaseSchemaCompatibility(
   if (missing.length > 0) {
     throw new Error(
       `数据库不是当前基线，缺少：${missing.join('、')}。`
-      + '请重建开发数据库；禁止只补写版本记录。',
+      + '请先执行部署阶段 migration；禁止只补写版本记录。',
+    )
+  }
+
+  const unverified = migrationResult.rows
+    .map(row => migrationRowsSchema.element.parse(row))
+    .filter(row => !row.checksum)
+    .map(row => row.migration_id)
+  if (unverified.length > 0) {
+    throw new Error(
+      `数据库存在没有 checksum 的 migration：${unverified.join('、')}。`
+      + '请使用当前版本迁移器完成一次校准后再启动服务。',
     )
   }
 
@@ -70,17 +92,30 @@ export async function verifyDatabaseSchemaCompatibility(
   const capabilityResult = await db.execute(sql`
     SELECT to_regprocedure(
       'public.geo_agent_platform_layer_tiles(integer,integer,integer,json)'
-    ) AS vector_tile_function
+    ) AS vector_tile_function,
+    to_regclass('public.platform_model_result_cache') AS model_result_cache_table
   `)
   const vectorTileFunction = (
-    capabilityResult.rows[0] as { vector_tile_function?: unknown } | undefined
+    capabilityResult.rows[0] as {
+      vector_tile_function?: unknown
+      model_result_cache_table?: unknown
+    } | undefined
   )?.vector_tile_function
   if (typeof vectorTileFunction !== 'string') {
     throw new Error(
       '数据库迁移记录与实际能力不一致：缺少 '
       + 'geo_agent_platform_layer_tiles(integer, integer, integer, json)。'
-      + '请重建数据库并重新应用 infra/migrations/001_init_postgis.sql；'
+      + '请重新执行部署阶段 migration；'
       + '禁止只补写迁移记录。',
+    )
+  }
+  const modelResultCacheTable = (
+    capabilityResult.rows[0] as { model_result_cache_table?: unknown } | undefined
+  )?.model_result_cache_table
+  if (typeof modelResultCacheTable !== 'string') {
+    throw new Error(
+      '数据库迁移记录与实际能力不一致：缺少 platform_model_result_cache。'
+      + '请执行 007_model_result_cache.sql；禁止由应用启动时创建业务表。',
     )
   }
 }

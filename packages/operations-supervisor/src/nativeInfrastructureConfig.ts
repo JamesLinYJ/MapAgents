@@ -37,6 +37,7 @@ export interface NativeInfrastructureConfig {
   profile: OperationsProfile
   projectRoot: string
   runtimeRoot: string
+  environment: NodeJS.ProcessEnv
   database: {
     url: string
     host: '127.0.0.1'
@@ -102,6 +103,7 @@ export function resolveNativeInfrastructureConfig(input: {
     profile: input.profile,
     projectRoot,
     runtimeRoot,
+    environment: input.environment,
     database: {
       url: environment.DATABASE_URL,
       host: '127.0.0.1',

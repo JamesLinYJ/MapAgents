@@ -2,7 +2,7 @@
 #
 #   地理智能平台 - Windows 服务固定入口
 #
-#   文件:       run-geo-agent-platform-windows-service.ps1
+#   文件:       run-windows-service.ps1
 #
 #   日期:       2026年07月21日
 #   作者:       JamesLinYJ
