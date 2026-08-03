@@ -32,6 +32,15 @@ interface PendingResponse {
   reject(error: Error): void
 }
 
+interface PendingAuthorization {
+  resolve(value: LocalAgentAuthorization): void
+  reject(error: Error): void
+  timer: NodeJS.Timeout
+}
+
+const BROKER_STDERR_BUFFER_CHARS = 8_192
+const BROKER_STDERR_REPORT_CHARS = 2_048
+
 type LocalOperationsRequestInput = LocalOperationsRequest extends infer Request
   ? Request extends { id: string }
     ? Omit<Request, 'id'>
@@ -40,8 +49,10 @@ type LocalOperationsRequestInput = LocalOperationsRequest extends infer Request
 
 export class LocalOperationsBrokerClient {
   private readonly pending = new Map<string, PendingResponse>()
-  private readonly authorizationListeners: Array<(value: LocalAgentAuthorization) => void> = []
+  private readonly authorizationWaiters = new Set<PendingAuthorization>()
   private readonly child: ChildProcessWithoutNullStreams
+  private authorization: LocalAgentAuthorization | null = null
+  private terminalError: Error | null = null
   private stderr = ''
   private closed = false
 
@@ -62,13 +73,17 @@ export class LocalOperationsBrokerClient {
     })
     this.child.stderr.setEncoding('utf8')
     this.child.stderr.on('data', chunk => {
-      this.stderr = `${this.stderr}${String(chunk)}`.slice(-8_192)
+      this.stderr = `${this.stderr}${String(chunk)}`.slice(-BROKER_STDERR_BUFFER_CHARS)
     })
-    this.child.once('error', error => this.failAll(error))
-    this.child.once('exit', code => {
+    this.child.once('error', error => this.failAll(new Error(
+      `本机运维 Broker 启动失败：${safeBrokerDiagnostic(error.message) || '未知子进程错误'}`,
+      { cause: error },
+    )))
+    this.child.once('exit', (code, signal) => {
       if (!this.closed || code !== 0) {
+        const diagnostic = safeBrokerDiagnostic(this.stderr)
         this.failAll(new Error(
-          `本机运维 Broker 已退出（${code ?? 'signal'}）${this.stderr.trim() ? `：${this.stderr.trim()}` : ''}`,
+          `本机运维 Broker 已退出（${code ?? signal ?? 'signal'}）${diagnostic ? `：${diagnostic}` : ''}`,
         ))
       }
     })
@@ -81,12 +96,19 @@ export class LocalOperationsBrokerClient {
   }
 
   async waitForAgentAuthorization(timeoutMs = 15_000): Promise<LocalAgentAuthorization> {
+    if (this.terminalError) throw this.terminalError
+    if (this.authorization) return this.authorization
+    if (this.closed) throw new Error('本机运维 Broker 已关闭。')
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('本机 Agent Broker 授权超时。')), timeoutMs)
-      this.authorizationListeners.push(value => {
-        clearTimeout(timer)
-        resolve(value)
-      })
+      const waiter: PendingAuthorization = {
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          this.authorizationWaiters.delete(waiter)
+          reject(new Error('本机 Agent Broker 授权超时。'))
+        }, timeoutMs),
+      }
+      this.authorizationWaiters.add(waiter)
     })
   }
 
@@ -179,7 +201,12 @@ export class LocalOperationsBrokerClient {
     }
     const authorization = localAgentAuthorizationSchema.safeParse(value)
     if (authorization.success) {
-      for (const listener of this.authorizationListeners.splice(0)) listener(authorization.data)
+      this.authorization = authorization.data
+      for (const waiter of this.authorizationWaiters) {
+        clearTimeout(waiter.timer)
+        waiter.resolve(authorization.data)
+      }
+      this.authorizationWaiters.clear()
       return
     }
     const response = localOperationsResponseSchema.parse(value)
@@ -191,7 +218,21 @@ export class LocalOperationsBrokerClient {
   }
 
   private failAll(error: Error): void {
+    this.terminalError ??= error
+    for (const waiter of this.authorizationWaiters) {
+      clearTimeout(waiter.timer)
+      waiter.reject(this.terminalError)
+    }
+    this.authorizationWaiters.clear()
     for (const pending of this.pending.values()) pending.reject(error)
     this.pending.clear()
   }
+}
+
+function safeBrokerDiagnostic(value: string): string {
+  return value
+    .replace(/\u001B\[[0-?]*[ -/]*[@-~]/gu, '')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/gu, '�')
+    .trim()
+    .slice(-BROKER_STDERR_REPORT_CHARS)
 }
