@@ -13,11 +13,14 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import logging
 
 from fastapi import FastAPI
 
 from worker_app.path_sandbox import WorkerPathSandbox
+from worker_app.execution import ProcessToolExecutor
+from worker_app.lifecycle import SqliteConcurrencyLimiter
 from worker_app.routes import register_system_routes
 from worker_app.security_middleware import WorkerSecurityMiddleware
 from worker_app.settings import WorkerSettings
@@ -43,14 +46,28 @@ def create_worker_app(
         shared_secret=settings.shared_secret,
         clock_skew_seconds=settings.clock_skew_seconds,
         nonce_cache_max=settings.nonce_cache_max,
+        nonce_store_path=settings.nonce_store_path,
     ))
+    concurrency_limiter = SqliteConcurrencyLimiter(
+        settings.concurrency_store_path,
+        settings.max_concurrency,
+        lease_ttl_seconds=settings.concurrency_lease_seconds,
+    )
+    tool_executor = ProcessToolExecutor(tool_registry)
 
-    app = FastAPI(title="geo-agent-platform-science-worker", version="0.3.0")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        try:
+            yield
+        finally:
+            await tool_executor.shutdown()
+
+    app = FastAPI(title="geo-agent-platform-science-worker", version="0.3.0", lifespan=lifespan)
     app.add_middleware(
         WorkerSecurityMiddleware,
         worker_auth=worker_auth,
         max_body_bytes=settings.max_body_bytes,
-        max_concurrency=settings.max_concurrency,
+        concurrency_limiter=concurrency_limiter,
         logger=app_logger,
     )
     register_system_routes(
@@ -64,9 +81,10 @@ def create_worker_app(
         app,
         tool_timeout_seconds=settings.tool_timeout_seconds,
         logger=app_logger,
-        tool_registry=tool_registry,
         tool_context=tool_context,
+        tool_executor=tool_executor,
     )
     app.state.tool_registry = tool_registry
     app.state.tool_context = tool_context
+    app.state.tool_executor = tool_executor
     return app

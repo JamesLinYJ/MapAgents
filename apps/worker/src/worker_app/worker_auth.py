@@ -18,8 +18,11 @@ from dataclasses import dataclass, field
 import hashlib
 import hmac
 import json
+from pathlib import Path
 import time
 from typing import Any
+
+from worker_app.lifecycle import LifecycleStoreError, SqliteNonceStore
 
 
 @dataclass(slots=True)
@@ -27,15 +30,23 @@ class WorkerAuthConfig:
     shared_secret: str | None
     clock_skew_seconds: int = 30
     nonce_cache_max: int = 10000
+    nonce_store_path: Path | None = None
 
 
 @dataclass(slots=True)
 class WorkerAuthVerifier:
     config: WorkerAuthConfig
     seen_nonces: dict[str, int] = field(default_factory=dict)
+    nonce_store: SqliteNonceStore | None = field(init=False, default=None)
+
+    def __post_init__(self) -> None:
+        if self.config.nonce_store_path is not None:
+            self.nonce_store = SqliteNonceStore(self.config.nonce_store_path)
 
     @property
     def nonce_cache_size(self) -> int:
+        if self.nonce_store is not None:
+            return self.nonce_store.size()
         return len(self.seen_nonces)
 
     def verify(self, authorization: str, tool_name: str, body: bytes) -> tuple[int, str] | None:
@@ -49,9 +60,13 @@ class WorkerAuthVerifier:
             seen_nonces=self.seen_nonces,
             clock_skew_seconds=self.config.clock_skew_seconds,
             nonce_cache_max=max(1, self.config.nonce_cache_max),
+            nonce_store=self.nonce_store,
         )
 
     def purge_expired_nonces(self, now: int, reserve_slots: int = 0) -> None:
+        if self.nonce_store is not None:
+            self.nonce_store.purge_expired(now)
+            return
         purge_expired_nonces(self.seen_nonces, now, max(1, self.config.nonce_cache_max), reserve_slots=reserve_slots)
 
 
@@ -64,6 +79,7 @@ def verify_worker_authorization(
     seen_nonces: dict[str, int],
     clock_skew_seconds: int,
     nonce_cache_max: int,
+    nonce_store: SqliteNonceStore | None = None,
 ) -> tuple[int, str] | None:
     if not authorization:
         return 401, "缺少 Worker 授权头"
@@ -99,10 +115,18 @@ def verify_worker_authorization(
     nonce = payload.get("nonce")
     if not isinstance(nonce, str) or len(nonce) < 16:
         return 403, "Worker 授权 nonce 无效"
-    purge_expired_nonces(seen_nonces, now, nonce_cache_max, reserve_slots=1)
-    if nonce in seen_nonces:
-        return 403, "Worker 授权 nonce 已使用"
-    seen_nonces[nonce] = exp
+    if nonce_store is not None:
+        try:
+            accepted = nonce_store.consume(nonce, exp, now, nonce_cache_max)
+        except LifecycleStoreError:
+            return 503, "Worker nonce 存储不可用"
+        if not accepted:
+            return 403, "Worker 授权 nonce 已使用"
+    else:
+        purge_expired_nonces(seen_nonces, now, nonce_cache_max, reserve_slots=1)
+        if nonce in seen_nonces:
+            return 403, "Worker 授权 nonce 已使用"
+        seen_nonces[nonce] = exp
     return None
 
 

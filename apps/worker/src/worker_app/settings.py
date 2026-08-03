@@ -27,17 +27,35 @@ class WorkerSettings:
     clock_skew_seconds: int
     tool_timeout_seconds: float
     nonce_cache_max: int
+    nonce_store_path: Path
+    concurrency_store_path: Path
+    concurrency_lease_seconds: float
 
     @classmethod
     def from_env(cls) -> "WorkerSettings":
+        runtime_root = Path(os.environ.get("RUNTIME_ROOT", "runtime")).resolve()
+        tool_timeout_seconds = _positive_float("WORKER_TOOL_TIMEOUT_SECONDS", 300.0)
+        concurrency_lease_seconds = _positive_float(
+            "WORKER_CONCURRENCY_LEASE_SECONDS",
+            tool_timeout_seconds + 30.0,
+        )
+        if concurrency_lease_seconds < tool_timeout_seconds:
+            raise ValueError("WORKER_CONCURRENCY_LEASE_SECONDS 不能小于 WORKER_TOOL_TIMEOUT_SECONDS")
         return cls(
-            runtime_root=Path(os.environ.get("RUNTIME_ROOT", "runtime")).resolve(),
+            runtime_root=runtime_root,
             shared_secret=os.environ.get("WORKER_SHARED_SECRET"),
             max_body_bytes=_positive_int("WORKER_MAX_BODY_BYTES", 16 * 1024 * 1024),
             max_concurrency=_positive_int("WORKER_MAX_CONCURRENCY", 2),
             clock_skew_seconds=_non_negative_int("WORKER_CLOCK_SKEW_SECONDS", 30),
-            tool_timeout_seconds=_positive_float("WORKER_TOOL_TIMEOUT_SECONDS", 300.0),
+            tool_timeout_seconds=tool_timeout_seconds,
             nonce_cache_max=_positive_int("WORKER_NONCE_CACHE_MAX", 10_000),
+            nonce_store_path=Path(
+                os.environ.get("WORKER_NONCE_STORE_PATH", str(runtime_root / ".worker-nonces.sqlite3"))
+            ).resolve(),
+            concurrency_store_path=Path(
+                os.environ.get("WORKER_CONCURRENCY_STORE_PATH", str(runtime_root / ".worker-concurrency.sqlite3"))
+            ).resolve(),
+            concurrency_lease_seconds=concurrency_lease_seconds,
         )
 
 

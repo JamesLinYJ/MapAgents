@@ -13,7 +13,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from typing import Any
@@ -22,7 +21,11 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from worker_app.tool_context import WorkerToolContext
-from worker_app.tool_registry import WorkerToolRegistry
+from worker_app.execution import (
+    WorkerToolExecutionError,
+    WorkerToolExecutor,
+    WorkerToolTimeoutError,
+)
 
 
 class ToolRequest(BaseModel):
@@ -34,8 +37,8 @@ def register_tool_routes(
     *,
     tool_timeout_seconds: float,
     logger: logging.Logger,
-    tool_registry: WorkerToolRegistry,
     tool_context: WorkerToolContext,
+    tool_executor: WorkerToolExecutor,
 ) -> None:
     @app.post("/tools/{tool_name}")
     async def run_meteorology_tool(tool_name: str, tool_request: ToolRequest, request: Request) -> dict[str, Any]:
@@ -43,9 +46,11 @@ def register_tool_routes(
         trace_id = getattr(request.state, "trace_id", None)
         started = time.perf_counter()
         try:
-            payload = await asyncio.wait_for(
-                asyncio.to_thread(tool_registry.dispatch, tool_name, tool_request.args, tool_context),
-                timeout=tool_timeout_seconds,
+            payload = await tool_executor.execute(
+                tool_name,
+                tool_request.args,
+                tool_context,
+                timeout_seconds=tool_timeout_seconds,
             )
             logger.info(
                 "Worker 工具执行完成",
@@ -74,7 +79,35 @@ def register_tool_routes(
                 },
             )
             raise HTTPException(400, str(exc)) from exc
-        except TimeoutError as exc:
+        except WorkerToolExecutionError as exc:
+            if not exc.invalid_request:
+                logger.exception(
+                    "Worker 工具执行失败",
+                    extra={
+                        "event": "tool.worker.failed",
+                        "category": "tool",
+                        "retention": "operational",
+                        "trace_id": trace_id,
+                        "tool_name": tool_name,
+                        "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                        "status": "failed",
+                    },
+                )
+                raise HTTPException(500, "Worker 工具执行失败，请查看 Worker 日志") from exc
+            logger.warning(
+                "Worker 工具请求无效",
+                extra={
+                    "event": "tool.worker.rejected",
+                    "category": "tool",
+                    "retention": "operational",
+                    "trace_id": trace_id,
+                    "tool_name": tool_name,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                    "status": "rejected",
+                },
+            )
+            raise HTTPException(400, str(exc)) from exc
+        except (WorkerToolTimeoutError, TimeoutError) as exc:
             logger.warning(
                 "Worker 工具执行超时",
                 extra={

@@ -28,8 +28,9 @@ WORKER_SRC = REPO_ROOT / "apps" / "worker" / "src"
 if str(WORKER_SRC) not in sys.path:
     sys.path.insert(0, str(WORKER_SRC))
 
-from worker_app.path_sandbox import WorkerPathSandbox
+from worker_app.execution import InProcessToolExecutor
 from worker_app.logging import WorkerJsonFormatter
+from worker_app.path_sandbox import WorkerPathSandbox
 from worker_app.tool_context import WorkerToolContext
 from worker_app.tool_registry import WorkerToolRegistry
 from worker_app.tool_routes import register_tool_routes
@@ -67,8 +68,8 @@ class WorkerToolLoggingTests(unittest.TestCase):
                 app,
                 tool_timeout_seconds=5,
                 logger=logger,
-                tool_registry=registry,
                 tool_context=WorkerToolContext(WorkerPathSandbox(Path(directory))),
+                tool_executor=InProcessToolExecutor(registry),
             )
             response = TestClient(app).post(
                 "/tools/echo",

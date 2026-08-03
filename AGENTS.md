@@ -576,7 +576,7 @@ WS 控制面必须使用命令注册表，而不是单个 `handleMessage()` 大�
 - Worker 是无状态的——不保存 session/thread/run/配置
 - Worker 只接受 `RUNTIME_ROOT` 内的相对文件路径
 - Worker 返回 `outputRelativePath`（相对于 `RUNTIME_ROOT` 的路径），Node.js 端负责注册为 Artifact
-- 并发控制通过 `asyncio.Semaphore`（默认 2），超时 300s
+- 并发控制通过 `RUNTIME_ROOT` 下的 SQLite 租约表跨 Worker 进程共享全局上限（默认 2），工具调用在独立可终止子进程中执行，超时 300s；nonce 消费也必须使用同一类跨进程持久化边界
 - Worker 不调用外部 LLM——它只做确定性科学计算
 
 ### 7.4 临近预报

@@ -13,9 +13,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import Any
+from typing import Protocol
 from uuid import uuid4
 
 from starlette.datastructures import Headers
@@ -23,6 +22,12 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from worker_app.worker_auth import WorkerAuthVerifier
+
+
+class ConcurrencyLimiter(Protocol):
+    async def acquire(self) -> object: ...
+
+    async def release(self, lease: object | None = None) -> None: ...
 
 
 class WorkerSecurityMiddleware:
@@ -34,13 +39,13 @@ class WorkerSecurityMiddleware:
         *,
         worker_auth: WorkerAuthVerifier,
         max_body_bytes: int,
-        max_concurrency: int,
         logger: logging.Logger,
+        concurrency_limiter: ConcurrencyLimiter,
     ) -> None:
         self.app = app
         self.worker_auth = worker_auth
         self.max_body_bytes = max_body_bytes
-        self.semaphore = asyncio.Semaphore(max_concurrency)
+        self.concurrency_limiter = concurrency_limiter
         self.logger = logger
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -90,8 +95,11 @@ class WorkerSecurityMiddleware:
             return
 
         replay_receive = _body_receiver(body)
-        async with self.semaphore:
+        lease = await self.concurrency_limiter.acquire()
+        try:
             await self.app(scope, replay_receive, send)
+        finally:
+            await self.concurrency_limiter.release(lease)
 
 
 def worker_auth_target(path: str) -> str:

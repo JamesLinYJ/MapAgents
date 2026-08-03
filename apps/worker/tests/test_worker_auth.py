@@ -17,6 +17,7 @@ import hashlib
 import hmac
 import json
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -159,6 +160,33 @@ class BodyHashTests(unittest.TestCase):
         auth = _sign(self.tool, self.body, self.secret)
         err = self.verifier.verify(auth, self.tool, self.body)
         self.assertIsNone(err)
+
+
+class SharedNonceStoreTests(unittest.TestCase):
+    """验证多个 Uvicorn Worker 进程共享同一 nonce 一次性事实源。"""
+
+    def test_nonce_replay_is_rejected_across_verifier_instances(self) -> None:
+        secret = "test-secret-shared-store"
+        body = b'{"file_relative_path":"data.nc"}'
+        nonce = "cross-process-replay-001"
+        with tempfile.TemporaryDirectory() as directory:
+            nonce_path = Path(directory) / "worker-nonces.sqlite3"
+            verifier_a = WorkerAuthVerifier(WorkerAuthConfig(
+                shared_secret=secret,
+                nonce_cache_max=10,
+                nonce_store_path=nonce_path,
+            ))
+            verifier_b = WorkerAuthVerifier(WorkerAuthConfig(
+                shared_secret=secret,
+                nonce_cache_max=10,
+                nonce_store_path=nonce_path,
+            ))
+            auth = _sign("meteorological_inspect", body, secret, nonce=nonce)
+
+            self.assertIsNone(verifier_a.verify(auth, "meteorological_inspect", body))
+            replay = verifier_b.verify(auth, "meteorological_inspect", body)
+            self.assertEqual(replay, (403, "Worker 授权 nonce 已使用"))
+            self.assertEqual(verifier_a.nonce_cache_size, 1)
 
 
 if __name__ == "__main__":
