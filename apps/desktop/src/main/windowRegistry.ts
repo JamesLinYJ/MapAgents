@@ -142,13 +142,16 @@ export class WorkspaceWindowRegistry {
         spellcheck: true,
       }),
     })
+    const webContentsId = window.webContents.id
     this.windowTitles.set(window, windowTitle)
     state.manage(window)
     this.windowStates.set(window, state)
     window.setMenuBarVisibility(false)
     window.once('ready-to-show', () => window.show())
     window.on('closed', () => {
-      this.files.releaseForWebContents(window.webContents.id)
+      // Electron has already destroyed BrowserWindow.webContents when `closed`
+      // fires. Release file handles with the identity captured at construction.
+      this.files.releaseForWebContents(webContentsId)
       this.windowStates.delete(window)
       this.windowTitles.delete(window)
       for (const [workspaceId, registeredWindow] of this.windows.entries()) {

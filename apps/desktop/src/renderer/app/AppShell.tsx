@@ -880,6 +880,7 @@ function AppShell() {
                     currentThreadTitle={currentThreadTitle}
                     runCreatedAt={run?.createdAt}
                     isSubmitting={isSubmitting}
+                    conversationReady={Boolean(session)}
                     errorMessage={uiError}
                     uploadedLayerName={uploadedLayerName}
                     uploadReferences={uploadReferences}

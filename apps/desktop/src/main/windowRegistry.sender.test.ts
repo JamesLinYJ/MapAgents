@@ -17,14 +17,67 @@ const { getAllWindows } = vi.hoisted(() => ({
 
 vi.mock('electron', () => ({
   app: { isPackaged: false },
-  BrowserWindow: class {
+  BrowserWindow: class MockBrowserWindow {
     static getAllWindows = getAllWindows
+
+    private destroyed = false
+    private readonly contents = {
+      id: 41,
+      setWindowOpenHandler: vi.fn(),
+      on: vi.fn(),
+    }
+    private readonly listeners = new Map<string, Array<(...args: unknown[]) => void>>()
+
+    get webContents() {
+      if (this.destroyed) throw new TypeError('Object has been destroyed')
+      return this.contents
+    }
+
+    isDestroyed = () => this.destroyed
+    isMinimized = () => false
+    isFullScreen = () => false
+    isMaximized = () => false
+    restore = vi.fn()
+    show = vi.fn()
+    focus = vi.fn()
+    setMenuBarVisibility = vi.fn()
+    setTitle = vi.fn()
+    setFullScreen = vi.fn()
+    unmaximize = vi.fn()
+    setBounds = vi.fn()
+    setSize = vi.fn()
+    center = vi.fn()
+    loadURL = vi.fn(async () => undefined)
+
+    once(event: string, listener: (...args: unknown[]) => void) {
+      return this.on(event, listener)
+    }
+
+    on(event: string, listener: (...args: unknown[]) => void) {
+      const listeners = this.listeners.get(event) ?? []
+      listeners.push(listener)
+      this.listeners.set(event, listeners)
+      return this
+    }
+
+    destroyForTest(): void {
+      this.destroyed = true
+      for (const listener of this.listeners.get('closed') ?? []) listener()
+    }
   },
   dialog: {},
   shell: {},
 }))
 vi.mock('electron-window-state', () => ({
-  default: vi.fn(),
+  default: vi.fn(() => ({
+    width: 1_580,
+    height: 960,
+    x: undefined,
+    y: undefined,
+    manage: vi.fn(),
+    saveState: vi.fn(),
+    unmanage: vi.fn(),
+  })),
 }))
 vi.mock('./nativeMenus.js', () => ({
   installNativeContextMenu: vi.fn(),
@@ -46,6 +99,15 @@ describe('WorkspaceWindowRegistry IPC ownership', () => {
     expect(registry.getForWebContents(22)).toBeNull()
     expect(registry.first()).toBe(registered)
     expect(getAllWindows).not.toHaveBeenCalled()
+  })
+
+  it('releases file handles after Electron has destroyed the BrowserWindow object', () => {
+    const releaseForWebContents = vi.fn()
+    const registry = new WorkspaceWindowRegistry({ releaseForWebContents } as never)
+    const window = registry.openBootstrap() as unknown as { destroyForTest(): void }
+
+    expect(() => window.destroyForTest()).not.toThrow()
+    expect(releaseForWebContents).toHaveBeenCalledWith(41)
   })
 })
 

@@ -24,6 +24,7 @@ interface ComposerProps {
   query: string
   providerLabel: string
   isSubmitting: boolean
+  conversationReady: boolean
   canSteerActiveRun: boolean
   composerMode: ComposerMode
   tokenBudget?: ChatPanelProps['tokenBudget']
@@ -64,6 +65,7 @@ export function Composer({
   query,
   providerLabel,
   isSubmitting,
+  conversationReady,
   canSteerActiveRun,
   composerMode,
   tokenBudget,
@@ -98,7 +100,7 @@ export function Composer({
 }: ComposerProps) {
   const mode = composerModeOption(composerMode)
   const modeShortLabel = mode.shortLabel
-  const canSubmit = Boolean(query.trim()) && (!isSubmitting || canSteerActiveRun)
+  const canSubmit = conversationReady && Boolean(query.trim()) && (!isSubmitting || canSteerActiveRun)
   const speechEnabled = Boolean(onStartSpeechRecognition && onStopSpeechRecognition)
   const speechBusy = speechStatus === 'authorizing' || speechStatus === 'stopping'
   const speechActive = speechStatus === 'recognizing' || speechBusy
@@ -147,14 +149,15 @@ export function Composer({
         className="cc-composer-input"
         value={query}
         aria-label="输入空间分析需求"
-        placeholder="输入消息..."
+        aria-busy={!conversationReady}
+        placeholder={conversationReady ? '输入消息...' : '正在初始化会话...'}
         rows={1}
         wrap="soft"
         onChange={(event) => onQueryChange(event.target.value)}
         onKeyDown={onInputKeyDown}
         onCompositionStart={onCompositionStart}
         onCompositionEnd={onCompositionEnd}
-        disabled={isSubmitting && !canSteerActiveRun}
+        disabled={!conversationReady || (isSubmitting && !canSteerActiveRun)}
       />
 
       <div className={`cc-composer-mode-note cc-composer-mode-note--${composerMode}`}>
@@ -266,8 +269,8 @@ export function Composer({
             className="cc-composer-tool cc-composer-tool--send"
             type="submit"
             disabled={!canSubmit}
-            title={canSteerActiveRun ? '发送引导消息' : isSubmitting ? '运行中' : '发送'}
-            aria-label={canSteerActiveRun ? '发送引导消息' : isSubmitting ? '运行中' : '发送'}
+            title={!conversationReady ? '正在初始化会话' : canSteerActiveRun ? '发送引导消息' : isSubmitting ? '运行中' : '发送'}
+            aria-label={!conversationReady ? '正在初始化会话' : canSteerActiveRun ? '发送引导消息' : isSubmitting ? '运行中' : '发送'}
           >
             <AppIcon name="send" size={17} />
           </button>

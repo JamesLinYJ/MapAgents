@@ -54,6 +54,7 @@ export function ChatPanel(props: ChatPanelProps) {
     runStatus,
     query,
     isSubmitting,
+    conversationReady,
     errorMessage,
     uploadedLayerName,
     uploadReferences = [],
@@ -182,7 +183,13 @@ export function ChatPanel(props: ChatPanelProps) {
   const handleSubmit = async (event?: FormEvent) => {
     event?.preventDefault()
     const canSteerActiveRun = isSubmitting && runStatus === 'running'
-    if (submittingRef.current || (isSubmitting && !canSteerActiveRun) || composing || !query.trim()) {
+    if (
+      !conversationReady
+      || submittingRef.current
+      || (isSubmitting && !canSteerActiveRun)
+      || composing
+      || !query.trim()
+    ) {
       return
     }
     submittingRef.current = true
@@ -346,6 +353,7 @@ export function ChatPanel(props: ChatPanelProps) {
               query={query}
               providerLabel={providerLabel}
               isSubmitting={isSubmitting}
+              conversationReady={conversationReady}
               canSteerActiveRun={runStatus === 'running'}
               composerMode={composerMode}
               tokenBudget={tokenBudget}

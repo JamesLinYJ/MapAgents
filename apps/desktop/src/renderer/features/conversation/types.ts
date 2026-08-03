@@ -44,6 +44,7 @@ export interface ChatPanelProps {
   runStatus?: string
   query: string
   isSubmitting: boolean
+  conversationReady: boolean
   errorMessage?: string
   uploadedLayerName?: string
   uploadReferences?: UploadReference[]
