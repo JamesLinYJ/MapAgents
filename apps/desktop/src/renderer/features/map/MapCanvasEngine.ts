@@ -82,7 +82,7 @@ export function isMapControlTarget(target: EventTarget | null) {
   }
   return Boolean(
     target.closest(
-      'button,a,input,textarea,select,[role="button"],.dc-map-stage__controls,.dc-map-stage__legend-item,.maplibregl-popup',
+      'button,a,input,textarea,select,[role="button"],.dc-map-stage__legend-item,.maplibregl-popup',
     ),
   )
 }

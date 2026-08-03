@@ -105,9 +105,6 @@
 .cc-decision-option,
 .cc-decision-submit,
 .toolbar-button,
-.dc-map-stage__zoom,
-.dc-map-stage__icon,
-.dc-map-stage__basemap,
 .nav-bar__status-chip,
 .dc-mobile-tab {
   border-color: rgb(255 255 255 / 0.48);
@@ -121,8 +118,6 @@
 .cc-mode-trigger:hover,
 .cc-decision-option:hover,
 .toolbar-button:hover,
-.dc-map-stage__icon:hover,
-.dc-map-stage__basemap:hover,
 .dc-mobile-tab:hover {
   background: var(--glass-control-hover);
 }

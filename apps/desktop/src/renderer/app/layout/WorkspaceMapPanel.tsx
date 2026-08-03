@@ -33,7 +33,6 @@ interface WorkspaceMapPanelProps {
   agentState?: { placeResolution?: { status: string; selected?: { latitude?: number | null; longitude?: number | null } | null } | null } | null
   onActivateMap: () => void
   onSelectArtifact: (artifactId: string) => void
-  onSelectBasemap: (basemapKey: string) => void
 }
 
 export function WorkspaceMapPanel({
@@ -50,7 +49,6 @@ export function WorkspaceMapPanel({
   agentState,
   onActivateMap,
   onSelectArtifact,
-  onSelectBasemap,
 }: WorkspaceMapPanelProps) {
   return (
     <m.section
@@ -70,7 +68,6 @@ export function WorkspaceMapPanel({
                 basemaps={basemaps}
                 runStatus={runStatus}
                 selectedBasemapKey={selectedBasemapKey}
-                onSelectBasemap={onSelectBasemap}
                 layers={mapScene.layers}
                 sceneError={mapScene.error}
                 sceneLoading={mapScene.isLoading}

@@ -11,16 +11,12 @@
 
 import { useEffect, useMemo, useState, type RefObject } from 'react'
 import { AnimatePresence, m } from 'framer-motion'
-import * as Select from '@radix-ui/react-select'
-import { Check, ChevronDown, Layers3, LocateFixed, Minus, Pause, Play, Plus, Ruler, SkipBack, SkipForward } from 'lucide-react'
-import type { BasemapDescriptor, MapLegend } from '@geo-agent-platform/shared-types'
-import { buildFadeMotion, buildFadeUpMotion, buildPressMotion } from '../../shared/motion'
+import { Pause, Play, SkipBack, SkipForward } from 'lucide-react'
+import type { MapLegend } from '@geo-agent-platform/shared-types'
+import { buildFadeMotion, buildFadeUpMotion } from '../../shared/motion'
 import type { SceneRenderLayer } from './useMapScene'
 
 interface MapCanvasChromeProps {
-  activeBasemapKey: string
-  basemaps: BasemapDescriptor[]
-  canFocusSelection: boolean
   containerRef: RefObject<HTMLDivElement | null>
   cursor: string
   layerErrors: Record<string, string>
@@ -35,20 +31,10 @@ interface MapCanvasChromeProps {
   sceneLoading: boolean
   selectedLayerId?: string
   selectedLayerName?: string
-  showLegend: boolean
-  onFocusSelection: () => void
-  onSelectBasemap: (basemapKey: string) => void
   onSetCurrentFrame: (mapLayerId: string, frameId: string) => Promise<void>
-  onToggleLegend: () => void
-  onToggleMeasure: () => void
-  onZoomIn: () => void
-  onZoomOut: () => void
 }
 
 export function MapCanvasChrome({
-  activeBasemapKey,
-  basemaps,
-  canFocusSelection,
   containerRef,
   cursor,
   layerErrors,
@@ -63,16 +49,8 @@ export function MapCanvasChrome({
   sceneLoading,
   selectedLayerId,
   selectedLayerName,
-  showLegend,
-  onFocusSelection,
-  onSelectBasemap,
   onSetCurrentFrame,
-  onToggleLegend,
-  onToggleMeasure,
-  onZoomIn,
-  onZoomOut,
 }: MapCanvasChromeProps) {
-  const pressMotion = buildPressMotion(reducedMotion)
   const selectedLayer = layers.find(layer => layer.manifest.mapLayerId === selectedLayerId)
   const selectedError = selectedLayerId ? layerErrors[selectedLayerId] : undefined
   const legendLayer = selectedLayer?.scene.visible && selectedLayer.manifest.legend
@@ -114,7 +92,7 @@ export function MapCanvasChrome({
       </m.div>
 
       <AnimatePresence initial={false}>
-        {showLegend && legendLayer ? (
+        {legendLayer ? (
           <m.aside className="dc-map-stage__legend dc-map-stage__legend--scientific" aria-label="科学图例" {...buildFadeUpMotion(reducedMotion, 0.12, 10)}>
             <header>
               <strong>图例</strong>
@@ -136,46 +114,7 @@ export function MapCanvasChrome({
           onSetFrame={onSetCurrentFrame}
         />
       ) : null}
-
-      <m.div className="dc-map-stage__controls" layout {...buildFadeUpMotion(reducedMotion, 0.16, 8)}>
-        <div className="dc-map-stage__zoom">
-          <m.button type="button" onClick={onZoomIn} aria-label="放大地图" disabled={Boolean(mapError)} {...pressMotion}><Plus size={18} /></m.button>
-          <div className="dc-map-stage__zoom-divider" />
-          <m.button type="button" onClick={onZoomOut} aria-label="缩小地图" disabled={Boolean(mapError)} {...pressMotion}><Minus size={18} /></m.button>
-        </div>
-        <m.button type="button" className={`dc-map-stage__icon${measureMode ? ' dc-map-stage__icon--active' : ''}`} onClick={onToggleMeasure} aria-label={measureMode ? '结束测距' : '开启测距'} disabled={Boolean(mapError)} {...pressMotion}><Ruler size={18} /></m.button>
-        <m.button type="button" className={`dc-map-stage__icon${showLegend && Boolean(legendLayer) ? ' dc-map-stage__icon--active' : ''}`} onClick={onToggleLegend} aria-label={showLegend ? '隐藏图例' : '显示图例'} disabled={!layers.some(layer => layer.scene.visible && layer.manifest.legend)} {...pressMotion}><Layers3 size={18} /></m.button>
-        <BasemapSelect basemaps={basemaps} value={activeBasemapKey} onValueChange={onSelectBasemap} />
-        <m.button type="button" className="dc-map-stage__icon" onClick={onFocusSelection} aria-label="定位到当前图层" disabled={!canFocusSelection || Boolean(mapError)} {...pressMotion}><LocateFixed size={18} /></m.button>
-      </m.div>
     </m.section>
-  )
-}
-
-function BasemapSelect({ basemaps, value, onValueChange }: {
-  basemaps: BasemapDescriptor[]
-  value: string
-  onValueChange: (value: string) => void
-}) {
-  return (
-    <Select.Root value={value} onValueChange={onValueChange}>
-      <Select.Trigger className="dc-map-stage__basemap-trigger" aria-label="选择底图">
-        <Select.Value />
-        <Select.Icon><ChevronDown size={14} /></Select.Icon>
-      </Select.Trigger>
-      <Select.Portal>
-        <Select.Content className="dc-map-stage__basemap-menu" position="popper" sideOffset={8}>
-          <Select.Viewport>
-            {basemaps.map(basemap => (
-              <Select.Item key={basemap.basemapKey} value={basemap.basemapKey} className="dc-map-stage__basemap-item">
-                <Select.ItemText>{basemap.name}</Select.ItemText>
-                <Select.ItemIndicator><Check size={14} /></Select.ItemIndicator>
-              </Select.Item>
-            ))}
-          </Select.Viewport>
-        </Select.Content>
-      </Select.Portal>
-    </Select.Root>
   )
 }
 

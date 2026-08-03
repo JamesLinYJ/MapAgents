@@ -641,7 +641,9 @@ async function expectMapRuntimeReady(page: Page): Promise<void> {
   await expect(mapRegion.getByText('地图无法渲染')).toHaveCount(0)
   await expect(mapRegion).toHaveAttribute('data-map-ready', 'true', { timeout: 15_000 })
   await expect(mapCanvas).toBeVisible({ timeout: 15_000 })
-  await expect(mapRegion.getByRole('button', { name: '放大地图' })).toBeVisible()
+  await expect(mapRegion.locator('.dc-map-stage__controls')).toHaveCount(0)
+  await expect(mapRegion.locator('.maplibregl-ctrl-attrib-button')).toBeHidden()
+  await expect(mapRegion.locator('.maplibregl-ctrl-attrib-inner')).toBeVisible()
   const canvasSize = await mapCanvas.evaluate(canvas => ({
     width: canvas.getBoundingClientRect().width,
     height: canvas.getBoundingClientRect().height,

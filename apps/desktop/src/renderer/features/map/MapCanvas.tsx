@@ -59,7 +59,6 @@ interface MapCanvasProps {
   basemaps: BasemapDescriptor[]
   selectedBasemapKey: string
   runStatus?: string
-  onSelectBasemap: (basemapKey: string) => void
   layers: SceneRenderLayer[]
   sceneError: string | null
   sceneLoading: boolean
@@ -78,7 +77,6 @@ interface MapCanvasProps {
 export function MapCanvas({
   basemaps,
   selectedBasemapKey,
-  onSelectBasemap,
   layers,
   sceneError,
   sceneLoading,
@@ -113,7 +111,6 @@ export function MapCanvas({
   const [measureMode, setMeasureMode] = useState(false)
   const measureModeRef = useRef(false)
   const [measurePoints, setMeasurePoints] = useState<Array<[number, number]>>([])
-  const [showLegend, setShowLegend] = useState(true)
   const reducedMotion = useReducedMotion() ?? false
 
   const availableBasemaps = useMemo(() => basemaps.filter(item => item.available !== false), [basemaps])
@@ -356,9 +353,6 @@ export function MapCanvas({
 
   return (
     <MapCanvasChrome
-      activeBasemapKey={activeBasemap.basemapKey}
-      basemaps={availableBasemaps}
-      canFocusSelection={Boolean(selectedLayer)}
       containerRef={containerRef}
       cursor={cursor}
       layerErrors={layerErrors}
@@ -373,14 +367,7 @@ export function MapCanvas({
       sceneLoading={sceneLoading}
       selectedLayerId={selectedLayer?.manifest.mapLayerId}
       selectedLayerName={selectedLayer?.manifest.title ?? selectedArtifactName}
-      showLegend={showLegend}
-      onFocusSelection={focusSelection}
-      onSelectBasemap={onSelectBasemap}
       onSetCurrentFrame={(mapLayerId, currentFrameId) => onUpdateLayer(mapLayerId, { currentFrameId })}
-      onToggleLegend={() => setShowLegend(current => !current)}
-      onToggleMeasure={toggleMeasure}
-      onZoomIn={() => mapRef.current?.zoomIn()}
-      onZoomOut={() => mapRef.current?.zoomOut()}
     />
   )
 }

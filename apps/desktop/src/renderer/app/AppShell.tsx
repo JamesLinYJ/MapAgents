@@ -275,7 +275,6 @@ function AppShell() {
     selectedBasemap,
     selectedBasemapKey,
     setSelectedArtifactId,
-    setSelectedBasemapKey,
     toggleArtifactVisibility: handleToggleArtifactVisibility,
     toggleLayerStatus: handleToggleLayerStatus,
     uploadedLayerName,
@@ -930,7 +929,6 @@ function AppShell() {
                     isMapActivated={isMapActivated}
                     runStatus={run?.status}
                     selectedBasemapKey={selectedBasemapKey}
-                    onSelectBasemap={setSelectedBasemapKey}
                     selectedArtifactId={selectedArtifactId}
                     selectedArtifactName={selectedArtifact?.name}
                     focusRequest={mapFocusRequest}

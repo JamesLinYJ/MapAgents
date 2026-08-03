@@ -1636,11 +1636,6 @@ button.workbench-chrome__icon:hover,
   display: none;
 }
 
-.workbench-inspector-map .dc-map-stage__controls {
-  transform: scale(0.86);
-  transform-origin: right bottom;
-}
-
 .workbench-map-shell {
   height: 100%;
   min-height: 0;
