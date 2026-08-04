@@ -106,7 +106,7 @@
 - `npm run lint:terminology`
 - `python apps/worker/tests/scan_security.py`
 - `python -m pytest apps/worker/tests tests -q`
-- `node scripts/create-runtime-service-artifact.mjs --build --out artifacts/runtime-service-verification`（制品清单 655 项、数据库 schema 版本 9；包含 `packages/db`、`packages/shared-types`、`packages/operations-supervisor` 运行包，并验证 Server 本地依赖路径；验证后已删除临时目录）
+- `node scripts/create-runtime-service-artifact.mjs --build --out artifacts/runtime-service-verification`（制品清单 655 项、数据库 schema 版本 9；包含 `packages/db`、`packages/shared-types`、`packages/operations-supervisor` 运行包；在临时 `server/` 内执行 `npm install --package-lock-only --ignore-scripts --omit=dev`，确认三个本地 `file:` 依赖解析到制品内路径；验证后已删除临时目录）
 
 构建、测试、包体预算、Worker 安全扫描和运行服务制品生成均已通过；工作区未产生需要提交的构建制品或临时验证目录。
 
