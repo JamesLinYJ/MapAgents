@@ -56,6 +56,11 @@ flowchart LR
 
 `runtime/` 是部署配置决定的运行目录，不是源码模块，也不是 Session/Run 的第二事实源。旧文件会话格式不做静默扫描兼容。
 
+跨平面注册清单由 `npm run generate:architecture-manifest` 生成到
+[`architecture-manifest.json`](./architecture-manifest.json)。该清单读取 Server
+Provider/WS registry、Worker catalog 和 Desktop IPC command schema，用于发布审查
+和扩展接线核对；它不是运行时权限或启动门禁。
+
 ## 主要运行链路
 
 ### Desktop 与 API

@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import os
 from pathlib import Path
 
@@ -60,21 +61,33 @@ class WorkerSettings:
 
 
 def _positive_int(name: str, default: int) -> int:
-    value = int(os.environ.get(name, str(default)))
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} 必须是整数") from exc
     if value <= 0:
         raise ValueError(f"{name} 必须大于 0")
     return value
 
 
 def _non_negative_int(name: str, default: int) -> int:
-    value = int(os.environ.get(name, str(default)))
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} 必须是整数") from exc
     if value < 0:
         raise ValueError(f"{name} 不能小于 0")
     return value
 
 
 def _positive_float(name: str, default: float) -> float:
-    value = float(os.environ.get(name, str(default)))
-    if value <= 0:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} 必须是数字") from exc
+    if not math.isfinite(value) or value <= 0:
         raise ValueError(f"{name} 必须大于 0")
     return value

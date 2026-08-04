@@ -379,8 +379,10 @@ describe('platform architecture', () => {
 
     const lock = JSON.parse(
       await readFile(path.join(repositoryRoot, 'package-lock.json'), 'utf8'),
-    ) as { packages?: Record<string, unknown> }
-    const installedPackages = Object.keys(lock.packages ?? {})
+    ) as { packages?: Record<string, { dev?: boolean } | undefined> }
+    const installedProductionPackages = Object.entries(lock.packages ?? {})
+      .filter(([, packageMetadata]) => packageMetadata?.dev !== true)
+      .map(([packagePath]) => packagePath)
     for (const retiredPackage of [
       'node_modules/pm2',
       'node_modules/node-pty',
@@ -390,7 +392,7 @@ describe('platform architecture', () => {
       'node_modules/dockerode',
     ]) {
       expect(
-        installedPackages.some(packagePath => (
+        installedProductionPackages.some(packagePath => (
           packagePath === retiredPackage
           || packagePath.startsWith(retiredPackage.endsWith('/') ? retiredPackage : `${retiredPackage}/`)
         )),

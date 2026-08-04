@@ -9,7 +9,7 @@
  * directory: every source path is explicit and missing inputs fail the build.
  */
 
-import { createHash } from 'node:crypto'
+import { createHash, createPrivateKey, createPublicKey, sign } from 'node:crypto'
 import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -59,6 +59,8 @@ const sources = [
   ['packages/shared-types/package.json', 'packages/shared-types/package.json', 'file'],
   ['package-lock.json', 'package-lock.json', 'file'],
   ['apps/worker/src', 'worker/src', 'directory'],
+  ['apps/worker/pyproject.toml', 'worker/pyproject.toml', 'file'],
+  ['apps/worker/uv.lock', 'worker/uv.lock', 'file'],
   ['packages/gis-meteorology/pyproject.toml', 'worker/gis-meteorology/pyproject.toml', 'file'],
   ['packages/gis-meteorology/src', 'worker/gis-meteorology/src', 'directory'],
   ['infra/migrations', 'migrations', 'directory'],
@@ -82,6 +84,8 @@ const serverPackagePath = path.join(output, 'server/package.json')
 const packageManifest = JSON.parse(await readFile(serverPackagePath, 'utf8'))
 rewriteLocalDependencyPaths(packageManifest)
 await writeFile(serverPackagePath, `${JSON.stringify(packageManifest, null, 2)}\n`, 'utf8')
+await rewriteWorkerProjectPaths(output)
+await writeRuntimeSbom(output)
 const releaseId = process.env.GEO_AGENT_PLATFORM_RELEASE_ID?.trim()
   || `geo-agent-platform@${String(packageManifest.version)}+runtime-service`
 const workerContractDigest = process.env.WORKER_CONTRACT_DIGEST?.trim() || null
@@ -112,13 +116,18 @@ const manifest = {
   databaseSchemaVersion: 9,
   workerContractDigest,
   workerContractDigestResolvedAtRuntime: workerContractDigest === null,
+  signing: args.signingKey
+    ? { algorithm: 'ed25519', signatureFile: 'runtime-service-manifest.sig' }
+    : null,
   entries,
 }
-await writeFile(path.join(output, 'runtime-service-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+await writeFile(path.join(output, 'runtime-service-manifest.json'), manifestBytes)
+if (args.signingKey) await writeManifestSignature(output, manifestBytes, args.signingKey)
 process.stdout.write(`${output}${process.platform === 'win32' ? '\\' : '/'}runtime-service-manifest.json\n`)
 
 function parseArgs(argv) {
-  const result = { build: false, force: false, out: null }
+  const result = { build: false, force: false, out: null, signingKey: null }
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
     if (argument === '--build') result.build = true
@@ -127,6 +136,10 @@ function parseArgs(argv) {
       result.out = argv[index + 1]
       index += 1
       if (!result.out) throw new Error('--out 需要目录参数。')
+    } else if (argument === '--signing-key') {
+      result.signingKey = argv[index + 1]
+      index += 1
+      if (!result.signingKey) throw new Error('--signing-key 需要 Ed25519 私钥文件。')
     } else {
       throw new Error(`未知参数：${argument}`)
     }
@@ -166,4 +179,98 @@ function rewriteLocalDependencyPaths(packageManifest) {
       }
     }
   }
+}
+
+async function rewriteWorkerProjectPaths(artifactRoot) {
+  const workerRoot = path.join(artifactRoot, 'worker')
+  const projectPath = path.join(workerRoot, 'pyproject.toml')
+  const lockPath = path.join(workerRoot, 'uv.lock')
+  for (const filePath of [projectPath, lockPath]) {
+    const content = await readFile(filePath, 'utf8')
+    await writeFile(
+      filePath,
+      content
+        .replaceAll('../../packages/gis-meteorology', 'gis-meteorology')
+        .replaceAll('../packages/gis-meteorology', 'gis-meteorology'),
+      'utf8',
+    )
+  }
+}
+
+async function writeRuntimeSbom(artifactRoot) {
+  const npmLock = JSON.parse(await readFile(path.join(root, 'package-lock.json'), 'utf8'))
+  const npmPackages = Object.entries(npmLock.packages ?? [])
+    .map(([location, value]) => ({ location, value }))
+    .filter(({ value }) => value && typeof value === 'object' && typeof value.name === 'string' && typeof value.version === 'string')
+    .map(({ value }) => ({
+      ecosystem: 'npm',
+      name: value.name,
+      version: value.version,
+      downloadLocation: typeof value.resolved === 'string' ? value.resolved : 'NOASSERTION',
+    }))
+  const pythonLock = await readFile(path.join(root, 'apps/worker/uv.lock'), 'utf8')
+  const pythonPackages = [...pythonLock.matchAll(/\[\[package\]\]\s*name = "([^"]+)"\s*version = "([^"]+)"/gu)]
+    .map(match => ({
+      ecosystem: 'pypi',
+      name: match[1],
+      version: match[2],
+      downloadLocation: 'NOASSERTION',
+    }))
+  const packages = [...npmPackages, ...pythonPackages]
+    .sort((left, right) => `${left.ecosystem}:${left.name}:${left.version}`.localeCompare(`${right.ecosystem}:${right.name}:${right.version}`))
+    .map((entry, index) => ({
+      SPDXID: `SPDXRef-Package-${index + 1}`,
+      name: `${entry.ecosystem}:${entry.name}`,
+      versionInfo: entry.version,
+      downloadLocation: entry.downloadLocation,
+      filesAnalyzed: false,
+      licenseConcluded: 'NOASSERTION',
+      licenseDeclared: 'NOASSERTION',
+      supplier: 'NOASSERTION',
+    }))
+  const sbom = {
+    spdxVersion: 'SPDX-2.3',
+    dataLicense: 'CC0-1.0',
+    SPDXID: 'SPDXRef-DOCUMENT',
+    name: 'geo-agent-platform-runtime-service',
+    documentNamespace: `https://geo-agent-platform.invalid/runtime-service/${releaseIdOrUnknown()}`,
+    creationInfo: {
+      created: new Date().toISOString(),
+      creators: ['Tool: geo-agent-platform runtime artifact builder'],
+    },
+    packages,
+    relationships: packages.map(pkg => ({
+      spdxElementId: 'SPDXRef-DOCUMENT',
+      relationshipType: 'DESCRIBES',
+      relatedSpdxElement: pkg.SPDXID,
+    })),
+  }
+  await writeFile(
+    path.join(artifactRoot, 'runtime-service-sbom.spdx.json'),
+    `${JSON.stringify(sbom, null, 2)}\n`,
+    'utf8',
+  )
+}
+
+async function writeManifestSignature(artifactRoot, manifestBytes, signingKeyPath) {
+  const privateKey = createPrivateKey(await readFile(path.resolve(root, signingKeyPath)))
+  if (privateKey.asymmetricKeyType !== 'ed25519') {
+    throw new Error('--signing-key 必须是 Ed25519 私钥。')
+  }
+  const publicKey = createPublicKey(privateKey).export({ type: 'spki', format: 'pem' })
+  const signature = sign(null, manifestBytes, privateKey)
+  await writeFile(
+    path.join(artifactRoot, 'runtime-service-manifest.sig'),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      algorithm: 'ed25519',
+      publicKeyPem: publicKey,
+      signatureBase64: signature.toString('base64'),
+    }, null, 2)}\n`,
+    'utf8',
+  )
+}
+
+function releaseIdOrUnknown() {
+  return process.env.GEO_AGENT_PLATFORM_RELEASE_ID?.trim() || 'unversioned'
 }

@@ -1,0 +1,269 @@
+{
+  "schemaVersion": 1,
+  "kind": "geo-agent-architecture-inventory",
+  "generatedAt": "2026-08-04T07:55:14.882Z",
+  "sourceOfTruth": {
+    "providers": "apps/server/src/model/registry.ts",
+    "wsCommands": "packages/shared-types/src/transport.ts + apps/server/src/ws/defaultCommandRegistry.ts",
+    "workerTools": "apps/worker/src/worker_app/tools + worker_app/catalog_cli.py",
+    "desktopCommands": "apps/desktop/src/contracts/desktopIpc.ts"
+  },
+  "provider": {
+    "ids": [
+      "deepseek",
+      "anthropic",
+      "gemini",
+      "ollama"
+    ],
+    "count": 4
+  },
+  "ws": {
+    "commands": [
+      "workspace:bootstrap",
+      "session:get-default",
+      "session:get",
+      "thread:list",
+      "thread:get",
+      "thread:create",
+      "thread:update",
+      "thread:delete",
+      "thread:history",
+      "thread:fork",
+      "thread:compact",
+      "thread:context",
+      "thread:subscribe",
+      "thread:unsubscribe",
+      "thread:memory:get",
+      "thread:memory:update",
+      "thread:memory:rebuild",
+      "thread:trash:list",
+      "thread:trash:restore",
+      "thread:trash:purge",
+      "run:list",
+      "run:start",
+      "run:get",
+      "run:cancel",
+      "run:resume",
+      "run:steer",
+      "run:respond-decision",
+      "run:subscribe",
+      "run:unsubscribe",
+      "tool:list",
+      "tool:run",
+      "tool-catalog:list",
+      "tool-catalog:upsert",
+      "tool-catalog:delete",
+      "runtime-config:get",
+      "runtime-config:update",
+      "provider:list",
+      "system:get",
+      "usage:summary",
+      "speech:authorization",
+      "memory:list",
+      "memory:read",
+      "memory:write",
+      "memory:delete",
+      "memory:search",
+      "memory:extract",
+      "memory:dream",
+      "memory:session:get",
+      "memory:session:rebuild",
+      "memory:instructions:list",
+      "file:list",
+      "file:delete",
+      "layer:list",
+      "layer:update",
+      "layer:delete",
+      "map-scene:update",
+      "automation:list",
+      "automation:validate",
+      "automation:create",
+      "automation:update",
+      "automation:publish",
+      "automation:disable",
+      "automation:history",
+      "automation:start",
+      "automation:cancel",
+      "automation:run:get",
+      "automation:respond-approval",
+      "scheduled-task:list",
+      "scheduled-task:create",
+      "scheduled-task:update",
+      "scheduled-task:delete",
+      "background-task:list",
+      "background-task:promote",
+      "background-task:cancel"
+    ],
+    "count": 74
+  },
+  "worker": {
+    "catalogCount": 19,
+    "tools": [
+      "answer_nowcast_question",
+      "compare_radar_mosaic_reference",
+      "create_nowcast_sequence",
+      "generate_area_rainfall_table",
+      "generate_nowcast_forecast_text",
+      "inspect_nowcast_sequence",
+      "inspect_radar_station_collection",
+      "meteorological_contour",
+      "meteorological_inspect",
+      "meteorological_nowcast_report",
+      "meteorological_precipitation_nowcast",
+      "meteorological_render",
+      "meteorological_report",
+      "meteorological_stats",
+      "meteorological_threshold",
+      "recommend_radar_mosaic_strategy",
+      "render_nowcast_raster",
+      "render_radar_mosaic",
+      "render_rainfall_risk_map"
+    ],
+    "contractDigests": [
+      {
+        "name": "answer_nowcast_question",
+        "schemaHash": "sha256:c2bdcfba2405fcaec38517c487b8b8cbfb3ce639442388dc9325a3d9d2c0b818"
+      },
+      {
+        "name": "compare_radar_mosaic_reference",
+        "schemaHash": "sha256:3d09cb2e085178069c9cbf95120c3edd3023efbf3d76f0767c78bfd18cf3ee0e"
+      },
+      {
+        "name": "create_nowcast_sequence",
+        "schemaHash": "sha256:79e29ba81398089efc926809d3f03c5fa10aee3d1c67a2ef92c780e0c69d8ef0"
+      },
+      {
+        "name": "generate_area_rainfall_table",
+        "schemaHash": "sha256:966dd8b5b08ecd2bab6cbd4cf4d4bfbf251b1e0c23eef4105b01195fe39e1d7b"
+      },
+      {
+        "name": "generate_nowcast_forecast_text",
+        "schemaHash": "sha256:eeb36e9d987699f0e5564a2b35b7b49b00eb808ea05638ff018ad7475983e809"
+      },
+      {
+        "name": "inspect_nowcast_sequence",
+        "schemaHash": "sha256:ad0f265aff76c474066c23879f8550297d138d15cc2a4cfacc206c878ff758d5"
+      },
+      {
+        "name": "inspect_radar_station_collection",
+        "schemaHash": "sha256:4e5d8b176d66b0c0808ff14446f4382dee746732db36f5309d37e26f5d7f7962"
+      },
+      {
+        "name": "meteorological_contour",
+        "schemaHash": "sha256:5891a37bd3959b982128b527c974cb99f3e05c8ea1908cafa4a3fc03c61925fd"
+      },
+      {
+        "name": "meteorological_inspect",
+        "schemaHash": "sha256:f9ea8b311fbac603ee683572318b55616032fc73eb84b1a7543391042006c1ed"
+      },
+      {
+        "name": "meteorological_nowcast_report",
+        "schemaHash": "sha256:c29a1390eb3aae59292aea9c8430c430b7f0486288db588b9f9c096277bb96fe"
+      },
+      {
+        "name": "meteorological_precipitation_nowcast",
+        "schemaHash": "sha256:b5b8b82d963b88e9269c0303030294bd9cd9e8fb7bb3418f34fba7fb92455f15"
+      },
+      {
+        "name": "meteorological_render",
+        "schemaHash": "sha256:be122819947ff2311bd35512c9f99749c291f6635e9bcfdb11c0e0d02ffeeb62"
+      },
+      {
+        "name": "meteorological_report",
+        "schemaHash": "sha256:cd494a24c3f6cda1bc39c402a327b8c97219ece132f6042a5a0ce257824d5277"
+      },
+      {
+        "name": "meteorological_stats",
+        "schemaHash": "sha256:1cfc7b42a37e32bdaf74d71c4d361eac2af3383e82c6c545dd23729c315fc8a4"
+      },
+      {
+        "name": "meteorological_threshold",
+        "schemaHash": "sha256:9edbb4a7992dce2397c0797d0a0acadc2149fefd3ce5962b7601ee3373e64cc1"
+      },
+      {
+        "name": "recommend_radar_mosaic_strategy",
+        "schemaHash": "sha256:294f743a64ce004190244893c5a7606e4b886b994bee641f132e3a7a8332ad7c"
+      },
+      {
+        "name": "render_nowcast_raster",
+        "schemaHash": "sha256:0de4215916297122b525f63dad74e5c1b9e9bd4e8479d95dc535b767b1d037f3"
+      },
+      {
+        "name": "render_radar_mosaic",
+        "schemaHash": "sha256:ba791d1e2ad0367bd5bd80ee82e1e472ae6bd9a324b1cb7e083ec43d1acefdbe"
+      },
+      {
+        "name": "render_rainfall_risk_map",
+        "schemaHash": "sha256:8b687e715fb3a57782a89e8539d7a06ffb0df1a319245d16e2da9da138518e08"
+      }
+    ]
+  },
+  "nodeWorkerProjection": {
+    "providerId": "geo-platform-meteorology",
+    "declaredTools": [
+      "answer_nowcast_question",
+      "compare_radar_mosaic_reference",
+      "create_nowcast_sequence",
+      "define_rainfall_risk_thresholds",
+      "generate_area_rainfall_table",
+      "generate_nowcast_forecast_text",
+      "inspect_nowcast_sequence",
+      "inspect_radar_station_collection",
+      "interpret_meteorological_dataset",
+      "list_meteorological_files",
+      "meteorological_contour",
+      "meteorological_inspect",
+      "meteorological_nowcast_report",
+      "meteorological_precipitation_nowcast",
+      "meteorological_render",
+      "meteorological_report",
+      "meteorological_stats",
+      "meteorological_threshold",
+      "prepare_nowcast_scope",
+      "recommend_radar_mosaic_strategy",
+      "render_nowcast_raster",
+      "render_radar_mosaic",
+      "render_rainfall_risk_map"
+    ],
+    "workerBackedTools": [
+      "answer_nowcast_question",
+      "compare_radar_mosaic_reference",
+      "create_nowcast_sequence",
+      "generate_area_rainfall_table",
+      "generate_nowcast_forecast_text",
+      "inspect_nowcast_sequence",
+      "inspect_radar_station_collection",
+      "meteorological_contour",
+      "meteorological_inspect",
+      "meteorological_nowcast_report",
+      "meteorological_precipitation_nowcast",
+      "meteorological_render",
+      "meteorological_report",
+      "meteorological_stats",
+      "meteorological_threshold",
+      "recommend_radar_mosaic_strategy",
+      "render_nowcast_raster",
+      "render_radar_mosaic",
+      "render_rainfall_risk_map"
+    ]
+  },
+  "desktop": {
+    "menuCommands": [
+      "new-analysis",
+      "open-workspace",
+      "focus-command",
+      "open-map",
+      "open-tools",
+      "open-workflow",
+      "open-results",
+      "open-account",
+      "open-security",
+      "open-diagnostics",
+      "open-system-logs",
+      "toggle-contents",
+      "toggle-assistant",
+      "export-results"
+    ],
+    "transport": "Electron Main DesktopApiGateway + controlGateway; Renderer uses typed transport"
+  }
+}

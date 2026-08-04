@@ -74,21 +74,18 @@ export function createApiRateLimiter(): SlidingWindowRateLimiter {
   return new SlidingWindowRateLimiter(120, 60_000) // 120 req/min
 }
 
-/** 从 Request 提取客户端 IP */
-export function clientIp(request: Request): string {
-  const forwarded = request.headers.get('x-forwarded-for')
-  if (forwarded) {
-    const [first] = forwarded.split(',')
-    if (first?.trim()) return first.trim()
-  }
-  const realIp = request.headers.get('x-real-ip')
-  if (realIp) return realIp.trim()
-  try {
-    const url = new URL(request.url)
-    return url.hostname
-  } catch {
-    return 'unknown'
-  }
+/**
+ * 从适配器提供的 socket 地址提取客户端 IP。
+ *
+ * `Request` 本身没有可信的 peer address；X-Forwarded-For/X-Real-IP 都是
+ * 请求头，不能在没有可信代理边界的情况下参与限流 key。Node Hono 适配器
+ * 由调用方传入 `request.socket.remoteAddress`，其它适配器缺少 peer 地址时
+ * 使用固定 unknown key，而不是接受可伪造的请求头。
+ */
+export function clientIp(_request: Request, options: { remoteAddress?: string | null } = {}): string {
+  const remoteAddress = options.remoteAddress?.trim()
+  if (remoteAddress) return remoteAddress
+  return 'unknown'
 }
 
 /** WS 消息限流器：按连接总量和同一连接的命令类型分别限流。 */

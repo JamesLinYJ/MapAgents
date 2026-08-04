@@ -19,6 +19,10 @@ import { createOllamaAdapter } from './providers/ollama.js'
 
 export type AgentToolSchemaMode = 'strict' | 'compatible'
 
+/** 模型适配器的静态扩展点；运行时注册表必须为每个 ID 提供实现。 */
+export const MODEL_PROVIDER_IDS = ['deepseek', 'anthropic', 'gemini', 'ollama'] as const
+export type ModelProviderId = typeof MODEL_PROVIDER_IDS[number]
+
 export interface ModelAdapter {
   readonly provider: string
   readonly displayName: string

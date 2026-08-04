@@ -18,7 +18,7 @@ const apiLimiter = createApiRateLimiter()
 
 /** Better Auth 登录/注册路径按 IP+邮箱限流 */
 export async function authRateLimitMiddleware(c: Context, next: Next): Promise<void | Response> {
-  const ip = clientIp(c.req.raw)
+  const ip = clientIp(c.req.raw, { remoteAddress: requestRemoteAddress(c) })
   const body = await tryReadBody(c)
   const email = body.email
   const key = typeof email === 'string' && email.trim()
@@ -34,7 +34,7 @@ export async function authRateLimitMiddleware(c: Context, next: Next): Promise<v
 /** /api/v1/* 按用户或 IP 限流 */
 export function apiRateLimitMiddleware(security: SecurityServices) {
   return async (c: Context, next: Next): Promise<void | Response> => {
-    const ip = clientIp(c.req.raw)
+    const ip = clientIp(c.req.raw, { remoteAddress: requestRemoteAddress(c) })
     let userId: string | null = null
     try {
       const auth = await security.auth.authenticateRequest(c.req.raw)
@@ -53,6 +53,13 @@ export function apiRateLimitMiddleware(security: SecurityServices) {
 
 interface AuthBody {
   email?: unknown
+}
+
+function requestRemoteAddress(c: Context): string | null {
+  const environment = c.env as {
+    incoming?: { socket?: { remoteAddress?: string | undefined } }
+  } | undefined
+  return environment?.incoming?.socket?.remoteAddress ?? null
 }
 
 async function tryReadBody(c: Context): Promise<AuthBody> {

@@ -34,6 +34,7 @@
     "test:presentation": "npm run test --workspace @geo-agent-platform/conversation-presentation",
     "test:supervisor": "npm run test --workspace @geo-agent-platform/operations-supervisor",
     "test:server": "npm run test --workspace geo-agent-server",
+    "test:postgis": "node scripts/run-postgis-integration.mjs",
     "test:desktop": "npm run test --workspace @geo-agent-platform/desktop",
     "test:e2e": "npm run build --workspace @geo-agent-platform/shared-types && npm run build --workspace @geo-agent-platform/conversation-presentation && npm run build --workspace @geo-agent-platform/operations-supervisor && npm run build --workspace @geo-agent-platform/desktop && playwright test",
     "test:e2e:headed": "npm run test:e2e -- --headed",
@@ -42,6 +43,8 @@
     "generate:glass": "node scripts/generate-liquid-glass-maps.mjs",
     "check:bundle": "node scripts/check-desktop-bundle-budget.mjs",
     "release:runtime": "node scripts/create-runtime-service-artifact.mjs --build",
+    "verify:runtime": "node scripts/verify-runtime-service-artifact.mjs",
+    "generate:architecture-manifest": "npm run build --workspace @geo-agent-platform/shared-types && npm run build --workspace geo-agent-server && node scripts/generate-architecture-manifest.mjs",
     "reset:conversations": "node scripts/reset-conversation-store.mjs --confirm"
   },
   "dependencies": {
@@ -50,6 +53,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
+    "@testcontainers/postgresql": "^12.0.4",
     "vite": "7.3.6"
   },
   "overrides": {
