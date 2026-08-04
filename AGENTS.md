@@ -158,6 +158,7 @@
 
 - **`apps/`**：可独立启动或部署的应用。Node Server、Electron Desktop 与 Python Worker 分别位于 `apps/server/`、`apps/desktop/`、`apps/worker/`
 - **`packages/`**：可复用能力与跨应用契约。源码统一放在各包的 `src/`，不得另建 `src-ts/` 等语言后缀目录
+- **`packages/db/`**：共享 Drizzle schema、数据库连接工厂和事务类型。Server 只通过该包访问公共 schema，不在 `apps/server/src/db/` 复制第二份实现
 - **`docs/`**：当前架构、运维手册、工程标准、历史评审和汇报材料分别进入 `architecture/`、`operations/`、`standards/`、`reviews/`、`presentations/`；历史评审不得冒充当前架构事实
 - **`apps/server/src/agent/`**：Agent 运行时编排——run 生命周期、上下文管理、审批、沙箱。不含工具实现
 - **`apps/server/src/framework/`**：工具注册、Provider 加载、环境配置、类型定义。框架级代码，不含业务逻辑

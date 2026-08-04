@@ -148,17 +148,16 @@ export class LocalDesktopIdentityBroker implements DesktopManagedIdentityPort {
 
     const authorization = new Promise<LocalDesktopAuthorization>((resolve, reject) => {
       let settled = false
-      let openingTimeout: ReturnType<typeof setTimeout> | undefined
+      const openingTimeout = setTimeout(() => {
+        rejectOpening(new Error('本机 Desktop 身份 Broker 授权超时。'))
+      }, 15_000)
       const rejectOpening = (error: Error) => {
         if (settled) return
         settled = true
-        if (openingTimeout) clearTimeout(openingTimeout)
+        clearTimeout(openingTimeout)
         child.kill()
         reject(error)
       }
-      openingTimeout = setTimeout(() => {
-        rejectOpening(new Error('本机 Desktop 身份 Broker 授权超时。'))
-      }, 15_000)
       child.once('error', (...details) => {
         rejectOpening(new Error(`本机 Desktop 身份 Broker 进程错误：${details.map(String).join('；')}`))
       })

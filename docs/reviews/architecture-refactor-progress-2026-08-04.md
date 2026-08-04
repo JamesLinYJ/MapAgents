@@ -13,7 +13,7 @@
 
 | 状态 | 范围 | 当前结论 |
 | --- | --- | --- |
-| [x] | 数据库/文件生命周期事实源 | 已落地 `pending → ready → deleted`、幂等上传、补偿删除和对象引用回收 |
+| [x] | 数据库/文件生命周期事实源 | 已落地 `pending → ready → deleted`、幂等上传、补偿删除和对象引用回收；Drizzle schema/connection 已归入 `packages/db` |
 | [x] | 工具结果提交与 Run 启动应用边界 | 已落地 `ToolResultCommitService`、`ToolExecutionPolicy`、`StartRunService` |
 | [x] | Desktop/Server WS、IPC 和 HTTP 传输契约 | 已集中共享 schema，并对响应执行运行时校验 |
 | [x] | 对话投影和实时列表性能 | 已落地共享投影索引、live overlay 合并和虚拟列表 |
@@ -55,7 +55,7 @@
 - 对话 timeline 使用 `conversation-presentation` 的增量投影索引，canonical transcript 与 live overlay 按来源和 transcript identity 合并。
 - `useRunState` 保留 run 快照事实，`ConversationTimeline` 使用虚拟列表；Desktop API 模块不再各自声明重复 WS response schema。
 - 增加 `/health/capabilities` 能力文档以及 API/Desktop 协议版本握手。该检查只确认运行时确实兼容，不改变业务权限，也不添加额外操作门槛。
-- `scripts/create-runtime-service-artifact.mjs` 生成 Node 服务、Worker 源码、迁移、服务定义和 checksum manifest；缺输入或覆盖已有输出时显式失败。
+- `scripts/create-runtime-service-artifact.mjs` 生成 Node 服务、Worker 源码、共享 DB/协议/监督器运行包、迁移、服务定义和 checksum manifest；服务 manifest 中的本地 `file:` 依赖会重写到制品内的固定相对路径，缺输入或覆盖已有输出时显式失败。
 
 ### 5. Worker 边界（不改 Python 算法）
 
@@ -74,11 +74,11 @@
 
 | 项目 | 状态 | 原因 |
 | --- | --- | --- |
-| Python `ReaderFacade` 及 `packages/gis-meteorology` reader/service 算法整理 | 暂缓 | 用户明确要求“Python 算法这一块暂时不要改”，当前只改 Worker 执行边界 |
-| Python Worker 入口/科学算法结构性重构 | 未完成 | 当前分支没有修改 `apps/worker` 和 `packages/gis-meteorology` Python 源码 |
-| 真实 PostgreSQL/PostGIS/Testcontainers 全链路 | 后续 | 当前先完成可重复的 repository/route/worker 单元和契约回归，避免把环境依赖伪装成单元测试 |
-| Desktop `AppShell` 全量拆分、地图视觉回归 | 未完成 | 本轮只完成对话投影、虚拟列表和 transport 边界 |
-| 生产签名、SBOM、锁定 Python 运行环境安装冒烟 | 未完成 | 当前只生成 Node/Worker/迁移/服务定义和 checksum manifest |
+| Python `ReaderFacade` 及 `packages/gis-meteorology` reader/service 算法整理 | [ ] 暂缓 | 用户明确要求“Python 算法这一块暂时不要改”，当前只改 Worker 执行边界 |
+| Python Worker 入口/科学算法结构性重构 | [ ] 未完成 | 当前分支没有修改 `apps/worker` 和 `packages/gis-meteorology` Python 源码 |
+| 真实 PostgreSQL/PostGIS/Testcontainers 全链路 | [ ] 后续 | 当前先完成可重复的 repository/route/worker 单元和契约回归，避免把环境依赖伪装成单元测试 |
+| Desktop `AppShell` 全量拆分、地图视觉回归 | [ ] 未完成 | 本轮只完成对话投影、虚拟列表和 transport 边界 |
+| 生产签名、SBOM、锁定 Python 运行环境安装冒烟 | [ ] 未完成 | 当前生成 Node/Worker、共享运行包、迁移、服务定义和 checksum manifest，但未完成正式签名、SBOM 与锁定 Python 环境安装冒烟 |
 
 ## 验证记录
 
@@ -97,7 +97,7 @@
 - `npm run lint:terminology`
 - `python apps/worker/tests/scan_security.py`
 - `python -m pytest apps/worker/tests tests -q`
-- `node scripts/create-runtime-service-artifact.mjs --out artifacts/runtime-service-verification`（制品清单 512 项、数据库 schema 版本 9；验证后已删除临时目录）
+- `node scripts/create-runtime-service-artifact.mjs --build --out artifacts/runtime-service-verification`（制品清单 655 项、数据库 schema 版本 9；包含 `packages/db`、`packages/shared-types`、`packages/operations-supervisor` 运行包，并验证 Server 本地依赖路径；验证后已删除临时目录）
 
 构建、测试、包体预算、Worker 安全扫描和运行服务制品生成均已通过；工作区未产生需要提交的构建制品或临时验证目录。
 

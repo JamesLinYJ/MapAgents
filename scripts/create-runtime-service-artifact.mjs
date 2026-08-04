@@ -21,9 +21,24 @@ const output = path.resolve(root, args.out ?? path.join('artifacts', 'runtime-se
 
 if (args.build) {
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-  for (const workspace of ['@geo-agent-platform/shared-types', 'geo-agent-server']) {
-    const build = spawnSync(npm, ['run', 'build', '--workspace', workspace], { cwd: root, stdio: 'inherit' })
-    if (build.status !== 0) throw new Error(`Runtime Service 编译失败（${workspace}），未生成发布制品。`)
+  const executable = process.platform === 'win32'
+    ? process.env.ComSpec
+    : npm
+  if (!executable) throw new Error('Runtime Service 编译需要可用的 ComSpec。')
+  for (const workspace of [
+    '@geo-agent-platform/shared-types',
+    '@geo-agent-platform/operations-supervisor',
+    '@geo-agent-platform/db',
+    'geo-agent-server',
+  ]) {
+    const npmArguments = ['run', 'build', '--workspace', workspace]
+    const commandArguments = process.platform === 'win32'
+      ? ['/d', '/s', '/c', npm, ...npmArguments]
+      : npmArguments
+    const build = spawnSync(executable, commandArguments, { cwd: root, stdio: 'inherit' })
+    if (build.error || build.status !== 0) {
+      throw new Error(`Runtime Service 编译失败（${workspace}），未生成发布制品。`)
+    }
   }
 }
 
@@ -36,6 +51,12 @@ await mkdir(output, { recursive: true })
 const sources = [
   ['apps/server/dist', 'server/dist', 'directory'],
   ['apps/server/package.json', 'server/package.json', 'file'],
+  ['packages/db/dist', 'packages/db/dist', 'directory'],
+  ['packages/db/package.json', 'packages/db/package.json', 'file'],
+  ['packages/operations-supervisor/dist', 'packages/operations-supervisor/dist', 'directory'],
+  ['packages/operations-supervisor/package.json', 'packages/operations-supervisor/package.json', 'file'],
+  ['packages/shared-types/dist', 'packages/shared-types/dist', 'directory'],
+  ['packages/shared-types/package.json', 'packages/shared-types/package.json', 'file'],
   ['package-lock.json', 'package-lock.json', 'file'],
   ['apps/worker/src', 'worker/src', 'directory'],
   ['packages/gis-meteorology/pyproject.toml', 'worker/gis-meteorology/pyproject.toml', 'file'],
@@ -57,7 +78,10 @@ for (const [source, relativeDestination, kind] of sources) {
   await cp(sourcePath, destination, { recursive: kind === 'directory' })
 }
 
-const packageManifest = JSON.parse(await readFile(path.join(root, 'apps/server/package.json'), 'utf8'))
+const serverPackagePath = path.join(output, 'server/package.json')
+const packageManifest = JSON.parse(await readFile(serverPackagePath, 'utf8'))
+rewriteLocalDependencyPaths(packageManifest)
+await writeFile(serverPackagePath, `${JSON.stringify(packageManifest, null, 2)}\n`, 'utf8')
 const releaseId = process.env.GEO_AGENT_PLATFORM_RELEASE_ID?.trim()
   || `geo-agent-platform@${String(packageManifest.version)}+runtime-service`
 const workerContractDigest = process.env.WORKER_CONTRACT_DIGEST?.trim() || null
@@ -129,4 +153,17 @@ async function listFiles(directory) {
     else if (entry.isFile()) result.push(fullPath)
   }
   return result
+}
+
+function rewriteLocalDependencyPaths(packageManifest) {
+  for (const sectionName of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+    const section = packageManifest[sectionName]
+    if (!section || typeof section !== 'object') continue
+    for (const [name, version] of Object.entries(section)) {
+      if (typeof version !== 'string') continue
+      if (version.startsWith('file:../../packages/')) {
+        section[name] = version.replace('file:../../packages/', 'file:../packages/')
+      }
+    }
+  }
 }

@@ -50,6 +50,7 @@ describe('platform architecture', () => {
 
     expect(rootPackage.workspaces).toContain('apps/server')
     expect(rootPackage.workspaces).toContain('apps/desktop')
+    expect(rootPackage.workspaces).toContain('packages/db')
     expect(rootPackage.workspaces).toContain('packages/conversation-presentation')
     expect(rootPackage.workspaces).not.toContain('server')
 
@@ -59,6 +60,8 @@ describe('platform architecture', () => {
     await expect(stat(path.join(repositoryRoot, 'server'))).rejects.toMatchObject({ code: 'ENOENT' })
 
     await expect(stat(path.join(repositoryRoot, 'packages/shared-types/src'))).resolves.toBeDefined()
+    await expect(stat(path.join(repositoryRoot, 'packages/db/src/schema.ts'))).resolves.toBeDefined()
+    await expect(stat(path.join(repositoryRoot, 'packages/db/src/connection.ts'))).resolves.toBeDefined()
     await expect(stat(path.join(repositoryRoot, 'packages/conversation-presentation/src'))).resolves.toBeDefined()
     await expect(stat(path.join(repositoryRoot, 'packages/shared-types/src-ts')))
       .rejects.toMatchObject({ code: 'ENOENT' })
@@ -78,6 +81,7 @@ describe('platform architecture', () => {
     )
     expect(architectureOverview).toContain('PostgreSQL/PostGIS')
     expect(architectureOverview).toContain('内容寻址对象存储')
+    expect(architectureOverview).toContain('db/')
     expect(architectureOverview).not.toContain('runtime/conversations/`：按 session')
   })
 
@@ -101,7 +105,8 @@ describe('platform architecture', () => {
 
   it('keeps the Drizzle schema and fresh database baseline aligned on ownership foreign keys', async () => {
     const repositoryRoot = path.resolve(process.cwd(), '..', '..')
-    const schemaSource = await readFile(path.join(process.cwd(), 'src/db/schema.ts'), 'utf8')
+    const schemaSource = await readFile(path.join(repositoryRoot, 'packages/db/src/schema.ts'), 'utf8')
+    const serverSchemaBridge = await readFile(path.join(process.cwd(), 'src/db/schema.ts'), 'utf8')
     const baselineSource = await readFile(
       path.join(repositoryRoot, 'infra/migrations/001_init_postgis.sql'),
       'utf8',
@@ -143,6 +148,7 @@ describe('platform architecture', () => {
     for (const foreignKey of baselineForeignKeys) {
       expect(baselineSource.includes(foreignKey), foreignKey).toBe(true)
     }
+    expect(serverSchemaBridge).toContain("export * from '@geo-agent-platform/db/schema'")
     expect(securityDatabaseSource).not.toMatch(/db\.execute\(sql`\s*(?:CREATE|ALTER|DROP)\b/iu)
   })
 

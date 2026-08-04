@@ -10,6 +10,7 @@ apps/
   desktop/      Electron + React + MapLibre 桌面 GIS 工作台
   worker/       FastAPI 科学计算边界
 packages/
+  db/             Drizzle schema、连接工厂与数据库公共类型
   shared-types/ 跨进程 Zod 契约
   conversation-presentation/ 桌面端与 CLI 共用的只读对话展示投影
   gis-meteorology/  地理与气象领域算法
