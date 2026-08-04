@@ -54,6 +54,9 @@ import type { AuthContext } from '../security/types.js'
 import { RuntimeFileStore } from '../store/fileStore.js'
 import { ServiceAdmission } from '../app/serviceAdmission.js'
 import { wsConnectionsActive } from '../observability/metrics.js'
+import { StartRunService } from '../conversation/startRunService.js'
+import { ToolResultCommitService } from '../tools/resultPersistence.js'
+import type { FileLifecyclePort } from '../store/fileLifecycleService.js'
 
 const TEST_ORIGIN = 'http://127.0.0.1:5173'
 const TEST_CSRF = 'csrf_test'
@@ -69,9 +72,9 @@ const TEST_AUTH: AuthContext = {
   roles: [{ workspaceId: 'workspace_test', role: 'platform_admin' }],
 }
 
-type TestWsDependencies = Omit<WsDependencies, 'admission' | 'env' | 'events' | 'runtime' | 'runTasks' | 'runtimeFiles' | 'scheduledTaskService' | 'backgroundTasks' | 'usageStats'> & Partial<Pick<
+type TestWsDependencies = Omit<WsDependencies, 'admission' | 'env' | 'events' | 'runtime' | 'runTasks' | 'startRunService' | 'resultCommitService' | 'runtimeFiles' | 'fileLifecycle' | 'scheduledTaskService' | 'backgroundTasks' | 'usageStats'> & Partial<Pick<
   WsDependencies,
-  'admission' | 'env' | 'events' | 'runtime' | 'runTasks' | 'runtimeFiles' | 'scheduledTaskService' | 'backgroundTasks' | 'usageStats'
+  'admission' | 'env' | 'events' | 'runtime' | 'runTasks' | 'startRunService' | 'runtimeFiles' | 'fileLifecycle' | 'scheduledTaskService' | 'backgroundTasks' | 'usageStats'
 >>
 
 async function removeTempRoot(root: string): Promise<void> {
@@ -85,17 +88,33 @@ function createWsHandler(server: Parameters<typeof createWsHandlerBase>[0], depe
     dependencies.modelRegistry,
     { createSandboxClient: dependencies.createSandboxClient },
   )
+  const runTasks = dependencies.runTasks ?? new RunTaskManager(runtime, dependencies.store)
+  const usageStats = dependencies.usageStats ?? new UsageStatsService(dependencies.store, dependencies.env ?? testEnv())
+  const runtimeFiles = dependencies.runtimeFiles ?? new RuntimeFileStore(dependencies.runtimeRoot)
+  const fileLifecycle: FileLifecyclePort = dependencies.fileLifecycle ?? {
+    upload: async () => { throw new Error('测试不应上传文件。') },
+    list: threadId => runtimeFiles.list(threadId),
+    delete: (fileId, threadId) => runtimeFiles.delete(fileId, threadId),
+  }
   return createWsHandlerBase(server, {
     ...dependencies,
     env: dependencies.env ?? testEnv(),
     events: dependencies.events ?? testPlatformEventHub(dependencies.store),
     admission: dependencies.admission ?? new ServiceAdmission(),
-    runtimeFiles: dependencies.runtimeFiles ?? new RuntimeFileStore(dependencies.runtimeRoot),
+    runtimeFiles,
+    fileLifecycle,
     runtime,
-    runTasks: dependencies.runTasks ?? new RunTaskManager(runtime, dependencies.store),
+    runTasks,
+    startRunService: dependencies.startRunService ?? new StartRunService({
+      store: dependencies.store,
+      usageStats,
+      modelRegistry: dependencies.modelRegistry,
+      runTasks,
+    }),
+    resultCommitService: dependencies.resultCommitService ?? new ToolResultCommitService(dependencies.store),
     scheduledTaskService: dependencies.scheduledTaskService ?? ({} as WsDependencies['scheduledTaskService']),
     backgroundTasks: dependencies.backgroundTasks ?? ({} as WsDependencies['backgroundTasks']),
-    usageStats: dependencies.usageStats ?? new UsageStatsService(dependencies.store, dependencies.env ?? testEnv()),
+    usageStats,
   })
 }
 

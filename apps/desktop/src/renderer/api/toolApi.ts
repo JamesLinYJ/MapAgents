@@ -10,13 +10,7 @@
 // --------------------------------------------------------------------------
 
 import {
-  agentRuntimeConfigSchema,
-  directToolRunResponseSchema,
-  modelProviderDescriptorSchema,
-  speechAuthorizationSchema,
-  systemComponentsStatusSchema,
-  tokenUsageSummarySchema,
-  toolDescriptorSchema,
+  wsCommandContract,
   type AgentRuntimeConfig,
   type DirectToolRunResponse,
   type ModelProviderDescriptor,
@@ -25,41 +19,39 @@ import {
   type TokenUsageSummary,
   type ToolDescriptor,
 } from '@geo-agent-platform/shared-types'
-import { z } from 'zod'
 
-import { unknownRecordListSchema, unknownRecordSchema } from './responseSchemas'
 import { requestControl } from './transport'
 
 export function listProviders(): Promise<ModelProviderDescriptor[]> {
-  return requestControl('provider:list', {}, z.array(modelProviderDescriptorSchema))
+  return requestControl('provider:list')
 }
 
 export function getSystemComponents(): Promise<SystemComponentsStatus> {
-  return requestControl('system:get', {}, systemComponentsStatusSchema)
+  return requestControl('system:get')
 }
 
 export function getSpeechAuthorization(): Promise<SpeechAuthorization> {
-  return requestControl('speech:authorization', {}, speechAuthorizationSchema)
+  return requestControl('speech:authorization')
 }
 
 export function getTokenUsageSummary(): Promise<TokenUsageSummary> {
-  return requestControl('usage:summary', {}, tokenUsageSummarySchema)
+  return requestControl('usage:summary')
 }
 
 export function listTools(): Promise<ToolDescriptor[]> {
-  return requestControl('tool:list', {}, z.array(toolDescriptorSchema))
+  return requestControl('tool:list')
 }
 
 export function listToolCatalogEntries(): Promise<Array<Record<string, unknown>>> {
-  return requestControl('tool-catalog:list', {}, unknownRecordListSchema)
+  return requestControl('tool-catalog:list')
 }
 
 export function getRuntimeConfig(): Promise<AgentRuntimeConfig> {
-  return requestControl('runtime-config:get', {}, agentRuntimeConfigSchema)
+  return requestControl('runtime-config:get')
 }
 
 export function updateRuntimeConfig(payload: AgentRuntimeConfig): Promise<AgentRuntimeConfig> {
-  return requestControl('runtime-config:update', { config: payload }, agentRuntimeConfigSchema)
+  return requestControl('runtime-config:update', { config: payload })
 }
 
 export function upsertToolCatalogEntry(
@@ -68,13 +60,14 @@ export function upsertToolCatalogEntry(
   payload: Record<string, unknown>,
   sortOrder?: number,
 ): Promise<Record<string, unknown>> {
-  return requestControl('tool-catalog:upsert', { toolKind, toolName, payload, sortOrder }, unknownRecordSchema)
+  return requestControl('tool-catalog:upsert', { toolKind, toolName, payload, sortOrder })
 }
 
 export function deleteToolCatalogEntry(toolKind: string, toolName: string): Promise<Record<string, unknown>> {
-  return requestControl('tool-catalog:delete', { toolKind, toolName }, unknownRecordSchema)
+  return requestControl('tool-catalog:delete', { toolKind, toolName })
 }
 
 export function runTool(payload: Record<string, unknown>): Promise<DirectToolRunResponse> {
-  return requestControl('tool:run', payload, directToolRunResponseSchema)
+  const parsedPayload = wsCommandContract('tool:run').payload.parse(payload)
+  return requestControl('tool:run', parsedPayload)
 }

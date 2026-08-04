@@ -10,7 +10,7 @@
 // --------------------------------------------------------------------------
 
 import { Hono } from 'hono'
-import { RuntimeFileStore } from '../store/fileStore.js'
+import type { FileLifecyclePort } from '../store/fileLifecycleService.js'
 import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import type { SecurityServices } from '../security/routes.js'
 import { requireAuth } from '../security/routes.js'
@@ -20,7 +20,7 @@ import { parseStreamingMultipart, type StreamingMultipartForm } from './streamin
 
 export function fileRoutes(
   runtimeRoot: string,
-  files: RuntimeFileStore,
+  files: FileLifecyclePort,
   store: PlatformPersistenceFacade,
   security: SecurityServices,
   env: Pick<Env, 'MAX_FILE_UPLOAD_BYTES'>,
@@ -42,8 +42,15 @@ export function fileRoutes(
           visibility: thread.visibility,
           resourceId: thread.id,
         })
-        const entry = await files.save(file, threadId, requestId, sourceRelativePath)
-        await store.recordAttachment(threadId, entry)
+        const entry = await files.upload({
+          file,
+          requestId,
+          sourceRelativePath,
+          workspaceId: thread.workspaceId,
+          sessionId: thread.sessionId,
+          threadId: thread.id,
+          createdByUserId: thread.createdByUserId,
+        })
         return c.json(entry)
       } catch (error) {
         const response = routeErrorResponse(error, '文件上传失败。')

@@ -329,6 +329,7 @@ describe('platform architecture', () => {
       '006_native_agent_runtime.sql',
       '007_model_result_cache.sql',
       '008_tool_result_commit_idempotency.sql',
+      '009_file_object_lifecycle.sql',
     ])
 
     const operationalSourceFiles = await collectProductionFiles([
@@ -584,7 +585,9 @@ describe('platform architecture', () => {
     expect(facadeSource.includes('readonly events')).toBe(false)
     expect(facadeSource.includes('events?: PlatformEventHub')).toBe(true)
     expect(containerSource.includes('const events = new PlatformEventHub()')).toBe(true)
-    expect(containerSource.includes('new PlatformPersistenceFacade(db, path.join(runtimeRoot, \'conversations\'), { events })')).toBe(true)
+    expect(containerSource.includes('new PlatformPersistenceFacade(db, path.join(runtimeRoot, \'conversations\'), {')).toBe(true)
+    expect(containerSource.includes('runtimeFiles,')).toBe(true)
+    expect(containerSource.includes('fileLifecycle,')).toBe(true)
     expect(containerSource.includes('automations: store.automations')).toBe(true)
     expect(containerSource.includes('runtimeConfiguration: store.runtimeConfiguration')).toBe(true)
     expect(runtimePortSource.includes('export interface AgentRuntimeStore')).toBe(true)

@@ -215,6 +215,27 @@ describe('createBoundedSystemIpv4Resolver', () => {
 })
 
 describe('OpenAIProviderTransport', () => {
+  it('exposes DNS priming as startup readiness before the first fetch', async () => {
+    const pending = deferred<LookupAddress[]>()
+    const resolver = vi.fn(() => pending.promise)
+    const cache = createCache(resolver)
+    const fetchImplementation = vi.fn(async () => new Response('{"ok":true}', { status: 200 }))
+    const transport = new OpenAIProviderTransport('https://api.deepseek.com', {
+      dnsCache: cache,
+      fetchImplementation,
+    })
+    transports.push(transport)
+
+    const warmup = transport.warmup?.()
+    expect(fetchImplementation).not.toHaveBeenCalled()
+    pending.resolve([{ address: '203.0.113.10', family: 4 }])
+    await warmup
+    await transport.fetch('https://api.deepseek.com/responses')
+
+    expect(resolver).toHaveBeenCalledOnce()
+    expect(fetchImplementation).toHaveBeenCalledOnce()
+  })
+
   it('automatically primes the canonical DeepSeek host and propagates its failure before fetch', async () => {
     const failure = Object.assign(new Error('DNS prime failed'), { code: 'EAI_AGAIN' })
     const resolver = vi.fn(async () => Promise.reject(failure))

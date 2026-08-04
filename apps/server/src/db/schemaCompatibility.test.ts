@@ -23,6 +23,7 @@ const migrationIds = [
   '006_native_agent_runtime',
   '007_model_result_cache',
   '008_tool_result_commit_idempotency',
+  '009_file_object_lifecycle',
 ] as const
 
 function currentMigrations() {
@@ -46,6 +47,7 @@ describe('verifyDatabaseSchemaCompatibility', () => {
       [{
         vector_tile_function: 'geo_agent_platform_layer_tiles(integer,integer,integer,json)',
         model_result_cache_table: 'platform_model_result_cache',
+        file_objects_table: 'platform_file_objects',
       }],
     )
 
@@ -72,7 +74,7 @@ describe('verifyDatabaseSchemaCompatibility', () => {
   it('拒绝让旧服务连接未来版本数据库', async () => {
     const db = databaseWithRows(
       [{ table_name: 'platform_schema_migrations' }],
-      [...currentMigrations(), { migration_id: '009_future_change', checksum: 'b'.repeat(64) }],
+      [...currentMigrations(), { migration_id: '010_future_change', checksum: 'b'.repeat(64) }],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
@@ -83,7 +85,7 @@ describe('verifyDatabaseSchemaCompatibility', () => {
     const db = databaseWithRows(
       [{ table_name: 'platform_schema_migrations' }],
       currentMigrations(),
-      [{ vector_tile_function: null, model_result_cache_table: 'platform_model_result_cache' }],
+      [{ vector_tile_function: null, model_result_cache_table: 'platform_model_result_cache', file_objects_table: 'platform_file_objects' }],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
@@ -109,6 +111,7 @@ describe('verifyDatabaseSchemaCompatibility', () => {
       [{
         vector_tile_function: 'geo_agent_platform_layer_tiles(integer,integer,integer,json)',
         model_result_cache_table: null,
+        file_objects_table: 'platform_file_objects',
       }],
     )
 

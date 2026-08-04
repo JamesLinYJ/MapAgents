@@ -276,6 +276,8 @@ export type OpenAIDnsStrategy = 'system' | 'bounded-ipv4'
 
 export interface OpenAIClientTransport {
   readonly fetch: typeof globalThis.fetch
+  /** 等待连接建立前的 DNS 预热，避免首个用户请求承担冷解析延迟。 */
+  warmup?(): Promise<void>
   close(): Promise<void>
 }
 
@@ -325,15 +327,18 @@ export class OpenAIProviderTransport implements OpenAIClientTransport {
       this.initialPrime = null
     }
     this.fetch = async (input, init) => {
-      const initialPrime = this.initialPrime
-      if (initialPrime) {
-        try {
-          await initialPrime
-        } finally {
-          if (this.initialPrime === initialPrime) this.initialPrime = null
-        }
-      }
+      await this.warmup()
       return requestFetch(input, init)
+    }
+  }
+
+  async warmup(): Promise<void> {
+    const initialPrime = this.initialPrime
+    if (!initialPrime) return
+    try {
+      await initialPrime
+    } finally {
+      if (this.initialPrime === initialPrime) this.initialPrime = null
     }
   }
 

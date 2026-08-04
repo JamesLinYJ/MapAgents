@@ -101,6 +101,7 @@ app.use('*', async (c, next) => {
 app.use('*', observeHttpMetrics)
 app.use('*', serviceAdmissionMiddleware(admission))
 app.get('/health/live', c => c.json({ status: 'ok', live: true }))
+app.get('/health/capabilities', c => c.json(container.capabilities))
 app.get('/health', async c => {
   const shutdown = shuttingDownHealth(admission)
   if (shutdown) return c.json(shutdown, 503)
@@ -113,7 +114,7 @@ app.get('/metrics', async () => {
 app.on(['GET', 'POST'], '/api/auth/*', authRateLimitMiddleware, c => container.security.auth.handler(c.req.raw))
 app.use('/api/v1/*', apiRateLimitMiddleware(container.security), (c, next) => requireHttpAuth(container.security, c, next))
 app.route('/', securityRoutes(container.security))
-app.route('/', fileRoutes(container.runtimeRoot, container.runtimeFiles, container.store, container.security, env))
+app.route('/', fileRoutes(container.runtimeRoot, container.fileLifecycle, container.store, container.security, env))
 app.route('/', layerRoutes(container.runtimeRoot, container.managedLayers, container.store, container.security, env))
 app.route('/', artifactRoutes(container.artifactRepository, container.runtimeRoot, container.security))
 app.route('/', desktopExportRoutes({
@@ -128,7 +129,7 @@ app.route('/', mapRoutes({
   tileGateway: container.mapTileGateway,
   security: container.security,
 }))
-app.route('/', meteorologyRoutes(container.runtimeRoot, container.runtimeFiles, container.store, container.security, env))
+app.route('/', meteorologyRoutes(container.runtimeRoot, container.fileLifecycle, container.store, container.security, env))
 app.onError((error, c) => {
   if (error instanceof AuthorizationError) return c.json({ detail: error.message }, 403)
   if (error.message === '未登录。') return c.json({ detail: '未登录' }, 401)
@@ -148,9 +149,12 @@ const wsServer = createWsHandler(server, {
   managedLayers: container.managedLayers,
   runtimeRoot: container.runtimeRoot,
   runtimeFiles: container.runtimeFiles,
+  fileLifecycle: container.fileLifecycle,
   defaultRuntimeConfig: container.defaultRuntimeConfig,
   runtime: container.runtime,
   runTasks: container.runTasks,
+  startRunService: container.startRunService,
+  resultCommitService: container.resultCommitService,
   scheduledTaskService: container.scheduledTaskService,
   automationDefinitionService: container.automationDefinitionService,
   backgroundTasks: container.backgroundTasks,

@@ -55,6 +55,10 @@ export class PostgresRuntimeIntegrityCatalog implements RuntimeIntegrityCatalog 
       UNION ALL
       SELECT content_hash AS object_hash, 'thread-memory:' || thread_id || ':' || version::text AS source
       FROM platform_thread_memory_versions
+      UNION ALL
+      SELECT content_hash AS object_hash, 'file:' || file_id AS source
+      FROM platform_file_objects
+      WHERE status = 'ready'
     `)
     return objectReferenceRowsSchema.parse(result.rows)
   }

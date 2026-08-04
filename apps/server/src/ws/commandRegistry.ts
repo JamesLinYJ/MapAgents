@@ -17,6 +17,7 @@ import type { RunTaskManager } from '../agent/runTaskManager.js'
 import type { AuthContext } from '../security/types.js'
 import type { RuntimeFileStore } from '../store/fileStore.js'
 import type { ClientMsg } from './protocol.js'
+import { wsCommandContract } from '@geo-agent-platform/shared-types'
 import type { WsDependencies } from './dependencies.js'
 
 export interface WsCommandContext {
@@ -33,11 +34,18 @@ export interface WsCommandContext {
 export interface WsCommandDefinition<TPayload extends z.ZodTypeAny = z.ZodTypeAny> {
   type: ClientMsg['type']
   payloadSchema: TPayload
-  responseSchema?: z.ZodTypeAny
+  responseSchema: z.ZodTypeAny
   auth?: 'required' | 'optional'
   csrf?: boolean
   authorize?: (payload: Record<string, unknown>, context: WsCommandContext) => Promise<void> | void
-  handler: (payload: z.infer<TPayload>, context: WsCommandContext) => Promise<unknown> | unknown
+  handler(payload: z.infer<TPayload>, context: WsCommandContext): Promise<unknown> | unknown
+}
+
+type WsCommandRegistration<TPayload extends z.ZodTypeAny> = Omit<WsCommandDefinition<TPayload>, 'responseSchema' | 'payloadSchema'> & {
+  // Existing command modules may provide a narrower local payload schema while
+  // migrating. The registry always installs the shared contract schema when it
+  // is omitted, so response validation never has a second source of truth.
+  payloadSchema?: z.ZodTypeAny
 }
 
 // 注册表是 WS 控制面的唯一新增入口。它把 payload schema、auth 要求和
@@ -45,11 +53,21 @@ export interface WsCommandDefinition<TPayload extends z.ZodTypeAny = z.ZodTypeAn
 export class WsCommandRegistry {
   private readonly commands = new Map<ClientMsg['type'], WsCommandDefinition>()
 
-  register<TPayload extends z.ZodTypeAny>(definition: WsCommandDefinition<TPayload>): void {
+  register<TPayload extends z.ZodTypeAny>(definition: WsCommandRegistration<TPayload> & { payloadSchema?: TPayload }): void {
     if (this.commands.has(definition.type)) {
       throw new Error(`WS 命令 '${definition.type}' 重复注册`)
     }
-    this.commands.set(definition.type, definition)
+    const contract = wsCommandContract(definition.type)
+    this.commands.set(definition.type, {
+      ...definition,
+      // The shared map is the runtime payload authority. Local schemas may
+      // remain in command modules during migration only for handler typing;
+      // they are never allowed to define a second wire contract.
+      payloadSchema: contract.payload,
+      responseSchema: contract.response,
+      auth: contract.auth,
+      csrf: contract.csrf,
+    })
   }
 
   get(type: ClientMsg['type']): WsCommandDefinition | null {
@@ -76,7 +94,7 @@ export class WsCommandRegistry {
     if (!definition.authorize) throw new Error(`WS 命令 '${msg.type}' 缺少授权策略。`)
     await definition.authorize(requireRecordPayload(parsedPayload, msg.type), commandContext)
     const result = await definition.handler(parsedPayload, commandContext)
-    return definition.responseSchema ? definition.responseSchema.parse(result) : result
+    return definition.responseSchema.parse(result)
   }
 
   registeredTypes(): ClientMsg['type'][] {

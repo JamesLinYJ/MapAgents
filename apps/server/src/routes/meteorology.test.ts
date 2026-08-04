@@ -18,7 +18,7 @@ import { ensureMeteorologicalTables, meteorologyRoutes } from './meteorology.js'
 import { verifySchema } from '../security/database.js'
 import type { SecurityServices } from '../security/routes.js'
 import type { AuthContext } from '../security/types.js'
-import { RuntimeFileStore } from '../store/fileStore.js'
+import type { FileLifecyclePort } from '../store/fileLifecycleService.js'
 
 describe('meteorology routes', () => {
   it('passes threadId and filename query parameters into dataset filtering', async () => {
@@ -36,7 +36,7 @@ describe('meteorology routes', () => {
       c.set('auth', TEST_AUTH)
       await next()
     })
-    app.route('/', meteorologyRoutes(os.tmpdir(), new RuntimeFileStore(os.tmpdir()), store, testSecurity(), {
+    app.route('/', meteorologyRoutes(os.tmpdir(), emptyFileLifecycle(), store, testSecurity(), {
       MAX_METEOROLOGY_UPLOAD_BYTES: 500 * 1024 * 1024,
     }))
 
@@ -52,7 +52,76 @@ describe('meteorology routes', () => {
     }])
     expect(rows.map(row => row.datasetId)).toEqual(['dataset-b'])
   })
+
+  it('compensates a published file when dataset indexing fails', async () => {
+    const deleted: string[] = []
+    const store = {
+      getSession: () => ({
+        id: 'session-test',
+        workspaceId: 'workspace-test',
+        createdByUserId: 'user-test',
+        visibility: 'workspace',
+      }),
+      getThread: () => ({
+        id: 'thread-test',
+        sessionId: 'session-test',
+        workspaceId: 'workspace-test',
+        createdByUserId: 'user-test',
+        visibility: 'workspace',
+      }),
+      meteorology: {
+        createMeteorologicalDataset: async () => { throw new Error('dataset index failed') },
+      },
+      updateSession: async () => { throw new Error('session pointer must not run') },
+    } as unknown as PlatformPersistenceFacade
+    const files: FileLifecyclePort = {
+      upload: async () => ({
+        id: 'file-uploaded',
+        name: 'weather.nc',
+        sourceRelativePath: null,
+        size: '7 B',
+        sizeBytes: 7,
+        uploadedAt: new Date().toISOString(),
+        status: 'ready',
+        threadId: 'thread-test',
+        relativePath: 'files/thread-test/file-uploaded/weather.nc',
+        contentHash: 'a'.repeat(64),
+        mediaType: 'application/x-netcdf',
+      }),
+      list: async () => [],
+      delete: async fileId => { deleted.push(fileId); return true },
+      cloneThreadFiles: async () => [],
+      purgeThreadFiles: async () => undefined,
+    }
+    const app = new Hono()
+    app.use('*', async (c, next) => {
+      c.set('auth', TEST_AUTH)
+      await next()
+    })
+    app.route('/', meteorologyRoutes(os.tmpdir(), files, store, testSecurity(), {
+      MAX_METEOROLOGY_UPLOAD_BYTES: 500 * 1024 * 1024,
+    }))
+
+    const form = new FormData()
+    form.set('sessionId', 'session-test')
+    form.set('threadId', 'thread-test')
+    form.append('file', new Blob(['netcdf'], { type: 'application/x-netcdf' }), 'weather.nc')
+    const response = await app.request('/api/v1/meteorology/datasets', { method: 'POST', body: form })
+
+    expect(response.status).toBe(400)
+    expect(deleted).toEqual(['file-uploaded'])
+  })
 })
+
+function emptyFileLifecycle(): FileLifecyclePort {
+  return {
+    upload: async () => { throw new Error('测试不应上传文件。') },
+    list: async () => [],
+    delete: async () => false,
+    cloneThreadFiles: async () => [],
+    purgeThreadFiles: async () => undefined,
+  }
+}
 
 const TEST_AUTH: AuthContext = {
   userId: 'user-test',

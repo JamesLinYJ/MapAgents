@@ -27,6 +27,7 @@ const booleanEnvSchema = z.preprocess((value) => {
 const envSchema = z.object({
   API_PORT: z.coerce.number(),
   API_HOST: z.string(),
+  GEO_AGENT_PLATFORM_RELEASE_ID: z.string().trim().min(1).optional(),
   DATABASE_URL: z.string(),
   RUNTIME_ROOT: z.string(),
   APP_BASE_URL: z.string().url(),

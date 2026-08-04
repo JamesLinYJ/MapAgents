@@ -15,6 +15,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   BackendStatusNotice,
   DesktopBackendMonitor,
+  assertRuntimeCapabilities,
 } from '../app/DesktopBackendMonitor'
 import { useBackendAvailabilityStore } from '../app/stores/backendAvailabilityStore'
 
@@ -59,5 +60,18 @@ describe('DesktopBackendMonitor', () => {
     expect(html).toContain('平台 API 未运行')
     expect(html).toContain('系统日志')
     expect(html).toContain('重新连接')
+  })
+
+  it('rejects an API/Desktop protocol mismatch before marking services online', () => {
+    expect(() => assertRuntimeCapabilities({
+      apiProtocolVersion: 99,
+      minDesktopProtocol: 1,
+      maxDesktopProtocol: 1,
+    })).toThrow('运行时 API 协议不兼容')
+    expect(() => assertRuntimeCapabilities({
+      apiProtocolVersion: 1,
+      minDesktopProtocol: 2,
+      maxDesktopProtocol: 3,
+    })).toThrow('桌面协议不兼容')
   })
 })

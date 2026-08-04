@@ -28,6 +28,11 @@ import {
   type DesktopBackendAvailability,
 } from './stores/backendAvailabilityStore'
 import { desktopMenuCommandSchema } from '../../contracts/desktopIpc'
+import {
+  API_PROTOCOL_VERSION,
+  DESKTOP_PROTOCOL_VERSION,
+} from '@geo-agent-platform/shared-types/release'
+import { getRuntimeCapabilities } from '../api/runtimeApi'
 
 const BACKGROUND_RECHECK_INTERVAL_MS = 5_000
 const SystemLogViewer = lazy(() => import('../features/operations/SystemLogViewer').then(module => ({
@@ -41,6 +46,7 @@ export function DesktopBackendMonitor({ children }: { children: ReactNode }) {
   const setAvailability = useBackendAvailabilityStore(state => state.setAvailability)
   const automaticStartAttempted = useRef(false)
   const requestInFlight = useRef(false)
+  const handshakeSequence = useRef<number | null>(null)
   const [logsOpen, setLogsOpen] = useState(false)
 
   const refresh = useCallback(async (allowAutomaticStart: boolean) => {
@@ -52,6 +58,7 @@ export function DesktopBackendMonitor({ children }: { children: ReactNode }) {
 
       let current = await bridge.supervisor.status()
       if (allServicesHealthy(current)) {
+        await ensureRuntimeCompatibility(current.sequence, handshakeSequence)
         setAvailability('online', { snapshot: current, errorMessage: null })
         return
       }
@@ -71,6 +78,7 @@ export function DesktopBackendMonitor({ children }: { children: ReactNode }) {
       }
 
       if (allServicesHealthy(current)) {
+        await ensureRuntimeCompatibility(current.sequence, handshakeSequence)
         setAvailability('online', { snapshot: current, errorMessage: null })
       } else {
         setAvailability('offline', {
@@ -79,6 +87,7 @@ export function DesktopBackendMonitor({ children }: { children: ReactNode }) {
         })
       }
     } catch (error) {
+      handshakeSequence.current = null
       setAvailability('offline', {
         errorMessage: safeMessage(error),
       })
@@ -111,6 +120,7 @@ export function DesktopBackendMonitor({ children }: { children: ReactNode }) {
 
   const retry = useCallback(() => {
     automaticStartAttempted.current = false
+    handshakeSequence.current = null
     setAvailability('checking', { errorMessage: null })
     void refresh(true)
   }, [refresh, setAvailability])
@@ -134,6 +144,36 @@ export function DesktopBackendMonitor({ children }: { children: ReactNode }) {
       ) : null}
     </>
   )
+}
+
+async function ensureRuntimeCompatibility(
+  supervisorSequence: number,
+  handshakeSequence: { current: number | null },
+): Promise<void> {
+  if (handshakeSequence.current === supervisorSequence) return
+  const capabilities = await getRuntimeCapabilities()
+  assertRuntimeCapabilities(capabilities)
+  handshakeSequence.current = supervisorSequence
+}
+
+export function assertRuntimeCapabilities(capabilities: {
+  apiProtocolVersion: number
+  minDesktopProtocol: number
+  maxDesktopProtocol: number
+}): void {
+  if (capabilities.apiProtocolVersion !== API_PROTOCOL_VERSION) {
+    throw new Error(
+      `运行时 API 协议不兼容：服务为 ${capabilities.apiProtocolVersion}，桌面需要 ${API_PROTOCOL_VERSION}。`,
+    )
+  }
+  if (
+    DESKTOP_PROTOCOL_VERSION < capabilities.minDesktopProtocol
+    || DESKTOP_PROTOCOL_VERSION > capabilities.maxDesktopProtocol
+  ) {
+    throw new Error(
+      `桌面协议不兼容：当前为 ${DESKTOP_PROTOCOL_VERSION}，服务要求 ${capabilities.minDesktopProtocol}–${capabilities.maxDesktopProtocol}。`,
+    )
+  }
 }
 
 export function BackendStatusNotice({

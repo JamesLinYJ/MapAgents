@@ -78,5 +78,4 @@ jobs:
         run: python apps/worker/tests/scan_security.py
 
       - name: Run Worker and scientific tests
-        run: python -m pytest apps/worker/tests
-
+        run: python -m pytest apps/worker/tests tests -q

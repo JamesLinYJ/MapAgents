@@ -23,10 +23,11 @@ import {
   type AgentWorkflowStep,
   type TodoItem,
 } from '../schemas/types.js'
-import { persistToolExecutionResult, resolveRuntimeValueRef } from '../tools/resultPersistence.js'
+import { resolveRuntimeValueRef, type ToolResultCommitService } from '../tools/resultPersistence.js'
 import { makeId } from '../utils/ids.js'
 import { ItemSink } from '../conversation/itemSink.js'
 import { RunEventSink } from './turnRunner.js'
+import { ToolExecutionPolicy } from './toolExecutionPolicy.js'
 import {
   completeAgentWorkflowStep,
   failAgentWorkflowStep,
@@ -36,6 +37,7 @@ import {
 
 interface CoordinatorOptions {
   store: ToolExecutionStore
+  resultCommitService: Pick<ToolResultCommitService, 'commit'>
   registry: ToolRegistry
   adapter: ModelAdapter | null
   modelCompletions?: ModelCompletionService
@@ -69,12 +71,19 @@ export class ToolExecutionCoordinator {
   private workflowMutation: Promise<void> = Promise.resolve()
   private resultMutation: Promise<void> = Promise.resolve()
   private checkpointMutation: Promise<void> = Promise.resolve()
-  private activeHandoffAgentId: string | null = null
+  private readonly policy: ToolExecutionPolicy
 
-  constructor(private readonly options: CoordinatorOptions) {}
+  constructor(private readonly options: CoordinatorOptions) {
+    this.policy = new ToolExecutionPolicy({
+      registry: options.registry,
+      state: () => this.options.store.getRun(this.options.runId).state,
+      claimedWorkflowSteps: () => new Set(this.claimedWorkflowSteps.values()),
+      externalAgentCalls: () => this.externalAgentCalls,
+    })
+  }
 
   isExecutionEnabled(): boolean {
-    return !this.options.store.getRun(this.options.runId).state.planMode
+    return this.policy.isExecutionEnabled()
   }
 
   formatToolFailureForModel(toolName: string, message: string): string {
@@ -104,82 +113,43 @@ export class ToolExecutionCoordinator {
   // 工作流中按名称猜测其副作用。load_skill 不走此开关：它只物化配置快照，
   // 不授予 Skill 中后续操作的执行权限。
   isSdkExtensionEnabled(): boolean {
-    const state = this.options.store.getRun(this.options.runId).state
-    return !state.planMode && state.agentWorkflow === null
+    return this.policy.isSdkExtensionEnabled()
   }
 
   isToolEnabled(toolName: string): boolean {
-    const tool = this.options.registry.get(toolName)
-    if (!tool) return false
-    const state = this.options.store.getRun(this.options.runId).state
-    if (state.planMode) {
-      return tool.isReadOnly && !tool.isDestructive
-    }
-    if (!state.agentWorkflow) return true
-    if (state.agentWorkflow.status === 'completed' || state.agentWorkflow.status === 'cancelled') return false
-    if (ACTIVE_WORKFLOW_CONTROL_TOOLS.has(toolName)) return true
-    if (state.agentWorkflow.status === 'adjusting') {
-      return tool.isReadOnly && !tool.isDestructive
-    }
-    return this.hasReadyWorkflowStep(toolName, 'supervisor')
+    return this.policy.isToolEnabled(toolName)
   }
 
   isExternalAgentEnabled(agentId: string): boolean {
-    const state = this.options.store.getRun(this.options.runId).state
-    return !state.planMode && (
-      this.hasReadyWorkflowStep(agentId, agentId)
-      || this.hasRunningExternalAgentStep(agentId)
-    )
+    return this.policy.isExternalAgentEnabled(agentId)
   }
 
   isHandoffEnabled(agentId: string): boolean {
-    const state = this.options.store.getRun(this.options.runId).state
-    return !state.planMode
-      && state.agentWorkflow === null
-      && (this.activeHandoffAgentId === null || this.activeHandoffAgentId === agentId)
+    return this.policy.isHandoffEnabled(agentId)
   }
 
   activateHandoff(agentId: string): void {
-    if (!this.isHandoffEnabled(agentId)) {
-      throw new Error(`当前运行边界禁止转交给子智能体 '${agentId}'`)
-    }
-    this.activeHandoffAgentId = agentId
+    this.policy.activateHandoff(agentId)
   }
 
   restoreHandoffOwnership(agentId: string): void {
-    const state = this.options.store.getRun(this.options.runId).state
-    const owner = state.subAgents.find(candidate => candidate.agentId === agentId)
-    if (
-      state.planMode
-      || state.agentWorkflow !== null
-      || !owner
-      || owner.status !== 'running'
-    ) {
-      throw new Error(`Handoff 子智能体 '${agentId}' 没有可恢复的对话所有权`)
-    }
-    if (this.activeHandoffAgentId && this.activeHandoffAgentId !== agentId) {
-      throw new Error(`Handoff 所有权已属于 '${this.activeHandoffAgentId}'，不能恢复 '${agentId}'`)
-    }
-    this.activeHandoffAgentId = agentId
+    this.policy.restoreHandoffOwnership(agentId)
   }
 
   finishHandoff(agentId: string): void {
-    if (this.activeHandoffAgentId === agentId) this.activeHandoffAgentId = null
+    this.policy.finishHandoff(agentId)
   }
 
   activeHandoffAgent(): string | null {
-    return this.activeHandoffAgentId
+    return this.policy.activeHandoffAgent()
   }
 
   isToolEnabledForHandoff(agentId: string, toolName: string): boolean {
-    return this.activeHandoffAgentId === agentId
-      && Boolean(this.options.registry.get(toolName))
-      && this.isHandoffEnabled(agentId)
+    return this.policy.isToolEnabledForHandoff(agentId, toolName)
   }
 
   isToolEnabledForSubAgent(agentId: string, toolName: string): boolean {
-    if (!this.options.registry.get(toolName) || !this.isExecutionEnabled()) return false
-    return [...this.externalAgentCalls.values()].some(candidate => candidate === agentId)
+    return this.policy.isToolEnabledForSubAgent(agentId, toolName)
   }
 
   validateToolCall(toolName: string, args: Record<string, unknown>): string | null {
@@ -301,7 +271,7 @@ export class ToolExecutionCoordinator {
     args: Record<string, unknown>,
     callId: string,
   ): Promise<string | null> {
-    this.assertExecutionPhaseAllowsExternalAgent(agentId)
+    this.policy.assertExecutionPhaseAllowsExternalAgent(agentId)
     const { workflowStepId } = splitWorkflowStepIdentity(args)
     const stepId = await this.claimAgentWorkflowStep(agentId, callId, agentId, workflowStepId)
     this.externalAgentCalls.set(callId, agentId)
@@ -387,8 +357,8 @@ export class ToolExecutionCoordinator {
     const invocation = splitWorkflowStepIdentity(args)
     const itemId = this.callItems.get(callId)
     try {
-      this.assertPlanModeAllows(toolName)
-      if (ownerAgentId) this.assertExternalAgentIsRunning(ownerAgentId)
+      this.policy.assertPlanModeAllows(toolName)
+      if (ownerAgentId) this.policy.assertExternalAgentIsRunning(ownerAgentId)
       else await this.claimAgentWorkflowStep(toolName, callId, undefined, invocation.workflowStepId)
       await this.appendLedger(callId, toolName, 'started')
       const toolLabel = this.toolLabel(toolName)
@@ -398,14 +368,13 @@ export class ToolExecutionCoordinator {
       )
       const result = await this.options.registry.execute(toolName, invocation.toolArgs, this.createToolContext())
       await this.enqueueResultMutation(async () => {
-        await persistToolExecutionResult(
-          this.options.store,
-          this.options.runId,
+        await this.options.resultCommitService.commit({
+          runId: this.options.runId,
           toolName,
-          this.toolLabel(toolName),
-          invocation.toolArgs,
+          toolLabel: this.toolLabel(toolName),
+          args: invocation.toolArgs,
           result,
-        )
+        })
         if (typeof result.payload.planMode === 'boolean') {
           this.options.onPlanModeChanged?.(result.payload.planMode)
         }
@@ -499,24 +468,13 @@ export class ToolExecutionCoordinator {
     }
   }
 
-  // 计划模式不再维护第二份逐工具白名单。工具定义中的读写语义是唯一事实源：
-  // 无副作用读取可用于形成计划，写入和破坏性能力必须先结束规划阶段。
-  private assertPlanModeAllows(toolName: string): void {
-    const run = this.options.store.getRun(this.options.runId)
-    if (!run.state.planMode) return
-    const tool = this.options.registry.get(toolName)
-    if (!tool) throw new Error(`工具 '${toolName}' 未注册`)
-    if (tool.isReadOnly && !tool.isDestructive) return
-    throw new Error(`计划模式只允许无副作用的读取工具，工具 '${toolName}' 会产生写入或外部影响。请先提交工作流结束规划阶段。`)
-  }
-
   async executeForHandoff(
     agentId: string,
     toolName: string,
     args: Record<string, unknown>,
     callId: string,
   ): Promise<string> {
-    if (this.activeHandoffAgentId !== agentId) {
+    if (this.policy.activeHandoffAgent() !== agentId) {
       throw new Error(`子智能体 '${agentId}' 尚未取得 handoff 所有权`)
     }
     const result = await this.execute(toolName, args, callId)
@@ -533,18 +491,6 @@ export class ToolExecutionCoordinator {
       this.options.inlineToolResultMaxChars,
       false,
     )
-  }
-
-  private assertExecutionPhaseAllowsExternalAgent(agentId: string): void {
-    if (this.isExecutionEnabled()) return
-    throw new Error(`计划模式禁止调用子智能体 '${agentId}'。请先用 submit_agent_workflow 记录工作流并开始执行。`)
-  }
-
-  private assertExternalAgentIsRunning(agentId: string): void {
-    const running = [...this.externalAgentCalls.values()].some(candidate => candidate === agentId)
-    if (!running) {
-      throw new Error(`子智能体 '${agentId}' 没有正在执行的已批准工作流步骤，不能调用平台工具。`)
-    }
   }
 
   private claimAgentWorkflowStep(
@@ -846,39 +792,6 @@ export class ToolExecutionCoordinator {
     })
   }
 
-  private hasReadyWorkflowStep(toolName: string, ownerAgentId: string): boolean {
-    const workflow = this.options.store.getRun(this.options.runId).state.agentWorkflow
-    if (!workflow || workflow.status !== 'running') return false
-    const completed = new Set(workflow.steps
-      .filter(step => step.status === 'completed' || step.status === 'skipped')
-      .map(step => step.stepId))
-    const claimed = new Set(this.claimedWorkflowSteps.values())
-    return workflow.steps.some(step => (
-      step.status === 'pending'
-      && step.toolName === toolName
-      && step.ownerAgentId === ownerAgentId
-      && !claimed.has(step.stepId)
-      && step.dependsOn.every(dependency => completed.has(dependency))
-    ))
-  }
-
-  private hasRunningExternalAgentStep(agentId: string): boolean {
-    const state = this.options.store.getRun(this.options.runId).state
-    const subAgent = state.subAgents.find(candidate => (
-      candidate.agentId === agentId
-      && candidate.status === 'running'
-      && candidate.currentStepId
-    ))
-    if (!subAgent?.currentStepId || state.agentWorkflow?.status !== 'running') return false
-    return state.agentWorkflow.steps.some(step => (
-      step.stepId === subAgent.currentStepId
-      && step.status === 'running'
-      && step.kind === 'agent'
-      && step.toolName === agentId
-      && step.ownerAgentId === agentId
-    ))
-  }
-
   private async appendToolFailure(callId: string, toolName: string, message: string): Promise<void> {
     await this.options.store.appendTranscript({
       threadId: this.options.threadId,
@@ -935,11 +848,6 @@ const AGENT_WORKFLOW_CONTROL_TOOLS = new Set([
 
 const AGENT_WORKFLOW_DEFINITION_TOOLS = new Set([
   'submit_agent_workflow',
-  'revise_agent_workflow',
-])
-
-const ACTIVE_WORKFLOW_CONTROL_TOOLS = new Set([
-  'request_clarification',
   'revise_agent_workflow',
 ])
 

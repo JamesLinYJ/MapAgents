@@ -59,6 +59,15 @@ describe('desktop IPC contracts', () => {
     }).success).toBe(false)
   })
 
+  it('allows the public runtime capability handshake through the Main API deputy', () => {
+    expect(desktopApiOperationSchema.safeParse({
+      method: 'GET',
+      path: '/health/capabilities',
+      body: null,
+      headers: {},
+    }).success).toBe(true)
+  })
+
   it('limits native downloads to explicit server-owned resource routes', () => {
     expect(desktopDownloadRequestSchema.safeParse({
       path: '/api/v1/results/artifact_1/file',

@@ -11,14 +11,12 @@
 
 import {
   memoryFileRecordSchema,
-  threadMemoryDocumentSchema,
   type MemoryFileRecord,
   type MemorySearchResult,
   type ThreadMemoryDocument,
 } from '@geo-agent-platform/shared-types'
 import { z } from 'zod'
 
-import { memoryListResponseSchema, memorySearchResponseSchema } from './responseSchemas'
 import { requestControl } from './transport'
 
 export type EditableMemoryScope = 'private' | 'team'
@@ -47,41 +45,41 @@ const instructionMemoryResponseSchema = z.object({
 })
 
 export function listMemories(scope?: EditableMemoryScope): Promise<{ records: MemoryFileRecord[]; total: number }> {
-  return requestControl('memory:list', { scope }, memoryListResponseSchema)
+  return requestControl('memory:list', { scope })
 }
 
 export function readMemory(scope: EditableMemoryScope, relativePath: string): Promise<MemoryFileRecord> {
-  return requestControl('memory:read', { scope, relativePath }, memoryFileRecordSchema)
+  return requestControl('memory:read', { scope, relativePath })
 }
 
 export function writeMemory(payload: WriteMemoryPayload): Promise<MemoryFileRecord> {
-  return requestControl('memory:write', { ...payload }, memoryFileRecordSchema)
+  return requestControl('memory:write', { ...payload })
 }
 
 export function deleteMemory(scope: EditableMemoryScope, relativePath: string): Promise<z.infer<typeof deletedMemorySchema>> {
-  return requestControl('memory:delete', { scope, relativePath }, deletedMemorySchema)
+  return requestControl('memory:delete', { scope, relativePath })
 }
 
 export function searchMemories(query: string): Promise<{ matches: MemorySearchResult[]; total: number }> {
-  return requestControl('memory:search', { query }, memorySearchResponseSchema)
+  return requestControl('memory:search', { query })
 }
 
 export function extractMemories(threadId: string, runId?: string | null): Promise<{ records: MemoryFileRecord[]; total: number }> {
-  return requestControl('memory:extract', { threadId, runId }, memoryListResponseSchema)
+  return requestControl('memory:extract', { threadId, runId })
 }
 
 export function dreamMemories(force = false): Promise<z.infer<typeof dreamMemoryResponseSchema>> {
-  return requestControl('memory:dream', { force }, dreamMemoryResponseSchema)
+  return requestControl('memory:dream', { force })
 }
 
 export function getSessionMemory(threadId: string): Promise<ThreadMemoryDocument> {
-  return requestControl('memory:session:get', { threadId }, threadMemoryDocumentSchema)
+  return requestControl('memory:session:get', { threadId })
 }
 
 export function rebuildSessionMemory(threadId: string): Promise<ThreadMemoryDocument> {
-  return requestControl('memory:session:rebuild', { threadId }, threadMemoryDocumentSchema)
+  return requestControl('memory:session:rebuild', { threadId })
 }
 
 export function listInstructionMemories(): Promise<z.infer<typeof instructionMemoryResponseSchema>> {
-  return requestControl('memory:instructions:list', {}, instructionMemoryResponseSchema)
+  return requestControl('memory:instructions:list')
 }

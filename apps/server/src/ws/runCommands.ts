@@ -12,7 +12,6 @@
 import { z } from 'zod'
 
 import { optionalPositiveInteger, requiredRunProvider } from './payload.js'
-import { resolveRuntimeConfig } from './runtimeConfig.js'
 import { respondDecision } from './decisionCommand.js'
 import { sendRunSnapshot, snapshotRun, subscribeToRun } from './subscriptions.js'
 import type { WsCommandRegistry } from './commandRegistry.js'
@@ -71,37 +70,19 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
     csrf: true,
     handler: async (payload, context) => {
       const auth = requireAuth(context.auth)
-      let threadId = payload.threadId ?? null
-      const sessionId = payload.sessionId ?? (threadId ? context.dependencies.store.getThread(threadId).sessionId : null)
-      if (!sessionId) throw new Error('sessionId 不能为空')
-      context.dependencies.usageStats.assertWorkspaceCanStartModelRun(auth)
-      const config = await resolveRuntimeConfig(context.dependencies.store.runtimeConfiguration, context.dependencies.defaultRuntimeConfig)
-      const selectedProvider = payload.provider
-        ?? payload.modelProvider
-        ?? context.dependencies.modelRegistry.defaultProvider
-      if (!selectedProvider) throw new Error('必须显式指定模型 provider，或配置 DEFAULT_MODEL_PROVIDER')
-      // 先完成所有不会写入 Thread 的配置与 provider 校验，避免请求失败时
-      // 留下没有 Run 的空 Thread。Thread/Run 创建仍由持久化生命周期事务负责。
-      if (!threadId) threadId = (await context.dependencies.store.createThread(sessionId, payload.query.slice(0, 32))).id
-      const run = await context.dependencies.store.createRun(sessionId, payload.query, {
-        threadId,
-        modelProvider: selectedProvider,
-        modelName: payload.modelName ?? null,
-        runtimeConfigSnapshot: config,
-      })
-      subscribeToRun(context.ws, run.id, context.dependencies.store, context.dependencies.events, context.subscriptions)
-      context.runTasks.startDetached({
-        runId: run.id,
-        threadId,
-        sessionId,
+      const run = await context.dependencies.startRunService.start({
+        auth,
         query: payload.query,
-        provider: selectedProvider,
-        modelName: run.modelName,
-        runtimeConfig: config,
+        sessionId: payload.sessionId ?? null,
+        threadId: payload.threadId ?? null,
+        provider: payload.provider ?? null,
+        modelProvider: payload.modelProvider ?? null,
+        modelName: payload.modelName ?? null,
         executionMode: payload.executionMode === 'plan' ? 'plan' : 'auto',
         reasoning: payload.reasoning !== false,
-        auth,
-      }, { onComplete: runId => sendRunSnapshot(context.ws, runId, context.dependencies.store) })
+        completion: { onComplete: runId => sendRunSnapshot(context.ws, runId, context.dependencies.store) },
+      })
+      subscribeToRun(context.ws, run.id, context.dependencies.store, context.dependencies.events, context.subscriptions)
       return run
     },
   })

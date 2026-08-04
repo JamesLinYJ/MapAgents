@@ -93,7 +93,7 @@ export function registerCoreCommands(registry: WsCommandRegistry): void {
     auth: 'required',
     csrf: false,
     handler: async (payload, context) => {
-      const entries = await context.files.list(payload.threadId)
+      const entries = await context.dependencies.fileLifecycle.list(payload.threadId)
       return { files: entries, total: entries.length }
     },
   })

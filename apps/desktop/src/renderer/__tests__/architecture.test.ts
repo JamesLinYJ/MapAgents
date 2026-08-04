@@ -220,8 +220,8 @@ describe('frontend architecture guards', () => {
     const conversationSource = await readFile(path.join(apiRoot, 'conversationApi.ts'), 'utf8')
     const runSource = await readFile(path.join(apiRoot, 'runApi.ts'), 'utf8')
     expect(conversationSource.includes('desktopWorkspaceBootstrapSnapshotSchema')).toBe(true)
-    expect(conversationSource.includes('threadDetailSnapshotSchema')).toBe(true)
-    expect(runSource.includes('runSnapshotSchema')).toBe(true)
+    expect(conversationSource.includes("requestControl('thread:get'")).toBe(true)
+    expect(runSource.includes("requestControl('run:get'")).toBe(true)
   })
 
   it('keeps layer facts in Zustand and layer mutations in an application module', async () => {

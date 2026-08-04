@@ -155,8 +155,8 @@ export const desktopAuthBootstrapResultSchema = z.object({
 }).strict()
 
 const safeRelativeApiPathSchema = z.string().trim().min(1).max(2_048).superRefine((value, context) => {
-  if (!value.startsWith('/api/') && value !== '/health') {
-    context.addIssue({ code: 'custom', message: '桌面 API 只允许访问 /api/* 或 /health。' })
+  if (!value.startsWith('/api/') && value !== '/health' && value !== '/health/capabilities') {
+    context.addIssue({ code: 'custom', message: '桌面 API 只允许访问 /api/*、/health 或 /health/capabilities。' })
   }
   if (
     value.includes('\\')
@@ -683,6 +683,7 @@ function matchDesktopJsonRoute(
   const path = url.pathname
   if (method === 'GET' && url.search === '' && (
     path === '/health'
+    || path === '/health/capabilities'
     || path === '/api/v1/map/basemaps'
     || path === '/api/v1/admin/users'
     || path === '/api/v1/admin/workspaces'

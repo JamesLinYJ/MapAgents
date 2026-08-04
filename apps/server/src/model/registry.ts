@@ -32,6 +32,7 @@ export interface ModelAdapter {
 
   isConfigured(): boolean
   capabilities(): string[]
+  warmup?(): Promise<void>
   createAgentModel?(modelName?: string | null): Model
   chat(prompt: string, kwargs?: Record<string, unknown>): Promise<Record<string, unknown>>
   close?(): Promise<void>
@@ -121,6 +122,19 @@ export class ModelAdapterRegistry {
         contextWindowTokens: a.contextWindowTokens ?? inferContextWindow(a.defaultModel),
       }
     })
+  }
+
+  /**
+   * Provider transport 预热属于启动就绪的一部分。只预热已配置的默认
+   * provider；未配置 provider 不触发外部网络，也不改变可选 provider 的
+   * 发现和错误语义。
+   */
+  async warmup(): Promise<void> {
+    const provider = this.defaultProvider.trim()
+    if (!provider) return
+    const adapter = this.adapters.get(provider)
+    if (!adapter?.isConfigured()) return
+    await adapter.warmup?.()
   }
 
   async close(): Promise<void> {

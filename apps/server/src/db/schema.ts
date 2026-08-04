@@ -431,6 +431,40 @@ export const platformMapLayers = pgTable('platform_map_layers', {
   workspaceUpdatedIdx: index('idx_platform_map_layers_workspace_updated').on(table.workspaceId, table.updatedAt),
 }))
 
+// 上传资源的结构化事实。文件字节只存在内容寻址对象存储；这张表拥有资源
+// 归属、请求幂等键和 pending/ready/deleted 生命周期，避免文件系统元数据成为
+// 第二套可写事实源。
+export const platformFileObjects = pgTable('platform_file_objects', {
+  fileId: text('file_id').primaryKey(),
+  workspaceId: text('workspace_id').references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
+  sessionId: text('session_id').notNull().references(() => platformSessions.sessionId, { onDelete: 'cascade' }),
+  threadId: text('thread_id').notNull().references(() => platformThreads.threadId, { onDelete: 'cascade' }),
+  createdByUserId: text('created_by_user_id').references(() => platformUsers.userId, { onDelete: 'set null' }),
+  name: text('name').notNull(),
+  sourceKey: text('source_key').notNull(),
+  sourceRelativePath: text('source_relative_path'),
+  relativePath: text('relative_path').notNull(),
+  contentHash: text('content_hash').notNull(),
+  sizeBytes: integer('size_bytes').notNull(),
+  mediaType: text('media_type').notNull(),
+  requestId: text('request_id'),
+  status: text('status').notNull().default('pending'),
+  errorMessage: text('error_message'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  readyAt: timestamp('ready_at', { withTimezone: true }),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, table => ({
+  requestIdx: uniqueIndex('idx_platform_file_objects_thread_request_unique')
+    .on(table.threadId, table.requestId)
+    .where(sql`${table.requestId} IS NOT NULL`),
+  threadStatusIdx: index('idx_platform_file_objects_thread_status_updated')
+    .on(table.threadId, table.status, table.updatedAt),
+  contentHashIdx: index('idx_platform_file_objects_content_hash').on(table.contentHash),
+  statusCheck: check('platform_file_objects_status_check', sql`${table.status} IN ('pending', 'ready', 'deleted')`),
+  sizeCheck: check('platform_file_objects_size_bytes_check', sql`${table.sizeBytes} >= 0`),
+}))
+
 export const platformMapScenes = pgTable('platform_map_scenes', {
   sceneId: text('scene_id').primaryKey(),
   workspaceId: text('workspace_id').notNull().references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),

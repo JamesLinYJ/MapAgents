@@ -11,7 +11,7 @@
 
 // 平台资源协议：身份、会话、线程、运行与气象数据索引。
 import { z } from 'zod'
-import type { AgentRuntimeConfig } from './runtime.js'
+import { agentRuntimeConfigSchema } from './runtime.js'
 import { agentStateSchema, runStatusSchema, toolValueRefSchema } from './core.js'
 import { artifactDisplaySchema } from './map.js'
 
@@ -195,7 +195,8 @@ export const analysisRunSchema = z.object({
   updatedAt: z.string(),
   state: agentStateSchema,
   conversationPath: z.string().nullable().default(null),
-  runtimeConfigSnapshot: z.custom<AgentRuntimeConfig>().nullable().default(null),
+  // 运行时配置是跨进程持久化的事实，不接受 z.custom 这种无法验证结构的占位符。
+  runtimeConfigSnapshot: agentRuntimeConfigSchema.nullable().default(null),
 })
 
 export const directToolResultSchema = z.object({

@@ -219,6 +219,14 @@
   display: none;
 }
 
+.cc-timeline-virtual-row > .cc-timeline-item::before {
+  display: block;
+}
+
+.cc-timeline-virtual-row--last > .cc-timeline-item::before {
+  display: none;
+}
+
 .cc-timeline-dot {
   position: relative;
   z-index: 1;

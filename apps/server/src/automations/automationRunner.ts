@@ -36,6 +36,7 @@ import { resolveRuntimeConfig } from '../ws/runtimeConfig.js'
 import { errorLogPayload, logger } from '../observability/logger.js'
 import { automationNodeDurationMs, automationNodeExecutionsTotal, automationRunsTotal } from '../observability/metrics.js'
 import { executePersistedTool } from '../tools/persistentToolExecutor.js'
+import type { ToolResultCommitService } from '../tools/resultPersistence.js'
 import { computeNextFireAt } from './cronSchedule.js'
 import type { AutomationJobPayload } from './jobQueueService.js'
 import { automationJobPayloadSchema } from './jobQueueService.js'
@@ -67,6 +68,7 @@ export interface AutomationRunnerOptions {
   >
   conversations: AutomationConversationPort
   toolExecutionStore: PersistentToolStore
+  resultCommitService: Pick<ToolResultCommitService, 'commit'>
   runtimeConfiguration: Pick<RuntimeConfigStore, 'getRuntimeConfig'>
   definitions: AutomationDefinitionService
   compiler: AutomationCompiler
@@ -386,6 +388,7 @@ export class AutomationRunner {
         }, {
           store: this.options.toolExecutionStore,
           runtimeConfiguration: this.options.runtimeConfiguration,
+          resultCommitService: this.options.resultCommitService,
           registry: this.options.toolRegistry,
           modelRegistry: this.options.modelRegistry,
           ...(this.options.modelCompletions ? { modelCompletions: this.options.modelCompletions } : {}),

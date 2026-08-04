@@ -85,15 +85,15 @@ const deletedFileSchema = z.object({ deleted: z.boolean(), id: z.string() })
 const deletedLayerSchema = z.object({ deleted: z.boolean(), layerKey: z.string() })
 
 export function listLayers(sessionId?: string | null, threadId?: string | null): Promise<LayerDescriptor[]> {
-  return requestControl('layer:list', { sessionId, threadId }, z.array(layerDescriptorSchema))
+  return requestControl('layer:list', { sessionId, threadId })
 }
 
 export function updateLayer(layerKey: string, payload: Record<string, unknown>): Promise<LayerDescriptor> {
-  return requestControl('layer:update', { layerKey, update: payload }, layerDescriptorSchema)
+  return requestControl('layer:update', { layerKey, update: payload })
 }
 
 export function deleteLayer(layerKey: string): Promise<z.infer<typeof deletedLayerSchema>> {
-  return requestControl('layer:delete', { layerKey }, deletedLayerSchema)
+  return requestControl('layer:delete', { layerKey })
 }
 
 export function listBasemaps(): Promise<BasemapDescriptor[]> {
@@ -229,7 +229,7 @@ export async function replaceManagedLayer(
 }
 
 export function listAllFiles(threadId: string): Promise<FileListResponse> {
-  return requestControl('file:list', { threadId }, fileListResponseSchema)
+  return requestControl('file:list', { threadId })
 }
 
 export async function uploadAnyFile(
@@ -252,7 +252,7 @@ export async function uploadAnyFile(
 }
 
 export function deleteAnyFile(fileId: string, threadId: string): Promise<z.infer<typeof deletedFileSchema>> {
-  return requestControl('file:delete', { fileId, threadId }, deletedFileSchema)
+  return requestControl('file:delete', { fileId, threadId })
 }
 
 function uploadBody(

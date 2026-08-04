@@ -19,7 +19,13 @@
 // 统一投影 HTTP、句柄式 multipart、WebSocket 控制命令和协议校验。
 // 真实网络连接由 Electron Main 持有，业务 API 只描述资源语义。
 
-import type { WsControlCommand, WsControlResponse } from '@geo-agent-platform/shared-types'
+import {
+  wsCommandContract,
+  type WsCommandPayload,
+  type WsCommandResponse,
+  type WsControlCommand,
+  type WsControlResponse,
+} from '@geo-agent-platform/shared-types'
 import {
   PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME,
 } from '@geo-agent-platform/shared-types/product-identity'
@@ -82,12 +88,12 @@ export function formatApiErrorMessage(prefix: string, detail?: string) {
 
 export async function requestJson<T>(
   path: string,
-  init?: RequestInit,
-  timeoutMs = 30_000,
-  schema?: ResponseSchema<T>,
+  init: RequestInit | undefined,
+  timeoutMs: number,
+  schema: ResponseSchema<T>,
 ): Promise<T> {
-  // 通用 JSON 请求入口 — 支持可选的 Zod schema 校验，
-  // 防止后端协议变更时裸 as T 掩藏字段缺失或类型错误。
+  // 通用 JSON 请求入口 — 每个调用必须提供对应的 Zod schema，
+  // 防止后端协议变更时字段缺失或类型错误穿透到业务层。
   let response: Response
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -133,23 +139,19 @@ export async function requestJson<T>(
 
   const data = await response.json()
 
-  if (schema) {
-    const parsed = schema.safeParse(data)
-    if (!parsed.success) {
-      throw new Error(formatSchemaValidationError(`HTTP ${path}`, parsed.error.issues))
-    }
-    return parsed.data
+  const parsed = schema.safeParse(data)
+  if (!parsed.success) {
+    throw new Error(formatSchemaValidationError(`HTTP ${path}`, parsed.error.issues))
   }
-
-  return data as T
+  return parsed.data
 }
 
 export async function requestFormJson<T>(
   path: string,
   body: DesktopUploadBody,
   failurePrefix: string,
-  timeoutMs = 120_000,
-  schema?: ResponseSchema<T>,
+  timeoutMs: number,
+  schema: ResponseSchema<T>,
 ): Promise<T> {
   // 句柄背书的 multipart 请求同样走统一超时和错误提取。
   //
@@ -199,25 +201,27 @@ export async function requestFormJson<T>(
   }
 
   const data: unknown = await response.json()
-  if (schema) {
-    const parsed = schema.safeParse(data)
-    if (!parsed.success) {
-      throw new Error(formatSchemaValidationError(`HTTP ${path}`, parsed.error.issues))
-    }
-    return parsed.data
+  const parsed = schema.safeParse(data)
+  if (!parsed.success) {
+    throw new Error(formatSchemaValidationError(`HTTP ${path}`, parsed.error.issues))
   }
-  return data as T
+  return parsed.data
 }
 
 // 业务控制命令统一走 /ws；响应必须是具有关联请求 ID 的成功/错误 envelope。
 //
-// 可选 schema 参数来自 @geo-agent-platform/shared-types 中的 Zod schema，
+// 命令 key 直接选择 shared-types 中的 payload/response schema，
 // 校验通过后才返回，失败时抛出稳定中文协议错误。
-export async function requestControl<T>(
-  type: WsControlCommand,
-  payload: Record<string, unknown> = {},
-  schema?: ResponseSchema<T>,
-): Promise<T> {
+export async function requestControl<K extends WsControlCommand>(
+  type: K,
+  payload?: WsCommandPayload<K>,
+): Promise<WsCommandResponse<K>> {
+  const contract = wsCommandContract(type)
+  const payloadValue = payload ?? {}
+  const parsedPayload = contract.payload.safeParse(payloadValue)
+  if (!parsedPayload.success) {
+    throw new Error(formatSchemaValidationError(`WS ${type} 请求`, parsedPayload.error.issues))
+  }
   let message: WsControlResponse
   try {
     const bridge = requireDesktopBridge()
@@ -225,20 +229,27 @@ export async function requestControl<T>(
       version: 1,
       requestId: crypto.randomUUID(),
       command: type,
-      payload,
+      payload: payloadValue,
     })
-    message = {
-      type: 'response',
-      id: response.requestId,
-      payload: response.ok
-        ? { ok: true, data: response.data }
-        : {
-            ok: false,
-            error: response.error ?? {
-              code: 'control_failed',
-              message: '桌面控制命令失败。',
-            },
-          },
+    if (response.ok) {
+      message = {
+        type: 'response',
+        id: response.requestId,
+        payload: { ok: true, data: response.data },
+      }
+    }
+    else {
+      if (!response.error) {
+        throw new PlatformTransportError(
+          `WebSocket 命令 ${type} 返回了缺少错误详情的无效控制响应。`,
+          { transport: 'websocket', code: 'protocol_error' },
+        )
+      }
+      message = {
+        type: 'response',
+        id: response.requestId,
+        payload: { ok: false, error: response.error },
+      }
     }
   } catch (error) {
     if (error instanceof PlatformTransportError) throw error
@@ -256,15 +267,11 @@ export async function requestControl<T>(
 
   const data = message.payload.data
 
-  if (schema) {
-    const parsed = schema.safeParse(data)
-    if (!parsed.success) {
-      throw new Error(formatSchemaValidationError(`WS ${type}`, parsed.error.issues))
-    }
-    return parsed.data
+  const parsed = contract.response.safeParse(data)
+  if (!parsed.success) {
+    throw new Error(formatSchemaValidationError(`WS ${type}`, parsed.error.issues))
   }
-
-  return data as T
+  return parsed.data as WsCommandResponse<K>
 }
 
 async function extractErrorDetail(response: Response): Promise<string> {

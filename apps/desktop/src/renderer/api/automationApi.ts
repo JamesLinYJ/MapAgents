@@ -12,12 +12,7 @@
 // 平台 Automation Studio、运行、审批、定时任务和后台任务传输边界。
 
 import {
-  backgroundTaskInfoSchema,
-  scheduledTaskSchema,
-  automationDefinitionSchema,
   automationRunRecordSchema,
-  automationValidationResultSchema,
-  automationVersionRecordSchema,
   type BackgroundTaskInfo,
   type ScheduledTask,
   type AutomationDefinition,
@@ -27,11 +22,6 @@ import {
   type AutomationVersionRecord,
 } from '@geo-agent-platform/shared-types'
 import { z } from 'zod'
-import {
-  backgroundTaskListResponseSchema,
-  scheduledTaskListResponseSchema,
-  automationListResponseSchema,
-} from './responseSchemas'
 import { requestControl } from './transport'
 
 export interface AutomationDraftPayload {
@@ -87,43 +77,43 @@ export function listAutomations(): Promise<{
   diagnostics: Array<Record<string, unknown>>
   validation: Record<string, AutomationValidationResult>
 }> {
-  return requestControl('automation:list', {}, automationListResponseSchema)
+  return requestControl('automation:list')
 }
 
 export function validateAutomation(payload: AutomationDraftPayload): Promise<AutomationValidationResult> {
-  return requestControl('automation:validate', { ...payload }, automationValidationResultSchema)
+  return requestControl('automation:validate', { ...payload })
 }
 
 export function createAutomation(payload: AutomationDraftPayload): Promise<AutomationDefinition> {
-  return requestControl('automation:create', { ...payload }, automationDefinitionSchema)
+  return requestControl('automation:create', { ...payload })
 }
 
 export function updateAutomation(payload: AutomationUpdatePayload): Promise<AutomationDefinition> {
-  return requestControl('automation:update', { ...payload }, automationDefinitionSchema)
+  return requestControl('automation:update', { ...payload })
 }
 
 export function publishAutomation(automationId: string, revision: number): Promise<AutomationDefinition> {
-  return requestControl('automation:publish', { automationId, revision }, automationDefinitionSchema)
+  return requestControl('automation:publish', { automationId, revision })
 }
 
 export function disableAutomation(automationId: string): Promise<AutomationDefinition> {
-  return requestControl('automation:disable', { automationId }, automationDefinitionSchema)
+  return requestControl('automation:disable', { automationId })
 }
 
 export function getAutomationHistory(automationId: string): Promise<AutomationVersionRecord[]> {
-  return requestControl('automation:history', { automationId }, z.array(automationVersionRecordSchema))
+  return requestControl('automation:history', { automationId })
 }
 
 export function startAutomation(payload: StartAutomationPayload): Promise<z.infer<typeof automationStartResponseSchema>> {
-  return requestControl('automation:start', { ...payload }, automationStartResponseSchema)
+  return requestControl('automation:start', { ...payload })
 }
 
 export function cancelAutomation(automationRunId: string): Promise<AutomationRunRecord> {
-  return requestControl('automation:cancel', { automationRunId }, automationRunRecordSchema)
+  return requestControl('automation:cancel', { automationRunId })
 }
 
 export function getAutomationRun(automationRunId: string): Promise<AutomationRunRecord> {
-  return requestControl('automation:run:get', { automationRunId }, automationRunRecordSchema)
+  return requestControl('automation:run:get', { automationRunId })
 }
 
 export function respondAutomationApproval(
@@ -131,33 +121,33 @@ export function respondAutomationApproval(
   approvalId: string,
   decision: 'approved' | 'rejected',
 ): Promise<z.infer<typeof automationApprovalResponseSchema>> {
-  return requestControl('automation:respond-approval', { automationRunId, approvalId, decision }, automationApprovalResponseSchema)
+  return requestControl('automation:respond-approval', { automationRunId, approvalId, decision })
 }
 
 export function listScheduledTasks(): Promise<{ tasks: ScheduledTask[]; automationRuns: AutomationRunRecord[] }> {
-  return requestControl('scheduled-task:list', {}, scheduledTaskListResponseSchema)
+  return requestControl('scheduled-task:list')
 }
 
 export function createScheduledTask(payload: ScheduledTaskCreatePayload): Promise<ScheduledTask> {
-  return requestControl('scheduled-task:create', { ...payload }, scheduledTaskSchema)
+  return requestControl('scheduled-task:create', { ...payload })
 }
 
 export function updateScheduledTask(payload: ScheduledTaskUpdatePayload): Promise<ScheduledTask> {
-  return requestControl('scheduled-task:update', { ...payload }, scheduledTaskSchema)
+  return requestControl('scheduled-task:update', { ...payload })
 }
 
 export function deleteScheduledTask(taskId: string): Promise<ScheduledTask> {
-  return requestControl('scheduled-task:delete', { taskId }, scheduledTaskSchema)
+  return requestControl('scheduled-task:delete', { taskId })
 }
 
 export function listBackgroundTasks(): Promise<{ tasks: BackgroundTaskInfo[] }> {
-  return requestControl('background-task:list', {}, backgroundTaskListResponseSchema)
+  return requestControl('background-task:list')
 }
 
 export function promoteBackgroundTask(taskId: string): Promise<BackgroundTaskInfo> {
-  return requestControl('background-task:promote', { taskId }, backgroundTaskInfoSchema)
+  return requestControl('background-task:promote', { taskId })
 }
 
 export function cancelBackgroundTask(taskId: string): Promise<BackgroundTaskInfo> {
-  return requestControl('background-task:cancel', { taskId }, backgroundTaskInfoSchema)
+  return requestControl('background-task:cancel', { taskId })
 }

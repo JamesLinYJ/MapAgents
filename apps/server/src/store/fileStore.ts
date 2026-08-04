@@ -59,6 +59,19 @@ export interface StagedFileInput {
   mediaType: string
 }
 
+export interface FilePublicationOptions {
+  /** PostgreSQL pending 记录预先分配的资源标识。 */
+  fileId?: string
+}
+
+export interface NormalizedStagedFile {
+  name: string
+  sourceRelativePath: string | null
+  sourceKey: string
+  relativePath: string
+  mediaType: string
+}
+
 interface FileIdempotencyRecord {
   requestId: string
   fileId: string
@@ -184,6 +197,45 @@ export class RuntimeFileStore {
     })
   }
 
+  /**
+   * 将已暂存文件发布为内容寻址对象，并以原子 metadata 文件作为物理投影。
+   * 生命周期状态由 FileObjectRepository 持有；这里不写 requestId，也不决定
+   * pending/ready/deleted 的业务语义。
+   */
+  async publish(
+    file: StagedFileInput,
+    threadId: string,
+    options: FilePublicationOptions = {},
+    sourceRelativePath?: string | null,
+  ): Promise<StoredFileEntry> {
+    const cleanName = sanitizeFilename(file.name || 'upload.bin')
+    const cleanSourceRelativePath = sanitizeSourceRelativePath(sourceRelativePath, cleanName)
+    const scope = scopeName(threadId)
+    validateStagedFile(file)
+    const fileId = options.fileId ? safePathSegment(options.fileId, 'fileId') : makeId('file')
+    return this.scopeQueue(scope).add(async () => {
+      const uploadedAt = nowUtc()
+      const objectName = `${file.contentHash}${safeObjectExtension(cleanName)}`
+      const relativePath = path.posix.join('objects', 'sha256', file.contentHash.slice(0, 2), objectName)
+      const objectPath = path.join(this.objectRoot, file.contentHash.slice(0, 2), objectName)
+      await publishContentObject(file.tempPath, objectPath)
+      const metadata: StoredFileMetadata = {
+        id: fileId,
+        name: cleanName,
+        sourceRelativePath: cleanSourceRelativePath,
+        sizeBytes: file.sizeBytes,
+        uploadedAt,
+        status: 'ready',
+        threadId,
+        relativePath,
+        contentHash: file.contentHash,
+        mediaType: file.mediaType || inferMediaType(cleanName),
+      }
+      await atomicWriteJson(path.join(this.root, scope, fileId, 'metadata.json'), metadata)
+      return toEntry(metadata)
+    })
+  }
+
   async delete(fileId: string, threadId: string): Promise<boolean> {
     const safeFileId = safePathSegment(fileId, 'fileId')
     const scope = scopeName(threadId)
@@ -222,6 +274,40 @@ export class RuntimeFileStore {
       copied.push(toEntry(metadata))
     }
     return copied
+  }
+
+  /** 只复制线程级 metadata，CAS 内容仍由不可变对象共享。 */
+  async cloneFile(
+    sourceFileId: string,
+    sourceThreadId: string,
+    targetThreadId: string,
+    targetFileId: string,
+  ): Promise<StoredFileEntry> {
+    const source = (await this.list(sourceThreadId)).find(entry => entry.id === sourceFileId)
+    if (!source) throw new Error(`源文件 '${sourceFileId}' 不存在或不是 ready 状态。`)
+    const metadata: StoredFileMetadata = {
+      id: safePathSegment(targetFileId, 'fileId'),
+      name: source.name,
+      sourceRelativePath: source.sourceRelativePath,
+      sizeBytes: source.sizeBytes,
+      uploadedAt: nowUtc(),
+      status: 'ready',
+      threadId: targetThreadId,
+      relativePath: source.relativePath,
+      contentHash: source.contentHash,
+      mediaType: source.mediaType,
+    }
+    await atomicWriteJson(
+      path.join(this.root, scopeName(targetThreadId), metadata.id, 'metadata.json'),
+      metadata,
+    )
+    return toEntry(metadata)
+  }
+
+  async purgeThreadFiles(threadId: string): Promise<void> {
+    for (const file of await this.list(threadId)) {
+      await this.delete(file.id, threadId)
+    }
   }
 
   async verifyIntegrity(): Promise<{ files: number }> {
@@ -287,6 +373,21 @@ export class RuntimeFileStore {
       throw new StoreConflictError(`requestId '${requestId}' 对应的文件状态已变化，不能重复提交。`)
     }
     return toEntry(metadata)
+  }
+}
+
+/** 将 multipart 解析后的输入规范化为数据库和对象存储共用的文件事实。 */
+export function describeStagedFile(file: StagedFileInput, sourceRelativePath?: string | null): NormalizedStagedFile {
+  const name = sanitizeFilename(file.name || 'upload.bin')
+  const normalizedSource = sanitizeSourceRelativePath(sourceRelativePath, name)
+  validateStagedFile(file)
+  const objectName = `${file.contentHash}${safeObjectExtension(name)}`
+  return {
+    name,
+    sourceRelativePath: normalizedSource,
+    sourceKey: normalizedSource ?? name,
+    relativePath: path.posix.join('objects', 'sha256', file.contentHash.slice(0, 2), objectName),
+    mediaType: file.mediaType || inferMediaType(name),
   }
 }
 

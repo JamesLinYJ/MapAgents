@@ -95,6 +95,10 @@ export function createDeepSeekAdapter(opts: DeepSeekOptions): ModelAdapter {
       'hosted_web_search',
     ],
 
+    async warmup(): Promise<void> {
+      await transport?.warmup?.()
+    },
+
     async close(): Promise<void> {
       await transport?.close()
     },

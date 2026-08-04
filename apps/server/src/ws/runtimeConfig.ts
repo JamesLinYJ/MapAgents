@@ -9,19 +9,5 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
-// 模块职责
-//
-// WebSocket 命令和后台工具执行共享同一个运行时配置读取边界。数据库配置是事实源；
-// 未写入配置时才使用进程启动时注入的默认配置。
-
-import { agentRuntimeConfigSchema, type AgentRuntimeConfig } from '@geo-agent-platform/shared-types/runtime'
-import { defaultRuntimeConfig } from '../agent/defaultRuntimeConfig.js'
-import type { RuntimeConfigStore } from '../store/postgres/runtimeConfigStore.js'
-
-export async function resolveRuntimeConfig(
-  store: Pick<RuntimeConfigStore, 'getRuntimeConfig'>,
-  fallbackConfig: AgentRuntimeConfig = defaultRuntimeConfig(),
-): Promise<AgentRuntimeConfig> {
-  const stored = await store.getRuntimeConfig('agent-runtime')
-  return stored ? agentRuntimeConfigSchema.parse(stored) : agentRuntimeConfigSchema.parse(fallbackConfig)
-}
+// 兼容旧 import。实现属于 runtime 应用边界，不属于 WS transport。
+export { resolveRuntimeConfig } from '../runtime/runtimeConfig.js'

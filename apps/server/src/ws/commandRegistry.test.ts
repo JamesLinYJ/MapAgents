@@ -16,6 +16,7 @@ import { createDefaultCommandRegistry } from './defaultCommandRegistry.js'
 import { WsCommandRegistry } from './commandRegistry.js'
 import { clientMsgType, type ClientMsg } from './protocol.js'
 import type { AuthContext } from '../security/types.js'
+import { wsCommandContracts } from '@geo-agent-platform/shared-types'
 
 describe('WsCommandRegistry', () => {
   it('rejects duplicate command registration', () => {
@@ -72,6 +73,15 @@ describe('WsCommandRegistry', () => {
   it('registers every protocol command exactly once', () => {
     const registry = createDefaultCommandRegistry()
     expect(new Set(registry.registeredTypes())).toEqual(new Set(clientMsgType.options))
+  })
+
+  it('attaches a shared response contract to every registered command', () => {
+    const registry = createDefaultCommandRegistry()
+    for (const type of clientMsgType.options) {
+      const definition = registry.get(type)
+      expect(definition?.responseSchema).toBe(wsCommandContracts[type].response)
+      expect(definition?.responseSchema).toBeDefined()
+    }
   })
 })
 

@@ -15,75 +15,10 @@
 // 这里集中处理去重和排序，避免 AppShell 根据局部状态临时拼出错序时间线。
 
 import type { ConversationItem } from '@geo-agent-platform/shared-types'
+import { projectConversationItems } from '@geo-agent-platform/conversation-presentation'
 
 export function projectTimeline(canonical: ConversationItem[], liveOverlay: ConversationItem[]): ConversationItem[] {
-  const overlayEntryIds = new Set(liveOverlay.flatMap(item => {
-    const entryId = item.metadata?.transcriptEntryId
-    return typeof entryId === 'string' ? [entryId] : []
-  }))
-  const combined = [
-    ...canonical.filter(item => {
-      const entryId = item.metadata?.transcriptEntryId
-      return typeof entryId !== 'string' || !overlayEntryIds.has(entryId)
-    }),
-    ...liveOverlay,
-  ]
-  const latest = new Map<string, ConversationItem>()
-  for (const item of combined) latest.set(item.itemId, item)
-  return placeAssistantContentBeforeToolCalls([...latest.values()].sort(compareConversationItems))
+  return projectConversationItems(canonical, liveOverlay)
 }
 
 export const mergeConversationItems = projectTimeline
-
-function compareConversationItems(left: ConversationItem, right: ConversationItem): number {
-  const leftTime = Date.parse(left.timestamp || '')
-  const rightTime = Date.parse(right.timestamp || '')
-  const safeLeftTime = Number.isFinite(leftTime) ? leftTime : 0
-  const safeRightTime = Number.isFinite(rightTime) ? rightTime : 0
-  if (safeLeftTime !== safeRightTime) return safeLeftTime - safeRightTime
-
-  const leftSeq = metadataNumber(left, 'transcriptSeq')
-  const rightSeq = metadataNumber(right, 'transcriptSeq')
-  if (leftSeq !== rightSeq) return leftSeq - rightSeq
-
-  const rank = itemRank(left) - itemRank(right)
-  if (rank !== 0) return rank
-
-  return left.itemId.localeCompare(right.itemId)
-}
-
-function metadataNumber(item: ConversationItem, key: string): number {
-  const value = item.metadata?.[key]
-  return typeof value === 'number' && Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER
-}
-
-function itemRank(item: ConversationItem): number {
-  if (item.itemType === 'message' && item.role === 'user') return 10
-  if (item.itemType === 'reasoning') return 20
-  if (item.itemType === 'message' && item.role === 'assistant') return 30
-  if (item.itemType === 'function_call') return 40
-  if (item.itemType === 'function_call_output') return 50
-  if (item.itemType === 'result') return 60
-  if (item.itemType === 'error') return 70
-  return 80
-}
-
-function placeAssistantContentBeforeToolCalls(items: ConversationItem[]): ConversationItem[] {
-  const ordered = [...items]
-  for (const item of [...ordered]) {
-    const callId = item.metadata?.assistantContentForCallId
-    if (item.itemType !== 'message' || typeof callId !== 'string') continue
-    const messageIndex = ordered.findIndex(candidate => candidate.itemId === item.itemId)
-    const toolIndex = ordered.findIndex(candidate => (
-      candidate.itemType === 'function_call' && candidate.callId === callId
-    ))
-    if (messageIndex < 0 || toolIndex < 0 || messageIndex < toolIndex) continue
-    const [message] = ordered.splice(messageIndex, 1)
-    if (!message) continue
-    const nextToolIndex = ordered.findIndex(candidate => (
-      candidate.itemType === 'function_call' && candidate.callId === callId
-    ))
-    ordered.splice(nextToolIndex, 0, message)
-  }
-  return ordered
-}

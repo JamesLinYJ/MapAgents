@@ -23,7 +23,7 @@ import type { AuthContext } from '../security/types.js'
 import type { PersistentToolStore } from '../store/runtimePorts.js'
 import type { RuntimeConfigStore } from '../store/postgres/runtimeConfigStore.js'
 import { makeId, nowUtc } from '../utils/ids.js'
-import { persistToolExecutionResult, resolveRuntimeValueRef } from './resultPersistence.js'
+import { resolveRuntimeValueRef, type ToolResultCommitService } from './resultPersistence.js'
 import { resolveRuntimeConfig } from '../ws/runtimeConfig.js'
 
 export interface PersistedToolExecutionInput {
@@ -41,6 +41,7 @@ export async function executePersistedTool(
     registry: ToolRegistry
     modelRegistry: ModelAdapterRegistry
     modelCompletions?: ModelCompletionService
+    resultCommitService: Pick<ToolResultCommitService, 'commit'>
     defaultRuntimeConfig?: AgentRuntimeConfig | undefined
   },
 ): Promise<ToolResult> {
@@ -116,7 +117,13 @@ export async function executePersistedTool(
   })
   try {
     const result = await deps.registry.execute(input.toolName, input.args, context)
-    await persistToolExecutionResult(deps.store, run.id, input.toolName, tool.label, input.args, result)
+    await deps.resultCommitService.commit({
+      runId: run.id,
+      toolName: input.toolName,
+      toolLabel: tool.label,
+      args: input.args,
+      result,
+    })
     itemSink.completeItem(callItem.itemId, {
       callId,
       name: input.toolName,

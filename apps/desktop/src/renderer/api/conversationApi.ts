@@ -10,14 +10,6 @@
 // --------------------------------------------------------------------------
 
 import {
-  agentThreadRecordSchema,
-  compactionRecordSchema,
-  contextAssemblyReportSchema,
-  runSummaryPageSchema,
-  sessionRecordSchema,
-  threadDetailSnapshotSchema,
-  threadHistoryPageSchema,
-  threadMemoryDocumentSchema,
   type AgentThreadRecord,
   type CompactionRecord,
   type ContextAssemblyReport,
@@ -27,70 +19,58 @@ import {
   type ThreadHistoryPage,
   type ThreadMemoryDocument,
 } from '@geo-agent-platform/shared-types'
-import { z } from 'zod'
-
 import {
   desktopWorkspaceBootstrapSnapshotSchema,
   type DesktopWorkspaceBootstrapSnapshot,
 } from '../../contracts/desktopIpc'
 import { requestControl } from './transport'
 
-const deletedThreadSchema = z.object({ deleted: z.boolean(), threadId: z.string() })
-const trashedThreadEntrySchema = z.object({
-  thread: agentThreadRecordSchema,
-  deletedAt: z.string(),
-  purgeAfter: z.string(),
-})
-const purgedThreadSchema = z.object({ purged: z.boolean(), threadId: z.string() })
-
 export function createSession(): Promise<SessionRecord> {
-  return requestControl('session:get-default', {}, sessionRecordSchema)
+  return requestControl('session:get-default')
 }
 
-export function bootstrapWorkspace(
+export async function bootstrapWorkspace(
   sessionId?: string,
   workspaceId?: string,
 ): Promise<DesktopWorkspaceBootstrapSnapshot> {
-  return requestControl(
-    'workspace:bootstrap',
-    { sessionId, workspaceId },
-    desktopWorkspaceBootstrapSnapshotSchema,
+  return desktopWorkspaceBootstrapSnapshotSchema.parse(
+    await requestControl('workspace:bootstrap', { sessionId, workspaceId }),
   )
 }
 
 export function getDefaultSession(): Promise<SessionRecord> {
-  return requestControl('session:get-default', {}, sessionRecordSchema)
+  return requestControl('session:get-default')
 }
 
 export function getSession(sessionId: string): Promise<SessionRecord> {
-  return requestControl('session:get', { sessionId }, sessionRecordSchema)
+  return requestControl('session:get', { sessionId })
 }
 
 export function listSessionThreads(sessionId: string): Promise<AgentThreadRecord[]> {
-  return requestControl('thread:list', { sessionId }, z.array(agentThreadRecordSchema))
+  return requestControl('thread:list', { sessionId })
 }
 
 export function createThread(sessionId: string, title?: string): Promise<AgentThreadRecord> {
-  return requestControl('thread:create', { sessionId, title }, agentThreadRecordSchema)
+  return requestControl('thread:create', { sessionId, title })
 }
 
 export function getThread(threadId: string): Promise<ThreadDetailSnapshot> {
-  return requestControl('thread:get', { threadId }, threadDetailSnapshotSchema)
+  return requestControl('thread:get', { threadId })
 }
 
 export function updateThread(threadId: string, title: string): Promise<AgentThreadRecord> {
-  return requestControl('thread:update', { threadId, title }, agentThreadRecordSchema)
+  return requestControl('thread:update', { threadId, title })
 }
 
-export function deleteThread(threadId: string): Promise<z.infer<typeof deletedThreadSchema>> {
-  return requestControl('thread:delete', { threadId }, deletedThreadSchema)
+export function deleteThread(threadId: string) {
+  return requestControl('thread:delete', { threadId })
 }
 
 export function listRunSummaries(
   sessionId: string,
   options: { threadId?: string | null; cursor?: string | null; limit?: number } = {},
 ): Promise<RunSummaryPage> {
-  return requestControl('run:list', { sessionId, ...options }, runSummaryPageSchema)
+  return requestControl('run:list', { sessionId, ...options })
 }
 
 export function getThreadHistory(
@@ -98,23 +78,23 @@ export function getThreadHistory(
   cursor?: string | null,
   limit = 100,
 ): Promise<ThreadHistoryPage> {
-  return requestControl('thread:history', { threadId, cursor, limit }, threadHistoryPageSchema)
+  return requestControl('thread:history', { threadId, cursor, limit })
 }
 
 export function forkThread(threadId: string, entryId: string, title?: string): Promise<AgentThreadRecord> {
-  return requestControl('thread:fork', { threadId, entryId, title }, agentThreadRecordSchema)
+  return requestControl('thread:fork', { threadId, entryId, title })
 }
 
 export function compactThread(threadId: string): Promise<CompactionRecord | null> {
-  return requestControl('thread:compact', { threadId }, compactionRecordSchema.nullable())
+  return requestControl('thread:compact', { threadId })
 }
 
 export function getThreadContext(threadId: string): Promise<ContextAssemblyReport> {
-  return requestControl('thread:context', { threadId }, contextAssemblyReportSchema)
+  return requestControl('thread:context', { threadId })
 }
 
 export function getThreadMemory(threadId: string): Promise<ThreadMemoryDocument> {
-  return requestControl('thread:memory:get', { threadId }, threadMemoryDocumentSchema)
+  return requestControl('thread:memory:get', { threadId })
 }
 
 export function updateThreadMemory(
@@ -122,21 +102,21 @@ export function updateThreadMemory(
   content: string,
   expectedVersion: number,
 ): Promise<ThreadMemoryDocument> {
-  return requestControl('thread:memory:update', { threadId, content, expectedVersion }, threadMemoryDocumentSchema)
+  return requestControl('thread:memory:update', { threadId, content, expectedVersion })
 }
 
 export function rebuildThreadMemory(threadId: string): Promise<ThreadMemoryDocument> {
-  return requestControl('thread:memory:rebuild', { threadId }, threadMemoryDocumentSchema)
+  return requestControl('thread:memory:rebuild', { threadId })
 }
 
-export function listTrashedThreads(sessionId: string): Promise<Array<z.infer<typeof trashedThreadEntrySchema>>> {
-  return requestControl('thread:trash:list', { sessionId }, z.array(trashedThreadEntrySchema))
+export function listTrashedThreads(sessionId: string) {
+  return requestControl('thread:trash:list', { sessionId })
 }
 
 export function restoreThread(threadId: string): Promise<AgentThreadRecord> {
-  return requestControl('thread:trash:restore', { threadId }, agentThreadRecordSchema)
+  return requestControl('thread:trash:restore', { threadId })
 }
 
-export function purgeThread(threadId: string): Promise<z.infer<typeof purgedThreadSchema>> {
-  return requestControl('thread:trash:purge', { threadId }, purgedThreadSchema)
+export function purgeThread(threadId: string) {
+  return requestControl('thread:trash:purge', { threadId })
 }

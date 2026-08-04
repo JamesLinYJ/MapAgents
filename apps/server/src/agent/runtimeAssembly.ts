@@ -71,6 +71,7 @@ import { createSubAgentTools } from './subAgentToolFactory.js'
 import { SubAgentStateController } from './subAgentRuntimeSupport.js'
 import { ToolExecutionCoordinator } from './toolExecutionCoordinator.js'
 import type { RunEventSink } from './turnRunner.js'
+import { ToolResultCommitService } from '../tools/resultPersistence.js'
 
 export interface RuntimeAssemblyFactoryOptions {
   createSandboxClient?: SandboxClientFactory
@@ -222,6 +223,7 @@ export class RuntimeAssemblyFactory {
     }
     coordinator = new ToolExecutionCoordinator({
       store,
+      resultCommitService: new ToolResultCommitService(store),
       registry: toolRegistry,
       adapter,
       ...(modelCompletions ? { modelCompletions } : {}),

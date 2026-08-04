@@ -23,7 +23,7 @@ import type { ConversationProjectionIndex } from './conversationProjectionIndex.
 import type { InMemoryEventBus } from './eventBus.js'
 import type { ConversationPayloadStore } from './conversationPayloadStore.js'
 import { estimateTokens } from './conversationEncoding.js'
-import type { RuntimeFileStore } from './fileStore.js'
+import type { FileLifecyclePort } from './fileLifecycleService.js'
 import { splitThreadMemoryDocument } from './threadMemoryDocument.js'
 import type { SessionStore } from './sessionStore.js'
 import type {
@@ -61,7 +61,7 @@ export class ThreadStore {
     private readonly repositories: ThreadPersistencePorts,
     private readonly runReader: Pick<RunRepository, 'listRunsForThread'>,
     private readonly objectReferences: ObjectReferenceRepository,
-    private readonly files: Pick<RuntimeFileStore, 'cloneThreadFiles'>,
+    private readonly files: Pick<FileLifecyclePort, 'cloneThreadFiles' | 'list' | 'delete' | 'purgeThreadFiles'>,
     private readonly events: ThreadStoreEvents,
   ) {}
 
@@ -288,6 +288,7 @@ export class ThreadStore {
 
   async purge(threadId: string): Promise<void> {
     const trashed = await this.repositories.lifecycle.getTrashedThread(threadId)
+    await this.files.purgeThreadFiles(threadId)
     const session = await this.repositories.lifecycle.purgeThread(threadId, trashed.thread.sessionId)
     this.sessionStore.acceptPersisted(session)
     this.index.deleteRunsForThread(threadId)

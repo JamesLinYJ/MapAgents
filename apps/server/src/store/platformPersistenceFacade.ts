@@ -24,6 +24,7 @@ import { RunStore } from './runStore.js'
 import { DEFAULT_SESSION_ID, SessionStore, type ResourceOwner } from './sessionStore.js'
 import { ThreadStore } from './threadStore.js'
 import { RuntimeFileStore } from './fileStore.js'
+import type { FileLifecyclePort } from './fileLifecycleService.js'
 import path from 'node:path'
 import { ArtifactPublicationRepository } from './postgres/artifactPublicationRepository.js'
 import type {
@@ -72,13 +73,15 @@ export class PlatformPersistenceFacade {
     conversationPersistence?: ConversationPersistence
     artifactRepository?: ArtifactRepository
     events?: PlatformEventHub
+    runtimeFiles?: RuntimeFileStore
+    fileLifecycle?: FileLifecyclePort
   } = {}) {
     const events = options.events ?? new PlatformEventHub()
     this.payloadStoreRoot = storageRoot
     this.runtimeRoot = ['sessions', 'conversations'].includes(path.basename(storageRoot))
       ? path.dirname(storageRoot)
       : storageRoot
-    this.runtimeFiles = new RuntimeFileStore(this.runtimeRoot)
+    this.runtimeFiles = options.runtimeFiles ?? new RuntimeFileStore(this.runtimeRoot)
     this.payloadStore = new ConversationPayloadStore(storageRoot)
     const persistence = options.conversationPersistence ?? new PostgresConversationPersistence(db)
     this.snapshotRepository = persistence
@@ -96,7 +99,7 @@ export class PlatformPersistenceFacade {
       },
       persistence,
       persistence,
-      this.runtimeFiles,
+      options.fileLifecycle ?? this.runtimeFiles,
       {
         threadUpdateBus: events.threadUpdates,
         threadEntryBus: events.threadEntries,

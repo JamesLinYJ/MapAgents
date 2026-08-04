@@ -10,6 +10,7 @@
 // --------------------------------------------------------------------------
 
 import { describe, expect, it } from 'vitest'
+import { wsCommandContracts, wsControlCommands } from '@geo-agent-platform/shared-types'
 import { formatSchemaValidationError } from '../api/transport'
 
 describe('formatSchemaValidationError', () => {
@@ -74,6 +75,17 @@ describe('ResponseSchema interface (contract)', () => {
     const result = schema.safeParse('not-a-number')
     if (!result.success) {
       expect(result.error.issues.at(0)?.path).toEqual(['body'])
+    }
+  })
+})
+
+describe('WebSocket command contract map', () => {
+  it('covers every protocol command with payload and response schemas', () => {
+    expect(Object.keys(wsCommandContracts).sort()).toEqual([...wsControlCommands].sort())
+    for (const type of wsControlCommands) {
+      expect(wsCommandContracts[type].payload).toBeDefined()
+      expect(wsCommandContracts[type].response).toBeDefined()
+      expect(typeof wsCommandContracts[type].csrf).toBe('boolean')
     }
   })
 })

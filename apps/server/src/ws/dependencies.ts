@@ -31,8 +31,11 @@ import type { BackgroundTaskRegistry } from '../automations/backgroundTaskRegist
 import type { UsageStatsService } from '../usage/usageStatsService.js'
 import type { MapStore } from '../store/postgres/mapStore.js'
 import type { RuntimeFileStore } from '../store/fileStore.js'
+import type { FileLifecyclePort } from '../store/fileLifecycleService.js'
 import type { ServiceAdmission } from '../app/serviceAdmission.js'
 import type { PlatformEventHub } from '../store/platformEventHub.js'
+import type { StartRunService } from '../conversation/startRunService.js'
+import type { ToolResultCommitService } from '../tools/resultPersistence.js'
 
 export interface WsDependencies {
   env: Env
@@ -44,10 +47,13 @@ export interface WsDependencies {
   managedLayers: ManagedLayerService
   runtimeRoot: string
   runtimeFiles: RuntimeFileStore
+  fileLifecycle: FileLifecyclePort
   defaultRuntimeConfig?: AgentRuntimeConfig
   createSandboxClient?: SandboxClientFactory
   runtime: OpenAIAgentsRuntime
   runTasks: RunTaskManager
+  startRunService: StartRunService
+  resultCommitService: Pick<ToolResultCommitService, 'commit'>
   scheduledTaskService: ScheduledTaskService
   automationDefinitionService: AutomationDefinitionService
   backgroundTasks: BackgroundTaskRegistry

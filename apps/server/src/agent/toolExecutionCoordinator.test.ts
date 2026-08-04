@@ -15,6 +15,7 @@ import { ToolRegistry } from '../framework/registry.js'
 import type { ToolProvider, ToolResult } from '../framework/types.js'
 import type { AgentWorkflow } from '../schemas/types.js'
 import type { ToolExecutionStore } from '../store/runtimePorts.js'
+import { ToolResultCommitService } from '../tools/resultPersistence.js'
 import { formatToolResultForModel, ToolExecutionCoordinator, validateAgentWorkflowDraft } from './toolExecutionCoordinator.js'
 import { RunEventSink } from './turnRunner.js'
 import { createAgentWorkflow } from './agentWorkflowState.js'
@@ -133,6 +134,7 @@ describe('ToolExecutionCoordinator', () => {
     } as unknown as ToolExecutionStore
     const coordinator = new ToolExecutionCoordinator({
       store,
+      resultCommitService: new ToolResultCommitService(store),
       registry: new ToolRegistry(),
       adapter: null,
       runId: 'run_extension_boundary',
@@ -254,6 +256,7 @@ describe('ToolExecutionCoordinator', () => {
     )
     const coordinator = new ToolExecutionCoordinator({
       store,
+      resultCommitService: new ToolResultCommitService(store),
       registry,
       adapter: null,
       runId: 'run_1',
@@ -337,6 +340,7 @@ describe('ToolExecutionCoordinator', () => {
     })
     const coordinator = new ToolExecutionCoordinator({
       store,
+      resultCommitService: new ToolResultCommitService(store),
       registry,
       adapter: null,
       runId: 'run_1',
@@ -657,6 +661,7 @@ function coordinatorHarness(
   return {
     coordinator: new ToolExecutionCoordinator({
       store,
+      resultCommitService: new ToolResultCommitService(store),
       registry,
       adapter: null,
       runId: 'run_plan_boundary',

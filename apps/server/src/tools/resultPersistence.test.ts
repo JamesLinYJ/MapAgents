@@ -12,7 +12,7 @@
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import { createTestPersistenceFacade } from '../../test-support/persistenceFacadeHarness.js'
 import { persistToolExecutionResult } from './resultPersistence.js'
@@ -72,6 +72,33 @@ describe('tool result persistence', () => {
       expect(latest.state.toolResults.filter(item => item.resultId === result.resultId)).toHaveLength(1)
       const artifactFiles = await readdir(path.join(root, 'artifacts', run.id))
       expect(artifactFiles.filter(file => file.endsWith('.geojson'))).toHaveLength(1)
+    } finally {
+      await store?.flushConversationStore()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('cleans generated files when the durable commit fails', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-result-commit-failure-'))
+    let store: PlatformPersistenceFacade | undefined
+    try {
+      store = createTestPersistenceFacade(path.join(root, 'sessions'))
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '提交失败清理')
+      const run = await store.createRun(session.id, '提交失败', { threadId: thread.id })
+      vi.spyOn(store, 'commitToolResult').mockRejectedValueOnce(new Error('commit failed'))
+
+      await expect(persistToolExecutionResult(store, run.id, 'route_planner', '路径规划', {}, {
+        message: '路线生成',
+        payload: { route: line() },
+        warnings: [],
+        resultId: 'result_commit_failure',
+        source: 'test',
+      })).rejects.toThrow('commit failed')
+
+      const artifactRoot = path.join(root, 'artifacts', run.id)
+      await expect(readdir(artifactRoot)).resolves.toEqual([])
     } finally {
       await store?.flushConversationStore()
       await rm(root, { recursive: true, force: true })

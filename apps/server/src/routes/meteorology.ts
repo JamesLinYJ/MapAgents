@@ -20,7 +20,8 @@ import type {
   MeteorologicalDatasetRecord,
   MeteorologicalJobRecord,
 } from '../schemas/types.js'
-import { RuntimeFileStore } from '../store/fileStore.js'
+import type { FileLifecyclePort } from '../store/fileLifecycleService.js'
+import type { StoredFileEntry } from '../store/fileStore.js'
 import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import { MeteorologicalStore } from '../store/postgres/meteorologicalStore.js'
 import { makeId, nowUtc } from '../utils/ids.js'
@@ -65,7 +66,7 @@ export async function ensureMeteorologicalTables(db: Database): Promise<void> {
 
 export function meteorologyRoutes(
   runtimeRoot: string,
-  files: RuntimeFileStore,
+  files: FileLifecyclePort,
   store: PlatformPersistenceFacade,
   security: SecurityServices,
   env: Pick<Env, 'MAX_METEOROLOGY_UPLOAD_BYTES'>,
@@ -115,8 +116,15 @@ export function meteorologyRoutes(
       }
 
       const sourceRelativePath = form.field('sourceRelativePath') ?? form.field('relativePath')
-      const stored = await files.save(file, threadId, form.field('requestId'), sourceRelativePath)
-      await store.recordAttachment(threadId, stored)
+      const stored: StoredFileEntry = await files.upload({
+        file,
+        requestId: form.field('requestId'),
+        sourceRelativePath,
+        workspaceId: session.workspaceId,
+        sessionId,
+        threadId,
+        createdByUserId: auth.userId ?? thread.createdByUserId,
+      })
       const now = nowUtc()
       const dataset: MeteorologicalDatasetRecord = {
         datasetId: makeId('meteorological_dataset'),
@@ -141,8 +149,25 @@ export function meteorologyRoutes(
         createdAt: now,
         updatedAt: now,
       }
-      await store.meteorology.createMeteorologicalDataset(dataset)
-      await store.updateSession(sessionId, { latestMeteorologicalDatasetId: dataset.datasetId })
+      try {
+        await store.meteorology.createMeteorologicalDataset(dataset)
+        await store.updateSession(sessionId, { latestMeteorologicalDatasetId: dataset.datasetId })
+      } catch (error) {
+        // The upload is a published file object, while the dataset index and
+        // latest-session pointer are a separate transaction boundary. If the
+        // index cannot be completed, explicitly compensate the published
+        // object through the lifecycle service so it cannot remain visible as
+        // an unreferenced ready file.
+        try {
+          await files.delete(stored.id, threadId)
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            '气象数据索引失败，且上传文件的补偿删除也失败。',
+          )
+        }
+        throw error
+      }
       return c.json({ dataset, job: null })
     } catch (error) {
       const response = routeErrorResponse(error, '气象数据上传失败。')

@@ -21,6 +21,97 @@ import { atomicWriteText } from '../store/durableFileIo.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 import { createAgentWorkflow, reviseAgentWorkflow } from '../agent/agentWorkflowState.js'
 
+export interface ToolResultCommitInput {
+  runId: string
+  toolName: string
+  toolLabel: string
+  args: Record<string, unknown>
+  result: ToolResult
+}
+
+/**
+ * The single durable boundary for a tool result.
+ *
+ * Tool execution may be initiated by the Agents SDK, the debug command, or an
+ * automation node. None of those callers should know how generated artifacts
+ * are staged or how idempotent result commits are reconciled with PostgreSQL.
+ * This service owns that protocol and deliberately does not turn a failed
+ * commit into a successful result.
+ */
+export class ToolResultCommitService {
+  constructor(private readonly store: ToolExecutionStore) {}
+
+  async commit(input: ToolResultCommitInput): Promise<void> {
+    const { runId, toolName, toolLabel, args, result } = input
+    const { store } = this
+    const refs: ToolValueRef[] = (result.valueRefs ?? []).map(ref => ({
+      ...ref,
+      sourceTool: toolName,
+      sourceResultId: result.resultId,
+      metadata: ref.metadata ?? {},
+      createdAt: nowUtc(),
+      unit: ref.unit ?? null,
+    }))
+    const explicitArtifacts: ArtifactRef[] = (result.artifacts ?? []).map(artifact => ({
+      artifactId: artifact.artifactId,
+      runId,
+      artifactType: artifact.artifactType,
+      name: artifact.name,
+      uri: artifact.uri,
+      display: artifact.display,
+      metadata: { ...(artifact.metadata ?? {}), ...(artifact.relativePath ? { relativePath: artifact.relativePath } : {}) },
+      isIntermediate: false,
+    }))
+    const generatedArtifacts = await createGeoArtifacts(result, runId, store.runtimeRoot)
+    const artifacts = dedupeArtifacts([...explicitArtifacts, ...generatedArtifacts])
+    const toolResult = {
+      stepId: makeId('step'),
+      tool: toolName,
+      toolLabel,
+      args,
+      status: 'completed' as const,
+      message: result.message,
+      startedAt: null,
+      completedAt: nowUtc(),
+      resultId: result.resultId,
+      source: result.source,
+      confidence: null,
+      usedQuery: null,
+      provenance: result.provenance ?? {},
+      crs: {},
+      geometryType: null,
+      featureCount: null,
+      valueRefs: refs,
+    }
+    const mutation = (state: AgentState): Partial<AgentState> => ({
+      toolValueRefs: dedupeValueRefs([...state.toolValueRefs, ...refs]),
+      artifacts: dedupeArtifacts([...state.artifacts, ...artifacts]),
+      ...agentWorkflowControlState(result.payload, state.agentWorkflow, state.todos),
+      ...clarificationControlState(result.payload, state.decisions),
+      ...todoControlState(result.payload),
+      toolResults: [
+        ...state.toolResults.filter(item => item.resultId !== result.resultId),
+        toolResult,
+      ],
+    })
+    try {
+      const committed = await store.commitToolResult(runId, result.resultId, mutation, refs, artifacts)
+      if (!committed) {
+        // 幂等重试已经有 durable 结果；本次尝试生成的文件没有对应 metadata，
+        // 立即删除，避免相同 resultId 在重试时积累孤儿 Artifact 内容。
+        await removeGeneratedArtifactFiles(store.runtimeRoot, generatedArtifacts)
+      }
+    } catch (error) {
+      // PostgreSQL 事务失败时，文件已经完成原子写入但没有对应的 durable
+      // metadata。立即清理本次请求的对象，避免把“未提交”误留成可读结果；
+      // GC 仍可处理进程在清理前崩溃的极端残留。
+      await removeGeneratedArtifactFiles(store.runtimeRoot, generatedArtifacts)
+      throw error
+    }
+  }
+}
+
+/** Compatibility entry point for callers still being migrated to the service. */
 export async function persistToolExecutionResult(
   store: ToolExecutionStore,
   runId: string,
@@ -29,62 +120,7 @@ export async function persistToolExecutionResult(
   args: Record<string, unknown>,
   result: ToolResult,
 ): Promise<void> {
-  const refs: ToolValueRef[] = (result.valueRefs ?? []).map(ref => ({
-    ...ref,
-    sourceTool: toolName,
-    sourceResultId: result.resultId,
-    metadata: ref.metadata ?? {},
-    createdAt: nowUtc(),
-    unit: ref.unit ?? null,
-  }))
-  const explicitArtifacts: ArtifactRef[] = (result.artifacts ?? []).map(artifact => ({
-    artifactId: artifact.artifactId,
-    runId,
-    artifactType: artifact.artifactType,
-    name: artifact.name,
-    uri: artifact.uri,
-    display: artifact.display,
-    metadata: { ...(artifact.metadata ?? {}), ...(artifact.relativePath ? { relativePath: artifact.relativePath } : {}) },
-    isIntermediate: false,
-  }))
-  const generatedArtifacts = await createGeoArtifacts(result, runId, store.runtimeRoot)
-  const artifacts = dedupeArtifacts([...explicitArtifacts, ...generatedArtifacts])
-  const toolResult = {
-    stepId: makeId('step'),
-    tool: toolName,
-    toolLabel,
-    args,
-    status: 'completed' as const,
-    message: result.message,
-    startedAt: null,
-    completedAt: nowUtc(),
-    resultId: result.resultId,
-    source: result.source,
-    confidence: null,
-    usedQuery: null,
-    provenance: result.provenance ?? {},
-    crs: {},
-    geometryType: null,
-    featureCount: null,
-    valueRefs: refs,
-  }
-  const mutation = (state: AgentState): Partial<AgentState> => ({
-    toolValueRefs: dedupeValueRefs([...state.toolValueRefs, ...refs]),
-    artifacts: dedupeArtifacts([...state.artifacts, ...artifacts]),
-    ...agentWorkflowControlState(result.payload, state.agentWorkflow, state.todos),
-    ...clarificationControlState(result.payload, state.decisions),
-    ...todoControlState(result.payload),
-    toolResults: [
-      ...state.toolResults.filter(item => item.resultId !== result.resultId),
-      toolResult,
-    ],
-  })
-  const committed = await store.commitToolResult(runId, result.resultId, mutation, refs, artifacts)
-  if (!committed) {
-    // 幂等重试已经有 durable 结果；本次尝试生成的文件没有对应 metadata，
-    // 立即删除，避免相同 resultId 在重试时积累孤儿 Artifact 内容。
-    await removeGeneratedArtifactFiles(store.runtimeRoot, generatedArtifacts)
-  }
+  await new ToolResultCommitService(store).commit({ runId, toolName, toolLabel, args, result })
 }
 
 // 智能体工作流由系统工具提交或修订。结构和依赖图在领域状态机中验证，

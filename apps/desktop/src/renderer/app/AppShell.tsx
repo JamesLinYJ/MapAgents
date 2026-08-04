@@ -58,7 +58,7 @@ import { useWorkspaceMapActivation } from './layout/useWorkspaceMapActivation'
 import {
   formatUiError,
 } from './bootstrap'
-import { projectTimeline } from '../features/conversation/timelineProjector'
+import { useConversationTimelineProjection } from '../features/runs/useConversationTimelineProjection'
 import { ExportWizard } from '../features/export/ExportWizard'
 import {
   useConnectionController,
@@ -175,10 +175,7 @@ function AppShell() {
   const deferredEvents = useDeferredValue(events)
   const deferredItems = useDeferredValue(items)
   // 当前 run 快照只负责实时变化；完整 thread transcript 由 canonical history 投影补齐。
-  const threadConversationItems = useMemo(
-    () => projectTimeline(canonicalThreadItems, deferredItems),
-    [canonicalThreadItems, deferredItems],
-  )
+  const threadConversationItems = useConversationTimelineProjection(canonicalThreadItems, deferredItems)
   const {
     applyProviders,
     changeProvider: handleProviderChange,

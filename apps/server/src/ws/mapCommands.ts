@@ -8,14 +8,13 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { mapSceneSchema, mapSceneUpdateSchema } from '../schemas/types.js'
+import { mapSceneUpdateSchema } from '../schemas/types.js'
 import type { WsCommandRegistry } from './commandRegistry.js'
 
 export function registerMapCommands(registry: WsCommandRegistry): void {
   registry.register({
     type: 'map-scene:update',
     payloadSchema: mapSceneUpdateSchema,
-    responseSchema: mapSceneSchema,
     auth: 'required',
     csrf: true,
     handler: (payload, context) => context.dependencies.mapStore.updateScene(payload),

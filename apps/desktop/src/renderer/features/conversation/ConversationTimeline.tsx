@@ -17,6 +17,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, m, type Variants } from 'framer-motion'
 import { AlertCircle, CheckCircle2, ChevronDown, Circle, LoaderCircle, PauseCircle } from 'lucide-react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { AppIcon } from '../../shared/components/AppIcon'
 import { buildFadeUpMotion } from '../../shared/motion'
 import type { DataReferenceSummary } from '../../shared/constants'
@@ -77,11 +78,28 @@ export function ConversationTimeline({
   const timelineRef = useRef<HTMLDivElement>(null)
   const nearBottom = useRef(true)
   const jumpItems = useMemo(() => buildConversationJumpItems(conversation), [conversation])
+  const jumpItemIndices = useMemo(
+    () => new Map(conversation.map((entry, index) => [entry.id, index])),
+    [conversation],
+  )
+  const virtualizer = useVirtualizer({
+    count: conversation.length,
+    getScrollElement: () => timelineRef.current,
+    estimateSize: () => 112,
+    overscan: 8,
+    getItemKey: index => conversation[index]?.id ?? index,
+  })
 
   const handleTimelineScroll = () => {
     const el = timelineRef.current
     if (!el) return
     nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    const firstVisibleIndex = virtualizer.getVirtualItems()[0]?.index
+    if (firstVisibleIndex === undefined) return
+    const active = jumpItems
+      .filter(item => (jumpItemIndices.get(item.id) ?? -1) <= firstVisibleIndex)
+      .at(-1)?.anchorId
+    if (active) setActiveJumpAnchorId(active)
   }
 
   const toggleExpanded = (id: string) => {
@@ -97,46 +115,26 @@ export function ConversationTimeline({
   }
 
   const jumpToAnchor = (anchorId: string) => {
-    const container = timelineRef.current
-    const target = document.getElementById(anchorId)
-    if (!container || !target) return
-    target.scrollIntoView({
-      block: 'center',
+    const targetId = jumpItems.find(item => item.anchorId === anchorId)?.id
+    const targetIndex = targetId ? jumpItemIndices.get(targetId) : undefined
+    if (targetIndex === undefined) return
+    virtualizer.scrollToIndex(targetIndex, {
+      align: 'center',
       behavior: reducedMotion ? 'auto' : 'smooth',
     })
     setActiveJumpAnchorId(anchorId)
   }
 
-  useEffect(() => {
-    const el = timelineRef.current
-    if (!el || jumpItems.length < 2) return
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries
-          .filter(entry => entry.isIntersecting)
-          .sort((left, right) => Math.abs(left.boundingClientRect.top) - Math.abs(right.boundingClientRect.top))
-        const active = visible[0]?.target.id
-        if (active) setActiveJumpAnchorId(active)
-      },
-      {
-        root: el,
-        threshold: 0.35,
-        rootMargin: '-20% 0px -55% 0px',
-      },
-    )
-    for (const item of jumpItems) {
-      const target = document.getElementById(item.anchorId)
-      if (target) observer.observe(target)
-    }
-    return () => observer.disconnect()
-  }, [jumpItems])
-
   // 新消息到达时自动滚到底部，除非用户手动上滚。
   useEffect(() => {
     const el = timelineRef.current
     if (!el || !nearBottom.current) return
-    el.scrollTop = el.scrollHeight
-  }, [conversation])
+    if (conversation.length > 0) {
+      virtualizer.scrollToIndex(conversation.length - 1, { align: 'end' })
+    } else {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [conversation, virtualizer])
 
   return (
     <m.div className="cc-chat-mode" layout>
@@ -178,21 +176,42 @@ export function ConversationTimeline({
           </m.div>
         )}
         {conversation.length ? (
-          <AnimatePresence initial={false}>
-            {conversation.map((entry) => (
-              <ConversationEntryView
-                key={entry.id}
-                entry={entry}
-                entryVariants={entryVariants}
-                reducedMotion={reducedMotion}
-                expandedIds={expandedIds}
-                anchorId={entry.kind === 'message' && entry.role === 'user' ? conversationJumpAnchorId(entry.id) : undefined}
-                onToggleExpanded={toggleExpanded}
-                onSelectArtifact={onSelectArtifact}
-                onForkMessage={onForkMessage}
-              />
-            ))}
-          </AnimatePresence>
+          <div
+            className="cc-timeline__virtual-list"
+            style={{ position: 'relative', height: `${virtualizer.getTotalSize()}px` }}
+          >
+            {virtualizer.getVirtualItems().map((virtualItem) => {
+              const entry = conversation[virtualItem.index]
+              if (!entry) return null
+              const isLast = virtualItem.index === conversation.length - 1
+              return (
+                <div
+                  key={virtualItem.key}
+                  ref={virtualizer.measureElement}
+                  data-index={virtualItem.index}
+                  className={`cc-timeline-virtual-row${isLast ? ' cc-timeline-virtual-row--last' : ''}`}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    transform: `translateY(${virtualItem.start}px)`,
+                  }}
+                >
+                  <ConversationEntryView
+                    entry={entry}
+                    entryVariants={entryVariants}
+                    reducedMotion={reducedMotion}
+                    expandedIds={expandedIds}
+                    anchorId={entry.kind === 'message' && entry.role === 'user' ? conversationJumpAnchorId(entry.id) : undefined}
+                    onToggleExpanded={toggleExpanded}
+                    onSelectArtifact={onSelectArtifact}
+                    onForkMessage={onForkMessage}
+                  />
+                </div>
+              )
+            })}
+          </div>
         ) : isSubmitting ? (
           <m.div className="cc-timeline-item cc-timeline-item--running" layout variants={entryVariants} initial="hidden" animate="visible" exit="exit">
             <span className="cc-timeline-dot" />

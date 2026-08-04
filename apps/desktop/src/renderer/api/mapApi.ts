@@ -31,7 +31,7 @@ export function getMapScene(threadId: string): Promise<MapSceneBundle> {
 
 export function updateMapScene(input: MapSceneUpdate) {
   const payload = mapSceneUpdateSchema.parse(input)
-  return requestControl('map-scene:update', payload, mapSceneSchema)
+  return requestControl('map-scene:update', payload)
 }
 
 export function getMapLayerFeatures(mapLayerId: string, offset: number, limit: number) {

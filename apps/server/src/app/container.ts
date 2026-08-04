@@ -42,7 +42,8 @@ import {
   PostgresRuntimeIntegrityCatalog,
   RuntimeIntegrityChecker,
 } from '../store/runtimeIntegrityChecker.js'
-import type { RuntimeFileStore } from '../store/fileStore.js'
+import { RuntimeFileStore } from '../store/fileStore.js'
+import { FileLifecycleService } from '../store/fileLifecycleService.js'
 import { ArtifactPublicationRepository } from '../store/postgres/artifactPublicationRepository.js'
 import { AuthSessionRepository } from '../store/postgres/authSessionRepository.js'
 import { MembershipRepository } from '../store/postgres/membershipRepository.js'
@@ -51,6 +52,7 @@ import { MapStore } from '../store/postgres/mapStore.js'
 import { AuditStore } from '../store/postgres/auditStore.js'
 import { RbacPolicyReader } from '../store/postgres/rbacPolicyReader.js'
 import { WorkspaceRepository } from '../store/postgres/workspaceRepository.js'
+import { FileObjectRepository } from '../store/postgres/fileObjectRepository.js'
 import { validateToolContracts } from '../tools/contractValidator.js'
 import { createAutomationExecutionProvider } from '../tools/automationExecution/index.js'
 import { UsageStatsService } from '../usage/usageStatsService.js'
@@ -63,6 +65,10 @@ import { AutomationCompiler } from '../automations/automationCompiler.js'
 import { AutomationDefinitionService } from '../automations/automationDefinitionService.js'
 import { AutomationInvocationService } from '../automations/automationInvocationService.js'
 import { PlatformEventHub } from '../store/platformEventHub.js'
+import { StartRunService } from '../conversation/startRunService.js'
+import { buildRuntimeCapabilities } from '../runtime/releaseCapabilities.js'
+import type { RuntimeCapabilities } from '@geo-agent-platform/shared-types/release'
+import { ToolResultCommitService } from '../tools/resultPersistence.js'
 
 export interface AppContainer {
   env: Env
@@ -70,6 +76,7 @@ export interface AppContainer {
   instanceLock: ApplicationInstanceLock
   runtimeRoot: string
   runtimeFiles: RuntimeFileStore
+  fileLifecycle: FileLifecycleService
   store: PlatformPersistenceFacade
   events: PlatformEventHub
   managedLayers: ManagedLayerService
@@ -82,6 +89,8 @@ export interface AppContainer {
   modelCompletions: ModelCompletionService
   runtime: OpenAIAgentsRuntime
   runTasks: RunTaskManager
+  startRunService: StartRunService
+  resultCommitService: ToolResultCommitService
   automationRegistry: AutomationRegistry
   automationDefinitionService: AutomationDefinitionService
   automationInvocationService: AutomationInvocationService
@@ -91,6 +100,7 @@ export interface AppContainer {
   jobQueue: JobQueueService
   security: SecurityServices
   defaultRuntimeConfig: ReturnType<typeof defaultRuntimeConfig>
+  capabilities: RuntimeCapabilities
   shutdown(): Promise<void>
   checkReadiness(): Promise<{ status: 'ok' | 'degraded'; checks: Record<string, { ok: boolean; detail?: string }> }>
 }
@@ -105,8 +115,14 @@ export async function createAppContainer(input: {
   const instanceLock = new ApplicationInstanceLock(db)
   const runtimeRoot = path.resolve(env.RUNTIME_ROOT)
   const events = new PlatformEventHub()
-  const store = new PlatformPersistenceFacade(db, path.join(runtimeRoot, 'conversations'), { events })
-  const runtimeFiles = store.runtimeFiles
+  const runtimeFiles = new RuntimeFileStore(runtimeRoot)
+  const fileLifecycle = new FileLifecycleService(new FileObjectRepository(db), runtimeFiles)
+  const store = new PlatformPersistenceFacade(db, path.join(runtimeRoot, 'conversations'), {
+    events,
+    runtimeFiles,
+    fileLifecycle,
+  })
+  const resultCommitService = new ToolResultCommitService(store)
   const managedLayers = new ManagedLayerService(db)
   const artifactRepository = new ArtifactPublicationRepository(db)
   const mapStore = new MapStore(db, events.mapScenes)
@@ -152,6 +168,10 @@ export async function createAppContainer(input: {
 
   try {
     await instanceLock.acquire()
+    // DeepSeek 的 OpenAI-compatible transport 在构造时启动 DNS 预热；
+    // 监听端口前等待它完成，确保 supervisor 报告 healthy 后首个问题
+    // 不再承担冷解析延迟。
+    await modelRegistry.warmup()
     await verifyDatabaseSchemaCompatibility(db)
     await ensureMeteorologicalTables(db)
     await ensureSecurityTables(db)
@@ -183,6 +203,13 @@ export async function createAppContainer(input: {
   const usageStats = new UsageStatsService(store, env)
   const backgroundTasks = new BackgroundTaskRegistry()
   const runTasks = new RunTaskManager(runtime, store, backgroundTasks)
+  const startRunService = new StartRunService({
+    store,
+    usageStats,
+    modelRegistry,
+    runTasks,
+    defaultRuntimeConfig: runtimeConfigDefaults,
+  })
   const automationRegistry = await createAutomationRegistryFromDirectory(path.join(projectRoot, 'apps', 'server', 'config', 'automations'))
   const automationCompiler = new AutomationCompiler(toolRegistry)
   const automationDefinitionService = new AutomationDefinitionService({
@@ -207,6 +234,7 @@ export async function createAppContainer(input: {
     automations: store.automations,
     conversations: store,
     toolExecutionStore: store,
+    resultCommitService,
     runtimeConfiguration: store.runtimeConfiguration,
     definitions: automationDefinitionService,
     compiler: automationCompiler,
@@ -237,7 +265,11 @@ export async function createAppContainer(input: {
   })
   await discoverAndLoad(managedLayers, { env, registry: toolRegistry, scheduledTaskService })
   toolRegistry.register(createAutomationExecutionProvider(automationInvocationService))
-  await validateWorkerContracts(env, toolRegistry)
+  const workerContractDigest = await validateWorkerContracts(env, toolRegistry)
+  const capabilities = buildRuntimeCapabilities({
+    workerContractDigest,
+    environment: { GEO_AGENT_PLATFORM_RELEASE_ID: env.GEO_AGENT_PLATFORM_RELEASE_ID },
+  })
   await automationDefinitionService.initialize()
   await jobQueue.start((payload, queueJobId) => automationRunner.executeQueuedJob(payload, queueJobId))
   startedJobQueue = jobQueue
@@ -250,6 +282,7 @@ export async function createAppContainer(input: {
     instanceLock,
     runtimeRoot,
     runtimeFiles,
+    fileLifecycle,
     store,
     events,
     managedLayers,
@@ -262,6 +295,8 @@ export async function createAppContainer(input: {
     modelCompletions,
     runtime,
     runTasks,
+    startRunService,
+    resultCommitService,
     automationRegistry,
     automationDefinitionService,
     automationInvocationService,
@@ -271,6 +306,7 @@ export async function createAppContainer(input: {
     jobQueue,
     security,
     defaultRuntimeConfig: runtimeConfigDefaults,
+    capabilities,
     shutdown: async () => {
       await jobQueue.stop()
       await Promise.all([runTasks.drain(), backgroundTasks.drain(), mapTileGateway.close()])
@@ -304,8 +340,8 @@ export async function createAppContainer(input: {
   }
 }
 
-async function validateWorkerContracts(env: Env, toolRegistry: ToolRegistry): Promise<void> {
-  if (!env.WORKER_URL) return
+async function validateWorkerContracts(env: Env, toolRegistry: ToolRegistry): Promise<string | null> {
+  if (!env.WORKER_URL) return null
   if (!env.WORKER_SHARED_SECRET) {
     throw new Error('WORKER_URL 已配置但 WORKER_SHARED_SECRET 未配置。')
   }
@@ -318,6 +354,7 @@ async function validateWorkerContracts(env: Env, toolRegistry: ToolRegistry): Pr
     ]
     throw new Error(`工具契约校验失败：${reasons.join('；')}`)
   }
+  return contractReport.workerContractDigest
 }
 
 async function checkReadiness(input: {

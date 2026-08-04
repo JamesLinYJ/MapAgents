@@ -14,12 +14,14 @@
 // 且每个 Worker 工具都有对应平台 ToolDef。任何不一致都硬失败。
 
 import type { ToolRegistry } from '../framework/registry.js'
+import { createHash } from 'node:crypto'
 import { logger } from '../observability/logger.js'
 import {
   fetchMeteorologyWorkerCatalog,
   REQUIRED_METEOROLOGY_WORKER_TOOLS,
   workerContractHash,
 } from './meteorology/meteorologyWorkerClient.js'
+import { stableJson } from '../framework/schema.js'
 
 export interface ContractValidationReport {
   passed: boolean
@@ -28,6 +30,7 @@ export interface ContractValidationReport {
   missingInRegistry: string[]
   missingInWorker: string[]
   errors: string[]
+  workerContractDigest: string | null
 }
 
 export async function validateToolContracts(
@@ -45,6 +48,7 @@ export async function validateToolContracts(
     missingInRegistry: [],
     missingInWorker: [],
     errors: [],
+    workerContractDigest: null,
   }
 
   let catalog
@@ -56,6 +60,7 @@ export async function validateToolContracts(
     return report
   }
   report.workerTools = catalog.tools.map(tool => tool.toolName)
+  report.workerContractDigest = `sha256:${createHash('sha256').update(stableJson(catalog)).digest('hex')}`
   const workerByName = new Map(catalog.tools.map(tool => [tool.toolName, tool]))
 
   for (const requiredName of REQUIRED_METEOROLOGY_WORKER_TOOLS) {

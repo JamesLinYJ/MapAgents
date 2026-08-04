@@ -10,3 +10,4 @@
 // --------------------------------------------------------------------------
 
 export * from './presentation.js'
+export * from './projection.js'

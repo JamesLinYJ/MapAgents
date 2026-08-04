@@ -22,6 +22,7 @@ import type { AuthContext } from '../security/types.js'
 import { assertDirectToolRunAllowed } from '../security/toolExecutionPolicy.js'
 import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import { executePersistedTool } from '../tools/persistentToolExecutor.js'
+import type { ToolResultCommitService } from '../tools/resultPersistence.js'
 import { optionalString, requiredRecord, requiredString } from './payload.js'
 import { resolveRuntimeConfig } from './runtimeConfig.js'
 import type { WsCommandRegistry } from './commandRegistry.js'
@@ -48,6 +49,7 @@ export function registerToolCommands(registry: WsCommandRegistry): void {
       context.dependencies.defaultRuntimeConfig,
       context.dependencies.security,
       requireAuth(context.auth),
+      context.dependencies.resultCommitService,
       context.dependencies.modelCompletions,
     ),
   })
@@ -61,6 +63,7 @@ export async function executeTool(
   runtimeConfigDefaults: AgentRuntimeConfig | undefined,
   security: SecurityServices,
   auth: AuthContext,
+  resultCommitService: Pick<ToolResultCommitService, 'commit'>,
   modelCompletions?: ModelCompletionService,
 ) {
   const toolName = requiredString(payload, 'toolName')
@@ -94,6 +97,7 @@ export async function executeTool(
       registry,
       modelRegistry,
       ...(modelCompletions ? { modelCompletions } : {}),
+      resultCommitService,
       defaultRuntimeConfig: runtimeConfigDefaults,
     })
     if (directRun) await store.completeRun(runId, 'completed')

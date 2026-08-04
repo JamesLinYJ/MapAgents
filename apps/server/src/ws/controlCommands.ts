@@ -104,12 +104,8 @@ export function registerControlCommands(registry: WsCommandRegistry): void {
     auth: 'required',
     csrf: true,
     handler: async (payload, context) => {
-      const existing = (await context.files.list(payload.threadId)).find(file => file.id === payload.fileId)
-      const deleted = await context.files.delete(payload.fileId, payload.threadId)
+      const deleted = await context.dependencies.fileLifecycle.delete(payload.fileId, payload.threadId)
       if (!deleted) throw new StoreNotFoundError(`文件 '${payload.fileId}' 不存在`)
-      if (existing) {
-        await context.dependencies.store.recordAttachment(payload.threadId, existing, 'deleted')
-      }
       return { deleted: true, id: payload.fileId }
     },
   })

@@ -19,12 +19,12 @@ import type {
   UserIntent,
   ConversationItem,
 } from '@geo-agent-platform/shared-types'
+import { ConversationProjectionIndex } from '@geo-agent-platform/conversation-presentation'
 import {
   subscribeRun,
   unsubscribeRun,
 } from '../../api/client'
 import { wsClient } from '../../ws/client'
-import { projectTimeline } from '../conversation/timelineProjector'
 import { isRecord } from '../../shared/utils/guards'
 import { reportClientDiagnostic } from '../../shared/utils/clientDiagnostics'
 
@@ -70,9 +70,11 @@ function formatHydrationError(error: unknown) {
 function mergeConversationItems(current: ConversationItem[], incoming: ConversationItem[]) {
   // ConversationItem 是聊天事实源。
   //
-  // started/delta/completed 可能反复更新同一个 itemId；TimelineProjector 统一负责
-  // upsert、transcript 去重和稳定排序，避免直播与刷新后的展示规则分叉。
-  return projectTimeline(current, incoming)
+  // started/delta/completed 可能反复更新同一个 itemId；索引负责 upsert、
+  // transcript 去重和稳定排序，避免直播与刷新后的展示规则分叉。
+  const projection = new ConversationProjectionIndex(current, 'live')
+  projection.upsertMany(incoming, 'live')
+  return projection.toArray()
 }
 
 // Reducer 只做纯状态转移
@@ -86,6 +88,7 @@ export type RunAction =
   | { type: 'APPEND_EVENT'; event: RunEvent }
   | { type: 'SET_EVENTS'; events: RunEvent[] }
   | { type: 'APPEND_ITEM'; item: ConversationItem }
+  | { type: 'SET_PROJECTED_ITEMS'; items: ConversationItem[] }
   | { type: 'SET_SUBMITTING'; value: boolean }
   | { type: 'SET_ERROR'; error?: string }
   | { type: 'SET_INTENT'; intent: UserIntent }
@@ -123,6 +126,8 @@ export function runReducer(state: RunState, action: RunAction): RunState {
     }
     case 'SET_ITEMS':
       return { ...state, items: mergeConversationItems([], action.items) }
+    case 'SET_PROJECTED_ITEMS':
+      return { ...state, items: action.items }
     case 'CLEAR_RUN':
       return {
         ...initialState(),
@@ -224,8 +229,25 @@ export function useRunState() {
   const [state, dispatch] = useReducer(runReducer, undefined, initialState)
   const runId = state.run?.id
   const subscribedRunIdRef = useRef<string | null>(null)
+  const projectionRunIdRef = useRef<string | null>(null)
+  const liveProjectionRef = useRef<ConversationProjectionIndex | null>(null)
+
+  const resetLiveProjection = useCallback((runId: string | null, items: ReadonlyArray<ConversationItem>) => {
+    projectionRunIdRef.current = runId
+    liveProjectionRef.current = new ConversationProjectionIndex(items, 'live')
+    return liveProjectionRef.current.toArray()
+  }, [])
+
+  const appendLiveItem = useCallback((item: ConversationItem) => {
+    if (!liveProjectionRef.current) {
+      liveProjectionRef.current = new ConversationProjectionIndex([], 'live')
+    }
+    liveProjectionRef.current.upsert(item, 'live')
+    dispatch({ type: 'SET_PROJECTED_ITEMS', items: liveProjectionRef.current.toArray() })
+  }, [])
 
   const absorbSnapshot = useCallback((snapshot: { run: AnalysisRun; items: ConversationItem[]; events: RunEvent[] }) => {
+    const projectedItems = resetLiveProjection(snapshot.run.id, snapshot.items)
     dispatch({
       type: 'SET_RUN',
       run: snapshot.run,
@@ -234,12 +256,14 @@ export function useRunState() {
       plan: snapshot.run.state.agentWorkflow ?? undefined,
       artifacts: snapshot.run.state.artifacts,
     })
-    dispatch({ type: 'SET_ITEMS', items: snapshot.items })
+    dispatch({ type: 'SET_PROJECTED_ITEMS', items: projectedItems })
     dispatch({ type: 'SET_EVENTS', events: snapshot.events })
     if (snapshot.run.status !== 'running') dispatch({ type: 'SET_SUBMITTING', value: false })
-  }, [])
+  }, [resetLiveProjection])
 
   const clearRun = useCallback(() => {
+    projectionRunIdRef.current = null
+    liveProjectionRef.current = null
     dispatch({ type: 'CLEAR_RUN' })
   }, [])
 
@@ -251,6 +275,9 @@ export function useRunState() {
   }, [absorbSnapshot])
 
   const acceptRun = useCallback((latestRun: AnalysisRun) => {
+    if (projectionRunIdRef.current !== latestRun.id) {
+      resetLiveProjection(latestRun.id, [])
+    }
     dispatch({
       type: 'SET_RUN',
       run: latestRun,
@@ -259,7 +286,7 @@ export function useRunState() {
       plan: latestRun.state.agentWorkflow ?? undefined,
       artifacts: latestRun.state.artifacts,
     })
-  }, [])
+  }, [resetLiveProjection])
 
   const startRun = useCallback(() => {
     dispatch({ type: 'SET_SUBMITTING', value: true })
@@ -314,7 +341,7 @@ export function useRunState() {
         return
       }
       if (message.type === 'run.item' && message.payload.data.runId === runId) {
-        startTransition(() => dispatch({ type: 'APPEND_ITEM', item: message.payload.data }))
+        startTransition(() => appendLiveItem(message.payload.data))
       }
       if (message.type === 'run.event' && message.payload.data.runId === runId) {
         startTransition(() => dispatch({ type: 'APPEND_EVENT', event: message.payload.data }))
@@ -338,11 +365,12 @@ export function useRunState() {
         reportClientDiagnostic('warn', { scope: 'unsubscribeRun', error, detail: { runId } })
       })
     }
-  }, [absorbSnapshot, runId])
+  }, [absorbSnapshot, appendLiveItem, runId])
 
   const setItems = useCallback((items: ConversationItem[]) => {
-    dispatch({ type: 'SET_ITEMS', items })
-  }, [])
+    resetLiveProjection(runId ?? null, items)
+    dispatch({ type: 'SET_PROJECTED_ITEMS', items: liveProjectionRef.current?.toArray() ?? items })
+  }, [resetLiveProjection, runId])
 
   return {
     run: state.run,
