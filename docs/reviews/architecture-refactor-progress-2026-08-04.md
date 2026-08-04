@@ -28,7 +28,7 @@
 | [ ] | 多实例共享限流后端 | 当前仍是单进程内存限流；本轮只修正可信 socket peer 的客户端 IP 取值，未引入 Redis/Postgres 计数后端 |
 | [ ] | Worker HTTP 重试/退避策略 | 当前 Worker 调用保持单次请求并显式上抛错误；需要先定义幂等性和按工具分类的重试策略，暂未加入自动重试 |
 | [ ] | 真实后端 E2E（run stream + approval） | Electron 用例已存在，但真实后端场景需要 `GEO_AGENT_PLATFORM_E2E_REAL=1` 和本机服务，当前未在本轮环境执行 |
-| [ ] | Desktop `AppShell` 全量按面板拆分、地图视觉回归 | 仅完成对话投影/传输边界，未完成完整 UI 拆分和视觉基线 |
+| [x] | Desktop `AppShell` 按面板装配拆分、地图视觉回归 | `WorkspaceShell` 承接布局槽位、登录/导出和受限面板；检查器详情整理为纯装配模块；Electron 增加固定 1366×768 地图快照并通过离线全套回归 |
 | [ ] | 生产发布签名、SBOM、锁定 Python 运行环境的安装冒烟 | 已实现 SPDX SBOM、Ed25519 显式签名/校验和 Worker `uv.lock`，但真实生产密钥发布与锁定 Python 环境安装冒烟仍需在发布主机执行 |
 | [x] | 自动生成 Provider/WS/Worker/Desktop 架构清单 | `npm run generate:architecture-manifest` 读取真实 registry/catalog/schema，生成 `docs/architecture/architecture-manifest.json` 并校验 WS 注册数量一致 |
 
@@ -80,6 +80,13 @@
 - 新增 [`scripts/README.md`](../../scripts/README.md)，按开发、构建校验、发布、服务安装、数据维护和 Worker 入口分类。
 - 破坏性动作保持显式参数；发布脚本验证输入、写入版本/协议/校验清单；脚本失败返回非零状态。
 
+### 7. Desktop 工作台壳与地图回归
+
+- `AppShell` 保留会话、运行、资源和导航控制器组合；布局 JSX、TopBar、面板槽位、导出向导、登录覆盖层和受限视图统一移入 `WorkspaceShell`。
+- `workspaceInspectorDetails.ts` 只做已准备状态到检查器详情的直接整理，不读取 Store、不发请求、不增加额外权限或 fallback 分支。
+- 更新前端架构测试，使“渲染隔离”检查 `WorkspaceShell` 的真实边界，而不是要求控制器组件继续出现在 `AppShell`。
+- Electron 地图视觉基线固定为 1366×768 的“空间地图”区域，地图运行态检查、工作区尺寸检查和离线 Electron 全套回归均通过。
+
 ## 未完成与明确暂缓
 
 | 项目 | 状态 | 原因 |
@@ -90,7 +97,7 @@
 | 多实例共享限流后端 | [ ] 未完成 | `SlidingWindowRateLimiter` 仍为进程内 Map；客户端 IP 已不再信任可伪造请求头，但共享计数后端需要单独的部署决策 |
 | Worker HTTP 重试/退避策略 | [ ] 未完成 | `callMeteorologyWorker` 仍保持单次请求并将错误显式上抛；没有在缺少幂等契约时自动重放工具调用 |
 | 真实后端 E2E（run stream + approval） | [ ] 未完成 | 真实 Electron 场景受环境变量显式控制，本轮只完成静态/单元/集成验证，未冒充真实后端 E2E 已通过 |
-| Desktop `AppShell` 全量拆分、地图视觉回归 | [ ] 未完成 | 本轮只完成对话投影、虚拟列表和 transport 边界 |
+| Desktop `AppShell` 拆分、地图视觉回归 | [x] 已完成 | `WorkspaceShell` 和检查器详情装配已落地；地图快照位于 `tests/e2e/desktop.electron.spec.ts-snapshots/`，真实后端场景仍按下一行单独统计 |
 | 生产签名、SBOM、锁定 Python 运行环境安装冒烟 | [ ] 部分完成 | 制品已生成 SPDX SBOM，支持显式 Ed25519 签名/校验，并包含 `apps/worker/uv.lock`；生产密钥和目标主机安装需发布环境执行 |
 | 自动生成 Provider/WS/Worker/Desktop 架构清单 | [x] 已完成 | `scripts/generate-architecture-manifest.mjs` 读取构建后的 Server registry、Worker catalog、共享 WS 契约和 Desktop command schema |
 
@@ -106,6 +113,7 @@
 - `npm run test --workspace geo-agent-server`
 - `npx vitest run src/model/providers/legacyProviders.test.ts`（Server provider 边界）
 - `npm run test --workspace @geo-agent-platform/desktop`
+- `npm run build --workspace @geo-agent-platform/desktop`
 - `npm run lint:desktop`（0 errors；保留既有 warning）
 - `npm test`（所有工作区通过：db 1 个文件/2 个测试，shared-types 1 个文件/3 个测试，server 105 个文件/540 个测试通过、2 个文件/4 个测试显式跳过，desktop 97 个文件/357 个测试通过、1 个测试显式跳过）
 - `npm run build`
@@ -118,6 +126,7 @@
 - `node scripts/verify-runtime-service-artifact.mjs` + `uv lock --check --project artifacts/runtime-service-verification/worker`（制品内 Worker 相对路径、checksum、SBOM 和锁文件解析通过；验证后已删除临时目录）
 - `npm run test:postgis`（Testcontainers + `postgis/postgis:16-3.5`：2 个真实集成场景通过）
 - `npm run generate:architecture-manifest`（Provider 4 个、WS 74 个、Worker catalog 19 个、Desktop menu command 14 个；生成清单）
+- `npx playwright test tests/e2e/desktop.electron.spec.ts --project=electron-desktop`（离线 Electron：8 个通过、2 个按真实后端条件跳过；包含 1366×768 地图视觉快照）
 - `node scripts/create-runtime-service-artifact.mjs --out artifacts/runtime-service-test --force` + `node scripts/verify-runtime-service-artifact.mjs artifacts/runtime-service-test`（678 项文件、75 个 SBOM 包；checksum/SBOM 通过）
 - 同一制品使用临时 Ed25519 key 执行 `--signing-key` 并通过 `verify-runtime-service-artifact.mjs` 签名校验；生产密钥仍不写入仓库。
 

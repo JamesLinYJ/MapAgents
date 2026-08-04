@@ -273,11 +273,13 @@ describe('frontend architecture guards', () => {
   it('keeps map rendering isolated from AppShell', async () => {
     const srcRoot = path.resolve(process.cwd(), 'src', 'renderer')
     const appShellSource = await readFile(path.join(srcRoot, 'app/AppShell.tsx'), 'utf8')
+    const workspaceShellSource = await readFile(path.join(srcRoot, 'app/layout/WorkspaceShell.tsx'), 'utf8')
     const mapPanelSource = await readFile(path.join(srcRoot, 'app/layout/WorkspaceMapPanel.tsx'), 'utf8')
     const mapPreloadSource = await readFile(path.join(srcRoot, 'app/layout/workspaceMapPreload.ts'), 'utf8')
     const mapActivationSource = await readFile(path.join(srcRoot, 'app/layout/useWorkspaceMapActivation.ts'), 'utf8')
 
-    expect(appShellSource.includes('WorkspaceMapPanel')).toBe(true)
+    expect(appShellSource.includes('WorkspaceShell')).toBe(true)
+    expect(workspaceShellSource.includes('WorkspaceMapPanel')).toBe(true)
     expect(appShellSource.includes('useWorkspaceMapActivation')).toBe(true)
     expect(appShellSource.includes('../features/map/MapCanvas')).toBe(false)
     expect(appShellSource.includes('../features/map/MapErrorBoundary')).toBe(false)
@@ -330,9 +332,11 @@ describe('frontend architecture guards', () => {
   it('keeps tool management rendering isolated from AppShell', async () => {
     const srcRoot = path.resolve(process.cwd(), 'src', 'renderer')
     const appShellSource = await readFile(path.join(srcRoot, 'app/AppShell.tsx'), 'utf8')
+    const workspaceShellSource = await readFile(path.join(srcRoot, 'app/layout/WorkspaceShell.tsx'), 'utf8')
     const toolPanelSource = await readFile(path.join(srcRoot, 'app/layout/WorkspaceToolPanel.tsx'), 'utf8')
 
-    expect(appShellSource.includes('WorkspaceToolPanel')).toBe(true)
+    expect(appShellSource.includes('WorkspaceShell')).toBe(true)
+    expect(workspaceShellSource.includes('WorkspaceToolPanel')).toBe(true)
     expect(appShellSource.includes('../features/tools/ToolManagementPage')).toBe(false)
     expect(toolPanelSource.includes("import('../../features/tools/ToolManagementPage')")).toBe(true)
     expect(toolPanelSource.includes('ToolManagementPageProps')).toBe(true)
@@ -341,10 +345,12 @@ describe('frontend architecture guards', () => {
   it('keeps inspector rendering isolated from AppShell', async () => {
     const srcRoot = path.resolve(process.cwd(), 'src', 'renderer')
     const appShellSource = await readFile(path.join(srcRoot, 'app/AppShell.tsx'), 'utf8')
+    const workspaceShellSource = await readFile(path.join(srcRoot, 'app/layout/WorkspaceShell.tsx'), 'utf8')
     const inspectorSource = await readFile(path.join(srcRoot, 'app/layout/WorkspaceInspectorPanel.tsx'), 'utf8')
     const detailSource = await readFile(path.join(srcRoot, 'features/artifacts/DetailPanel.tsx'), 'utf8')
 
-    expect(appShellSource.includes('WorkspaceInspectorPanel')).toBe(true)
+    expect(appShellSource.includes('WorkspaceShell')).toBe(true)
+    expect(workspaceShellSource.includes('WorkspaceInspectorPanel')).toBe(true)
     expect(appShellSource.includes('../features/artifacts/DetailPanel')).toBe(false)
     expect(appShellSource.includes('WorkbenchProgressCard')).toBe(false)
     expect(inspectorSource.includes("import('../../features/artifacts/DetailPanel')")).toBe(true)
@@ -396,9 +402,11 @@ describe('frontend architecture guards', () => {
   it('keeps conversation rendering isolated from AppShell', async () => {
     const srcRoot = path.resolve(process.cwd(), 'src', 'renderer')
     const appShellSource = await readFile(path.join(srcRoot, 'app/AppShell.tsx'), 'utf8')
+    const workspaceShellSource = await readFile(path.join(srcRoot, 'app/layout/WorkspaceShell.tsx'), 'utf8')
     const conversationPanelSource = await readFile(path.join(srcRoot, 'app/layout/WorkspaceConversationPanel.tsx'), 'utf8')
 
-    expect(appShellSource.includes('WorkspaceConversationPanel')).toBe(true)
+    expect(appShellSource.includes('WorkspaceShell')).toBe(true)
+    expect(workspaceShellSource.includes('WorkspaceConversationPanel')).toBe(true)
     expect(appShellSource.includes('../features/conversation/ChatPanel')).toBe(false)
     expect(conversationPanelSource.includes("from '../../features/conversation/ChatPanel'")).toBe(true)
     expect(conversationPanelSource.includes('ChatPanelProps')).toBe(true)

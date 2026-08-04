@@ -16,7 +16,7 @@
 
 // 模块职责
 //
-// 负责装配桌面文档、工作区布局和领域控制器的 UI 投影。
+// 负责装配桌面文档、工作区布局和领域控制器的 UI。
 
 import { Suspense, useCallback, useDeferredValue, useMemo } from 'react'
 import { domAnimation, LazyMotion, MotionConfig } from 'framer-motion'
@@ -34,18 +34,7 @@ import './styles/tools-debug.css'
 import './styles/settings.css'
 import './styles/desktop.css'
 import { listAdminWorkspaces } from '../api/client'
-import { TopBar } from './layout/TopBar'
-import { WorkspaceConversationPanel } from './layout/WorkspaceConversationPanel'
 import {
-  WorkspaceInspectorPanel,
-  type WorkspaceInspectorDetail,
-} from './layout/WorkspaceInspectorPanel'
-import { WorkspaceMapPanel } from './layout/WorkspaceMapPanel'
-import { WorkspaceToolPanel } from './layout/WorkspaceToolPanel'
-import { WorkspaceWorkflowPanel } from './layout/WorkspaceWorkflowPanel'
-import {
-  WorkspaceRestrictedContents,
-  WorkspaceRestrictedConversation,
   WorkspaceRestrictedDocument,
 } from './layout/WorkspaceRestrictedPanels'
 import {
@@ -55,11 +44,11 @@ import {
   WorkspaceRouteHost,
 } from './layout/WorkspaceRouteHost'
 import { useWorkspaceMapActivation } from './layout/useWorkspaceMapActivation'
+import { WorkspaceShell } from './layout/WorkspaceShell'
 import {
   formatUiError,
 } from './bootstrap'
 import { useConversationTimelineProjection } from '../features/runs/useConversationTimelineProjection'
-import { ExportWizard } from '../features/export/ExportWizard'
 import {
   useConnectionController,
   useNavigationController,
@@ -73,7 +62,6 @@ import type {
 } from './types'
 import { useMemoryEntries } from './useMemoryEntries'
 import { useWorkspaceBootstrap } from './useWorkspaceBootstrap'
-import { LoginScreen } from './auth/LoginScreen'
 import {
   buildAgentTodoItems,
   buildDataReferences,
@@ -104,6 +92,9 @@ import {
   deriveDesktopWorkspaceAccess,
   shouldShowDesktopLogin,
 } from './workspaceAccess'
+import {
+  type WorkspaceInspectorDetailsInput,
+} from './workspaceInspectorDetails'
 
 function useVoidCallback<Args extends unknown[]>(fn: (...args: Args) => Promise<void>): (...args: Args) => void {
   return useCallback((...args: Args) => { void fn(...args) }, [fn])
@@ -112,7 +103,7 @@ function useVoidCallback<Args extends unknown[]>(fn: (...args: Args) => Promise<
 function AppShell() {
   // 主应用壳
   //
-  // 装配会话、运行、资源、工具和导航控制器的页面投影。
+  // 装配会话、运行、资源、工具和导航控制器的页面状态。
   // 网络语义和实时订阅分别由控制器与 useRunState 所有。
   const desktopPathname = '/'
   const {
@@ -545,159 +536,57 @@ function AppShell() {
     hasAuthenticatedIdentity: Boolean(authMe),
   })
 
-  const createLayerManagerDetail = (closeable: boolean): WorkspaceInspectorDetail => ({
-    panelMode: 'layerManager',
+  const handleSelectHistoryRun = useCallback((runId: string) => {
+    void hydrateRunState(runId)
+    setPanelMode('history')
+    setActiveNav('history')
+  }, [hydrateRunState, setActiveNav, setPanelMode])
+
+  const inspectorDetails: WorkspaceInspectorDetailsInput = {
     runStatus: run?.status,
-    tree: layerManager.tree,
-    selectedId: layerManager.selectedId,
-    searchQuery: layerManager.searchQuery,
-    totalCount: layerManager.totalCount,
-    visibleCount: layerManager.visibleCount,
-    selectedNode: layerManager.selectedNode,
-    activeView: layerManager.activeView,
-    visibilityFilter: layerManager.visibilityFilter,
-    referenceLayers: layers,
-    errorMessage: layerManager.operationError,
-    onSelectLayer: layerManager.selectLayer,
-    onToggleVisibility: layerManager.toggleVisibility,
-    onToggleAllVisibility: layerManager.toggleAllVisibility,
-    onSetOpacity: layerManager.setOpacity,
-    onSetColor: layerManager.setColor,
-    onRenameLayer: layerManager.renameLayer,
-    onMoveUp: layerManager.moveUp,
-    onMoveDown: layerManager.moveDown,
-    onMoveLayer: layerManager.moveTo,
-    onRemoveLayer: layerManager.removeLayer,
-    onCreateGroup: layerManager.createGroup,
-    onToggleGroup: layerManager.toggleGroup,
-    onSetSearchQuery: layerManager.setSearchQuery,
-    onZoomToLayer: handleLayerZoomTo,
+    panelMode,
+    agentState,
+    items: deferredItems,
+    artifacts,
+    artifactData,
+    mapLayers,
+    layers,
+    selectedArtifactId,
+    onSelectArtifact: setSelectedArtifactId,
+    onDownloadArtifact: () => { void handleDownloadArtifact() },
+    onExportResults: () => { void handleExportResults() },
+    onToggleArtifactVisibility: handleToggleArtifactVisibility,
+    onChangeArtifactOpacity: handleArtifactOpacityChange,
+    currentRunId: run?.id,
+    events: deferredEvents,
+    sessionRuns,
+    hasMoreHistory: hasMoreRunHistory,
+    isHistoryLoading: isRunHistoryLoading,
+    progressItems,
+    onSelectHistoryRun: handleSelectHistoryRun,
+    onLoadMoreHistory: handleLoadMoreHistory,
+    allFiles,
+    onUploadFile: handleUploadAnyFile,
+    onDeleteFile: handleDeleteAnyFile,
+    provider,
+    model,
+    providers,
+    systemComponents,
+    onProviderChange: handleProviderChange,
+    onModelChange: setModel,
+    isToolSubmitting,
+    layerManager,
+    onLayerZoomTo: handleLayerZoomTo,
     onExportLayer: handleExportLayer,
-    onSetActiveView: layerManager.setActiveView,
-    onSetVisibilityFilter: layerManager.setVisibilityFilter,
-    onSetLabelEnabled: layerManager.setLabelEnabled,
-    onSetLabelField: layerManager.setLabelField,
-    onImportManagedLayer: (file) => { void handleImportManagedLayer(file) },
-    onReplaceManagedLayer: (layerKey, file) => { void handleReplaceManagedLayer(layerKey, file) },
-    onToggleReferenceLayerStatus: (layerKey, nextStatus) => { void handleToggleLayerStatus(layerKey, nextStatus) },
-    onDeleteReferenceLayer: (layerKey) => { void handleDeleteLayer(layerKey) },
-    onRefreshReferenceLayers: () => { void refreshLayers(session?.id, currentThreadId) },
-    sceneManagedLayerKeys: layerManager.sceneManagedLayerKeys,
-    onAddReferenceLayer: layerManager.addReferenceLayer,
-    onRemoveReferenceLayer: layerManager.removeReferenceLayer,
-    onClose: closeable ? () => setPanelMode('summary') : undefined,
-  })
-  const createResultDetail = (): WorkspaceInspectorDetail => {
-    const common = { runStatus: run?.status }
-    switch (panelMode) {
-      case 'summary':
-        return {
-          ...common,
-          panelMode,
-          agentState,
-          items: deferredItems,
-          artifacts,
-          artifactData,
-          mapLayers,
-          layers,
-          selectedArtifactId,
-          onSelectArtifact: setSelectedArtifactId,
-          onDownloadArtifact: () => { void handleDownloadArtifact() },
-          onExportResults: () => { void handleExportResults() },
-        }
-      case 'layers':
-        return {
-          ...common,
-          panelMode,
-          artifacts,
-          artifactData,
-          mapLayers,
-          layers,
-          selectedArtifactId,
-          onSelectArtifact: setSelectedArtifactId,
-          onToggleArtifactVisibility: handleToggleArtifactVisibility,
-          onChangeArtifactOpacity: handleArtifactOpacityChange,
-        }
-      case 'history':
-        return {
-          ...common,
-          panelMode,
-          currentRunId: run?.id,
-          agentState,
-          events: deferredEvents,
-          sessionRuns,
-          hasMoreHistory: hasMoreRunHistory,
-          isHistoryLoading: isRunHistoryLoading,
-          progressItems,
-          onSelectHistoryRun: (runId) => {
-            void hydrateRunState(runId)
-            setPanelMode('history')
-            setActiveNav('history')
-          },
-          onLoadMoreHistory: handleLoadMoreHistory,
-        }
-      case 'compute':
-        return {
-          ...common,
-          panelMode,
-          artifacts,
-          artifactData,
-          mapLayers,
-          selectedArtifactId,
-          isToolSubmitting,
-          onSelectArtifact: setSelectedArtifactId,
-          onToggleArtifactVisibility: handleToggleArtifactVisibility,
-          onExportResults: () => { void handleExportResults() },
-        }
-      case 'sources':
-        return {
-          ...common,
-          panelMode,
-          allFiles,
-          onUploadFile: (file) => { void handleUploadAnyFile(file) },
-          onDeleteFile: (fileId) => { void handleDeleteAnyFile(fileId) },
-        }
-      case 'export':
-        return {
-          ...common,
-          panelMode,
-          artifacts,
-          selectedArtifactId,
-          onDownloadArtifact: () => { void handleDownloadArtifact() },
-          onExportResults: () => { void handleExportResults() },
-        }
-      case 'config':
-        return {
-          ...common,
-          panelMode,
-          provider,
-          model,
-          providers,
-          systemComponents,
-          onProviderChange: handleProviderChange,
-          onModelChange: setModel,
-        }
-      case 'layerManager':
-        return createLayerManagerDetail(true)
-      case 'tools':
-        return { ...common, panelMode }
-    }
+    onImportManagedLayer: handleImportManagedLayer,
+    onReplaceManagedLayer: handleReplaceManagedLayer,
+    onToggleReferenceLayerStatus: handleToggleLayerStatus,
+    onDeleteReferenceLayer: handleDeleteLayer,
+    refreshReferenceLayers: refreshLayers,
+    sessionId: session?.id,
+    threadId: currentThreadId,
+    setPanelMode,
   }
-  const renderInspectorPanel = (variant: 'contents' | 'results') => (
-    <WorkspaceInspectorPanel
-      detail={variant === 'contents' ? createLayerManagerDetail(false) : createResultDetail()}
-      progress={variant === 'results'
-        ? {
-            runStatus: run?.status,
-            progressItems,
-            tasks: progressTasks,
-            events: deferredEvents,
-            artifactCount: artifacts.length,
-            onOpenHistory: () => setPanelMode('history'),
-          }
-        : undefined}
-    />
-  )
 
   return (
     <Suspense fallback={<div className="dc-route-loading">正在加载页面…</div>}>
@@ -724,238 +613,225 @@ function AppShell() {
             terms={<LegalPolicyPage kind="terms" />}
             privacy={<LegalPolicyPage kind="privacy" />}
             renderWorkspace={(Workspace, desktopDocuments) => (
-              <>
-                {exportWizardOpen && (
-                  <ExportWizard
-                    open
-                    title={currentThreadTitle || `${PRODUCT_CODENAME} 分析成果`}
-                    artifacts={artifacts}
-                    defaultArtifactId={selectedArtifact?.artifactId ?? artifacts.at(-1)?.artifactId}
-                    busy={exportBusy}
-                    onOpenChange={(open) => {
-                      if (!open) closeExportWizard()
-                    }}
-                    onConfirm={handleConfirmExport}
-                  />
-                )}
-                <Workspace
-                  desktopDocuments={desktopDocuments}
+              <WorkspaceShell
+                Workspace={Workspace}
+                desktopDocuments={desktopDocuments}
                 activeDesktopDocument={activeDesktopDocument}
                 onDesktopDocumentChange={setActiveDesktopDocument}
-                topBar={
-                  <TopBar
-                    authMe={authMe}
-                    workspaces={visibleWorkspacesQuery.data ?? []}
-                    activeWorkspaceId={session?.workspaceId ?? authMe?.defaultWorkspace?.workspaceId ?? null}
-                    onLogout={handleLogout}
-                    unavailableReason={workspaceAccess.unavailableReason}
-                    onOpenDocument={setActiveDesktopDocument}
-                    onOpenWorkspace={handleOpenWorkspace}
-                  />
-                }
-                onSidebarItemClick={(itemId) => handleSidebarItemClick(itemId as SidebarItemId)}
-                dataReferenceCount={dataReferences.length}
-                selectedBasemapName={selectedBasemap.name}
-                uploadedLayerName={uploadedLayerName}
-                providerLabel={providerLabel}
-                modelLabel={model || '默认'}
-                modelStatusLabel={formatModelRunStatus(run?.status)}
-                artifactCount={artifacts.length}
-                selectedArtifactName={selectedArtifact?.name}
-                currentThreadId={currentThreadId}
-                workspaceLayoutKey={
-                  session?.workspaceId
+                layout={{
+                  onSidebarItemClick: itemId => handleSidebarItemClick(itemId as SidebarItemId),
+                  dataReferenceCount: dataReferences.length,
+                  selectedBasemapName: selectedBasemap.name,
+                  uploadedLayerName,
+                  providerLabel,
+                  modelLabel: model || '默认',
+                  modelStatusLabel: formatModelRunStatus(run?.status),
+                  artifactCount: artifacts.length,
+                  selectedArtifactName: selectedArtifact?.name,
+                  currentThreadId,
+                  workspaceLayoutKey: session?.workspaceId
                     ?? authMe?.defaultWorkspace?.workspaceId
-                    ?? 'unbound-workspace'
-                }
-                sessionThreads={sessionThreads}
-                onNewTask={handleNewConversation}
-                onSelectThread={onSelectTaskAction}
-                workspaceMode={workspaceMode}
-                onWorkspaceModeChange={changeWorkspaceMode}
-                onContentsModeChange={(mode) => {
-                  layerManager.setActiveView(mode === 'sources' ? 'sources' : 'drawOrder')
+                    ?? 'unbound-workspace',
+                  sessionThreads,
+                  onNewTask: handleNewConversation,
+                  onSelectThread: onSelectTaskAction,
+                  workspaceMode,
+                  onWorkspaceModeChange: changeWorkspaceMode,
+                  onContentsModeChange: mode => {
+                    layerManager.setActiveView(mode === 'sources' ? 'sources' : 'drawOrder')
+                  },
+                  onExportResults: () => {
+                    void handleExportResults()
+                  },
+                  backendActionDisabledReason: workspaceAccess.unavailableReason,
+                  canAccessAccount: workspaceAccess.canAccessAccount,
+                  canAccessDiagnostics: workspaceAccess.canAccessDiagnostics,
+                  canAccessSecurity: workspaceAccess.canAccessSecurity,
                 }}
-                onExportResults={() => {
-                  void handleExportResults()
+                topBar={{
+                  authMe,
+                  workspaces: visibleWorkspacesQuery.data ?? [],
+                  activeWorkspaceId: session?.workspaceId ?? authMe?.defaultWorkspace?.workspaceId ?? null,
+                  onLogout: handleLogout,
+                  unavailableReason: workspaceAccess.unavailableReason,
+                  onOpenDocument: setActiveDesktopDocument,
+                  onOpenWorkspace: handleOpenWorkspace,
                 }}
-                backendActionDisabledReason={workspaceAccess.unavailableReason}
-                canAccessAccount={workspaceAccess.canAccessAccount}
-                canAccessDiagnostics={workspaceAccess.canAccessDiagnostics}
-                canAccessSecurity={workspaceAccess.canAccessSecurity}
-                toolsSlot={workspaceAccess.backendActionsEnabled ? (
-                  <WorkspaceToolPanel
-                    tools={availableTools}
-                    artifacts={artifacts}
-                    layers={layers}
-                    valueRefs={agentState?.toolValueRefs ?? []}
-                    runtimeConfig={runtimeConfig}
-                    memories={memoryEntries}
-                    activeSkills={activeSkills}
-                    activeMcpServers={activeMcpServers}
-                    toolRunResult={toolRunResult}
-                    toolCatalogEntries={toolCatalogEntries}
-                    systemComponents={systemComponents}
-                    tokenUsageSummary={tokenUsageSummary}
-                    automationDefinitions={automationDefinitions}
-                    automationDiagnostics={automationDiagnostics}
-                    automationValidation={automationValidation}
-                    scheduledTasks={scheduledTasks}
-                    automationRuns={automationRuns}
-                    backgroundTasks={backgroundTasks}
-                    isToolSubmitting={isToolSubmitting}
-                    isAutomationSubmitting={isAutomationSubmitting}
-                    isToolCatalogSubmitting={isToolCatalogSubmitting}
-                    isRuntimeConfigSubmitting={isRuntimeConfigSubmitting}
-                    onRunTool={(tool, args) => {
+                access={{
+                  backendActionsEnabled: workspaceAccess.backendActionsEnabled,
+                  unavailableReason: remoteUnavailableReason,
+                  showInteractiveLogin,
+                }}
+                panels={{
+                  tools: {
+                    tools: availableTools,
+                    artifacts,
+                    layers,
+                    valueRefs: agentState?.toolValueRefs ?? [],
+                    runtimeConfig,
+                    memories: memoryEntries,
+                    activeSkills,
+                    activeMcpServers,
+                    toolRunResult,
+                    toolCatalogEntries,
+                    systemComponents,
+                    tokenUsageSummary,
+                    automationDefinitions,
+                    automationDiagnostics,
+                    automationValidation,
+                    scheduledTasks,
+                    automationRuns,
+                    backgroundTasks,
+                    isToolSubmitting,
+                    isAutomationSubmitting,
+                    isToolCatalogSubmitting,
+                    isRuntimeConfigSubmitting,
+                    onRunTool: (tool, args) => {
                       void handleRunTool(tool, args)
-                    }}
-                    onUpsertToolCatalogEntry={(tool, payload, sortOrder) => {
+                    },
+                    onUpsertToolCatalogEntry: (tool, payload, sortOrder) => {
                       void handleUpsertToolCatalogEntry(tool, payload, sortOrder)
-                    }}
-                    onDeleteToolCatalogEntry={(tool) => {
+                    },
+                    onDeleteToolCatalogEntry: tool => {
                       void handleDeleteToolCatalogEntry(tool)
-                    }}
-                    onSaveRuntimeConfig={(nextConfig) => {
+                    },
+                    onSaveRuntimeConfig: nextConfig => {
                       void handleSaveRuntimeConfig(nextConfig)
-                    }}
-                    onStartAutomation={(payload) => {
+                    },
+                    onStartAutomation: payload => {
                       void handleStartAutomation(payload)
-                    }}
-                    onValidateAutomation={handleValidateAutomation}
-                    onCreateAutomation={handleCreateAutomation}
-                    onUpdateAutomation={handleUpdateAutomation}
-                    onPublishAutomation={handlePublishAutomation}
-                    onDisableAutomation={handleDisableAutomation}
-                    onRespondAutomationApproval={handleRespondAutomationApproval}
-                    onCancelAutomation={(automationRunId) => {
+                    },
+                    onValidateAutomation: handleValidateAutomation,
+                    onCreateAutomation: handleCreateAutomation,
+                    onUpdateAutomation: handleUpdateAutomation,
+                    onPublishAutomation: handlePublishAutomation,
+                    onDisableAutomation: handleDisableAutomation,
+                    onRespondAutomationApproval: handleRespondAutomationApproval,
+                    onCancelAutomation: automationRunId => {
                       void handleCancelAutomation(automationRunId)
-                    }}
-                    onOpenAutomationRun={(sessionId, runId, threadId) => {
-                      void hydrateRunState(runId).then((loadedRun) => {
+                    },
+                    onOpenAutomationRun: (sessionId, runId, threadId) => {
+                      void hydrateRunState(runId).then(loadedRun => {
                         if (loadedRun.sessionId !== sessionId || (threadId && loadedRun.threadId !== threadId)) {
                           throw new Error('Automation 交付运行归属与持久化导航目标不一致。')
                         }
                         setActiveNav('analysis')
                         setPanelMode('summary')
                         setActiveSidebarItem('assistant')
-                      }).catch((error) => {
+                      }).catch(error => {
                         setUiError(formatUiError(error, 'Automation 交付运行加载失败，请稍后重试。'))
                       })
-                    }}
-                    onSaveScheduledTask={(payload) => {
+                    },
+                    onSaveScheduledTask: payload => {
                       void handleSaveScheduledTask(payload)
-                    }}
-                    onDeleteScheduledTask={(taskId) => {
+                    },
+                    onDeleteScheduledTask: taskId => {
                       void handleDeleteScheduledTask(taskId)
-                    }}
-                    onCancelBackgroundTask={(taskId) => {
+                    },
+                    onCancelBackgroundTask: taskId => {
                       void handleCancelBackgroundTask(taskId)
-                    }}
-                    onPromoteBackgroundTask={(taskId) => {
-                      void handlePromoteBackgroundTask(taskId).then((task) => {
+                    },
+                    onPromoteBackgroundTask: taskId => {
+                      void handlePromoteBackgroundTask(taskId).then(task => {
                         if (!task) return
                         const sessionId = typeof task.metadata.sessionId === 'string' ? task.metadata.sessionId : null
                         const threadId = typeof task.metadata.threadId === 'string' ? task.metadata.threadId : null
                         if (sessionId && task.runId) syncUrl(sessionId, task.runId, threadId ?? undefined)
                       })
-                    }}
-                    onRefreshMemories={onRefreshMemoriesAction}
-                  />
-                ) : (
-                  <WorkspaceRestrictedDocument title="工具与自动化" reason={remoteUnavailableReason} />
-                )}
-                mainSlot={workspaceAccess.backendActionsEnabled ? (
-                  <WorkspaceConversationPanel
-                    artifactCount={artifacts.length}
-                    runStatus={run?.status}
-                    providerLabel={providerLabel}
-                    query={query}
-                    currentRunId={run?.id}
-                    currentThreadId={currentThreadId}
-                    currentThreadTitle={currentThreadTitle}
-                    runCreatedAt={run?.createdAt}
-                    isSubmitting={isSubmitting}
-                    conversationReady={Boolean(session)}
-                    errorMessage={uiError}
-                    uploadedLayerName={uploadedLayerName}
-                    uploadReferences={uploadReferences}
-                    decisions={agentState?.decisions ?? []}
-                    sessionThreads={sessionThreads}
-                    items={threadConversationItems}
-                    runtimeConfig={runtimeConfig}
-                    availableTools={availableTools}
-                    onQueryChange={setQuery}
-                    onSubmit={handleSubmit}
-                    onInterrupt={handleInterruptRun}
-                    onNewConversation={handleNewConversation}
-                    onFillSample={handleSampleSelect}
-                    onRespondDecision={onRespondDecisionAction}
-                    onUseTemplate={handleUseTemplate}
-                    onUploadFiles={(files) => {
+                    },
+                    onRefreshMemories: onRefreshMemoriesAction,
+                  },
+                  conversation: {
+                    artifactCount: artifacts.length,
+                    runStatus: run?.status,
+                    providerLabel,
+                    query,
+                    currentRunId: run?.id,
+                    currentThreadId,
+                    currentThreadTitle,
+                    runCreatedAt: run?.createdAt,
+                    isSubmitting,
+                    conversationReady: Boolean(session),
+                    errorMessage: uiError,
+                    uploadedLayerName,
+                    uploadReferences,
+                    decisions: agentState?.decisions ?? [],
+                    sessionThreads,
+                    items: threadConversationItems,
+                    runtimeConfig,
+                    availableTools,
+                    onQueryChange: setQuery,
+                    onSubmit: handleSubmit,
+                    onInterrupt: handleInterruptRun,
+                    onNewConversation: handleNewConversation,
+                    onFillSample: handleSampleSelect,
+                    onRespondDecision: onRespondDecisionAction,
+                    onUseTemplate: handleUseTemplate,
+                    onUploadFiles: files => {
                       void handleUploadFiles(files)
-                    }}
-                    onSelectArtifact={setSelectedArtifactId}
-                    onSelectTask={onSelectTaskAction}
-                    onRenameTask={onRenameTaskAction}
-                    onDeleteTask={onDeleteTaskAction}
-                    onForkMessage={onForkMessageAction}
-                    onOpenWorkflow={openWorkflowInspector}
-                    dataReferences={dataReferences}
-                    trashedThreads={trashedThreads}
-                    onLoadTrash={onRefreshTrashAction}
-                    onRestoreThread={onRestoreThreadAction}
-                    onPurgeThread={onPurgeThreadAction}
-                    tokenBudget={tokenBudget}
-                    activeSkills={activeSkills}
-                    activeMcpServers={activeMcpServers}
-                    compactionLevel={compactionLevel}
-                    runStats={runStats}
-                    denialCounts={denialCounts}
-                    agentWorkflow={agentWorkflow}
-                    tasks={progressTasks}
-                  />
-                ) : (
-                  <WorkspaceRestrictedConversation reason={remoteUnavailableReason} onRetry={retryAuth} />
-                )}
-                mapSlot={
-                  <WorkspaceMapPanel
-                    artifactCount={artifacts.length}
-                    basemaps={basemaps}
-                    mapScene={mapScene}
-                    isMapActivated={isMapActivated}
-                    runStatus={run?.status}
-                    selectedBasemapKey={selectedBasemapKey}
-                    selectedArtifactId={selectedArtifactId}
-                    selectedArtifactName={selectedArtifact?.name}
-                    focusRequest={mapFocusRequest}
-                    onSelectArtifact={setSelectedArtifactId}
-                    placeResolution={placeResolution}
-                    agentState={agentState}
-                    onActivateMap={activateMap}
-                  />
-                }
-                workflowSlot={workspaceAccess.backendActionsEnabled
-                  ? <WorkspaceWorkflowPanel agentState={agentState} />
-                  : <WorkspaceRestrictedDocument title="智能体工作流" reason={remoteUnavailableReason} />}
-                contentsSlot={workspaceAccess.backendActionsEnabled
-                  ? renderInspectorPanel('contents')
-                  : <WorkspaceRestrictedContents basemapName={selectedBasemap.name} reason={remoteUnavailableReason} />}
-                  inspectorSlot={workspaceAccess.backendActionsEnabled
-                    ? renderInspectorPanel('results')
-                    : <WorkspaceRestrictedDocument title="分析结果" reason={remoteUnavailableReason} />}
-                />
-                {showInteractiveLogin ? (
-                  <div
-                    className="gf-login-overlay"
-                    role="dialog"
-                    aria-modal="true"
-                    aria-label={`登录 ${PRODUCT_CODENAME}`}
-                  >
-                    <LoginScreen onAuthenticated={retryAuth} />
-                  </div>
-                ) : null}
-              </>
+                    },
+                    onSelectArtifact: setSelectedArtifactId,
+                    onSelectTask: onSelectTaskAction,
+                    onRenameTask: onRenameTaskAction,
+                    onDeleteTask: onDeleteTaskAction,
+                    onForkMessage: onForkMessageAction,
+                    onOpenWorkflow: openWorkflowInspector,
+                    dataReferences,
+                    trashedThreads,
+                    onLoadTrash: onRefreshTrashAction,
+                    onRestoreThread: onRestoreThreadAction,
+                    onPurgeThread: onPurgeThreadAction,
+                    tokenBudget,
+                    activeSkills,
+                    activeMcpServers,
+                    compactionLevel,
+                    runStats,
+                    denialCounts,
+                    agentWorkflow,
+                    tasks: progressTasks,
+                  },
+                  map: {
+                    artifactCount: artifacts.length,
+                    basemaps,
+                    mapScene,
+                    isMapActivated,
+                    runStatus: run?.status,
+                    selectedBasemapKey,
+                    selectedArtifactId,
+                    selectedArtifactName: selectedArtifact?.name,
+                    focusRequest: mapFocusRequest,
+                    onSelectArtifact: setSelectedArtifactId,
+                    placeResolution,
+                    agentState,
+                    onActivateMap: activateMap,
+                  },
+                  workflow: {
+                    agentState,
+                  },
+                  inspector: {
+                    details: inspectorDetails,
+                    progress: {
+                      runStatus: run?.status,
+                      progressItems,
+                      tasks: progressTasks,
+                      events: deferredEvents,
+                      artifactCount: artifacts.length,
+                      onOpenHistory: () => setPanelMode('history'),
+                    },
+                    basemapName: selectedBasemap.name,
+                  },
+                }}
+                exportWizard={exportWizardOpen ? {
+                  open: true,
+                  title: currentThreadTitle || `${PRODUCT_CODENAME} 分析成果`,
+                  artifacts,
+                  defaultArtifactId: selectedArtifact?.artifactId ?? artifacts.at(-1)?.artifactId,
+                  busy: exportBusy,
+                } : null}
+                onCloseExportWizard={closeExportWizard}
+                onConfirmExport={handleConfirmExport}
+                onAuthenticated={retryAuth}
+              />
             )}
             renderDebug={(Debug) => (
               <Debug

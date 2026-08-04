@@ -93,7 +93,15 @@ test('renders the complete GIS shell even when native services are unavailable',
       .toBeVisible()
     await expect(workspace.getByRole('button', { name: '系统日志' })).toBeVisible()
   }
+  await setWindowSize(electronApp, workspace, 1_366, 768)
   await expectMapRuntimeReady(workspace)
+  await expect(workspace.getByRole('region', { name: '空间地图' })).toHaveScreenshot(
+    'map-workbench-1366x768.png',
+    {
+      animations: 'disabled',
+      maxDiffPixelRatio: 0.02,
+    },
+  )
   await workspace.screenshot({
     path: testInfo.outputPath('geo-agent-platform-offline-auto-auth.png'),
     animations: 'disabled',
