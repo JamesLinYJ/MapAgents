@@ -60,6 +60,7 @@ describe('platform architecture', () => {
     await expect(stat(path.join(repositoryRoot, 'server'))).rejects.toMatchObject({ code: 'ENOENT' })
 
     await expect(stat(path.join(repositoryRoot, 'packages/shared-types/src'))).resolves.toBeDefined()
+    await expect(stat(path.join(repositoryRoot, 'packages/shared-types/src/contracts.test.ts'))).resolves.toBeDefined()
     await expect(stat(path.join(repositoryRoot, 'packages/db/src/schema.ts'))).resolves.toBeDefined()
     await expect(stat(path.join(repositoryRoot, 'packages/db/src/connection.ts'))).resolves.toBeDefined()
     await expect(stat(path.join(repositoryRoot, 'packages/conversation-presentation/src'))).resolves.toBeDefined()
