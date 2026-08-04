@@ -13,7 +13,7 @@
 
 | 状态 | 范围 | 当前结论 |
 | --- | --- | --- |
-| [x] | 数据库/文件生命周期事实源 | 已落地 `pending → ready → deleted`、幂等上传、补偿删除和对象引用回收；Drizzle schema/connection 已归入 `packages/db` |
+| [x] | 数据库/文件生命周期事实源 | 已落地 `pending → ready → deleted`、幂等上传、补偿删除和对象引用回收；Drizzle schema/connection 已归入 `packages/db`，并有连接工厂回归测试 |
 | [x] | 工具结果提交与 Run 启动应用边界 | 已落地 `ToolResultCommitService`、`ToolExecutionPolicy`、`StartRunService` |
 | [x] | Desktop/Server WS、IPC 和 HTTP 传输契约 | 已集中共享 schema，并对响应执行运行时校验 |
 | [x] | 共享契约回归测试 | 已覆盖 WS command 一对一映射、交付 artifact 引用和 Worker catalog schema hash |
@@ -38,6 +38,7 @@
 - `FileLifecycleService` 统一上传、重试、删除、线程 fork 复制和线程清理；HTTP 路由不再直接决定物理文件状态。
 - 气象上传在索引或 session 指针写入失败时执行显式补偿删除，原始错误继续抛出。
 - 文件对象哈希已接入完整性检查和对象引用回收查询。
+- `packages/db` 提供唯一 schema、连接工厂和事务类型；Server 仅保留兼容导出，连接工厂测试验证惰性连接和池错误观测，不连接真实数据库。
 
 ### 2. 工具结果和运行应用边界
 
@@ -99,7 +100,7 @@
 - `npx vitest run src/model/providers/legacyProviders.test.ts`（Server provider 边界）
 - `npm run test --workspace @geo-agent-platform/desktop`
 - `npm run lint:desktop`（0 errors；保留既有 warning）
-- `npm test`（所有工作区通过：shared-types 1 个文件/3 个测试，server 104 个文件/538 个测试，desktop 97 个文件/357 个测试；server 1 个文件/2 个测试、desktop 1 个测试为显式跳过）
+- `npm test`（所有工作区通过：db 1 个文件/2 个测试，shared-types 1 个文件/3 个测试，server 104 个文件/538 个测试，desktop 97 个文件/357 个测试；server 1 个文件/2 个测试、desktop 1 个测试为显式跳过）
 - `npm run build`
 - `npm run check:bundle`（initial JS gzip 101254 bytes，CSS gzip 4425 bytes）
 - `npm run lint:terminology`

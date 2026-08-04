@@ -2396,7 +2396,9 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         delegationMode: 'as_tool',
         parallelSafe: false,
         maxTurns: 12,
-        timeoutMs: 25,
+        // 留出 SDK 首个 function_call 事件的调度时间；超时边界本身仍由
+        // 子智能体配置控制，不能用过短的值把“尚未投影调用”误判成失败。
+        timeoutMs: 250,
       }]
       const workflow = {
         goal: '验证子智能体超时不会无限阻塞主运行',
@@ -2451,12 +2453,12 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       const failed = await runtime.resolveApproval(run.id, approval.approvalId, true)
 
       expect(failed.status).toBe('failed')
-      expect(failed.state.errors.join('\n')).toContain('慢速分析助手超过单次调用时限 25ms，已停止。')
+      expect(failed.state.errors.join('\n')).toContain('慢速分析助手超过单次调用时限 250ms，已停止。')
       expect(failed.state.subAgents).toContainEqual(expect.objectContaining({
         agentId: 'slow_analyst',
         status: 'failed',
         currentStepId: null,
-        latestMessage: '慢速分析助手超过单次调用时限 25ms，已停止。',
+        latestMessage: '慢速分析助手超过单次调用时限 250ms，已停止。',
       }))
       expect(failed.state.agentWorkflow).toMatchObject({
         status: 'adjusting',
