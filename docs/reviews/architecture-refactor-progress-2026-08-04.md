@@ -1,5 +1,7 @@
 # Newmap 架构重构进度报告
 
+> 复核更新：本报告完成后又对当前分支做了独立代码审查，并修复了文件事务、Thread purge、Desktop 投影和 Runtime Service 发布链路中的实际缺陷。最新结论、修复清单、升级步骤和验证结果以 [`refactor-branch-code-review-2026-08-04.md`](./refactor-branch-code-review-2026-08-04.md) 为准；下文保留为重构实施过程记录。
+
 日期：2026-08-04
 分支：`refactor/architecture-completion`
 

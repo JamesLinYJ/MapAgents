@@ -10,13 +10,17 @@
 // --------------------------------------------------------------------------
 
 import { renderToStaticMarkup } from 'react-dom/server'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { OperationsServiceSnapshot, OperationsSnapshot } from '@geo-agent-platform/shared-types/operations'
 
 import {
   BackendStatusNotice,
   DesktopBackendMonitor,
-  assertRuntimeCapabilities,
 } from '../app/DesktopBackendMonitor'
+import {
+  assertRuntimeCapabilities,
+  ensureRuntimeCompatibility,
+} from '../app/runtimeCompatibility'
 import { useBackendAvailabilityStore } from '../app/stores/backendAvailabilityStore'
 
 describe('DesktopBackendMonitor', () => {
@@ -74,4 +78,98 @@ describe('DesktopBackendMonitor', () => {
       maxDesktopProtocol: 3,
     })).toThrow('桌面协议不兼容')
   })
+
+  it('caches a successful handshake by stable API process identity instead of snapshot sequence', async () => {
+    const handshakeIdentity = { current: null as string | null }
+    const loadCapabilities = vi.fn(async () => compatibleCapabilities())
+
+    await ensureRuntimeCompatibility(
+      runtimeSnapshot({ sequence: 1, pid: 42, startedAt: '2026-08-04T00:00:00.000Z', restartCount: 0 }),
+      handshakeIdentity,
+      loadCapabilities,
+    )
+    await ensureRuntimeCompatibility(
+      runtimeSnapshot({ sequence: 2, pid: 42, startedAt: '2026-08-04T00:00:00.000Z', restartCount: 0 }),
+      handshakeIdentity,
+      loadCapabilities,
+    )
+
+    expect(loadCapabilities).toHaveBeenCalledTimes(1)
+  })
+
+  it('performs a new handshake after the API process restarts', async () => {
+    const handshakeIdentity = { current: null as string | null }
+    const loadCapabilities = vi.fn(async () => compatibleCapabilities())
+
+    await ensureRuntimeCompatibility(
+      runtimeSnapshot({ sequence: 1, pid: 42, startedAt: '2026-08-04T00:00:00.000Z', restartCount: 0 }),
+      handshakeIdentity,
+      loadCapabilities,
+    )
+    await ensureRuntimeCompatibility(
+      runtimeSnapshot({ sequence: 9, pid: 84, startedAt: '2026-08-04T00:05:00.000Z', restartCount: 1 }),
+      handshakeIdentity,
+      loadCapabilities,
+    )
+
+    expect(loadCapabilities).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not poison the process cache when a restarted API handshake fails transiently', async () => {
+    const handshakeIdentity = { current: null as string | null }
+    const loadCapabilities = vi.fn()
+      .mockResolvedValueOnce(compatibleCapabilities())
+      .mockRejectedValueOnce(new Error('capabilities unavailable'))
+      .mockResolvedValueOnce(compatibleCapabilities())
+    const original = runtimeSnapshot({
+      sequence: 1,
+      pid: 42,
+      startedAt: '2026-08-04T00:00:00.000Z',
+      restartCount: 0,
+    })
+    const restarted = runtimeSnapshot({
+      sequence: 2,
+      pid: 84,
+      startedAt: '2026-08-04T00:05:00.000Z',
+      restartCount: 1,
+    })
+
+    await ensureRuntimeCompatibility(original, handshakeIdentity, loadCapabilities)
+    const originalIdentity = handshakeIdentity.current
+    await expect(ensureRuntimeCompatibility(restarted, handshakeIdentity, loadCapabilities))
+      .rejects.toThrow('capabilities unavailable')
+    expect(handshakeIdentity.current).toBe(originalIdentity)
+
+    await ensureRuntimeCompatibility(restarted, handshakeIdentity, loadCapabilities)
+    expect(loadCapabilities).toHaveBeenCalledTimes(3)
+    expect(handshakeIdentity.current).not.toBe(originalIdentity)
+  })
 })
+
+function compatibleCapabilities() {
+  return {
+    releaseId: 'test-release',
+    apiProtocolVersion: 1,
+    minDesktopProtocol: 1,
+    maxDesktopProtocol: 1,
+    databaseSchemaVersion: 1,
+    workerContractDigest: null,
+  }
+}
+
+function runtimeSnapshot(input: {
+  sequence: number
+  pid: number
+  startedAt: string
+  restartCount: number
+}): OperationsSnapshot {
+  return {
+    sequence: input.sequence,
+    services: [{
+      serviceId: 'api',
+      pid: input.pid,
+      startedAt: input.startedAt,
+      restartCount: input.restartCount,
+    } as OperationsServiceSnapshot],
+  } as OperationsSnapshot
+}

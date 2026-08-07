@@ -27,6 +27,10 @@ import type { ChatPanelProps } from './types'
 import { ConversationEntryView } from './ConversationEntry'
 import { ConversationJumpRail } from './ConversationJumpRail'
 import { buildConversationJumpItems, conversationJumpAnchorId } from './conversationJumpItems'
+import {
+  CONVERSATION_TIMELINE_GAP_PX,
+  firstVisibleConversationIndex,
+} from './conversationTimelineVirtualization'
 import { formatTaskStatus } from './entryFormat'
 import { fmtElapsed } from './useConversation'
 
@@ -76,6 +80,7 @@ export function ConversationTimeline({
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [activeJumpAnchorId, setActiveJumpAnchorId] = useState<string | null>(null)
   const timelineRef = useRef<HTMLDivElement>(null)
+  const virtualListRef = useRef<HTMLDivElement>(null)
   const nearBottom = useRef(true)
   const jumpItems = useMemo(() => buildConversationJumpItems(conversation), [conversation])
   const jumpItemIndices = useMemo(
@@ -87,6 +92,7 @@ export function ConversationTimeline({
     getScrollElement: () => timelineRef.current,
     estimateSize: () => 112,
     overscan: 8,
+    gap: CONVERSATION_TIMELINE_GAP_PX,
     getItemKey: index => conversation[index]?.id ?? index,
   })
 
@@ -94,12 +100,21 @@ export function ConversationTimeline({
     const el = timelineRef.current
     if (!el) return
     nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
-    const firstVisibleIndex = virtualizer.getVirtualItems()[0]?.index
+    const virtualList = virtualListRef.current
+    if (!virtualList) return
+    const visibleOffset = Math.max(
+      0,
+      el.getBoundingClientRect().top - virtualList.getBoundingClientRect().top,
+    )
+    const firstVisibleIndex = firstVisibleConversationIndex(
+      virtualizer.getVirtualItems(),
+      visibleOffset,
+    )
     if (firstVisibleIndex === undefined) return
     const active = jumpItems
       .filter(item => (jumpItemIndices.get(item.id) ?? -1) <= firstVisibleIndex)
       .at(-1)?.anchorId
-    if (active) setActiveJumpAnchorId(active)
+    setActiveJumpAnchorId(active ?? null)
   }
 
   const toggleExpanded = (id: string) => {
@@ -177,6 +192,7 @@ export function ConversationTimeline({
         )}
         {conversation.length ? (
           <div
+            ref={virtualListRef}
             className="cc-timeline__virtual-list"
             style={{ position: 'relative', height: `${virtualizer.getTotalSize()}px` }}
           >

@@ -26,6 +26,13 @@ export interface StartRunInput {
   executionMode?: 'auto' | 'plan'
   reasoning?: boolean
   completion?: RunTaskCompletionTarget
+  /**
+   * 在后台任务真正启动前建立调用方所需的观察关系。
+   *
+   * 该回调是启动顺序的一部分而不是完成通知：运行已经持久化，但此时尚未
+   * 产生任何实时事件。调用方必须同步完成订阅，避免快速运行的首批事件丢失。
+   */
+  beforeLaunch: (run: AnalysisRun) => void
 }
 
 type StartRunStore = Pick<PlatformPersistenceFacade, 'createThread' | 'getThread' | 'createRun'>
@@ -76,6 +83,7 @@ export class StartRunService {
       reasoning: input.reasoning !== false,
       auth: input.auth,
     }
+    input.beforeLaunch(run)
     this.dependencies.runTasks.startDetached(options, input.completion)
     return run
   }

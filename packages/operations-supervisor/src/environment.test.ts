@@ -132,6 +132,7 @@ describe('service environment isolation', () => {
       'GEO_AGENT_PLATFORM_MEMORY_BASE_DIR',
       'RIPGREP_PATH',
       'RG_PATH',
+      'GEO_AGENT_PLATFORM_RELEASE_ID',
     ] as const
     const source = Object.fromEntries(apiEnvironmentNames.map(name => [name, `value-for-${name}`]))
 

@@ -26,7 +26,7 @@ import type {
   TranscriptEntryKind,
 } from '../schemas/types.js'
 import type { VisibleArtifactResource } from './postgres/artifactRepository.js'
-import type { StoredFileEntry } from './fileStore.js'
+import type { FileLifecyclePort } from './fileLifecycleService.js'
 import type { MeteorologicalStore } from './postgres/meteorologicalStore.js'
 
 export interface AppendTranscriptInput {
@@ -42,9 +42,7 @@ export interface AppendTranscriptInput {
 
 export interface AgentRuntimeStore {
   readonly runtimeRoot: string
-  readonly runtimeFiles: {
-    list(threadId: string): Promise<StoredFileEntry[]>
-  }
+  readonly fileLifecycle: Pick<FileLifecyclePort, 'list'>
   readonly meteorology: Pick<MeteorologicalStore,
     | 'listMeteorologicalDatasets'
     | 'resolveMeteorologicalDataset'
@@ -111,7 +109,7 @@ export type RunLookupStore = Pick<AgentRuntimeStore, 'getRun'>
 
 export type ThreadContextStore = Pick<AgentRuntimeStore,
   | 'runtimeRoot'
-  | 'runtimeFiles'
+  | 'fileLifecycle'
   | 'activeTranscript'
   | 'appendCompaction'
   | 'appendTranscript'

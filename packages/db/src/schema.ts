@@ -458,6 +458,9 @@ export const platformFileObjects = pgTable('platform_file_objects', {
   requestIdx: uniqueIndex('idx_platform_file_objects_thread_request_unique')
     .on(table.threadId, table.requestId)
     .where(sql`${table.requestId} IS NOT NULL`),
+  readySourceIdx: uniqueIndex('idx_platform_file_objects_thread_source_ready_unique')
+    .on(table.threadId, table.sourceKey)
+    .where(sql`${table.status} = 'ready'`),
   threadStatusIdx: index('idx_platform_file_objects_thread_status_updated')
     .on(table.threadId, table.status, table.updatedAt),
   contentHashIdx: index('idx_platform_file_objects_content_hash').on(table.contentHash),

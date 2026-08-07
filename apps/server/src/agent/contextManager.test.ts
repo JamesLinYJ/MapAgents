@@ -86,9 +86,16 @@ describe('thread context management', () => {
       const thread = await store.createThread(session.id, '资源恢复')
       const run = await store.createRun(session.id, '沿用已上传文件继续分析', { threadId: thread.id })
       await new RuntimeFileStore(root).save(
-        await stageTestFile(root, 'sample.nc', Buffer.from([1, 2, 3])),
+        await stageTestFile(root, 'ghost.nc', Buffer.from([9, 9, 9])),
         thread.id,
       )
+      await store.fileLifecycle.upload({
+        file: await stageTestFile(root, 'sample.nc', Buffer.from([1, 2, 3])),
+        workspaceId: thread.workspaceId,
+        sessionId: thread.sessionId,
+        threadId: thread.id,
+        createdByUserId: thread.createdByUserId,
+      })
       await store.appendTranscript({
         threadId: thread.id,
         runId: run.id,
@@ -115,6 +122,8 @@ describe('thread context management', () => {
       const userIndex = assembled.messages.findIndex(message => message.content === run.userQuery)
       expect(resourceIndex).toBeGreaterThanOrEqual(0)
       expect(resourceIndex).toBeLessThan(userIndex)
+      expect(assembled.messages[resourceIndex]?.content).toContain('name=sample.nc')
+      expect(assembled.messages[resourceIndex]?.content).not.toContain('ghost.nc')
       expect(assembled.messages.some(message => message.role === 'tool' && message.content === fullResult)).toBe(true)
 
       expect(await store.activeTranscript(thread.id)).toHaveLength(3)

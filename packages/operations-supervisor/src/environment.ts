@@ -29,7 +29,7 @@ const PREFIXES: Record<OperationsServiceId, readonly string[]> = {
     'GATEWAY_', 'AMAP_', 'OPEN_METEO_', 'VALHALLA_', 'ROUTING_', 'TIANDITU_',
     'ENABLED_', 'DEVELOPER_', 'SEED_', 'SCHEDULED_', 'SANDBOX_', 'RUNTIME_',
     'MAX_', 'MAP_', 'USAGE_', 'AZURE_SPEECH_', 'GEO_AGENT_PLATFORM_MEMORY_', 'RIPGREP_', 'RG_',
-    'OTEL_', 'LOG_',
+    'GEO_AGENT_PLATFORM_RELEASE_', 'OTEL_', 'LOG_',
   ],
 }
 

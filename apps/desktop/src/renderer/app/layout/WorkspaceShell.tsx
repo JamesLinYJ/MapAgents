@@ -27,7 +27,7 @@ import {
 import { ExportWizard } from '../../features/export/ExportWizard'
 import { LoginScreen } from '../auth/LoginScreen'
 import {
-  createWorkspaceInspectorDetail,
+  createWorkspaceShellInspectorDetails,
   type WorkspaceInspectorDetailsInput,
 } from '../workspaceInspectorDetails'
 
@@ -93,11 +93,9 @@ export function WorkspaceShell({
   onConfirmExport,
   onAuthenticated,
 }: WorkspaceShellProps) {
-  const inspectorDetails = createWorkspaceInspectorDetail(panels.inspector.details)
-  const contentsDetails = createWorkspaceInspectorDetail({
-    ...panels.inspector.details,
-    panelMode: 'layerManager',
-  })
+  const { inspectorDetails, contentsDetails } = createWorkspaceShellInspectorDetails(
+    panels.inspector.details,
+  )
 
   return (
     <>

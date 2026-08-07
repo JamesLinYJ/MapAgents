@@ -23,9 +23,11 @@ export interface ConversationProjectionStats {
 /**
  * 对话实时流的可重建索引。
  *
- * `itemsById` 是 itemId 的唯一索引，`orderedIds` 只在插入或更新时维护，
+ * `itemsById` 是 itemId 的唯一索引，`orderedIds` 始终保持基础比较器顺序，
  * `transcriptEntryIndex` 负责 canonical 与 live overlay 的替换关系。调用方
- * 不需要在每个 run.item 到达时重新扫描、排序完整 ConversationItem[]。
+ * 不需要在每个 run.item 到达时重新扫描、排序完整 ConversationItem[]。关联
+ * 工具调用的 assistant preamble 只在物化快照时做稳定投影，不能破坏二分插入
+ * 依赖的全局有序不变量。
  */
 export class ConversationProjectionIndex {
   private readonly itemsById = new Map<string, ConversationItem>()
@@ -42,9 +44,6 @@ export class ConversationProjectionIndex {
     canonical: new Set<string>(),
     live: new Set<string>(),
   }
-  private readonly toolCallIndex = new Map<string, string>()
-  private readonly toolOutputIndex = new Map<string, string>()
-  private readonly assistantContentIndex = new Map<string, string>()
   private snapshot: ConversationItem[] | null = null
   private readonly counters: ConversationProjectionStats = {
     upserts: 0,
@@ -64,7 +63,7 @@ export class ConversationProjectionIndex {
   /** 返回稳定的展示快照；没有更新时复用同一个数组。 */
   toArray(): ConversationItem[] {
     if (!this.snapshot) {
-      this.snapshot = this.orderedIds.flatMap(itemId => {
+      this.snapshot = this.presentationOrderedIds().flatMap(itemId => {
         const item = this.itemsById.get(itemId)
         return item ? [item] : []
       })
@@ -166,8 +165,6 @@ export class ConversationProjectionIndex {
     this.activeSources.set(item.itemId, source)
     this.indexItem(item)
     this.insertOrderedId(item.itemId)
-    this.ensureAssistantContentBeforeToolCall(item.callId)
-    this.ensureAssistantContentBeforeToolCall(assistantContentForCall(item))
     this.snapshot = null
   }
 
@@ -211,10 +208,6 @@ export class ConversationProjectionIndex {
       members.add(item.itemId)
       this.transcriptEntryMembers.set(transcriptId, members)
     }
-    if (item.itemType === 'function_call' && item.callId) this.toolCallIndex.set(item.callId, item.itemId)
-    if (item.itemType === 'function_call_output' && item.callId) this.toolOutputIndex.set(item.callId, item.itemId)
-    const assistantCallId = assistantContentForCall(item)
-    if (assistantCallId) this.assistantContentIndex.set(assistantCallId, item.itemId)
   }
 
   private unindexItem(item: ConversationItem): void {
@@ -232,16 +225,6 @@ export class ConversationProjectionIndex {
       if (members && members.size === 0) this.transcriptEntryMembers.delete(transcriptId)
     }
     this.itemTranscriptEntry.delete(item.itemId)
-    if (item.callId && item.itemType === 'function_call' && this.toolCallIndex.get(item.callId) === item.itemId) {
-      this.toolCallIndex.delete(item.callId)
-    }
-    if (item.callId && item.itemType === 'function_call_output' && this.toolOutputIndex.get(item.callId) === item.itemId) {
-      this.toolOutputIndex.delete(item.callId)
-    }
-    const assistantCallId = assistantContentForCall(item)
-    if (assistantCallId && this.assistantContentIndex.get(assistantCallId) === item.itemId) {
-      this.assistantContentIndex.delete(assistantCallId)
-    }
   }
 
   private insertOrderedId(itemId: string): void {
@@ -267,18 +250,36 @@ export class ConversationProjectionIndex {
     this.orderedIds.splice(low, 0, itemId)
   }
 
-  private ensureAssistantContentBeforeToolCall(callId: string | null): void {
-    if (!callId) return
-    const messageId = this.assistantContentIndex.get(callId)
-    const toolId = this.toolCallIndex.get(callId)
-    if (!messageId || !toolId || messageId === toolId) return
-    const messageIndex = this.orderedIds.indexOf(messageId)
-    const toolIndex = this.orderedIds.indexOf(toolId)
-    if (messageIndex < 0 || toolIndex < 0 || messageIndex < toolIndex) return
-    this.orderedIds.splice(messageIndex, 1)
-    const nextToolIndex = this.orderedIds.indexOf(toolId)
-    this.orderedIds.splice(Math.max(0, nextToolIndex), 0, messageId)
-    this.snapshot = null
+  private presentationOrderedIds(): string[] {
+    const positions = new Map(this.orderedIds.map((itemId, index) => [itemId, index]))
+    const firstToolIdByCall = new Map<string, string>()
+    for (const itemId of this.orderedIds) {
+      const item = this.itemsById.get(itemId)
+      if (item?.itemType === 'function_call' && item.callId && !firstToolIdByCall.has(item.callId)) {
+        firstToolIdByCall.set(item.callId, itemId)
+      }
+    }
+
+    const preamblesByToolId = new Map<string, string[]>()
+    const movedPreambleIds = new Set<string>()
+    for (const itemId of this.orderedIds) {
+      const item = this.itemsById.get(itemId)
+      if (!item) continue
+      const callId = assistantContentForCall(item)
+      const toolId = callId ? firstToolIdByCall.get(callId) : undefined
+      if (!toolId || (positions.get(itemId) ?? -1) < (positions.get(toolId) ?? -1)) continue
+      const preambles = preamblesByToolId.get(toolId) ?? []
+      preambles.push(itemId)
+      preamblesByToolId.set(toolId, preambles)
+      movedPreambleIds.add(itemId)
+    }
+
+    const projected: string[] = []
+    for (const itemId of this.orderedIds) {
+      if (movedPreambleIds.has(itemId)) continue
+      projected.push(...preamblesByToolId.get(itemId) ?? [], itemId)
+    }
+    return projected
   }
 }
 

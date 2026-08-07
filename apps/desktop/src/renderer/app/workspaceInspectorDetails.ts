@@ -133,6 +133,18 @@ export function createLayerManagerDetail(
   }
 }
 
+export function createWorkspaceShellInspectorDetails(
+  input: WorkspaceInspectorDetailsInput,
+): {
+  inspectorDetails: WorkspaceInspectorDetail
+  contentsDetails: LayerManagerDetail
+} {
+  return {
+    inspectorDetails: createWorkspaceInspectorDetail(input),
+    contentsDetails: createLayerManagerDetail(input, false),
+  }
+}
+
 export function createWorkspaceInspectorDetail(
   input: WorkspaceInspectorDetailsInput,
 ): WorkspaceInspectorDetail {

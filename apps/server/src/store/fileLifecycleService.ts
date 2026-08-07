@@ -14,6 +14,7 @@ import type { StagedFileInput, StoredFileEntry, RuntimeFileStore } from './fileS
 import { describeStagedFile } from './fileStore.js'
 import type {
   FileObjectOwner,
+  FileObjectPromotionResult,
   FileObjectRecord,
   FileObjectRepository,
 } from './postgres/fileObjectRepository.js'
@@ -40,10 +41,9 @@ export class FileLifecycleService implements FileLifecyclePort {
   constructor(
     private readonly repository: Pick<
       FileObjectRepository,
-      'reservePending' | 'markReady' | 'markPendingError' | 'markDeleted' | 'retirePreviousVersions' | 'get' | 'listReady'
-      | 'listAll' | 'markFailed'
+      'reservePending' | 'promoteReadyAndRetire' | 'markPendingError' | 'markDeleted' | 'get' | 'listReady'
     >,
-    private readonly files: Pick<RuntimeFileStore, 'publish' | 'delete' | 'cloneFile'>,
+    private readonly files: Pick<RuntimeFileStore, 'publish' | 'delete' | 'cloneFile' | 'purgeThreadFiles'>,
   ) {}
 
   async upload(input: FileUploadInput): Promise<StoredFileEntry> {
@@ -66,16 +66,14 @@ export class FileLifecycleService implements FileLifecyclePort {
     })
 
     if (pending.status === 'ready') {
-      await this.removeRetiredFiles(pending)
-      return toStoredFileEntry(pending)
+      const promotion = await this.repository.promoteReadyAndRetire(pending.fileId)
+      await this.removeRetiredFiles(promotion.retired)
+      return toStoredFileEntry(promotion.ready)
     }
 
     try {
       // 文件 ID 来自 pending 记录，重试时再次写入同一 CAS 对象和 metadata。
       await this.files.publish(input.file, input.threadId, { fileId: pending.fileId }, normalized.sourceRelativePath)
-      const ready = await this.repository.markReady(pending.fileId)
-      await this.removeRetiredFiles(ready)
-      return toStoredFileEntry(ready)
     } catch (error) {
       // pending 保留在账本中，下一次相同 requestId 可以继续发布；这里不吞掉
       // 原始错误，也不返回“上传成功”的 fallback。
@@ -89,6 +87,23 @@ export class FileLifecycleService implements FileLifecyclePort {
       }
       throw error
     }
+
+    let promotion: FileObjectPromotionResult
+    try {
+      promotion = await this.repository.promoteReadyAndRetire(pending.fileId)
+    } catch (error) {
+      try {
+        await this.repository.markPendingError(pending.fileId, errorMessage(error))
+      } catch (stateError) {
+        throw new AggregateError(
+          [error, stateError],
+          `文件 '${pending.fileId}' 提交失败，且无法记录 pending 失败状态。`,
+        )
+      }
+      throw error
+    }
+    await this.removeRetiredFiles(promotion.retired)
+    return toStoredFileEntry(promotion.ready)
   }
 
   async list(threadId: string): Promise<StoredFileEntry[]> {
@@ -139,8 +154,9 @@ export class FileLifecycleService implements FileLifecyclePort {
       })
       try {
         await this.files.cloneFile(source.fileId, sourceThreadId, targetThreadId, pending.fileId)
-        const ready = await this.repository.markReady(pending.fileId)
-        copied.push(toStoredFileEntry(ready))
+        const promotion = await this.repository.promoteReadyAndRetire(pending.fileId)
+        await this.removeRetiredFiles(promotion.retired)
+        copied.push(toStoredFileEntry(promotion.ready))
       } catch (error) {
         await this.repository.markPendingError(pending.fileId, errorMessage(error))
         throw error
@@ -150,19 +166,11 @@ export class FileLifecycleService implements FileLifecyclePort {
   }
 
   async purgeThreadFiles(threadId: string): Promise<void> {
-    const records = await this.repository.listAll(threadId)
-    for (const record of records) {
-      if (record.status === 'pending') {
-        await this.repository.markFailed(record.fileId, '所属线程已清理。')
-      } else if (record.status === 'ready') {
-        await this.repository.markDeleted(record.fileId)
-      }
-      await this.files.delete(record.fileId, threadId)
-    }
+    // 调用方必须先提交线程的数据库 purge；这里仅幂等清理物理投影。
+    await this.files.purgeThreadFiles(threadId)
   }
 
-  private async removeRetiredFiles(record: FileObjectRecord): Promise<void> {
-    const retired = await this.repository.retirePreviousVersions(record)
+  private async removeRetiredFiles(retired: readonly FileObjectRecord[]): Promise<void> {
     for (const previous of retired) {
       await this.files.delete(previous.fileId, previous.threadId)
     }

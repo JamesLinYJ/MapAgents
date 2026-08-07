@@ -35,6 +35,7 @@
     "test:supervisor": "npm run test --workspace @geo-agent-platform/operations-supervisor",
     "test:server": "npm run test --workspace geo-agent-server",
     "test:postgis": "node scripts/run-postgis-integration.mjs",
+    "test:runtime-release": "node --test scripts/runtime-service-artifact.test.mjs",
     "test:desktop": "npm run test --workspace @geo-agent-platform/desktop",
     "test:e2e": "npm run build --workspace @geo-agent-platform/shared-types && npm run build --workspace @geo-agent-platform/conversation-presentation && npm run build --workspace @geo-agent-platform/operations-supervisor && npm run build --workspace @geo-agent-platform/desktop && playwright test",
     "test:e2e:headed": "npm run test:e2e -- --headed",
@@ -45,6 +46,7 @@
     "release:runtime": "node scripts/create-runtime-service-artifact.mjs --build",
     "verify:runtime": "node scripts/verify-runtime-service-artifact.mjs",
     "generate:architecture-manifest": "npm run build --workspace @geo-agent-platform/shared-types && npm run build --workspace geo-agent-server && node scripts/generate-architecture-manifest.mjs",
+    "migrate:file-lifecycle": "node scripts/migrate-runtime-file-metadata.mjs",
     "reset:conversations": "node scripts/reset-conversation-store.mjs --confirm"
   },
   "dependencies": {

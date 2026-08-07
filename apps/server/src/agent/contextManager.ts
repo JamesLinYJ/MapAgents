@@ -317,7 +317,7 @@ async function buildThreadResourceMessage(
   const query = stringField(currentUserEntry?.payload.content) ?? ''
   if (!/(继续|沿用|复用|之前|刚才|上次|已有|已上传|文件|图层|结果|产物|引用|报告)/u.test(query)) return null
 
-  const files = await store.runtimeFiles.list(threadId)
+  const files = await store.fileLifecycle.list(threadId)
   const allRuns = store.listRunsForThread(threadId)
   const currentRun = currentRunId
     ? allRuns.find(run => run.id === currentRunId)

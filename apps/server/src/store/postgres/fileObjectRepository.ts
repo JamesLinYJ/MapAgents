@@ -12,7 +12,7 @@
 import { and, desc, eq, ne, or } from 'drizzle-orm'
 
 import type { Database } from '../../db/connection.js'
-import { platformFileObjects } from '../../db/schema.js'
+import { platformFileObjects, platformThreads } from '../../db/schema.js'
 import { decodeRequiredTimestamp } from '../../db/valueDecoders.js'
 import { StoreConflictError, StoreNotFoundError } from '../storeErrors.js'
 
@@ -44,6 +44,11 @@ export interface FileObjectRecord extends PendingFileObjectInput {
   readyAt: string | null
   deletedAt: string | null
   updatedAt: string
+}
+
+export interface FileObjectPromotionResult {
+  ready: FileObjectRecord
+  retired: FileObjectRecord[]
 }
 
 type FileObjectRow = typeof platformFileObjects.$inferSelect
@@ -99,24 +104,89 @@ export class FileObjectRepository {
     return existing
   }
 
-  async markReady(fileId: string): Promise<FileObjectRecord> {
-    const updated = await this.db.update(platformFileObjects)
-      .set({
-        status: 'ready',
-        errorMessage: null,
-        readyAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(and(
-        eq(platformFileObjects.fileId, fileId),
-        eq(platformFileObjects.status, 'pending'),
-      ))
-      .returning()
-    if (updated[0]) return mapFileObject(updated[0])
-    const current = await this.get(fileId)
-    if (current.status === 'ready') return current
-    if (current.status === 'deleted') throw new StoreConflictError(`文件 '${fileId}' 已删除，不能标记为 ready。`)
-    throw new StoreConflictError(`文件 '${fileId}' 未能完成 ready 状态提交。`)
+  /**
+   * 在一个事务中提交当前版本并退役同一来源的旧版本。线程行是稳定锁，
+   * 因而同一线程内两个并发上传不会互相把对方都标记为 deleted。
+   */
+  async promoteReadyAndRetire(fileId: string): Promise<FileObjectPromotionResult> {
+    return this.db.transaction(async tx => {
+      const initialRows = await tx.select()
+        .from(platformFileObjects)
+        .where(eq(platformFileObjects.fileId, fileId))
+        .limit(1)
+      const initial = initialRows[0]
+      if (!initial) throw new StoreNotFoundError(`文件 '${fileId}' 不存在。`)
+
+      const threadRows = await tx.select({ threadId: platformThreads.threadId })
+        .from(platformThreads)
+        .where(eq(platformThreads.threadId, initial.threadId))
+        .for('update')
+        .limit(1)
+      if (!threadRows[0]) throw new StoreNotFoundError(`线程 '${initial.threadId}' 不存在。`)
+
+      const currentRows = await tx.select()
+        .from(platformFileObjects)
+        .where(eq(platformFileObjects.fileId, fileId))
+        .for('update')
+        .limit(1)
+      const currentRow = currentRows[0]
+      if (!currentRow) throw new StoreNotFoundError(`文件 '${fileId}' 不存在。`)
+      const current = mapFileObject(currentRow)
+      if (current.status === 'deleted') {
+        throw new StoreConflictError(`文件 '${fileId}' 已删除，不能标记为 ready。`)
+      }
+
+      const previousRows = await tx.select()
+        .from(platformFileObjects)
+        .where(and(
+          eq(platformFileObjects.threadId, current.threadId),
+          eq(platformFileObjects.sourceKey, current.sourceKey),
+          or(
+            eq(platformFileObjects.status, 'ready'),
+            eq(platformFileObjects.status, 'deleted'),
+          ),
+          ne(platformFileObjects.fileId, current.fileId),
+        ))
+
+      if (current.status === 'ready') {
+        return {
+          ready: current,
+          retired: previousRows.map(mapFileObject),
+        }
+      }
+
+      const now = new Date()
+      await tx.update(platformFileObjects)
+        .set({
+          status: 'deleted',
+          deletedAt: now,
+          updatedAt: now,
+        })
+        .where(and(
+          eq(platformFileObjects.threadId, current.threadId),
+          eq(platformFileObjects.sourceKey, current.sourceKey),
+          eq(platformFileObjects.status, 'ready'),
+          ne(platformFileObjects.fileId, current.fileId),
+        ))
+
+      const updated = await tx.update(platformFileObjects)
+        .set({
+          status: 'ready',
+          errorMessage: null,
+          readyAt: now,
+          updatedAt: now,
+        })
+        .where(and(
+          eq(platformFileObjects.fileId, current.fileId),
+          eq(platformFileObjects.status, 'pending'),
+        ))
+        .returning()
+      if (!updated[0]) throw new StoreConflictError(`文件 '${fileId}' 未能完成 ready 状态提交。`)
+      return {
+        ready: mapFileObject(updated[0]),
+        retired: previousRows.map(mapFileObject),
+      }
+    })
   }
 
   async markFailed(fileId: string, message: string): Promise<FileObjectRecord> {
@@ -167,34 +237,6 @@ export class FileObjectRepository {
     const current = await this.get(fileId)
     if (current.status === 'deleted') return current
     throw new StoreConflictError(`文件 '${fileId}' 当前状态为 '${current.status}'，不能删除。`)
-  }
-
-  async retirePreviousVersions(record: FileObjectRecord): Promise<FileObjectRecord[]> {
-    const previous = await this.db.select()
-      .from(platformFileObjects)
-      .where(and(
-        eq(platformFileObjects.threadId, record.threadId),
-        eq(platformFileObjects.sourceKey, record.sourceKey),
-        or(
-          eq(platformFileObjects.status, 'ready'),
-          eq(platformFileObjects.status, 'deleted'),
-        ),
-        ne(platformFileObjects.fileId, record.fileId),
-      ))
-    if (!previous.length) return []
-    await this.db.update(platformFileObjects)
-      .set({
-        status: 'deleted',
-        deletedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(and(
-        eq(platformFileObjects.threadId, record.threadId),
-        eq(platformFileObjects.sourceKey, record.sourceKey),
-        eq(platformFileObjects.status, 'ready'),
-        ne(platformFileObjects.fileId, record.fileId),
-      ))
-    return previous.map(mapFileObject)
   }
 
   async get(fileId: string): Promise<FileObjectRecord> {

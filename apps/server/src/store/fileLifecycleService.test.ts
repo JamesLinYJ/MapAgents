@@ -29,6 +29,7 @@ describe('FileLifecycleService', () => {
       publish,
       delete: vi.fn().mockResolvedValue(true),
       cloneFile: vi.fn(),
+      purgeThreadFiles: vi.fn(),
     })
     const input = uploadInput()
 
@@ -52,6 +53,7 @@ describe('FileLifecycleService', () => {
       publish,
       delete: vi.fn().mockResolvedValue(true),
       cloneFile: vi.fn(),
+      purgeThreadFiles: vi.fn(),
     })
 
     const result = await service.upload(uploadInput())
@@ -68,6 +70,7 @@ describe('FileLifecycleService', () => {
       publish: vi.fn(),
       delete: remove,
       cloneFile: vi.fn(),
+      purgeThreadFiles: vi.fn(),
     })
 
     await expect(service.delete(record.fileId, record.threadId)).resolves.toBe(true)
@@ -84,6 +87,7 @@ describe('FileLifecycleService', () => {
       publish: vi.fn(),
       delete: remove,
       cloneFile: vi.fn(),
+      purgeThreadFiles: vi.fn(),
     })
 
     await expect(service.delete(record.fileId, record.threadId)).resolves.toBe(true)
@@ -100,6 +104,7 @@ describe('FileLifecycleService', () => {
       publish: vi.fn(),
       delete: vi.fn().mockResolvedValue(true),
       cloneFile,
+      purgeThreadFiles: vi.fn(),
     })
 
     const copied = await service.cloneThreadFiles('thread_1', 'thread_2')
@@ -111,24 +116,51 @@ describe('FileLifecycleService', () => {
     expect(repository.records.filter(record => record.threadId === 'thread_2')[0]?.status).toBe('ready')
   })
 
-  it('marks all thread records deleted before purging physical metadata', async () => {
+  it('purges only the physical thread projection after the database lifecycle owns deletion', async () => {
     const repository = new FakeFileRepository()
     const ready = repository.seed(uploadInput())
     ready.status = 'ready'
     const pending = repository.seed({ ...uploadInput(), requestId: 'request_2' })
-    const remove = vi.fn().mockResolvedValue(true)
+    const purgeThreadFiles = vi.fn().mockResolvedValue(undefined)
     const service = new FileLifecycleService(repository, {
       publish: vi.fn(),
-      delete: remove,
+      delete: vi.fn(),
       cloneFile: vi.fn(),
+      purgeThreadFiles,
     })
 
     await service.purgeThreadFiles('thread_1')
 
-    expect(ready.status).toBe('deleted')
-    expect(pending.status).toBe('deleted')
-    expect(remove).toHaveBeenCalledWith(ready.fileId, 'thread_1')
-    expect(remove).toHaveBeenCalledWith(pending.fileId, 'thread_1')
+    expect(ready.status).toBe('ready')
+    expect(pending.status).toBe('pending')
+    expect(purgeThreadFiles).toHaveBeenCalledWith('thread_1')
+  })
+
+  it('uses one promotion boundary so concurrent source versions leave exactly one ready record', async () => {
+    const repository = new FakeFileRepository()
+    const service = new FileLifecycleService(repository, {
+      publish: vi.fn().mockResolvedValue(undefined),
+      delete: vi.fn().mockResolvedValue(true),
+      cloneFile: vi.fn(),
+      purgeThreadFiles: vi.fn(),
+    })
+    const first = uploadInput()
+    const secondContent = Buffer.from('new-file-content')
+    const second = {
+      ...uploadInput(),
+      requestId: 'request_2',
+      file: {
+        ...uploadInput().file,
+        contentHash: createHash('sha256').update(secondContent).digest('hex'),
+        sizeBytes: secondContent.byteLength,
+      },
+    }
+
+    await Promise.all([service.upload(first), service.upload(second)])
+
+    const sameSource = repository.records.filter(record => record.sourceKey === 'sample.nc')
+    expect(sameSource.filter(record => record.status === 'ready')).toHaveLength(1)
+    expect(sameSource.filter(record => record.status === 'deleted')).toHaveLength(1)
   })
 })
 
@@ -154,13 +186,24 @@ class FakeFileRepository {
     return record
   }
 
-  async markReady(fileId: string): Promise<FileObjectRecord> {
+  async promoteReadyAndRetire(fileId: string): Promise<{ ready: FileObjectRecord; retired: FileObjectRecord[] }> {
     const record = this.require(fileId)
+    const retired = this.records.filter(candidate => (
+      candidate.fileId !== record.fileId
+      && candidate.threadId === record.threadId
+      && candidate.sourceKey === record.sourceKey
+      && (candidate.status === 'ready' || candidate.status === 'deleted')
+    ))
+    for (const previous of retired) {
+      previous.status = 'deleted'
+      previous.deletedAt = new Date().toISOString()
+      previous.updatedAt = previous.deletedAt
+    }
     record.status = 'ready'
     record.errorMessage = null
     record.readyAt = new Date().toISOString()
     record.updatedAt = record.readyAt
-    return record
+    return { ready: record, retired }
   }
 
   async markPendingError(fileId: string, message: string): Promise<FileObjectRecord> {
@@ -176,15 +219,6 @@ class FakeFileRepository {
     record.updatedAt = record.deletedAt
     return record
   }
-
-  async markFailed(fileId: string, message: string): Promise<FileObjectRecord> {
-    const record = this.require(fileId)
-    record.status = 'deleted'
-    record.errorMessage = message
-    return record
-  }
-
-  async retirePreviousVersions(_record: FileObjectRecord): Promise<FileObjectRecord[]> { return [] }
 
   async get(fileId: string): Promise<FileObjectRecord> {
     return this.require(fileId)

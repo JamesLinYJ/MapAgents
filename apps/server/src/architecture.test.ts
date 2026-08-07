@@ -231,16 +231,13 @@ describe('platform architecture', () => {
       path.join(repositoryRoot, 'tests'),
     ]
     const files = await collectRepositoryTextFiles(roots)
-    const normalizedCodename = PRODUCT_CODENAME.toLocaleLowerCase('en-US')
-    const offenders: string[] = []
-
-    for (const file of files) {
-      if (path.resolve(file) === path.resolve(productIdentityFile)) continue
+    const normalizedCodename = PRODUCT_CODENAME.toLowerCase()
+    const offenders = (await Promise.all(files.map(async (file) => {
+      if (path.resolve(file) === path.resolve(productIdentityFile)) return null
       const source = await readFile(file, 'utf8')
-      if (source.toLocaleLowerCase('en-US').includes(normalizedCodename)) {
-        offenders.push(path.relative(repositoryRoot, file).replace(/\\/gu, '/'))
-      }
-    }
+      if (!source.toLowerCase().includes(normalizedCodename)) return null
+      return path.relative(repositoryRoot, file).replace(/\\/gu, '/')
+    }))).filter((file): file is string => file !== null)
 
     expect(offenders).toEqual([])
   })
@@ -338,6 +335,7 @@ describe('platform architecture', () => {
       '007_model_result_cache.sql',
       '008_tool_result_commit_idempotency.sql',
       '009_file_object_lifecycle.sql',
+      '010_file_ready_source_invariant.sql',
     ])
 
     const operationalSourceFiles = await collectProductionFiles([
@@ -1158,7 +1156,7 @@ describe('platform architecture', () => {
     ]
 
     expect(source.includes('store.meteorology.listMeteorologicalDatasets')).toBe(true)
-    expect(source.includes('store.meteorology.createMeteorologicalDataset')).toBe(true)
+    expect(source.includes('store.createMeteorologicalDataset')).toBe(true)
     expect(source.includes('store.meteorology.getMeteorologicalJob')).toBe(true)
     for (const token of forbidden) {
       expect(source.includes(token), token).toBe(false)

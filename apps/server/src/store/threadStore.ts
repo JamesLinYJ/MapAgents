@@ -61,7 +61,7 @@ export class ThreadStore {
     private readonly repositories: ThreadPersistencePorts,
     private readonly runReader: Pick<RunRepository, 'listRunsForThread'>,
     private readonly objectReferences: ObjectReferenceRepository,
-    private readonly files: Pick<FileLifecyclePort, 'cloneThreadFiles' | 'list' | 'delete' | 'purgeThreadFiles'>,
+    private readonly files: Pick<FileLifecyclePort, 'cloneThreadFiles' | 'purgeThreadFiles'>,
     private readonly events: ThreadStoreEvents,
   ) {}
 
@@ -288,11 +288,15 @@ export class ThreadStore {
 
   async purge(threadId: string): Promise<void> {
     const trashed = await this.repositories.lifecycle.getTrashedThread(threadId)
-    await this.files.purgeThreadFiles(threadId)
     const session = await this.repositories.lifecycle.purgeThread(threadId, trashed.thread.sessionId)
     this.sessionStore.acceptPersisted(session)
     this.index.deleteRunsForThread(threadId)
-    await this.payloadStore.purgeThreadPayload(threadId)
+    // PostgreSQL 已经提交资源删除；物理投影随后幂等清理。清理失败不得把
+    // 尚未提交的数据库事实伪装成可恢复状态。
+    await Promise.all([
+      this.payloadStore.purgeThreadPayload(threadId),
+      this.files.purgeThreadFiles(threadId),
+    ])
     const references = await this.objectReferences.listReferencedObjectHashes()
     await this.payloadStore.garbageCollectObjects(references)
   }

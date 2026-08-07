@@ -15,6 +15,10 @@ import {
   conversationJumpAnchorId,
 } from '../features/conversation/conversationJumpItems'
 import { conversationJumpRailReducer } from '../features/conversation/conversationJumpRailState'
+import {
+  CONVERSATION_TIMELINE_GAP_PX,
+  firstVisibleConversationIndex,
+} from '../features/conversation/conversationTimelineVirtualization'
 import type { ConversationEntry } from '@geo-agent-platform/conversation-presentation'
 
 describe('buildConversationJumpItems', () => {
@@ -80,6 +84,22 @@ describe('conversationJumpRailReducer', () => {
       hovered: false,
       pinned: false,
     })
+  })
+})
+
+describe('conversation timeline virtualization', () => {
+  it('keeps the timeline spacing used by the connector rail', () => {
+    expect(CONVERSATION_TIMELINE_GAP_PX).toBe(16)
+  })
+
+  it('ignores overscanned rows that are already above the viewport', () => {
+    const virtualItems = [
+      { index: 0, end: 112 },
+      { index: 1, end: 240 },
+      { index: 2, end: 368 },
+    ]
+
+    expect(firstVisibleConversationIndex(virtualItems, 240)).toBe(2)
   })
 })
 

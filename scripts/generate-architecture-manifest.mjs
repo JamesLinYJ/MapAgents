@@ -31,9 +31,16 @@ const meteorologyManifest = JSON.parse(await readFile(
 const desktopMenuCommands = readDesktopMenuCommands()
 
 if (providerIds.length === 0) throw new Error('架构清单无法生成：模型 Provider registry 为空。')
-if (wsCommands.length !== wsRegistry.registeredTypes().length) {
+const registeredWsCommands = wsRegistry.registeredTypes()
+const sharedWsSet = [...wsCommands].sort()
+const registeredWsSet = [...registeredWsCommands].sort()
+if (JSON.stringify(sharedWsSet) !== JSON.stringify(registeredWsSet)) {
+  const missingFromServer = sharedWsSet.filter(command => !registeredWsSet.includes(command))
+  const missingFromShared = registeredWsSet.filter(command => !sharedWsSet.includes(command))
   throw new Error(
-    `架构清单无法生成：共享 WS 命令 ${wsCommands.length} 个，Server registry ${wsRegistry.registeredTypes().length} 个。`,
+    '架构清单无法生成：共享 WS 命令与 Server registry 不一致。'
+    + ` Server 缺少：${missingFromServer.join('、') || '无'}；`
+    + `共享契约缺少：${missingFromShared.join('、') || '无'}。`,
   )
 }
 const workerToolNames = workerCatalog.tools.map(tool => tool.toolName).sort()

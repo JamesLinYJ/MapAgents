@@ -109,6 +109,7 @@ export function parseDevLauncherCommand(arguments_: readonly string[]): DevLaunc
 
 export function prerequisiteBuilds(): ReadonlyArray<readonly [string, readonly string[]]> {
   return [
+    ['npm', ['run', 'build:dev', '--workspace', '@geo-agent-platform/db']],
     ['npm', ['run', 'build:dev', '--workspace', '@geo-agent-platform/shared-types']],
     ['npm', ['run', 'build:dev', '--workspace', '@geo-agent-platform/conversation-presentation']],
     ['npm', ['run', 'build:dev', '--workspace', '@geo-agent-platform/operations-supervisor']],

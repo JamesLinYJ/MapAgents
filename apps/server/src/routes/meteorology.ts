@@ -150,14 +150,10 @@ export function meteorologyRoutes(
         updatedAt: now,
       }
       try {
-        await store.meteorology.createMeteorologicalDataset(dataset)
-        await store.updateSession(sessionId, { latestMeteorologicalDatasetId: dataset.datasetId })
+        await store.createMeteorologicalDataset(dataset)
       } catch (error) {
-        // The upload is a published file object, while the dataset index and
-        // latest-session pointer are a separate transaction boundary. If the
-        // index cannot be completed, explicitly compensate the published
-        // object through the lifecycle service so it cannot remain visible as
-        // an unreferenced ready file.
+        // Dataset 与会话最新指针在同一事务中提交。事务回滚后显式补偿已经
+        // 发布的文件对象，避免留下无索引的 ready 上传。
         try {
           await files.delete(stored.id, threadId)
         } catch (cleanupError) {

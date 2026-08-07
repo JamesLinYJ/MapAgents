@@ -8,8 +8,12 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
+import path from 'node:path'
+
 import type { Database } from '../src/db/connection.js'
 import type { ArtifactRef } from '../src/schemas/types.js'
+import { FileLifecycleService } from '../src/store/fileLifecycleService.js'
+import { RuntimeFileStore } from '../src/store/fileStore.js'
 import { PlatformPersistenceFacade } from '../src/store/platformPersistenceFacade.js'
 import { PlatformEventHub } from '../src/store/platformEventHub.js'
 import type {
@@ -18,6 +22,11 @@ import type {
   ArtifactRepository,
   VisibleArtifactQuery,
 } from '../src/store/postgres/artifactRepository.js'
+import type {
+  FileObjectPromotionResult,
+  FileObjectRecord,
+  PendingFileObjectInput,
+} from '../src/store/postgres/fileObjectRepository.js'
 import { InMemoryConversationPersistence } from './inMemoryConversationPersistence.js'
 
 const eventHubs = new WeakMap<PlatformPersistenceFacade, PlatformEventHub>()
@@ -75,16 +84,105 @@ class InMemoryArtifactRepository implements ArtifactRepository {
 export class PersistenceFacadeTestHarness {
   readonly conversationPersistence = new InMemoryConversationPersistence()
   readonly artifactRepository = new InMemoryArtifactRepository()
+  readonly fileRepository = new InMemoryFileObjectRepository()
 
   create(storageRoot: string, db: Database = noOpDatabase()): PlatformPersistenceFacade {
     const events = new PlatformEventHub()
+    const runtimeRoot = ['sessions', 'conversations'].includes(path.basename(storageRoot))
+      ? path.dirname(storageRoot)
+      : storageRoot
+    const runtimeFiles = new RuntimeFileStore(runtimeRoot)
     const store = new PlatformPersistenceFacade(db, storageRoot, {
       conversationPersistence: this.conversationPersistence,
       artifactRepository: this.artifactRepository,
       events,
+      runtimeFiles,
+      fileLifecycle: new FileLifecycleService(this.fileRepository, runtimeFiles),
     })
     eventHubs.set(store, events)
     return store
+  }
+}
+
+class InMemoryFileObjectRepository {
+  private readonly records = new Map<string, FileObjectRecord>()
+
+  async reservePending(input: PendingFileObjectInput): Promise<FileObjectRecord> {
+    const replay = input.requestId
+      ? [...this.records.values()].find(record => (
+          record.threadId === input.threadId && record.requestId === input.requestId
+        ))
+      : null
+    if (replay) return structuredClone(replay)
+    const now = new Date().toISOString()
+    const record: FileObjectRecord = {
+      ...input,
+      status: 'pending',
+      errorMessage: null,
+      createdAt: now,
+      readyAt: null,
+      deletedAt: null,
+      updatedAt: now,
+    }
+    this.records.set(record.fileId, record)
+    return structuredClone(record)
+  }
+
+  async promoteReadyAndRetire(fileId: string): Promise<FileObjectPromotionResult> {
+    const current = this.require(fileId)
+    if (current.status === 'deleted') throw new Error(`文件 '${fileId}' 已删除`)
+    const retired = [...this.records.values()].filter(record => (
+      record.fileId !== current.fileId
+      && record.threadId === current.threadId
+      && record.sourceKey === current.sourceKey
+      && (record.status === 'ready' || record.status === 'deleted')
+    ))
+    const now = new Date().toISOString()
+    for (const previous of retired) {
+      previous.status = 'deleted'
+      previous.deletedAt = now
+      previous.updatedAt = now
+    }
+    current.status = 'ready'
+    current.errorMessage = null
+    current.readyAt ??= now
+    current.updatedAt = now
+    return {
+      ready: structuredClone(current),
+      retired: retired.map(record => structuredClone(record)),
+    }
+  }
+
+  async markPendingError(fileId: string, message: string): Promise<FileObjectRecord> {
+    const record = this.require(fileId)
+    if (record.status === 'pending') record.errorMessage = message
+    return structuredClone(record)
+  }
+
+  async markDeleted(fileId: string): Promise<FileObjectRecord> {
+    const record = this.require(fileId)
+    if (record.status === 'ready') {
+      record.status = 'deleted'
+      record.deletedAt = new Date().toISOString()
+      record.updatedAt = record.deletedAt
+    }
+    return structuredClone(record)
+  }
+
+  async get(fileId: string): Promise<FileObjectRecord> {
+    return structuredClone(this.require(fileId))
+  }
+
+  async listReady(threadId: string): Promise<FileObjectRecord[]> {
+    return [...this.records.values()]
+      .filter(record => record.threadId === threadId && record.status === 'ready')
+      .map(record => structuredClone(record))
+  }
+
+  private require(fileId: string): FileObjectRecord {
+    const record = this.records.get(fileId)
+    if (!record) throw new Error(`文件 '${fileId}' 不存在`)
+    return record
   }
 }
 

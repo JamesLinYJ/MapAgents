@@ -24,6 +24,7 @@ const migrationIds = [
   '007_model_result_cache',
   '008_tool_result_commit_idempotency',
   '009_file_object_lifecycle',
+  '010_file_ready_source_invariant',
 ] as const
 
 function currentMigrations() {
@@ -74,7 +75,7 @@ describe('verifyDatabaseSchemaCompatibility', () => {
   it('拒绝让旧服务连接未来版本数据库', async () => {
     const db = databaseWithRows(
       [{ table_name: 'platform_schema_migrations' }],
-      [...currentMigrations(), { migration_id: '010_future_change', checksum: 'b'.repeat(64) }],
+      [...currentMigrations(), { migration_id: '011_future_change', checksum: 'b'.repeat(64) }],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))

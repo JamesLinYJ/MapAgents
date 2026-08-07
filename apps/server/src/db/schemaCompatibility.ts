@@ -25,9 +25,10 @@ export const REQUIRED_MIGRATIONS = [
   '007_model_result_cache',
   '008_tool_result_commit_idempotency',
   '009_file_object_lifecycle',
+  '010_file_ready_source_invariant',
 ] as const
 
-export const CURRENT_DATABASE_SCHEMA_VERSION = 9
+export const CURRENT_DATABASE_SCHEMA_VERSION = 10
 
 const migrationRowsSchema = z.array(z.object({
   migration_id: z.string().min(1),
@@ -48,7 +49,7 @@ export async function verifyDatabaseSchemaCompatibility(
   if (typeof tableName !== 'string') {
     throw new Error(
       '数据库尚未启用版本跟踪。请重建开发数据库并应用 '
-      + 'infra/migrations/000_schema_migrations.sql 至 009_file_object_lifecycle.sql '
+      + 'infra/migrations/000_schema_migrations.sql 至 010_file_ready_source_invariant.sql '
       + '后重新启动。',
     )
   }

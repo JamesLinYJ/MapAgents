@@ -4,11 +4,14 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "predev": "npm run build:dev --workspace @geo-agent-platform/db",
     "dev": "tsx watch src/main.ts",
     "dev:supervised": "tsx src/main.ts",
     "build": "npm run build --workspace @geo-agent-platform/db && node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
     "start": "node dist/main.js",
+    "pretest": "npm run build:dev --workspace @geo-agent-platform/db",
     "test": "node scripts/run-vitest-with-env.mjs run src",
+    "pretest:watch": "npm run build:dev --workspace @geo-agent-platform/db",
     "test:watch": "node scripts/run-vitest-with-env.mjs src"
   },
   "dependencies": {

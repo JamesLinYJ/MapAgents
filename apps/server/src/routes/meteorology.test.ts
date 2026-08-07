@@ -53,7 +53,7 @@ describe('meteorology routes', () => {
     expect(rows.map(row => row.datasetId)).toEqual(['dataset-b'])
   })
 
-  it('compensates a published file when dataset indexing fails', async () => {
+  it('compensates a published file when the dataset/session transaction fails', async () => {
     const deleted: string[] = []
     const store = {
       getSession: () => ({
@@ -69,10 +69,7 @@ describe('meteorology routes', () => {
         createdByUserId: 'user-test',
         visibility: 'workspace',
       }),
-      meteorology: {
-        createMeteorologicalDataset: async () => { throw new Error('dataset index failed') },
-      },
-      updateSession: async () => { throw new Error('session pointer must not run') },
+      createMeteorologicalDataset: async () => { throw new Error('dataset/session transaction failed') },
     } as unknown as PlatformPersistenceFacade
     const files: FileLifecyclePort = {
       upload: async () => ({

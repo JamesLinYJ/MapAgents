@@ -268,7 +268,10 @@ export async function createAppContainer(input: {
   const workerContractDigest = await validateWorkerContracts(env, toolRegistry)
   const capabilities = buildRuntimeCapabilities({
     workerContractDigest,
-    environment: { GEO_AGENT_PLATFORM_RELEASE_ID: env.GEO_AGENT_PLATFORM_RELEASE_ID },
+    environment: {
+      GEO_AGENT_PLATFORM_RELEASE_ID: env.GEO_AGENT_PLATFORM_RELEASE_ID,
+      GEO_AGENT_PLATFORM_ROOT: process.env.GEO_AGENT_PLATFORM_ROOT,
+    },
   })
   await automationDefinitionService.initialize()
   await jobQueue.start((payload, queueJobId) => automationRunner.executeQueuedJob(payload, queueJobId))

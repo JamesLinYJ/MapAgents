@@ -15,6 +15,7 @@ import { drizzle } from 'drizzle-orm/node-postgres'
 import { describe, expect, it } from 'vitest'
 import type { Database } from '../db/connection.js'
 import * as schema from '../db/schema.js'
+import type { FileLifecyclePort } from './fileLifecycleService.js'
 import { PlatformPersistenceFacade } from './platformPersistenceFacade.js'
 
 describe('MeteorologicalStore domain port', () => {
@@ -23,7 +24,9 @@ describe('MeteorologicalStore domain port', () => {
       datasetRow('dataset-a', 'session-a', 'thread-a', 'alpha.nc', '2026-07-01T00:00:00.000Z'),
       datasetRow('dataset-b', 'session-a', 'thread-b', 'beta.nc', '2026-07-01T01:00:00.000Z'),
     ])
-    const store = new PlatformPersistenceFacade(fixture.db, path.join(os.tmpdir(), 'geo-store-meteorology-thread'))
+    const store = new PlatformPersistenceFacade(fixture.db, path.join(os.tmpdir(), 'geo-store-meteorology-thread'), {
+      fileLifecycle: emptyFileLifecycle(),
+    })
 
     const rows = await store.meteorology.listMeteorologicalDatasets({ threadId: 'thread-b' })
 
@@ -37,7 +40,9 @@ describe('MeteorologicalStore domain port', () => {
       datasetRow('dataset-b', 'session-a', 'thread-b', 'target.nc', '2026-07-01T01:00:00.000Z'),
       datasetRow('dataset-c', 'session-a', 'thread-b', 'other.nc', '2026-07-01T02:00:00.000Z'),
     ])
-    const store = new PlatformPersistenceFacade(fixture.db, path.join(os.tmpdir(), 'geo-store-meteorology-filename'))
+    const store = new PlatformPersistenceFacade(fixture.db, path.join(os.tmpdir(), 'geo-store-meteorology-filename'), {
+      fileLifecycle: emptyFileLifecycle(),
+    })
 
     const rows = await store.meteorology.listMeteorologicalDatasets({ threadId: 'thread-b', filename: 'target.nc' })
 
@@ -51,7 +56,9 @@ describe('MeteorologicalStore domain port', () => {
       datasetRow('dataset-a', 'session-a', 'thread-a', 'target.nc', '2026-07-01T00:00:00.000Z', 'workspace-a'),
       datasetRow('dataset-b', 'session-a', 'thread-a', 'target.nc', '2026-07-01T01:00:00.000Z', 'workspace-b'),
     ])
-    const store = new PlatformPersistenceFacade(fixture.db, path.join(os.tmpdir(), 'geo-store-meteorology-workspace'))
+    const store = new PlatformPersistenceFacade(fixture.db, path.join(os.tmpdir(), 'geo-store-meteorology-workspace'), {
+      fileLifecycle: emptyFileLifecycle(),
+    })
 
     const rows = await store.meteorology.listMeteorologicalDatasets({
       workspaceId: 'workspace-b',
@@ -72,7 +79,9 @@ describe('MeteorologicalStore domain port', () => {
       { ...datasetRow('dataset-c', 'session-a', 'thread-a', 'c.nc', '2026-07-01T02:00:00.000Z', 'workspace-a'), status: 'failed' },
       datasetRow('dataset-d', 'session-a', 'thread-b', 'd.nc', '2026-07-01T03:00:00.000Z', 'workspace-a'),
     ])
-    const store = new PlatformPersistenceFacade(fixture.db, path.join(os.tmpdir(), 'geo-store-meteorology-count'))
+    const store = new PlatformPersistenceFacade(fixture.db, path.join(os.tmpdir(), 'geo-store-meteorology-count'), {
+      fileLifecycle: emptyFileLifecycle(),
+    })
 
     const count = await store.meteorology.countMeteorologicalDatasets({
       workspaceId: 'workspace-a',
@@ -86,6 +95,16 @@ describe('MeteorologicalStore domain port', () => {
     expect(fixture.queries[0]?.text).toContain('"status" =')
   })
 })
+
+function emptyFileLifecycle(): FileLifecyclePort {
+  return {
+    upload: async () => { throw new Error('测试不应上传文件。') },
+    list: async () => [],
+    delete: async () => false,
+    cloneThreadFiles: async () => [],
+    purgeThreadFiles: async () => undefined,
+  }
+}
 
 interface CapturedQuery {
   text: string

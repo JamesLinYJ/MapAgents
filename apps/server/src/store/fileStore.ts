@@ -72,6 +72,11 @@ export interface NormalizedStagedFile {
   mediaType: string
 }
 
+export interface RuntimeFileProjection {
+  fileId: string
+  threadId: string
+}
+
 interface FileIdempotencyRecord {
   requestId: string
   fileId: string
@@ -310,8 +315,9 @@ export class RuntimeFileStore {
     }
   }
 
-  async verifyIntegrity(): Promise<{ files: number }> {
+  async verifyIntegrity(): Promise<{ files: number; projections: RuntimeFileProjection[] }> {
     let files = 0
+    const projections: RuntimeFileProjection[] = []
     for (const scope of await listDirectories(this.root)) {
       for (const metadataPath of await listMetadataFiles(path.join(this.root, scope))) {
         const metadata = await readMetadata(metadataPath)
@@ -331,11 +337,12 @@ export class RuntimeFileStore {
         if (await hashFile(objectPath) !== metadata.contentHash) {
           throw new Error(`文件元数据 '${metadata.id}' 的内容哈希不一致。`)
         }
+        projections.push({ fileId: metadata.id, threadId: metadata.threadId })
         files += 1
       }
       await verifyIdempotencyRecords(path.join(this.root, scope))
     }
-    return { files }
+    return { files, projections }
   }
 
   private scopeQueue(scope: string): PQueue {

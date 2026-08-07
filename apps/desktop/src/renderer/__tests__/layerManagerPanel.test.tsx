@@ -15,6 +15,10 @@ import type { LayerDescriptor } from '@geo-agent-platform/shared-types'
 import { LayerPanel } from '../features/layers/LayerManagerPanel'
 import { LayerNodeView } from '../features/layers/LayerManagerShared'
 import type { LayerPanelView } from '../features/layers/useLayerManager'
+import {
+  createWorkspaceShellInspectorDetails,
+  type WorkspaceInspectorDetailsInput,
+} from '../app/workspaceInspectorDetails'
 
 const noop = () => {}
 
@@ -57,6 +61,24 @@ describe('LayerPanel', () => {
     expect(html).not.toContain('世界地形图')
     expect(html).not.toContain('全球山影')
     expect(html).toContain('底图仍由地图画布单独管理')
+  })
+
+  it('does not render a close action when the layer manager is the permanent Contents document', () => {
+    const html = renderLayerPanel('drawOrder', false)
+
+    expect(html).not.toContain('关闭图层管理面板')
+  })
+
+  it('assembles the permanent Contents detail without a close action in WorkspaceShell', () => {
+    const { inspectorDetails, contentsDetails } = createWorkspaceShellInspectorDetails({
+      panelMode: 'tools',
+      layers: [],
+      layerManager: {},
+    } as unknown as WorkspaceInspectorDetailsInput)
+
+    expect(inspectorDetails.panelMode).toBe('tools')
+    expect(contentsDetails.panelMode).toBe('layerManager')
+    expect(contentsDetails.onClose).toBeUndefined()
   })
 
   it('renders scientific raster legends from the manifest instead of assuming RGB bands', () => {
@@ -104,7 +126,7 @@ describe('LayerPanel', () => {
   })
 })
 
-function renderLayerPanel(activeView: LayerPanelView) {
+function renderLayerPanel(activeView: LayerPanelView, closeable = true) {
   return renderToStaticMarkup(
     <LayerPanel
       tree={[]}
@@ -142,7 +164,7 @@ function renderLayerPanel(activeView: LayerPanelView) {
       onRefreshReferenceLayers={noop}
       onAddReferenceLayer={noop}
       onRemoveReferenceLayer={noop}
-      onClose={noop}
+      onClose={closeable ? noop : undefined}
     />,
   )
 }

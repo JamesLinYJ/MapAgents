@@ -18,8 +18,13 @@ describe('StartRunService', () => {
   it('resolves a thread session, snapshots runtime config, and starts one detached task', async () => {
     const runtimeConfig = defaultRuntimeConfig()
     const run = fakeRun({ threadId: 'thread_existing', modelProvider: 'deepseek' })
-    const startDetached = vi.fn()
-    const createRun = vi.fn().mockResolvedValue(run)
+    const order: string[] = []
+    const startDetached = vi.fn(() => order.push('startDetached'))
+    const createRun = vi.fn(async () => {
+      order.push('createRun')
+      return run
+    })
+    const beforeLaunch = vi.fn(() => order.push('beforeLaunch'))
     const service = new StartRunService({
       store: {
         runtimeConfiguration: { getRuntimeConfig: vi.fn().mockResolvedValue(runtimeConfig) },
@@ -38,6 +43,7 @@ describe('StartRunService', () => {
       threadId: 'thread_existing',
       provider: null,
       executionMode: 'auto',
+      beforeLaunch,
     })
 
     expect(result).toBe(run)
@@ -54,6 +60,8 @@ describe('StartRunService', () => {
       provider: 'deepseek',
       runtimeConfig,
     }), undefined)
+    expect(beforeLaunch).toHaveBeenCalledWith(run)
+    expect(order).toEqual(['createRun', 'beforeLaunch', 'startDetached'])
   })
 
   it('fails before creating a run when no provider is configured', async () => {
@@ -74,6 +82,7 @@ describe('StartRunService', () => {
       auth: testAuth(),
       query: '没有 provider',
       sessionId: 'session_1',
+      beforeLaunch: vi.fn(),
     })).rejects.toThrow('必须显式指定模型 provider')
     expect(createRun).not.toHaveBeenCalled()
   })

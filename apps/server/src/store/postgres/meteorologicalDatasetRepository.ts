@@ -11,9 +11,10 @@
 import { and, count, desc, eq, sql, type SQL } from 'drizzle-orm'
 
 import type { Database } from '../../db/connection.js'
-import { platformMeteorologicalDatasets } from '../../db/schema.js'
-import type { MeteorologicalDatasetRecord } from '../../schemas/types.js'
+import { platformMeteorologicalDatasets, platformSessions } from '../../db/schema.js'
+import type { MeteorologicalDatasetRecord, SessionRecord } from '../../schemas/types.js'
 import { decodeRequiredRecord, decodeRequiredTimestamp } from '../../db/valueDecoders.js'
+import { mapSessionRow } from './conversationRowMappers.js'
 
 type DatasetRow = typeof platformMeteorologicalDatasets.$inferSelect
 
@@ -99,26 +100,49 @@ export class MeteorologicalDatasetRepository {
     return row ? mapDatasetRow(row) : null
   }
 
-  async create(dataset: MeteorologicalDatasetRecord): Promise<void> {
-    await this.db.insert(platformMeteorologicalDatasets).values({
-      datasetId: dataset.datasetId,
-      workspaceId: dataset.workspaceId,
-      createdByUserId: dataset.createdByUserId,
-      visibility: dataset.visibility,
-      sessionId: dataset.sessionId,
-      threadId: dataset.threadId,
-      filename: dataset.filename,
-      originalFilename: dataset.originalFilename,
-      fileId: dataset.fileId,
-      fileRelativePath: dataset.fileRelativePath,
-      sizeBytes: dataset.sizeBytes,
-      contentHash: dataset.contentHash,
-      mediaType: dataset.mediaType,
-      status: dataset.status,
-      metadataJson: dataset.metadata,
-      createdAt: new Date(dataset.createdAt),
-      updatedAt: new Date(dataset.updatedAt),
+  async create(dataset: MeteorologicalDatasetRecord): Promise<SessionRecord> {
+    return this.db.transaction(async tx => {
+      const sessionRows = await tx.select()
+        .from(platformSessions)
+        .where(eq(platformSessions.sessionId, dataset.sessionId))
+        .for('update')
+        .limit(1)
+      if (!sessionRows[0]) throw new Error(`会话 '${dataset.sessionId}' 不存在`)
+
+      const inserted = await tx.insert(platformMeteorologicalDatasets)
+        .values(toDatasetValues(dataset))
+        .returning({ datasetId: platformMeteorologicalDatasets.datasetId })
+      if (!inserted[0]) throw new Error(`气象数据集 '${dataset.datasetId}' 创建失败`)
+
+      const updatedSessions = await tx.update(platformSessions).set({
+        latestMeteorologicalDatasetId: dataset.datasetId,
+        updatedAt: new Date(dataset.updatedAt),
+      }).where(eq(platformSessions.sessionId, dataset.sessionId)).returning()
+      if (!updatedSessions[0]) throw new Error(`会话 '${dataset.sessionId}' 的气象数据指针更新失败`)
+      return mapSessionRow(updatedSessions[0])
     })
+  }
+}
+
+function toDatasetValues(dataset: MeteorologicalDatasetRecord): typeof platformMeteorologicalDatasets.$inferInsert {
+  return {
+    datasetId: dataset.datasetId,
+    workspaceId: dataset.workspaceId,
+    createdByUserId: dataset.createdByUserId,
+    visibility: dataset.visibility,
+    sessionId: dataset.sessionId,
+    threadId: dataset.threadId,
+    filename: dataset.filename,
+    originalFilename: dataset.originalFilename,
+    fileId: dataset.fileId,
+    fileRelativePath: dataset.fileRelativePath,
+    sizeBytes: dataset.sizeBytes,
+    contentHash: dataset.contentHash,
+    mediaType: dataset.mediaType,
+    status: dataset.status,
+    metadataJson: dataset.metadata,
+    createdAt: new Date(dataset.createdAt),
+    updatedAt: new Date(dataset.updatedAt),
   }
 }
 

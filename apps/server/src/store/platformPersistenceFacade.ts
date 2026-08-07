@@ -14,7 +14,7 @@ import type {
   SessionRecord, AgentThreadRecord, AnalysisRun, RunSummary, AgentState,
   RunEvent, ConversationItem, AgentRuntimeConfig, ArtifactRef, ContentRef,
   RunCheckpoint, RunSteeringRecord, TranscriptEntry, TranscriptEntryKind, ThreadManifest,
-  ThreadMemoryDocument, CompactionRecord, ToolValueRef,
+  ThreadMemoryDocument, CompactionRecord, ToolValueRef, MeteorologicalDatasetRecord,
 } from '../schemas/types.js'
 import { ArtifactStore, type VisibleArtifactOptions } from './artifactStore.js'
 import { ConversationProjectionIndex } from './conversationProjectionIndex.js'
@@ -54,6 +54,7 @@ export class PlatformPersistenceFacade {
   readonly payloadStoreRoot: string
   readonly runtimeRoot: string
   readonly runtimeFiles: RuntimeFileStore
+  readonly fileLifecycle: FileLifecyclePort
   readonly meteorology: MeteorologicalStore
   readonly runtimeConfiguration: RuntimeConfigStore
   readonly toolCatalog: ToolCatalogStore
@@ -74,14 +75,15 @@ export class PlatformPersistenceFacade {
     artifactRepository?: ArtifactRepository
     events?: PlatformEventHub
     runtimeFiles?: RuntimeFileStore
-    fileLifecycle?: FileLifecyclePort
-  } = {}) {
+    fileLifecycle: FileLifecyclePort
+  }) {
     const events = options.events ?? new PlatformEventHub()
     this.payloadStoreRoot = storageRoot
     this.runtimeRoot = ['sessions', 'conversations'].includes(path.basename(storageRoot))
       ? path.dirname(storageRoot)
       : storageRoot
     this.runtimeFiles = options.runtimeFiles ?? new RuntimeFileStore(this.runtimeRoot)
+    this.fileLifecycle = options.fileLifecycle
     this.payloadStore = new ConversationPayloadStore(storageRoot)
     const persistence = options.conversationPersistence ?? new PostgresConversationPersistence(db)
     this.snapshotRepository = persistence
@@ -99,7 +101,7 @@ export class PlatformPersistenceFacade {
       },
       persistence,
       persistence,
-      options.fileLifecycle ?? this.runtimeFiles,
+      this.fileLifecycle,
       {
         threadUpdateBus: events.threadUpdates,
         threadEntryBus: events.threadEntries,
@@ -159,6 +161,11 @@ export class PlatformPersistenceFacade {
 
   async updateSession(sessionId: string, fields: Partial<SessionRecord>): Promise<SessionRecord> {
     return this.sessionStore.update(sessionId, fields)
+  }
+
+  async createMeteorologicalDataset(dataset: MeteorologicalDatasetRecord): Promise<void> {
+    const session = await this.meteorology.createMeteorologicalDataset(dataset)
+    this.sessionStore.acceptPersisted(session)
   }
 
   async persistArtifact(artifact: ArtifactRef): Promise<void> {

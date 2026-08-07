@@ -56,6 +56,7 @@ describe('统一开发启动器', () => {
 
   it('只有一处声明共享构建顺序', () => {
     expect(prerequisiteBuilds().map(([, args]) => args.at(-1))).toEqual([
+      '@geo-agent-platform/db',
       '@geo-agent-platform/shared-types',
       '@geo-agent-platform/conversation-presentation',
       '@geo-agent-platform/operations-supervisor',

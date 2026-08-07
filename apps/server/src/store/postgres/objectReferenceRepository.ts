@@ -14,6 +14,7 @@ import type { Database } from '../../db/connection.js'
 import {
   platformConversationEntries,
   platformFileObjects,
+  platformMeteorologicalDatasets,
   platformRunRecords,
   platformRuns,
   platformThreadMemoryVersions,
@@ -24,7 +25,7 @@ export class PostgresObjectReferenceRepository implements ObjectReferenceReposit
   constructor(private readonly db: Database) {}
 
   async listReferencedObjectHashes(): Promise<string[]> {
-    const [runRows, memoryRows, entryRows, recordRows, fileRows] = await Promise.all([
+    const [runRows, memoryRows, entryRows, recordRows, fileRows, meteorologicalRows] = await Promise.all([
       this.db.select({ hash: platformRuns.sdkStateContentHash }).from(platformRuns),
       this.db.select({ hash: platformThreadMemoryVersions.contentHash }).from(platformThreadMemoryVersions),
       this.db.select({ payload: platformConversationEntries.payloadJson }).from(platformConversationEntries),
@@ -32,9 +33,12 @@ export class PostgresObjectReferenceRepository implements ObjectReferenceReposit
       this.db.select({ hash: platformFileObjects.contentHash })
         .from(platformFileObjects)
         .where(eq(platformFileObjects.status, 'ready')),
+      this.db.select({ hash: platformMeteorologicalDatasets.contentHash })
+        .from(platformMeteorologicalDatasets)
+        .where(eq(platformMeteorologicalDatasets.status, 'ready')),
     ])
     const hashes = new Set<string>()
-    for (const row of [...runRows, ...memoryRows, ...fileRows]) {
+    for (const row of [...runRows, ...memoryRows, ...fileRows, ...meteorologicalRows]) {
       if (row.hash && /^[a-f0-9]{64}$/u.test(row.hash)) hashes.add(row.hash)
     }
     for (const row of [...entryRows, ...recordRows]) collectSha256Strings(row.payload, hashes)

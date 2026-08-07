@@ -80,9 +80,15 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
         modelName: payload.modelName ?? null,
         executionMode: payload.executionMode === 'plan' ? 'plan' : 'auto',
         reasoning: payload.reasoning !== false,
+        beforeLaunch: run => subscribeToRun(
+          context.ws,
+          run.id,
+          context.dependencies.store,
+          context.dependencies.events,
+          context.subscriptions,
+        ),
         completion: { onComplete: runId => sendRunSnapshot(context.ws, runId, context.dependencies.store) },
       })
-      subscribeToRun(context.ws, run.id, context.dependencies.store, context.dependencies.events, context.subscriptions)
       return run
     },
   })

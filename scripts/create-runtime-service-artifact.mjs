@@ -9,11 +9,22 @@
  * directory: every source path is explicit and missing inputs fail the build.
  */
 
-import { createHash, createPrivateKey, createPublicKey, sign } from 'node:crypto'
-import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { createHash, createPrivateKey, sign } from 'node:crypto'
+import { cp, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
+
+import {
+  collectNpmProductionPackages,
+  createRuntimePackageLock,
+  createRuntimeRootPackageManifest,
+  createRuntimeWorkspacePackageManifest,
+  prepareArtifactOutput,
+  publicKeyFingerprint,
+  RUNTIME_SERVICE_KIND,
+  RUNTIME_WORKSPACE_PATHS,
+} from './runtime-service-artifact-core.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const args = parseArgs(process.argv.slice(2))
@@ -42,36 +53,43 @@ if (args.build) {
   }
 }
 
-if (await exists(output)) {
-  if (!args.force) throw new Error(`输出目录已存在：${output}；需要显式 --force 才能覆盖。`)
-  await rm(output, { recursive: true, force: true })
-}
-await mkdir(output, { recursive: true })
+await prepareArtifactOutput(root, output, args.force)
 
 const sources = [
-  ['apps/server/dist', 'server/dist', 'directory'],
-  ['apps/server/package.json', 'server/package.json', 'file'],
+  ['package.json', 'package.json', 'file'],
+  ['package-lock.json', 'package-lock.json', 'file'],
+  ['.node-version', '.node-version', 'file'],
+  ['apps/server/dist', 'apps/server/dist', 'directory'],
+  ['apps/server/package.json', 'apps/server/package.json', 'file'],
   ['packages/db/dist', 'packages/db/dist', 'directory'],
   ['packages/db/package.json', 'packages/db/package.json', 'file'],
   ['packages/operations-supervisor/dist', 'packages/operations-supervisor/dist', 'directory'],
   ['packages/operations-supervisor/package.json', 'packages/operations-supervisor/package.json', 'file'],
   ['packages/shared-types/dist', 'packages/shared-types/dist', 'directory'],
   ['packages/shared-types/package.json', 'packages/shared-types/package.json', 'file'],
-  ['package-lock.json', 'package-lock.json', 'file'],
-  ['apps/worker/src', 'worker/src', 'directory'],
-  ['apps/worker/pyproject.toml', 'worker/pyproject.toml', 'file'],
-  ['apps/worker/uv.lock', 'worker/uv.lock', 'file'],
-  ['packages/gis-meteorology/pyproject.toml', 'worker/gis-meteorology/pyproject.toml', 'file'],
-  ['packages/gis-meteorology/src', 'worker/gis-meteorology/src', 'directory'],
-  ['infra/migrations', 'migrations', 'directory'],
-  ['deploy/windows', 'service-definitions/windows', 'directory'],
-  ['deploy/systemd', 'service-definitions/systemd', 'directory'],
+  ['apps/worker/src', 'apps/worker/src', 'directory'],
+  ['apps/worker/pyproject.toml', 'apps/worker/pyproject.toml', 'file'],
+  ['apps/worker/uv.lock', 'apps/worker/uv.lock', 'file'],
+  ['packages/gis-meteorology/pyproject.toml', 'packages/gis-meteorology/pyproject.toml', 'file'],
+  ['packages/gis-meteorology/src', 'packages/gis-meteorology/src', 'directory'],
+  ['infra/migrations', 'infra/migrations', 'directory'],
+  ['deploy', 'deploy', 'directory'],
+  ['scripts/run-worker.ps1', 'scripts/run-worker.ps1', 'file'],
+  ['scripts/run-worker.sh', 'scripts/run-worker.sh', 'file'],
+  ['scripts/run-windows-service.ps1', 'scripts/run-windows-service.ps1', 'file'],
 ]
 
 for (const [source, relativeDestination, kind] of sources) {
   const sourcePath = path.join(root, source)
-  if (!(await exists(sourcePath))) throw new Error(`Runtime Service 制品缺少输入：${source}`)
-  const metadata = await stat(sourcePath)
+  let metadata
+  try {
+    metadata = await stat(sourcePath)
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+      throw new Error(`Runtime Service 制品缺少输入：${source}`)
+    }
+    throw error
+  }
   if ((kind === 'directory' && !metadata.isDirectory()) || (kind === 'file' && !metadata.isFile())) {
     throw new Error(`Runtime Service 输入类型不正确：${source}`)
   }
@@ -80,18 +98,32 @@ for (const [source, relativeDestination, kind] of sources) {
   await cp(sourcePath, destination, { recursive: kind === 'directory' })
 }
 
-const serverPackagePath = path.join(output, 'server/package.json')
-const packageManifest = JSON.parse(await readFile(serverPackagePath, 'utf8'))
-rewriteLocalDependencyPaths(packageManifest)
-await writeFile(serverPackagePath, `${JSON.stringify(packageManifest, null, 2)}\n`, 'utf8')
-await rewriteWorkerProjectPaths(output)
-await writeRuntimeSbom(output)
+const rootPackagePath = path.join(output, 'package.json')
+const rootLockPath = path.join(output, 'package-lock.json')
+const sourceRootPackage = JSON.parse(await readFile(rootPackagePath, 'utf8'))
+const runtimeRootPackage = createRuntimeRootPackageManifest(sourceRootPackage)
+const sourceRootLock = JSON.parse(await readFile(rootLockPath, 'utf8'))
+const runtimeLock = createRuntimePackageLock(sourceRootLock, runtimeRootPackage)
+await writeFile(rootPackagePath, `${JSON.stringify(runtimeRootPackage, null, 2)}\n`, 'utf8')
+await writeFile(rootLockPath, `${JSON.stringify(runtimeLock, null, 2)}\n`, 'utf8')
+for (const workspacePath of RUNTIME_WORKSPACE_PATHS) {
+  const packagePath = path.join(output, workspacePath, 'package.json')
+  const sourcePackage = JSON.parse(await readFile(packagePath, 'utf8'))
+  const runtimePackage = createRuntimeWorkspacePackageManifest(sourcePackage)
+  await writeFile(packagePath, `${JSON.stringify(runtimePackage, null, 2)}\n`, 'utf8')
+}
+
+const serverPackagePath = path.join(output, 'apps/server/package.json')
+const serverPackage = JSON.parse(await readFile(serverPackagePath, 'utf8'))
 const releaseId = process.env.GEO_AGENT_PLATFORM_RELEASE_ID?.trim()
-  || `geo-agent-platform@${String(packageManifest.version)}+runtime-service`
+  || `geo-agent-platform@${String(serverPackage.version)}+runtime-service`
 const workerContractDigest = process.env.WORKER_CONTRACT_DIGEST?.trim() || null
 if (workerContractDigest !== null && !/^sha256:[a-f0-9]{64}$/u.test(workerContractDigest)) {
   throw new Error('WORKER_CONTRACT_DIGEST 必须是 sha256:<64 位小写十六进制>。')
 }
+const releaseContracts = await loadReleaseContracts()
+const signingMaterial = args.signingKey ? await readSigningMaterial(args.signingKey) : null
+await writeRuntimeSbom(output, runtimeLock, releaseId)
 
 const files = await listFiles(output)
 const entries = []
@@ -104,26 +136,30 @@ for (const file of files) {
     sha256: `sha256:${createHash('sha256').update(content).digest('hex')}`,
   })
 }
-entries.sort((left, right) => left.path.localeCompare(right.path))
+entries.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0)
 
 const manifest = {
   schemaVersion: 1,
-  kind: 'geo-agent-runtime-service',
+  kind: RUNTIME_SERVICE_KIND,
   releaseId,
-  apiProtocolVersion: 1,
-  minDesktopProtocol: 1,
-  maxDesktopProtocol: 1,
-  databaseSchemaVersion: 9,
+  apiProtocolVersion: releaseContracts.apiProtocolVersion,
+  minDesktopProtocol: releaseContracts.desktopProtocolVersion,
+  maxDesktopProtocol: releaseContracts.desktopProtocolVersion,
+  databaseSchemaVersion: releaseContracts.databaseSchemaVersion,
   workerContractDigest,
   workerContractDigestResolvedAtRuntime: workerContractDigest === null,
-  signing: args.signingKey
-    ? { algorithm: 'ed25519', signatureFile: 'runtime-service-manifest.sig' }
+  signing: signingMaterial
+    ? {
+        algorithm: 'ed25519',
+        signatureFile: 'runtime-service-manifest.sig',
+        keyFingerprint: signingMaterial.keyFingerprint,
+      }
     : null,
   entries,
 }
 const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
 await writeFile(path.join(output, 'runtime-service-manifest.json'), manifestBytes)
-if (args.signingKey) await writeManifestSignature(output, manifestBytes, args.signingKey)
+if (signingMaterial) await writeManifestSignature(output, manifestBytes, signingMaterial)
 process.stdout.write(`${output}${process.platform === 'win32' ? '\\' : '/'}runtime-service-manifest.json\n`)
 
 function parseArgs(argv) {
@@ -147,66 +183,27 @@ function parseArgs(argv) {
   return result
 }
 
-async function exists(candidate) {
-  try {
-    await stat(candidate)
-    return true
-  } catch (error) {
-    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return false
-    throw error
-  }
-}
-
 async function listFiles(directory) {
   const result = []
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const fullPath = path.join(directory, entry.name)
-    if (entry.name === 'runtime-service-manifest.json') continue
+    if (entry.isSymbolicLink()) {
+      throw new Error(`Runtime Service 制品输入不得包含符号链接：${path.relative(output, fullPath)}`)
+    }
     if (entry.isDirectory()) result.push(...await listFiles(fullPath))
     else if (entry.isFile()) result.push(fullPath)
+    else throw new Error(`Runtime Service 制品输入包含不支持的文件类型：${path.relative(output, fullPath)}`)
   }
   return result
 }
 
-function rewriteLocalDependencyPaths(packageManifest) {
-  for (const sectionName of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
-    const section = packageManifest[sectionName]
-    if (!section || typeof section !== 'object') continue
-    for (const [name, version] of Object.entries(section)) {
-      if (typeof version !== 'string') continue
-      if (version.startsWith('file:../../packages/')) {
-        section[name] = version.replace('file:../../packages/', 'file:../packages/')
-      }
-    }
-  }
-}
-
-async function rewriteWorkerProjectPaths(artifactRoot) {
-  const workerRoot = path.join(artifactRoot, 'worker')
-  const projectPath = path.join(workerRoot, 'pyproject.toml')
-  const lockPath = path.join(workerRoot, 'uv.lock')
-  for (const filePath of [projectPath, lockPath]) {
-    const content = await readFile(filePath, 'utf8')
-    await writeFile(
-      filePath,
-      content
-        .replaceAll('../../packages/gis-meteorology', 'gis-meteorology')
-        .replaceAll('../packages/gis-meteorology', 'gis-meteorology'),
-      'utf8',
-    )
-  }
-}
-
-async function writeRuntimeSbom(artifactRoot) {
-  const npmLock = JSON.parse(await readFile(path.join(root, 'package-lock.json'), 'utf8'))
-  const npmPackages = Object.entries(npmLock.packages ?? [])
-    .map(([location, value]) => ({ location, value }))
-    .filter(({ value }) => value && typeof value === 'object' && typeof value.name === 'string' && typeof value.version === 'string')
-    .map(({ value }) => ({
+async function writeRuntimeSbom(artifactRoot, npmLock, releaseId) {
+  const npmPackages = collectNpmProductionPackages(npmLock)
+    .map(value => ({
       ecosystem: 'npm',
       name: value.name,
       version: value.version,
-      downloadLocation: typeof value.resolved === 'string' ? value.resolved : 'NOASSERTION',
+      downloadLocation: value.resolved ?? 'NOASSERTION',
     }))
   const pythonLock = await readFile(path.join(root, 'apps/worker/uv.lock'), 'utf8')
   const pythonPackages = [...pythonLock.matchAll(/\[\[package\]\]\s*name = "([^"]+)"\s*version = "([^"]+)"/gu)]
@@ -217,7 +214,11 @@ async function writeRuntimeSbom(artifactRoot) {
       downloadLocation: 'NOASSERTION',
     }))
   const packages = [...npmPackages, ...pythonPackages]
-    .sort((left, right) => `${left.ecosystem}:${left.name}:${left.version}`.localeCompare(`${right.ecosystem}:${right.name}:${right.version}`))
+    .sort((left, right) => {
+      const leftKey = `${left.ecosystem}:${left.name}:${left.version}`
+      const rightKey = `${right.ecosystem}:${right.name}:${right.version}`
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0
+    })
     .map((entry, index) => ({
       SPDXID: `SPDXRef-Package-${index + 1}`,
       name: `${entry.ecosystem}:${entry.name}`,
@@ -233,9 +234,9 @@ async function writeRuntimeSbom(artifactRoot) {
     dataLicense: 'CC0-1.0',
     SPDXID: 'SPDXRef-DOCUMENT',
     name: 'geo-agent-platform-runtime-service',
-    documentNamespace: `https://geo-agent-platform.invalid/runtime-service/${releaseIdOrUnknown()}`,
+    documentNamespace: `https://geo-agent-platform.invalid/runtime-service/${encodeURIComponent(releaseId)}`,
     creationInfo: {
-      created: new Date().toISOString(),
+      created: resolveSbomCreatedAt(process.env),
       creators: ['Tool: geo-agent-platform runtime artifact builder'],
     },
     packages,
@@ -252,25 +253,55 @@ async function writeRuntimeSbom(artifactRoot) {
   )
 }
 
-async function writeManifestSignature(artifactRoot, manifestBytes, signingKeyPath) {
+async function readSigningMaterial(signingKeyPath) {
   const privateKey = createPrivateKey(await readFile(path.resolve(root, signingKeyPath)))
   if (privateKey.asymmetricKeyType !== 'ed25519') {
     throw new Error('--signing-key 必须是 Ed25519 私钥。')
   }
-  const publicKey = createPublicKey(privateKey).export({ type: 'spki', format: 'pem' })
-  const signature = sign(null, manifestBytes, privateKey)
+  return { privateKey, keyFingerprint: publicKeyFingerprint(privateKey) }
+}
+
+async function writeManifestSignature(artifactRoot, manifestBytes, signingMaterial) {
+  const signature = sign(null, manifestBytes, signingMaterial.privateKey)
   await writeFile(
     path.join(artifactRoot, 'runtime-service-manifest.sig'),
     `${JSON.stringify({
       schemaVersion: 1,
       algorithm: 'ed25519',
-      publicKeyPem: publicKey,
+      keyFingerprint: signingMaterial.keyFingerprint,
       signatureBase64: signature.toString('base64'),
     }, null, 2)}\n`,
     'utf8',
   )
 }
 
-function releaseIdOrUnknown() {
-  return process.env.GEO_AGENT_PLATFORM_RELEASE_ID?.trim() || 'unversioned'
+async function loadReleaseContracts() {
+  const sharedRelease = await import(pathToFileURL(
+    path.join(root, 'packages/shared-types/dist/release.js'),
+  ).href)
+  const schemaCompatibility = await import(pathToFileURL(
+    path.join(root, 'apps/server/dist/db/schemaCompatibility.js'),
+  ).href)
+  const apiProtocolVersion = sharedRelease.API_PROTOCOL_VERSION
+  const desktopProtocolVersion = sharedRelease.DESKTOP_PROTOCOL_VERSION
+  const databaseSchemaVersion = schemaCompatibility.CURRENT_DATABASE_SCHEMA_VERSION
+  if (![apiProtocolVersion, desktopProtocolVersion, databaseSchemaVersion]
+    .every(value => Number.isInteger(value) && value >= 0)) {
+    throw new Error('发布协议或数据库版本常量无效。')
+  }
+  return { apiProtocolVersion, desktopProtocolVersion, databaseSchemaVersion }
+}
+
+function resolveSbomCreatedAt(environment) {
+  const sourceDateEpoch = environment.SOURCE_DATE_EPOCH?.trim()
+  if (!sourceDateEpoch) return new Date().toISOString()
+  if (!/^\d+$/u.test(sourceDateEpoch)) {
+    throw new Error('SOURCE_DATE_EPOCH 必须是非负 Unix 秒数。')
+  }
+  const timestamp = Number(sourceDateEpoch) * 1_000
+  const date = new Date(timestamp)
+  if (!Number.isFinite(timestamp) || Number.isNaN(date.valueOf())) {
+    throw new Error('SOURCE_DATE_EPOCH 超出可支持时间范围。')
+  }
+  return date.toISOString()
 }

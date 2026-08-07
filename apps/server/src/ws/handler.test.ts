@@ -91,11 +91,7 @@ function createWsHandler(server: Parameters<typeof createWsHandlerBase>[0], depe
   const runTasks = dependencies.runTasks ?? new RunTaskManager(runtime, dependencies.store)
   const usageStats = dependencies.usageStats ?? new UsageStatsService(dependencies.store, dependencies.env ?? testEnv())
   const runtimeFiles = dependencies.runtimeFiles ?? new RuntimeFileStore(dependencies.runtimeRoot)
-  const fileLifecycle: FileLifecyclePort = dependencies.fileLifecycle ?? {
-    upload: async () => { throw new Error('测试不应上传文件。') },
-    list: threadId => runtimeFiles.list(threadId),
-    delete: (fileId, threadId) => runtimeFiles.delete(fileId, threadId),
-  }
+  const fileLifecycle: FileLifecyclePort = dependencies.fileLifecycle ?? dependencies.store.fileLifecycle
   return createWsHandlerBase(server, {
     ...dependencies,
     env: dependencies.env ?? testEnv(),

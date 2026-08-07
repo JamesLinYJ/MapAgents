@@ -9,7 +9,7 @@
 // --------------------------------------------------------------------------
 
 import type { Database } from '../../db/connection.js'
-import type { MeteorologicalDatasetRecord, MeteorologicalJobRecord } from '../../schemas/types.js'
+import type { MeteorologicalDatasetRecord, MeteorologicalJobRecord, SessionRecord } from '../../schemas/types.js'
 import {
   MeteorologicalDatasetRepository,
   type ListMeteorologicalDatasetsFilters,
@@ -48,7 +48,7 @@ export class MeteorologicalStore {
     return this.datasets.get(datasetId)
   }
 
-  createMeteorologicalDataset(dataset: MeteorologicalDatasetRecord): Promise<void> {
+  createMeteorologicalDataset(dataset: MeteorologicalDatasetRecord): Promise<SessionRecord> {
     return this.datasets.create(dataset)
   }
 

@@ -57,6 +57,39 @@ describe('ConversationProjectionIndex', () => {
     expect(projection.toArray().map(item => item.itemId)).toEqual(['preamble-1', 'tool-1'])
   })
 
+  it('keeps the binary-search index sorted after projecting a preamble before its tool', () => {
+    const tool = makeItem({
+      itemId: 'tool-1',
+      itemType: 'function_call',
+      callId: 'call-1',
+      name: 'query_public_weather',
+      timestamp: '2026-08-04T00:00:01.000Z',
+    })
+    const preamble = makeItem({
+      itemId: 'preamble-1',
+      role: 'assistant',
+      body: '我先查询天气。',
+      metadata: { assistantContentForCallId: 'call-1' },
+      timestamp: '2026-08-04T00:00:02.000Z',
+    })
+    const laterInsertion = makeItem({
+      itemId: 'result-1',
+      itemType: 'result',
+      body: '查询已开始。',
+      timestamp: '2026-08-04T00:00:01.500Z',
+    })
+    const projection = new ConversationProjectionIndex()
+
+    projection.upsert(tool, 'live')
+    projection.upsert(preamble, 'live')
+    expect(projection.toArray().map(item => item.itemId)).toEqual(['preamble-1', 'tool-1'])
+
+    projection.upsert(laterInsertion, 'live')
+
+    expect(projection.getIndexSnapshot().orderedIds).toEqual(['tool-1', 'result-1', 'preamble-1'])
+    expect(projection.toArray().map(item => item.itemId)).toEqual(['preamble-1', 'tool-1', 'result-1'])
+  })
+
   it('hides all canonical items sharing an overlaid transcript entry', () => {
     const canonicalPreamble = makeItem({
       itemId: 'canonical-preamble',
