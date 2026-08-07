@@ -148,12 +148,12 @@ class ProcessToolExecutor:
         try:
             while True:
                 if parent_connection.poll():
-                    return _decode_child_message(parent_connection.recv())
+                    return _receive_child_message(parent_connection)
                 if not process.is_alive():
                     # A process can exit before writing its result when an import
                     # or native library crashes. Report that as a failed tool.
                     if parent_connection.poll():
-                        return _decode_child_message(parent_connection.recv())
+                        return _receive_child_message(parent_connection)
                     raise WorkerToolExecutionError("Worker 工具子进程异常退出")
                 remaining = deadline - loop.time()
                 if remaining <= 0:
@@ -222,3 +222,13 @@ def _decode_child_message(message: Any) -> dict[str, Any]:
         detail = str(message[2]) if len(message) > 2 else ""
         raise WorkerToolExecutionError(f"Worker 工具子进程失败：{detail}")
     raise WorkerToolExecutionError("Worker 工具子进程返回了未知消息")
+
+
+def _receive_child_message(connection: Any) -> dict[str, Any]:
+    """读取子进程消息；管道无消息关闭时保持执行边界的领域错误契约。"""
+
+    try:
+        message = connection.recv()
+    except EOFError as exc:
+        raise WorkerToolExecutionError("Worker 工具子进程未返回结果") from exc
+    return _decode_child_message(message)

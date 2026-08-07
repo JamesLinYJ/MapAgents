@@ -10,6 +10,7 @@
 // --------------------------------------------------------------------------
 
 import { createHash } from 'node:crypto'
+import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { StagedFileInput } from './fileStore.js'
@@ -280,7 +281,7 @@ function uploadInput(): FileUploadInput {
   const content = Buffer.from('file-content')
   const file: StagedFileInput = {
     name: 'sample.nc',
-    tempPath: 'C:/runtime/staging/sample.upload',
+    tempPath: path.resolve('runtime', 'staging', 'sample.upload'),
     sizeBytes: content.byteLength,
     contentHash: createHash('sha256').update(content).digest('hex'),
     mediaType: 'application/x-netcdf',
