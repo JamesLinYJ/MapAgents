@@ -174,12 +174,22 @@ describe('thread context management', () => {
         '系统提示',
         { excludeRunId: current.id, artifactResources: resources },
       )
+      const withoutResources = await assembleThreadContext(
+        store,
+        thread.id,
+        defaultRuntimeConfig().context,
+        '系统提示',
+        { excludeRunId: current.id, artifactResources: [] },
+      )
       const resourceMessage = assembled.messages.find(message => message.content?.includes('<thread-resources>'))?.content
+      const resourceTokens = assembled.report.sections.find(section => section.name === 'resources')?.estimatedTokens ?? 0
 
       expect(resourceMessage).toContain(`artifactId=${artifactId}`)
       expect(resourceMessage).toContain(`originRunId=${previous.id}`)
       expect(resourceMessage).toContain(`sandboxPath=artifacts/${previous.id}/${artifactId}.png`)
       expect(resourceMessage).not.toContain(root)
+      expect(resourceTokens).toBeGreaterThan(0)
+      expect(assembled.report.estimatedTokens - withoutResources.report.estimatedTokens).toBe(resourceTokens)
     } finally {
       await removeTempRoot(root)
     }

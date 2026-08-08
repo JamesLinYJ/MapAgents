@@ -20,6 +20,7 @@ import type {
 import type { ThreadContextStore } from '../store/runtimePorts.js'
 import type { VisibleArtifactResource } from '../store/postgres/artifactRepository.js'
 import { makeId, nowUtc } from '../utils/ids.js'
+import { estimateTextTokens } from './tokenEstimate.js'
 
 const USER_NOTES_START = '<!-- user-notes:start -->'
 const USER_NOTES_END = '<!-- user-notes:end -->'
@@ -105,33 +106,35 @@ export async function assembleThreadContext(
     : visibleChain
   let transcriptMessages = transcriptEntriesToChatMessages(historyChain)
   let includedEntries = historyChain.filter(isModelVisibleEntry)
-
-  const baseTokens = estimateTokens(systemPrompt) + estimateTokens(memory.content)
-  const hardBudget = Math.floor(config.contextWindowTokens * config.hardLimitRatio)
-  if (baseTokens + estimateMessages(transcriptMessages) > hardBudget) {
-    const trimmed = preserveRecentTurns(historyChain, config.preserveRecentTurns)
-    transcriptMessages = transcriptEntriesToChatMessages(trimmed)
-    includedEntries = trimmed.filter(isModelVisibleEntry)
-  }
-
+  const systemMessage: ConversationChatMessage = { role: 'system', content: systemPrompt }
   const memoryMessages: ConversationChatMessage[] = memory.content.trim()
     ? [{ role: 'system', content: `<thread-memory>\n${memory.content}\n</thread-memory>` }]
     : []
+  const resourceMessages: ConversationChatMessage[] = resourceMessage
+    ? [{ role: 'system', content: resourceMessage }]
+    : []
+  const systemTokens = estimateMessages([systemMessage])
+  const memoryTokens = estimateMessages(memoryMessages)
+  const resourceTokens = estimateMessages(resourceMessages)
+  let transcriptTokens = estimateMessages(transcriptMessages)
+  const hardBudget = Math.floor(config.contextWindowTokens * config.hardLimitRatio)
+  if (systemTokens + memoryTokens + resourceTokens + transcriptTokens > hardBudget) {
+    const trimmed = preserveRecentTurns(historyChain, config.preserveRecentTurns)
+    transcriptMessages = transcriptEntriesToChatMessages(trimmed)
+    includedEntries = trimmed.filter(isModelVisibleEntry)
+    transcriptTokens = estimateMessages(transcriptMessages)
+  }
+
   const messages: ConversationChatMessage[] = [
-    { role: 'system', content: systemPrompt },
+    systemMessage,
     ...memoryMessages,
-    ...(resourceMessage ? [{ role: 'system', content: resourceMessage }] : []),
+    ...resourceMessages,
     ...transcriptMessages,
   ]
-  const systemTokens = estimateTokens(systemPrompt)
-  const memoryTokens = estimateTokens(memory.content)
-  const resourceTokens = resourceMessage
-    ? estimateMessages([{ role: 'system', content: resourceMessage }])
-    : 0
-  const transcriptTokens = Math.max(0, estimateMessages(transcriptMessages) - resourceTokens)
   const estimatedTokens = systemTokens + memoryTokens + transcriptTokens + resourceTokens
   const usageRatio = estimatedTokens / config.contextWindowTokens
   const includedIds = new Set(includedEntries.map(entry => entry.entryId))
+  const visibleHistoryEntries = historyChain.filter(isModelVisibleEntry)
   const report: ContextAssemblyReport = {
     threadId,
     activeLeafEntryId: manifest.activeLeafEntryId,
@@ -141,7 +144,7 @@ export async function assembleThreadContext(
     compactionRecommended: usageRatio >= config.compactRatio,
     hardLimitReached: usageRatio >= config.hardLimitRatio,
     includedEntryIds: [...includedIds],
-    omittedEntryCount: historyChain.filter(isModelVisibleEntry).filter(entry => !includedIds.has(entry.entryId)).length,
+    omittedEntryCount: visibleHistoryEntries.filter(entry => !includedIds.has(entry.entryId)).length,
     latestCompactionId: manifest.latestCompactionId,
     sections: [
       { name: 'system', estimatedTokens: systemTokens },
@@ -220,7 +223,8 @@ export async function compactThreadIfNeeded(
   }
 
   const preTokens = manifest.estimatedContextTokens
-  const postTokens = estimateTokens(summary) + preserved.reduce((sum, entry) => sum + estimateTokens(JSON.stringify(entry.payload)), 0)
+  const postTokens = estimateTextTokens(summary)
+    + preserved.reduce((sum, entry) => sum + estimateTextTokens(JSON.stringify(entry.payload)), 0)
   const record: CompactionRecord = {
     schemaVersion: 2,
     compactionId,
@@ -522,11 +526,7 @@ function renderMemory(generated: string, pinned: string): string {
 }
 
 function estimateMessages(messages: ConversationChatMessage[]): number {
-  return messages.reduce((total, message) => total + estimateTokens(JSON.stringify(message)), 0)
-}
-
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4)
+  return messages.reduce((total, message) => total + estimateTextTokens(JSON.stringify(message)), 0)
 }
 
 function stringField(value: unknown): string | null {

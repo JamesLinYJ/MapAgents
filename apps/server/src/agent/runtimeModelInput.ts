@@ -12,6 +12,7 @@
 import { createHash } from 'node:crypto'
 import type { AgentInputItem } from '@openai/agents'
 import type { RuntimeContextConfig } from '../schemas/types.js'
+import { estimateTextTokens } from './tokenEstimate.js'
 
 export interface RuntimeModelInputData {
   input: AgentInputItem[]
@@ -49,6 +50,7 @@ interface RuntimeModelInputControllerOptions {
 export class RuntimeModelInputController {
   private readonly summaries: Map<string, string>
   private readonly persistedDigests: Set<string>
+  private lastReportedTokens: number | null = null
 
   constructor(private readonly options: RuntimeModelInputControllerOptions) {
     this.summaries = new Map(options.existingSummaries)
@@ -63,7 +65,6 @@ export class RuntimeModelInputController {
     const reduced = await this.reduceLargeToolOutputs(combined)
     const instructions = modelData.instructions ?? ''
     const estimatedBefore = estimateInputTokens(reduced, instructions)
-    await this.options.updateEstimatedTokens(estimatedBefore)
     const compactThreshold = Math.floor(
       this.options.config.contextWindowTokens * this.options.config.compactRatio,
     )
@@ -71,6 +72,7 @@ export class RuntimeModelInputController {
       this.options.config.contextWindowTokens * this.options.config.hardLimitRatio,
     )
     if (estimatedBefore < compactThreshold) {
+      await this.reportEstimatedTokens(estimatedBefore)
       return withInstructions(reduced, modelData.instructions)
     }
 
@@ -80,6 +82,7 @@ export class RuntimeModelInputController {
     )
     const leadingSystemCount = countLeadingSystemMessages(reduced)
     if (boundary <= leadingSystemCount) {
+      await this.reportEstimatedTokens(estimatedBefore)
       if (estimatedBefore >= hardLimit) {
         throw new Error('模型上下文已达到硬上限，且没有可安全压缩的完整旧消息组。请新建任务或减少输入。')
       }
@@ -106,6 +109,7 @@ export class RuntimeModelInputController {
     ]
     const estimatedAfter = estimateInputTokens(nextInput, instructions)
     if (estimatedAfter >= hardLimit) {
+      await this.reportEstimatedTokens(estimatedAfter)
       throw new Error('模型上下文压缩后仍达到硬上限；为避免破坏工具调用或推理配对，运行已停止。')
     }
     if (!this.persistedDigests.has(sourceDigest)) {
@@ -118,8 +122,14 @@ export class RuntimeModelInputController {
       })
       this.persistedDigests.add(sourceDigest)
     }
-    await this.options.updateEstimatedTokens(estimatedAfter)
+    await this.reportEstimatedTokens(estimatedAfter)
     return withInstructions(nextInput, modelData.instructions)
+  }
+
+  private async reportEstimatedTokens(tokens: number): Promise<void> {
+    if (this.lastReportedTokens === tokens) return
+    await this.options.updateEstimatedTokens(tokens)
+    this.lastReportedTokens = tokens
   }
 
   private async reduceLargeToolOutputs(items: AgentInputItem[]): Promise<AgentInputItem[]> {
@@ -205,7 +215,7 @@ function countLeadingSystemMessages(items: AgentInputItem[]): number {
 }
 
 function estimateInputTokens(items: AgentInputItem[], instructions: string): number {
-  return Math.ceil((JSON.stringify(items).length + instructions.length) / 4)
+  return estimateTextTokens(JSON.stringify(items), instructions)
 }
 
 function serializedOutputLength(output: Extract<AgentInputItem, { type: 'function_call_result' }>['output']): number {

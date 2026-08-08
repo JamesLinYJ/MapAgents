@@ -25,6 +25,7 @@ describe('RuntimeModelInputController', () => {
       inlineToolResultMaxChars: 100,
     }
     const persisted = vi.fn(async () => undefined)
+    const estimatedUpdates: number[] = []
     const controller = new RuntimeModelInputController({
       config,
       summarize: async prompt => {
@@ -44,7 +45,7 @@ describe('RuntimeModelInputController', () => {
           }
         : null,
       persistSummary: persisted,
-      updateEstimatedTokens: async () => undefined,
+      updateEstimatedTokens: async tokens => { estimatedUpdates.push(tokens) },
     })
     const oldPair: AgentInputItem[] = [
       { type: 'message', role: 'user', content: `旧问题：${'旧'.repeat(1_000)}` },
@@ -92,6 +93,10 @@ describe('RuntimeModelInputController', () => {
     expect(result.input.some(item => item.type === 'function_call_result' && item.callId === 'call_old')).toBe(false)
     expect(result.input.some(item => item.type === 'function_call' && item.callId === 'call_old')).toBe(false)
     expect(persisted).toHaveBeenCalledOnce()
+    expect(estimatedUpdates).toEqual([
+      expect.any(Number),
+    ])
+    expect(estimatedUpdates[0]).toBe(persisted.mock.calls[0]?.[0].estimatedTokensAfter)
   })
 
   it('fails explicitly when the current input alone exceeds the hard limit', async () => {
@@ -115,5 +120,24 @@ describe('RuntimeModelInputController', () => {
     }, [
       { type: 'message', role: 'user', content: '当前'.repeat(1_000) },
     ])).rejects.toThrow('没有可安全压缩的完整旧消息组')
+  })
+
+  it('does not persist identical context telemetry on every model callback', async () => {
+    const updates: number[] = []
+    const controller = new RuntimeModelInputController({
+      config: defaultRuntimeConfig().context,
+      summarize: async () => '不应调用',
+      resolveToolOutput: async () => null,
+      persistSummary: async () => undefined,
+      updateEstimatedTokens: async tokens => { updates.push(tokens) },
+    })
+    const modelData = {
+      input: [{ type: 'message', role: 'user', content: '查询杭州天气' }] satisfies AgentInputItem[],
+    }
+
+    await controller.filter(modelData, [])
+    await controller.filter(modelData, [])
+
+    expect(updates).toHaveLength(1)
   })
 })
