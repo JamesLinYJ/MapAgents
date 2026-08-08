@@ -12,10 +12,13 @@
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
+import {
+  isSuccessfulRunStreamResult,
+  RunStreamProjection,
+} from '@geo-agent-platform/conversation-presentation'
 
 import {
   analysisRunSchema,
-  conversationItemSchema,
   runEventSchema,
   runSnapshotSchema,
   runSteeringRecordSchema,
@@ -69,6 +72,12 @@ export interface LocalAgentSessionSnapshot {
   error: string | null
 }
 
+interface RunProjectionIdentity {
+  client: LocalAgentClientPort
+  runId: string
+  generation: number
+}
+
 /**
  * CLI 只编排平台控制命令和投影。Runner、RunState、审批恢复和工具并发仍全部
  * 属于主 API 进程，断线后只重新订阅，不重放任何写命令。
@@ -82,6 +91,10 @@ export class LocalAgentSession {
   private reconnectTimer: NodeJS.Timeout | null = null
   private reconnectAttempt = 0
   private closed = false
+  private runStream = new RunStreamProjection()
+  private streamResynchronization: Promise<void> | null = null
+  private projectionGeneration = 0
+  private expectedRunId: string | null = null
   private state: LocalAgentSessionSnapshot
 
   constructor(options: LocalAgentSessionOptions) {
@@ -148,7 +161,10 @@ export class LocalAgentSession {
         ? { threadId: this.state.threadId }
         : { sessionId: bootstrap.session.id }),
     }
+    this.runStream = new RunStreamProjection()
+    this.runStream.beginSnapshot()
     const run = await client.send('run:start', payload, analysisRunSchema)
+    const identity = this.selectRunProjection(client, run.id)
     this.setState({
       run,
       threadId: run.threadId,
@@ -156,6 +172,10 @@ export class LocalAgentSession {
       events: [],
       error: null,
     })
+    const snapshot = await client.send('run:subscribe', { runId: run.id }, runSnapshotSchema)
+    if (this.isCurrentRunProjection(identity, snapshot.run.id)) {
+      this.absorbSnapshot(snapshot, identity)
+    }
     return run
   }
 
@@ -165,18 +185,29 @@ export class LocalAgentSession {
     text?: string | null
   }): Promise<AnalysisRun> {
     const current = this.requireRun()
-    const next = await this.requireClient().send('run:respond-decision', {
+    const client = this.requireClient()
+    this.runStream.beginSnapshot()
+    const next = await client.send('run:respond-decision', {
       runId: current.id,
       decisionId: input.decisionId,
       ...(input.optionId !== undefined ? { optionId: input.optionId } : {}),
       ...(input.text !== undefined ? { text: input.text } : {}),
     }, analysisRunSchema)
+    if (next.id !== current.id) {
+      this.runStream = new RunStreamProjection()
+      this.runStream.beginSnapshot()
+    }
+    const identity = this.selectRunProjection(client, next.id)
     this.setState({
       run: next,
       threadId: next.threadId,
       events: next.id === current.id ? this.state.events : [],
       error: null,
     })
+    const snapshot = await client.send('run:subscribe', { runId: next.id }, runSnapshotSchema)
+    if (this.isCurrentRunProjection(identity, snapshot.run.id)) {
+      this.absorbSnapshot(snapshot, identity)
+    }
     return next
   }
 
@@ -189,8 +220,15 @@ export class LocalAgentSession {
 
   async resume(): Promise<AnalysisRun> {
     const run = this.requireRun()
-    const resumed = await this.requireClient().send('run:resume', { runId: run.id }, analysisRunSchema)
+    const client = this.requireClient()
+    this.runStream.beginSnapshot()
+    const resumed = await client.send('run:resume', { runId: run.id }, analysisRunSchema)
+    const identity = this.selectRunProjection(client, resumed.id)
     this.setState({ run: resumed, error: null })
+    const snapshot = await client.send('run:subscribe', { runId: resumed.id }, runSnapshotSchema)
+    if (this.isCurrentRunProjection(identity, snapshot.run.id)) {
+      this.absorbSnapshot(snapshot, identity)
+    }
     return resumed
   }
 
@@ -210,6 +248,8 @@ export class LocalAgentSession {
     )) {
       throw new Error('当前运行尚未结束；请先取消、恢复或处理待决事项。')
     }
+    this.clearExpectedRun()
+    this.runStream = new RunStreamProjection()
     this.setState({
       threadId: null,
       run: null,
@@ -255,6 +295,7 @@ export class LocalAgentSession {
     this.closed = true
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
     this.reconnectTimer = null
+    this.clearExpectedRun()
     this.detachClient()
     this.setState({ connection: 'closed', connectionMessage: '已分离' })
     this.events.removeAllListeners()
@@ -275,9 +316,13 @@ export class LocalAgentSession {
     }
     this.detachClient()
     this.client = client
-    this.disposePush = client.onPush(message => this.handlePush(message))
-    this.disposeDisconnected = client.onDisconnected(error => this.handleDisconnected(error))
+    this.disposePush = client.onPush(message => this.handlePush(client, message))
+    this.disposeDisconnected = client.onDisconnected(error => this.handleDisconnected(client, error))
     const bootstrap = await client.send('workspace:bootstrap', {}, workspaceBootstrapSnapshotSchema)
+    if (this.closed || this.client !== client) {
+      client.close()
+      return
+    }
     const provider = selectProvider(bootstrap.providers, this.options.provider)
     const model = selectModel(provider, this.options.model)
     this.reconnectAttempt = 0
@@ -290,55 +335,136 @@ export class LocalAgentSession {
       error: null,
     })
     if (this.state.run) {
-      const snapshot = await client.send('run:subscribe', { runId: this.state.run.id }, runSnapshotSchema)
-      this.absorbSnapshot(snapshot)
+      const subscribedRunId = this.state.run.id
+      const identity = this.selectRunProjection(client, subscribedRunId)
+      this.runStream.beginSnapshot()
+      const snapshot = await client.send('run:subscribe', { runId: subscribedRunId }, runSnapshotSchema)
+      if (this.isCurrentRunProjection(identity, snapshot.run.id)) {
+        this.absorbSnapshot(snapshot, identity)
+      }
       return
     }
     if (this.state.threadId) {
-      const detail = await client.send('thread:get', { threadId: this.state.threadId }, threadDetailSnapshotSchema)
+      const threadId = this.state.threadId
+      const generation = this.projectionGeneration
+      const detail = await client.send('thread:get', { threadId }, threadDetailSnapshotSchema)
+      if (
+        this.client !== client
+        || this.projectionGeneration !== generation
+        || this.state.threadId !== threadId
+      ) return
       if (detail.latestRun) {
+        this.runStream = new RunStreamProjection()
+        this.runStream.beginSnapshot()
+        const identity = this.selectRunProjection(client, detail.latestRun.id)
         const snapshot = await client.send('run:subscribe', { runId: detail.latestRun.id }, runSnapshotSchema)
-        this.absorbSnapshot(snapshot)
+        if (this.isCurrentRunProjection(identity, snapshot.run.id)) {
+          this.absorbSnapshot(snapshot, identity)
+        }
       }
     }
   }
 
-  private handlePush(message: LocalAgentPush): void {
+  private handlePush(client: LocalAgentClientPort, message: LocalAgentPush): void {
     if (message.type === 'run.item') {
-      const parsed = conversationItemSchema.safeParse(message.payload.data)
-      if (parsed.success && (!this.state.threadId || parsed.data.threadId === this.state.threadId)) {
-        this.setState({ items: upsertById(this.state.items, parsed.data, item => item.itemId) })
+      const update = message.payload.data
+      const identity = this.currentRunProjection(client, update.item.runId)
+      if (identity && update.item.runId === this.state.run?.id) {
+        const result = this.runStream.acceptItem(update)
+        if (isSuccessfulRunStreamResult(result) && result !== 'queued') {
+          this.setState({ items: this.runStream.toArray() })
+        } else if (!isSuccessfulRunStreamResult(result)) {
+          this.resynchronizeRunStream()
+        }
+      }
+      return
+    }
+    if (message.type === 'run.item.delta') {
+      const identity = this.currentRunProjection(client, message.payload.data.runId)
+      if (!identity || message.payload.data.runId !== this.state.run?.id) return
+      const result = this.runStream.acceptDelta(message.payload.data)
+      if (isSuccessfulRunStreamResult(result) && result !== 'queued') {
+        this.setState({ items: this.runStream.toArray() })
+      } else if (!isSuccessfulRunStreamResult(result)) {
+        this.resynchronizeRunStream()
       }
       return
     }
     if (message.type === 'run.event') {
       const parsed = runEventSchema.safeParse(message.payload.data)
-      if (parsed.success && parsed.data.runId === this.state.run?.id) {
+      if (
+        parsed.success
+        && this.currentRunProjection(client, parsed.data.runId)
+        && parsed.data.runId === this.state.run?.id
+      ) {
         this.setState({ events: upsertById(this.state.events, parsed.data, event => event.eventId) })
       }
       return
     }
     if (message.type === 'run.snapshot') {
       const parsed = runSnapshotSchema.safeParse(message.payload.data)
-      if (parsed.success) this.absorbSnapshot(parsed.data)
+      if (!parsed.success) return
+      const identity = this.currentRunProjection(client, parsed.data.run.id)
+      if (identity && !this.absorbSnapshot(parsed.data, identity)) this.resynchronizeRunStream()
     }
   }
 
-  private absorbSnapshot(snapshot: z.infer<typeof runSnapshotSchema>): void {
-    if (this.state.run && snapshot.run.id !== this.state.run.id) return
+  private absorbSnapshot(
+    snapshot: z.infer<typeof runSnapshotSchema>,
+    identity: RunProjectionIdentity,
+  ): boolean {
+    if (!this.isCurrentRunProjection(identity, snapshot.run.id)) return true
+    const accepted = this.runStream.acceptSnapshot(snapshot.items, snapshot.itemStream)
     this.setState({
       run: snapshot.run,
       threadId: snapshot.run.threadId,
-      items: mergeItems(this.state.items, snapshot.items),
-      events: snapshot.events,
-      error: snapshot.run.status === 'failed'
+      items: accepted.items,
+      events: mergeRunEvents(
+        this.state.events.filter(event => event.runId === identity.runId),
+        snapshot.events.filter(event => event.runId === identity.runId),
+      ),
+      error: !accepted.consistent
+        ? '实时文本流与权威快照不一致，请重新连接。'
+        : snapshot.run.status === 'failed'
         ? snapshot.run.state.errors.at(-1) ?? '运行失败。'
         : null,
     })
+    return accepted.consistent
   }
 
-  private handleDisconnected(error: Error): void {
-    if (this.closed) return
+  private resynchronizeRunStream(): void {
+    const runId = this.state.run?.id
+    const client = this.client
+    if (!runId || !client || this.streamResynchronization) return
+    const identity = this.currentRunProjection(client, runId)
+    if (!identity) return
+    this.runStream.beginSnapshot()
+    const synchronization = client.send('run:subscribe', { runId }, runSnapshotSchema)
+      .then(snapshot => {
+        if (!this.isCurrentRunProjection(identity, snapshot.run.id)) return
+        if (!this.absorbSnapshot(snapshot, identity)) {
+          throw new Error('实时文本流与权威快照仍不一致。')
+        }
+      })
+      .catch(error => {
+        if (this.isCurrentRunProjection(identity)) {
+          const aborted = this.runStream.abortSnapshot()
+          this.setState({
+            items: aborted.items,
+            error: `实时文本流重同步失败：${safeMessage(error)}`,
+          })
+        }
+      })
+      .finally(() => {
+        if (this.streamResynchronization === synchronization) {
+          this.streamResynchronization = null
+        }
+      })
+    this.streamResynchronization = synchronization
+  }
+
+  private handleDisconnected(client: LocalAgentClientPort, error: Error): void {
+    if (this.closed || this.client !== client) return
     this.detachClient()
     this.setState({
       connection: 'reconnecting',
@@ -366,11 +492,49 @@ export class LocalAgentSession {
     }, delay)
   }
 
+  private selectRunProjection(
+    client: LocalAgentClientPort,
+    runId: string,
+  ): RunProjectionIdentity {
+    if (this.expectedRunId !== runId) {
+      this.projectionGeneration += 1
+      this.expectedRunId = runId
+      this.streamResynchronization = null
+    }
+    return { client, runId, generation: this.projectionGeneration }
+  }
+
+  private currentRunProjection(
+    client: LocalAgentClientPort,
+    runId: string,
+  ): RunProjectionIdentity | null {
+    if (this.client !== client || this.expectedRunId !== runId) return null
+    return { client, runId, generation: this.projectionGeneration }
+  }
+
+  private isCurrentRunProjection(
+    identity: RunProjectionIdentity,
+    snapshotRunId: string = identity.runId,
+  ): boolean {
+    return !this.closed
+      && this.client === identity.client
+      && this.expectedRunId === identity.runId
+      && this.projectionGeneration === identity.generation
+      && snapshotRunId === identity.runId
+  }
+
+  private clearExpectedRun(): void {
+    this.projectionGeneration += 1
+    this.expectedRunId = null
+    this.streamResynchronization = null
+  }
+
   private detachClient(): void {
     this.disposePush?.()
     this.disposeDisconnected?.()
     this.disposePush = null
     this.disposeDisconnected = null
+    this.streamResynchronization = null
     this.client?.close()
     this.client = null
   }
@@ -443,11 +607,12 @@ function upsertById<T>(current: T[], incoming: T, id: (value: T) => string): T[]
   return [...next.values()]
 }
 
-function mergeItems(current: ConversationItem[], incoming: ConversationItem[]): ConversationItem[] {
-  const next = new Map(current.map(item => [item.itemId, item]))
-  for (const item of incoming) next.set(item.itemId, item)
-  return [...next.values()].sort((left, right) =>
-    left.timestamp.localeCompare(right.timestamp) || left.itemId.localeCompare(right.itemId))
+function mergeRunEvents(current: RunEvent[], incoming: RunEvent[]): RunEvent[] {
+  const events = new Map(current.map(event => [event.eventId, event]))
+  for (const event of incoming) events.set(event.eventId, event)
+  return [...events.values()].sort((left, right) => (
+    left.timestamp.localeCompare(right.timestamp) || left.eventId.localeCompare(right.eventId)
+  ))
 }
 
 function safeMessage(error: unknown): string {

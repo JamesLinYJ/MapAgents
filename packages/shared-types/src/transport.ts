@@ -77,17 +77,101 @@ export const threadDetailSnapshotSchema = z.object({
   latestRun: analysisRunSchema.nullable().optional(),
 })
 
+export const runItemCursorSchema = z.object({
+  sequence: z.number().int().nonnegative(),
+  utf16Offset: z.number().int().nonnegative(),
+}).strict()
+
+export const runItemSnapshotCursorSchema = runItemCursorSchema.extend({
+  itemId: z.string().min(1),
+}).strict()
+
+export const runItemUpsertSchema = z.object({
+  updateType: z.literal('item_upsert'),
+  schemaVersion: z.literal(1),
+  streamId: z.string().min(1),
+  cursor: runItemCursorSchema,
+  item: conversationItemSchema,
+}).strict().superRefine((update, context) => {
+  if (update.cursor.utf16Offset === (update.item.body ?? '').length) return
+  context.addIssue({
+    code: 'custom',
+    path: ['cursor', 'utf16Offset'],
+    message: '完整 item 游标必须等于 item.body 的 UTF-16 长度',
+  })
+})
+
+export const runItemStreamSnapshotSchema = z.object({
+  streamId: z.string().min(1),
+  cursors: z.array(runItemSnapshotCursorSchema),
+}).strict().superRefine((snapshot, context) => {
+  const itemIds = new Set<string>()
+  snapshot.cursors.forEach((cursor, index) => {
+    if (!itemIds.has(cursor.itemId)) {
+      itemIds.add(cursor.itemId)
+      return
+    }
+    context.addIssue({
+      code: 'custom',
+      path: ['cursors', index, 'itemId'],
+      message: `itemId '${cursor.itemId}' 的流游标重复`,
+    })
+  })
+})
+
 export const runSnapshotSchema = z.object({
   run: analysisRunSchema,
   items: z.array(conversationItemSchema),
   events: z.array(runEventSchema),
+  itemStream: runItemStreamSnapshotSchema,
+}).strict().superRefine((snapshot, context) => {
+  const cursors = new Map(snapshot.itemStream.cursors.map(cursor => [cursor.itemId, cursor]))
+  if (snapshot.items.length !== cursors.size) {
+    context.addIssue({
+      code: 'custom',
+      path: ['itemStream', 'cursors'],
+      message: '快照中的每个 item 必须且只能有一个游标',
+    })
+  }
+  snapshot.items.forEach((item, index) => {
+    const cursor = cursors.get(item.itemId)
+    if (cursor && cursor.utf16Offset === (item.body ?? '').length) return
+    context.addIssue({
+      code: 'custom',
+      path: ['items', index, 'body'],
+      message: `item '${item.itemId}' 的正文与流游标不一致`,
+    })
+  })
 })
+
+/**
+ * 运行中文本项的增量事实。`utf16Offset` 与 JavaScript 字符串索引语义一致，
+ * 接收端必须在 offset 精确匹配时才追加；sequence 用于检测同一 item 的乱序
+ * 或丢帧。完整 ConversationItem 仅用于 start/final 和快照重同步。
+ */
+export const conversationItemTextDeltaSchema = z.object({
+  updateType: z.literal('text_delta'),
+  schemaVersion: z.literal(1),
+  streamId: z.string().min(1),
+  runId: z.string().min(1),
+  threadId: z.string().min(1).nullable(),
+  itemId: z.string().min(1),
+  sequence: z.number().int().positive(),
+  utf16Offset: z.number().int().nonnegative(),
+  text: z.string().min(1),
+}).strict()
 
 export type RunSummaryPage = z.infer<typeof runSummaryPageSchema>
 export type WorkspaceBootstrapSnapshot = z.infer<typeof workspaceBootstrapSnapshotSchema>
 export type ThreadHistoryPage = z.infer<typeof threadHistoryPageSchema>
 export type ThreadDetailSnapshot = z.infer<typeof threadDetailSnapshotSchema>
 export type RunSnapshot = z.infer<typeof runSnapshotSchema>
+export type RunItemCursor = z.infer<typeof runItemCursorSchema>
+export type RunItemSnapshotCursor = z.infer<typeof runItemSnapshotCursorSchema>
+export type RunItemUpsert = z.infer<typeof runItemUpsertSchema>
+export type RunItemStreamSnapshot = z.infer<typeof runItemStreamSnapshotSchema>
+export type ConversationItemTextDelta = z.infer<typeof conversationItemTextDeltaSchema>
+export type ConversationItemStreamUpdate = RunItemUpsert | ConversationItemTextDelta
 
 // --- WebSocket control plane ---
 
@@ -548,13 +632,10 @@ const wsPushEnvelope = <const TType extends string, TData extends z.ZodType>(
 }).strict()
 
 export const wsRunPushSchema = z.discriminatedUnion('type', [
-  wsPushEnvelope('run.item', conversationItemSchema),
+  wsPushEnvelope('run.item', runItemUpsertSchema),
+  wsPushEnvelope('run.item.delta', conversationItemTextDeltaSchema),
   wsPushEnvelope('run.event', runEventSchema),
-  wsPushEnvelope('run.snapshot', z.object({
-    run: analysisRunSchema,
-    items: z.array(conversationItemSchema),
-    events: z.array(runEventSchema),
-  }).strict()),
+  wsPushEnvelope('run.snapshot', runSnapshotSchema),
   wsPushEnvelope('thread.entry', transcriptEntrySchema),
   wsPushEnvelope('thread.updated', z.object({
     thread: agentThreadRecordSchema,

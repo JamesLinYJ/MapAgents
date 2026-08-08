@@ -345,6 +345,344 @@ describe('WebSocket run subscriptions', () => {
     await close(second)
   })
 
+  it('sends success and failure responses before terminal pushes that overtake snapshot reads', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-response-barrier-'))
+    const store = createTestPersistenceFacade(root, noOpDb())
+    await store.initialize()
+    const session = await store.createSession()
+    const thread = await store.createThread(session.id, '响应因果顺序')
+    const run = await store.createRun(session.id, '测试响应与推送顺序', { threadId: thread.id })
+    const staleItemSnapshot = await store.listItemSnapshot(run.id)
+    const originalListItemSnapshot = store.listItemSnapshot.bind(store)
+    const originalGetRun = store.getRun.bind(store)
+    let releaseStaleSnapshot!: () => void
+    const staleSnapshotBlocked = new Promise<void>(resolve => { releaseStaleSnapshot = resolve })
+    let markStaleSnapshotStarted!: () => void
+    const staleSnapshotStarted = new Promise<void>(resolve => { markStaleSnapshotStarted = resolve })
+    let markTerminalSnapshotProjected!: () => void
+    const terminalSnapshotProjected = new Promise<void>(resolve => { markTerminalSnapshotProjected = resolve })
+    let itemSnapshotCalls = 0
+    let terminalItemSnapshotReady = false
+    store.listItemSnapshot = async requestedRunId => {
+      itemSnapshotCalls += 1
+      if (itemSnapshotCalls === 1) {
+        markStaleSnapshotStarted()
+        await staleSnapshotBlocked
+        return staleItemSnapshot
+      }
+      const snapshot = await originalListItemSnapshot(requestedRunId)
+      terminalItemSnapshotReady = true
+      return snapshot
+    }
+    store.getRun = requestedRunId => {
+      const current = originalGetRun(requestedRunId)
+      if (terminalItemSnapshotReady) {
+        terminalItemSnapshotReady = false
+        markTerminalSnapshotProjected()
+      }
+      return current
+    }
+
+    const server = createServer((_request, response) => response.end())
+    const wss = createWsHandler(server, {
+      store,
+      toolRegistry: new ToolRegistry(),
+      modelRegistry: new ModelAdapterRegistry(testEnv()),
+      managedLayers: {} as unknown as ManagedLayerService,
+      runtimeRoot: root,
+      security: testSecurity(),
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('测试服务未监听 TCP 地址')
+    cleanups.push(async () => {
+      await new Promise<void>(resolve => wss.close(() => resolve()))
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      await store.flushConversationStore()
+      await removeTempRoot(root)
+    })
+
+    const ws = await connect(`ws://127.0.0.1:${address.port}/ws`)
+    const received: Array<Record<string, unknown>> = []
+    ws.on('message', data => {
+      for (const line of data.toString().split('\n').filter(Boolean)) {
+        const parsed: unknown = JSON.parse(line)
+        if (!isRecord(parsed)) continue
+        received.push(parsed)
+      }
+    })
+    const waitForReceivedCount = (count: number) => new Promise<void>(resolve => {
+      if (received.length >= count) {
+        resolve()
+        return
+      }
+      const handle = () => {
+        if (received.length < count) return
+        ws.off('message', handle)
+        resolve()
+      }
+      ws.on('message', handle)
+    })
+    ws.send(JSON.stringify({
+      type: 'run:subscribe',
+      id: 'response_barrier',
+      payload: { runId: run.id },
+      meta: { csrfToken: TEST_CSRF },
+    }) + '\n')
+
+    await staleSnapshotStarted
+    await store.updateRunStatus(run.id, 'completed')
+    expect(itemSnapshotCalls).toBe(1)
+    expect(received).toEqual([])
+
+    const responseAndPushReceived = waitForReceivedCount(2)
+    releaseStaleSnapshot()
+    await terminalSnapshotProjected
+    await responseAndPushReceived
+    expect(received.map(message => ({ type: message.type, id: message.id }))).toEqual([
+      { type: 'response', id: 'response_barrier' },
+      { type: 'run.snapshot', id: null },
+    ])
+
+    store.listItemSnapshot = originalListItemSnapshot
+    store.getRun = originalGetRun
+    received.length = 0
+    let releaseFailedSnapshot!: () => void
+    const failedSnapshotBlocked = new Promise<void>(resolve => { releaseFailedSnapshot = resolve })
+    let markFailedSnapshotStarted!: () => void
+    const failedSnapshotStarted = new Promise<void>(resolve => { markFailedSnapshotStarted = resolve })
+    let markRecoverySnapshotProjected!: () => void
+    const recoverySnapshotProjected = new Promise<void>(resolve => { markRecoverySnapshotProjected = resolve })
+    let failedItemSnapshotCalls = 0
+    let recoveryItemSnapshotReady = false
+    store.listItemSnapshot = async requestedRunId => {
+      failedItemSnapshotCalls += 1
+      if (failedItemSnapshotCalls === 1) {
+        markFailedSnapshotStarted()
+        await failedSnapshotBlocked
+        throw new Error('快照仓储读取失败')
+      }
+      const snapshot = await originalListItemSnapshot(requestedRunId)
+      recoveryItemSnapshotReady = true
+      return snapshot
+    }
+    store.getRun = requestedRunId => {
+      const current = originalGetRun(requestedRunId)
+      if (recoveryItemSnapshotReady) {
+        recoveryItemSnapshotReady = false
+        markRecoverySnapshotProjected()
+      }
+      return current
+    }
+    ws.send(JSON.stringify({
+      type: 'run:get',
+      id: 'failure_barrier',
+      payload: { runId: run.id },
+      meta: { csrfToken: TEST_CSRF },
+    }) + '\n')
+
+    await failedSnapshotStarted
+    testPlatformEventHub(store).runs.publish(run.id, originalGetRun(run.id))
+    expect(failedItemSnapshotCalls).toBe(1)
+    expect(received).toEqual([])
+
+    const failureAndPushReceived = waitForReceivedCount(2)
+    releaseFailedSnapshot()
+    await recoverySnapshotProjected
+    await failureAndPushReceived
+    expect(received.map(message => ({
+      type: message.type,
+      id: message.id,
+      ok: isRecord(message.payload) ? message.payload.ok : undefined,
+    }))).toEqual([
+      { type: 'response', id: 'failure_barrier', ok: false },
+      { type: 'run.snapshot', id: null, ok: undefined },
+    ])
+    await close(ws)
+  })
+
+  it('keeps an older reserved snapshot push ahead of a newer completed get response', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-reserved-fifo-'))
+    const store = createTestPersistenceFacade(root, noOpDb())
+    await store.initialize()
+    const session = await store.createSession()
+    const thread = await store.createThread(session.id, '预留槽 FIFO')
+    const run = await store.createRun(session.id, '旧推送不得被新响应超车', { threadId: thread.id })
+    await store.updateRunStatus(run.id, 'completed')
+    const originalListItemSnapshot = store.listItemSnapshot.bind(store)
+    const originalGetRun = store.getRun.bind(store)
+
+    const server = createServer((_request, response) => response.end())
+    const wss = createWsHandler(server, {
+      store,
+      toolRegistry: new ToolRegistry(),
+      modelRegistry: new ModelAdapterRegistry(testEnv()),
+      managedLayers: {} as unknown as ManagedLayerService,
+      runtimeRoot: root,
+      security: testSecurity(),
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('测试服务未监听 TCP 地址')
+    cleanups.push(async () => {
+      await new Promise<void>(resolve => wss.close(() => resolve()))
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      await store.flushConversationStore()
+      await removeTempRoot(root)
+    })
+
+    const ws = await connect(`ws://127.0.0.1:${address.port}/ws`)
+    await request(ws, 'run:subscribe', { runId: run.id }, 'establish_subscription')
+    const baseSnapshot = await originalListItemSnapshot(run.id)
+    const oldSnapshot = {
+      ...baseSnapshot,
+      itemStream: { ...baseSnapshot.itemStream, streamId: 'stream_old_reserved' },
+    }
+    const newSnapshot = {
+      ...baseSnapshot,
+      itemStream: { ...baseSnapshot.itemStream, streamId: 'stream_new_terminal' },
+    }
+    let releaseOldSnapshot!: () => void
+    const oldSnapshotBlocked = new Promise<void>(resolve => { releaseOldSnapshot = resolve })
+    let markOldSnapshotStarted!: () => void
+    const oldSnapshotStarted = new Promise<void>(resolve => { markOldSnapshotStarted = resolve })
+    let markNewSnapshotProjected!: () => void
+    const newSnapshotProjected = new Promise<void>(resolve => { markNewSnapshotProjected = resolve })
+    let snapshotCalls = 0
+    let newSnapshotReady = false
+    store.listItemSnapshot = async () => {
+      snapshotCalls += 1
+      if (snapshotCalls === 1) {
+        markOldSnapshotStarted()
+        await oldSnapshotBlocked
+        return oldSnapshot
+      }
+      newSnapshotReady = true
+      return newSnapshot
+    }
+    store.getRun = requestedRunId => {
+      const current = originalGetRun(requestedRunId)
+      if (newSnapshotReady) {
+        newSnapshotReady = false
+        markNewSnapshotProjected()
+      }
+      return current
+    }
+
+    const received: Array<Record<string, unknown>> = []
+    ws.on('message', data => {
+      for (const line of data.toString().split('\n').filter(Boolean)) {
+        const parsed: unknown = JSON.parse(line)
+        if (isRecord(parsed)) received.push(parsed)
+      }
+    })
+    const waitForReceivedCount = (count: number) => new Promise<void>(resolve => {
+      const handle = () => {
+        if (received.length < count) return
+        ws.off('message', handle)
+        resolve()
+      }
+      ws.on('message', handle)
+    })
+
+    testPlatformEventHub(store).runs.publish(run.id, originalGetRun(run.id))
+    await oldSnapshotStarted
+    const ledgerEvent = runEvent(run.id, thread.id)
+    await store.appendEvent(run.id, ledgerEvent)
+    ws.send(JSON.stringify({
+      type: 'run:get',
+      id: 'newer_get',
+      payload: { runId: run.id },
+      meta: { csrfToken: TEST_CSRF },
+    }) + '\n')
+    await Promise.resolve()
+    expect(snapshotCalls).toBe(1)
+    expect(received).toEqual([])
+
+    const pushAndResponseReceived = waitForReceivedCount(3)
+    releaseOldSnapshot()
+    await newSnapshotProjected
+    await pushAndResponseReceived
+    expect(received.map(message => {
+      const payload = isRecord(message.payload) ? message.payload : {}
+      const data = isRecord(payload.data) ? payload.data : {}
+      const itemStream = isRecord(data.itemStream) ? data.itemStream : {}
+      const eventIds = Array.isArray(data.events)
+        ? data.events.flatMap(event => isRecord(event) && typeof event.eventId === 'string' ? [event.eventId] : [])
+        : []
+      return { type: message.type, id: message.id, streamId: itemStream.streamId, eventIds }
+    })).toEqual([
+      { type: 'run.snapshot', id: null, streamId: 'stream_old_reserved', eventIds: [] },
+      { type: 'run.event', id: null, streamId: undefined, eventIds: [] },
+      { type: 'response', id: 'newer_get', streamId: 'stream_new_terminal', eventIds: [ledgerEvent.eventId] },
+    ])
+
+    let projectedEvents: RunEvent[] = []
+    for (const message of received) {
+      const payload = isRecord(message.payload) ? message.payload : {}
+      const data = isRecord(payload.data) ? payload.data : {}
+      if (message.type === 'run.event') {
+        const event = data as unknown as RunEvent
+        if (!projectedEvents.some(current => current.eventId === event.eventId)) projectedEvents.push(event)
+      } else if (Array.isArray(data.events)) {
+        projectedEvents = data.events.filter(isRecord) as unknown as RunEvent[]
+      }
+    }
+    expect(projectedEvents.map(event => event.eventId)).toContain(ledgerEvent.eventId)
+
+    store.listItemSnapshot = originalListItemSnapshot
+    store.getRun = originalGetRun
+    received.length = 0
+    let releaseFirstGet!: () => void
+    const firstGetBlocked = new Promise<void>(resolve => { releaseFirstGet = resolve })
+    let markFirstGetStarted!: () => void
+    const firstGetStarted = new Promise<void>(resolve => { markFirstGetStarted = resolve })
+    let markSecondGetProjected!: () => void
+    const secondGetProjected = new Promise<void>(resolve => { markSecondGetProjected = resolve })
+    let getSnapshotCalls = 0
+    let secondGetSnapshotReady = false
+    store.listItemSnapshot = async () => {
+      getSnapshotCalls += 1
+      if (getSnapshotCalls === 1) {
+        markFirstGetStarted()
+        await firstGetBlocked
+        return oldSnapshot
+      }
+      secondGetSnapshotReady = true
+      return newSnapshot
+    }
+    store.getRun = requestedRunId => {
+      const current = originalGetRun(requestedRunId)
+      if (secondGetSnapshotReady) {
+        secondGetSnapshotReady = false
+        markSecondGetProjected()
+      }
+      return current
+    }
+    ws.send(JSON.stringify({
+      type: 'run:get', id: 'first_concurrent_get', payload: { runId: run.id },
+      meta: { csrfToken: TEST_CSRF },
+    }) + '\n')
+    await firstGetStarted
+    ws.send(JSON.stringify({
+      type: 'run:get', id: 'second_concurrent_get', payload: { runId: run.id },
+      meta: { csrfToken: TEST_CSRF },
+    }) + '\n')
+    await Promise.resolve()
+    expect(getSnapshotCalls).toBe(1)
+    expect(received).toEqual([])
+
+    const concurrentResponsesReceived = waitForReceivedCount(2)
+    releaseFirstGet()
+    await secondGetProjected
+    await concurrentResponsesReceived
+    expect(received.map(message => message.id)).toEqual([
+      'first_concurrent_get',
+      'second_concurrent_get',
+    ])
+    await close(ws)
+  })
+
   it('responds to clarification decisions through the unified decision command', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-ws-decision-'))
     const store = createTestPersistenceFacade(root, noOpDb())

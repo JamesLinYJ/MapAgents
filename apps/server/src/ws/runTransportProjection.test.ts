@@ -106,7 +106,18 @@ describe('run realtime transport projection', () => {
       payload: { toolName: 'query_layer', result: largeValue },
     })
 
-    const snapshot = runSnapshotSchema.parse({ run, items: [output, answer], events: [event] })
+    const snapshot = runSnapshotSchema.parse({
+      run,
+      items: [output, answer],
+      events: [event],
+      itemStream: {
+        streamId: 'stream_projection',
+        cursors: [
+          { itemId: output.itemId, sequence: 0, utf16Offset: 0 },
+          { itemId: answer.itemId, sequence: 0, utf16Offset: answer.body?.length ?? 0 },
+        ],
+      },
+    })
     const projected = projectRunSnapshotForTransport(snapshot)
     const wire = JSON.stringify({
       type: 'run.snapshot',
@@ -144,6 +155,59 @@ describe('run realtime transport projection', () => {
       .toBeLessThan(24 * 1024)
     expect(Buffer.byteLength(JSON.stringify(projectRunEventForTransport(event)), 'utf8'))
       .toBeLessThan(16 * 1024)
+  })
+
+  it('keeps streamed message and reasoning bodies exact beyond the old 48 KiB projection limit', () => {
+    const body = '杭州短临结论。'.repeat(10_000)
+    for (const itemType of ['message', 'reasoning'] as const) {
+      const item = conversationItemSchema.parse({
+        itemId: `item_${itemType}`,
+        itemType,
+        runId: 'run_1',
+        role: 'assistant',
+        body,
+        status: 'completed',
+        timestamp: new Date(0).toISOString(),
+      })
+
+      expect(projectConversationItemForTransport(item).body).toBe(body)
+    }
+  })
+
+  it('keeps an early running item in a capped snapshot so its next delta remains recoverable', () => {
+    const run = analysisRunSchema.parse({
+      id: 'run_active_overlay', sessionId: 'session_1', threadId: 'thread_1',
+      visibility: 'workspace', userQuery: '测试', status: 'running',
+      createdAt: new Date(0).toISOString(), updatedAt: new Date(1).toISOString(),
+      state: { sessionId: 'session_1', threadId: 'thread_1', userQuery: '测试' },
+    })
+    const items = Array.from({ length: 602 }, (_, index) => conversationItemSchema.parse({
+      itemId: `item_${index}`, itemType: 'message', runId: run.id, threadId: run.threadId,
+      role: 'assistant', body: index === 0 ? '仍在生成' : `历史 ${index}`,
+      status: index === 0 ? 'running' : 'completed',
+      timestamp: new Date(index).toISOString(),
+    }))
+    const snapshot = runSnapshotSchema.parse({
+      run,
+      items,
+      events: [],
+      itemStream: {
+        streamId: 'stream_active_overlay',
+        cursors: items.map(item => ({
+          itemId: item.itemId,
+          sequence: 0,
+          utf16Offset: (item.body ?? '').length,
+        })),
+      },
+    })
+
+    const projected = projectRunSnapshotForTransport(snapshot)
+
+    expect(projected.items).toHaveLength(601)
+    expect(projected.items[0]?.itemId).toBe('item_0')
+    expect(projected.itemStream.cursors).toContainEqual({
+      itemId: 'item_0', sequence: 0, utf16Offset: 4,
+    })
   })
 
   it('charges string budgets by actual content instead of the per-field cap', () => {

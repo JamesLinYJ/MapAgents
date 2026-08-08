@@ -13,15 +13,30 @@ import { startTransition, useCallback } from 'react'
 import type { AnalysisRun } from '@geo-agent-platform/shared-types'
 
 import { pickPreferredArtifactId } from '../../features/artifacts/artifactSelection'
+import type {
+  RunHydrationResult,
+  RunSelectionCapability,
+  RunSelectionToken,
+} from '../../features/runs/useRunState'
 import { mergeThreadRuns } from '../derivedState'
 
 type ListUpdater<T> = T[] | ((current: T[]) => T[])
 
-export interface WorkspaceRunProjectionOptions {
+export interface RunHydrationCapability {
+  abortRunSelection: RunSelectionCapability['abortRunSelection']
+  beginRunSelection: RunSelectionCapability['beginRunSelection']
+  hydrateRunState: (
+    runId: string,
+    selection?: RunSelectionToken,
+  ) => Promise<RunHydrationResult>
+  isRunSelectionCurrent: RunSelectionCapability['isRunSelectionCurrent']
+}
+
+export interface WorkspaceRunProjectionOptions extends RunSelectionCapability {
   clearArtifacts: () => void
   clearCanonicalThreadItems: () => void
   clearRun: () => void
-  hydrateRun: (runId: string) => Promise<AnalysisRun>
+  hydrateRun: (runId: string, selection?: RunSelectionToken) => Promise<RunHydrationResult>
   setActiveThreadId: (threadId?: string) => void
   setModel: (model: string) => void
   setProvider: (provider: string) => void
@@ -32,10 +47,14 @@ export interface WorkspaceRunProjectionOptions {
 }
 
 export function useWorkspaceRunProjection({
+  abortRunSelection,
   clearArtifacts,
   clearCanonicalThreadItems,
   clearRun,
+  beginRunSelection,
+  captureRunSelection,
   hydrateRun,
+  isRunSelectionCurrent,
   setActiveThreadId,
   setModel,
   setProvider,
@@ -60,8 +79,20 @@ export function useWorkspaceRunProjection({
     setToolRunResult,
   ])
 
-  const hydrateRunState = useCallback(async (runId: string) => {
-    const latestRun = await hydrateRun(runId)
+  const hydrateRunState = useCallback(async (
+    runId: string,
+    selection?: RunSelectionToken,
+  ) => {
+    const effectiveSelection = selection ?? beginRunSelection()
+    if (!isRunSelectionCurrent(effectiveSelection)) {
+      return { status: 'superseded' } as const
+    }
+    const hydration = await hydrateRun(runId, effectiveSelection)
+    if (hydration.status === 'superseded') return hydration
+    if (!isRunSelectionCurrent(effectiveSelection)) {
+      return { status: 'superseded' } as const
+    }
+    const latestRun = hydration.run
     startTransition(() => {
       setActiveThreadId(latestRun.threadId ?? undefined)
       setProvider(latestRun.modelProvider ?? 'deepseek')
@@ -70,9 +101,11 @@ export function useWorkspaceRunProjection({
       setThreadRuns(current => mergeThreadRuns(current, latestRun))
     })
     syncUrl(latestRun.sessionId, latestRun.id, latestRun.threadId ?? undefined)
-    return latestRun
+    return hydration
   }, [
+    beginRunSelection,
     hydrateRun,
+    isRunSelectionCurrent,
     setActiveThreadId,
     setModel,
     setProvider,
@@ -81,5 +114,12 @@ export function useWorkspaceRunProjection({
     syncUrl,
   ])
 
-  return { clearActiveRunState, hydrateRunState }
+  return {
+    abortRunSelection,
+    beginRunSelection,
+    captureRunSelection,
+    clearActiveRunState,
+    hydrateRunState,
+    isRunSelectionCurrent,
+  }
 }

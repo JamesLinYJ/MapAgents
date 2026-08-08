@@ -9,16 +9,16 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 import type { DirectToolRunResponse, ToolDescriptor } from '@geo-agent-platform/shared-types'
 
 import { formatUiError } from '../bootstrap'
+import type { RunHydrationCapability } from './useWorkspaceRunProjection'
 
-export interface ToolExecutionActionOptions {
+export interface ToolExecutionActionOptions extends RunHydrationCapability {
   sessionId?: string
   threadId?: string | null
   runId?: string
-  hydrateRunState: (runId: string) => Promise<unknown>
   runTool: (payload: Record<string, unknown>) => Promise<DirectToolRunResponse>
   setIsToolSubmitting: (isSubmitting: boolean) => void
   setToolRunResult: (result: Record<string, unknown> | null) => void
@@ -27,18 +27,25 @@ export interface ToolExecutionActionOptions {
 }
 
 export function useToolExecutionAction({
+  abortRunSelection,
+  beginRunSelection,
   sessionId,
   threadId,
   runId,
   hydrateRunState,
+  isRunSelectionCurrent,
   runTool,
   setIsToolSubmitting,
   setToolRunResult,
   setUiError,
   syncUrl,
 }: ToolExecutionActionOptions) {
+  const activeToolOperationRef = useRef<object | null>(null)
   return useCallback(async (tool: ToolDescriptor, args: Record<string, unknown>) => {
     if (!sessionId) return
+    const selection = beginRunSelection()
+    const operation = {}
+    activeToolOperationRef.current = operation
 
     try {
       setUiError(undefined)
@@ -51,16 +58,26 @@ export function useToolExecutionAction({
         toolKind: tool.toolKind,
         args,
       })
+      if (!isRunSelectionCurrent(selection)) return
+      const hydration = await hydrateRunState(response.run.id, selection)
+      if (hydration.status === 'superseded' || !isRunSelectionCurrent(selection)) return
       setToolRunResult(response)
-      await hydrateRunState(response.run.id)
       syncUrl(sessionId, response.run.id, threadId ?? undefined)
     } catch (error) {
+      if (!isRunSelectionCurrent(selection)) return
+      abortRunSelection(selection)
       setUiError(formatUiError(error, `${tool.label} 执行失败。`))
     } finally {
-      setIsToolSubmitting(false)
+      if (activeToolOperationRef.current === operation) {
+        activeToolOperationRef.current = null
+        setIsToolSubmitting(false)
+      }
     }
   }, [
+    abortRunSelection,
+    beginRunSelection,
     hydrateRunState,
+    isRunSelectionCurrent,
     runId,
     runTool,
     sessionId,

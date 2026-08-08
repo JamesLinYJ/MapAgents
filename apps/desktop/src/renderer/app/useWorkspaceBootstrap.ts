@@ -16,7 +16,6 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import type {
-  AnalysisRun,
   ConversationItem,
   ThreadHistoryPage,
 } from '@geo-agent-platform/shared-types'
@@ -28,6 +27,7 @@ import type {
 import { getAuthProjection } from '../api/client'
 import { bootstrapDesktopAuth } from '../api/authClient'
 import { formatUiError, transcriptEntriesToConversationItems } from './bootstrap'
+import type { RunHydrationCapability } from './controllers/useWorkspaceRunProjection'
 import { useAuthStore, type AuthStatus } from './stores/authStore'
 
 export type { AuthStatus }
@@ -56,10 +56,14 @@ export async function loadBootstrapFromWorkspacePointer(
 export function useWorkspaceBootstrap({
   applyProviders,
   applyTools,
+  applyWorkspaceBootstrap,
+  abortRunSelection,
+  beginRunSelection,
   clearActiveRunState,
   disabled = false,
   getThreadHistory,
   hydrateRunState,
+  isRunSelectionCurrent,
   loadWorkspaceBootstrap,
   readWorkspacePointer,
   setActiveThreadId,
@@ -67,13 +71,13 @@ export function useWorkspaceBootstrap({
   setUiError,
   syncUrl,
   syncWorkspaceUrl = true,
-}: {
+}: RunHydrationCapability & {
   applyProviders: (providers: DesktopWorkspaceBootstrapSnapshot['providers']) => void
   applyTools: (tools: DesktopWorkspaceBootstrapSnapshot['tools']) => void
+  applyWorkspaceBootstrap: (snapshot: DesktopWorkspaceBootstrapSnapshot) => void
   clearActiveRunState: () => void
   disabled?: boolean
   getThreadHistory: (threadId: string, cursor?: string | null, limit?: number) => Promise<ThreadHistoryPage>
-  hydrateRunState: (runId: string) => Promise<AnalysisRun>
   loadWorkspaceBootstrap: (
     sessionId?: string,
     workspaceId?: string,
@@ -111,14 +115,15 @@ export function useWorkspaceBootstrap({
     // 首屏只吸收一次 workspace bootstrap；thread 摘要足以校验本地指针。
     // 完整运行通过 run:subscribe 一次恢复，不能再展开 thread/run 请求瀑布。
     let disposed = false
-    const workspacePointer = readWorkspacePointer()
-    const sharedThreadId = workspacePointer.activeThreadId
-    const sharedRunId = workspacePointer.activeRunId
+    const selection = beginRunSelection()
 
     void (async () => {
       try {
+        const workspacePointer = readWorkspacePointer()
+        const sharedThreadId = workspacePointer.activeThreadId
+        const sharedRunId = workspacePointer.activeRunId
         const desktopAuth = await bootstrapDesktopAuth()
-        if (disposed) return
+        if (disposed || !isRunSelectionCurrent(selection)) return
         setAuthMode(desktopAuth.mode)
         if (desktopAuth.status === 'failed') {
           throw new Error(desktopAuth.message ?? '本机自动认证失败。')
@@ -128,17 +133,20 @@ export function useWorkspaceBootstrap({
           if (message.includes('未登录') || message.includes('401')) return null
           throw error
         })
+        if (!isRunSelectionCurrent(selection)) return
         if (!auth) {
           if (desktopAuth.mode === 'local_auto') {
             throw new Error('本机自动认证未建立可验证的服务端会话。')
           }
           if (!disposed) setAuthStatus('unauthenticated')
+          abortRunSelection(selection)
           return
         }
         if (disposed) return
         setAuthenticated(auth)
         const snapshot = await loadBootstrapFromWorkspacePointer(workspacePointer, loadWorkspaceBootstrap)
-        if (disposed) return
+        if (disposed || !isRunSelectionCurrent(selection)) return
+        applyWorkspaceBootstrap(snapshot)
         applyProviders(snapshot.providers)
         applyTools(snapshot.tools)
         setUiError(undefined)
@@ -164,41 +172,57 @@ export function useWorkspaceBootstrap({
         const preferredRunId = runToRestore ?? thread?.latestRunId ?? undefined
         if (!preferredRunId) {
           if (syncWorkspaceUrl) syncUrl(sessionRecord.id, undefined, thread?.id)
+          abortRunSelection(selection)
           return
         }
 
         try {
-          const restoredRun = await hydrateRunState(preferredRunId)
-          if (disposed) return
+          const hydration = await hydrateRunState(preferredRunId, selection)
+          if (
+            hydration.status === 'superseded'
+            || disposed
+            || !isRunSelectionCurrent(selection)
+          ) return
+          const restoredRun = hydration.run
           const wrongSession = restoredRun.sessionId !== sessionRecord.id
           const wrongThread = Boolean(thread && restoredRun.threadId !== thread.id)
           if (wrongSession || wrongThread) throw new Error('运行记录不属于当前会话或对话。')
           if (restoredRun.threadId) {
             const history = await getThreadHistory(restoredRun.threadId, null, 200)
-            if (disposed) return
+            if (disposed || !isRunSelectionCurrent(selection)) return
             setCanonicalThreadItems(restoredRun.threadId, transcriptEntriesToConversationItems(history.entries))
           }
         } catch (error) {
+          if (disposed || !isRunSelectionCurrent(selection)) return
+          abortRunSelection(selection)
           if (sharedRunId || sharedThreadId) throw error
           clearActiveRunState()
           if (syncWorkspaceUrl) syncUrl(sessionRecord.id)
         }
       } catch (error) {
-        if (!disposed) {
+        if (!disposed && isRunSelectionCurrent(selection)) {
+          abortRunSelection(selection)
           setAuthStatus('error')
           setUiError(formatUiError(error, '页面加载遇到问题，请刷新重试。'))
         }
       }
     })()
 
-    return () => { disposed = true }
+    return () => {
+      disposed = true
+      abortRunSelection(selection)
+    }
   }, [
+    abortRunSelection,
     applyProviders,
     applyTools,
+    applyWorkspaceBootstrap,
     authRefreshNonce,
+    beginRunSelection,
     clearActiveRunState,
     disabled,
     hydrateRunState,
+    isRunSelectionCurrent,
     getThreadHistory,
     loadWorkspaceBootstrap,
     readWorkspacePointer,

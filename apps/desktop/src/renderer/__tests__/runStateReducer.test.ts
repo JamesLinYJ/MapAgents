@@ -42,6 +42,8 @@ describe('runReducer', () => {
     })
     const state: RunState = {
       run: previous,
+      projectionGeneration: 1,
+      expectedRunId: previous.id,
       agentState: previous.state,
       events: [event],
       items: [item],
@@ -53,6 +55,8 @@ describe('runReducer', () => {
 
     const result = runReducer(state, {
       type: 'SET_RUN',
+      runId: next.id,
+      generation: 2,
       run: next,
       agentState: next.state,
       artifacts: [],
@@ -69,6 +73,8 @@ describe('runReducer', () => {
     const run = makeRun('run_1', 'thread_1')
     const state: RunState = {
       run,
+      projectionGeneration: 1,
+      expectedRunId: run.id,
       agentState: run.state,
       events: [],
       items: [],
@@ -79,6 +85,8 @@ describe('runReducer', () => {
 
     const result = runReducer(state, {
       type: 'SET_RUN',
+      runId: run.id,
+      generation: 1,
       run: { ...run, status: 'completed' },
       agentState: run.state,
       artifacts: [],
@@ -93,6 +101,8 @@ describe('runReducer', () => {
     const run = makeRun('run_1', 'thread_1')
     const state: RunState = {
       run,
+      projectionGeneration: 1,
+      expectedRunId: run.id,
       agentState: run.state,
       events: [],
       items: [],
@@ -109,13 +119,17 @@ describe('runReducer', () => {
       timestamp: '2026-07-10T00:00:01.000Z',
     })
 
-    const afterEvent = runReducer(state, { type: 'APPEND_EVENT', event: completed })
+    const afterEvent = runReducer(state, {
+      type: 'APPEND_EVENT', runId: run.id, generation: 1, event: completed,
+    })
 
     expect(afterEvent.run?.status).toBe('completed')
     expect(afterEvent.isSubmitting).toBe(false)
 
     const afterLateSnapshot = runReducer(afterEvent, {
       type: 'SET_RUN',
+      runId: run.id,
+      generation: 1,
       run: { ...run, updatedAt: '2026-07-10T00:00:00.500Z' },
       agentState: run.state,
       artifacts: [],
@@ -129,6 +143,8 @@ describe('runReducer', () => {
     const run = makeRun('run_1', 'thread_1')
     const state: RunState = {
       run,
+      projectionGeneration: 1,
+      expectedRunId: run.id,
       agentState: run.state,
       events: [],
       items: [],
@@ -146,10 +162,102 @@ describe('runReducer', () => {
       payload: { cancelled: true },
     })
 
-    const result = runReducer(state, { type: 'APPEND_EVENT', event: cancelled })
+    const result = runReducer(state, {
+      type: 'APPEND_EVENT', runId: run.id, generation: 1, event: cancelled,
+    })
 
     expect(result.run?.status).toBe('cancelled')
     expect(result.isSubmitting).toBe(false)
+  })
+
+  it('快照事件账本不会删除已到达的实时事件', () => {
+    const run = makeRun('run_1', 'thread_1')
+    const event = runEventSchema.parse({
+      eventId: 'event_ledger',
+      runId: run.id,
+      threadId: run.threadId,
+      type: 'step.completed',
+      message: '已持久化事件',
+      timestamp: '2026-07-10T00:00:01.000Z',
+    })
+    const state: RunState = {
+      run,
+      projectionGeneration: 1,
+      expectedRunId: run.id,
+      agentState: run.state,
+      events: [],
+      items: [],
+      artifacts: [],
+      isSubmitting: true,
+      seenEventIds: new Set(),
+    }
+
+    const afterOldSnapshot = runReducer(state, {
+      type: 'SET_EVENTS', runId: run.id, generation: 1, events: [],
+    })
+    const afterPush = runReducer(afterOldSnapshot, {
+      type: 'APPEND_EVENT', runId: run.id, generation: 1, event,
+    })
+    const afterNewSnapshot = runReducer(afterPush, {
+      type: 'SET_EVENTS', runId: run.id, generation: 1, events: [event],
+    })
+
+    expect(afterNewSnapshot.events.map(current => current.eventId)).toEqual([event.eventId])
+    expect(afterNewSnapshot.seenEventIds.has(event.eventId)).toBe(true)
+  })
+
+  it('快速切换 A/B 后拒绝迟到 A 的快照与事件投影', () => {
+    const previous = makeRun('run_a', 'thread_1')
+    const next = makeRun('run_b', 'thread_1')
+    const state: RunState = {
+      run: previous,
+      projectionGeneration: 1,
+      expectedRunId: previous.id,
+      agentState: previous.state,
+      events: [],
+      items: [],
+      artifacts: [],
+      isSubmitting: true,
+      seenEventIds: new Set(),
+    }
+    const oldEvent = runEventSchema.parse({
+      eventId: 'event_a', runId: previous.id, threadId: previous.threadId,
+      type: 'step.completed', message: 'A 迟到事件', timestamp: previous.createdAt,
+    })
+    const nextEvent = runEventSchema.parse({
+      eventId: 'event_b', runId: next.id, threadId: next.threadId,
+      type: 'step.completed', message: 'B 当前事件', timestamp: next.createdAt,
+    })
+    const oldItem = conversationItemSchema.parse({
+      itemId: 'item_a', itemType: 'message', runId: previous.id,
+      threadId: previous.threadId, role: 'assistant', body: 'A 迟到文本',
+      timestamp: previous.createdAt,
+    })
+
+    const afterSwitch = runReducer(state, {
+      type: 'SET_RUN', runId: next.id, generation: 2,
+      run: next, agentState: next.state, artifacts: [],
+    })
+    const afterLateEvent = runReducer(afterSwitch, {
+      type: 'APPEND_EVENT', runId: previous.id, generation: 1, event: oldEvent,
+    })
+    const afterCurrentEvents = runReducer(afterLateEvent, {
+      type: 'SET_EVENTS', runId: next.id, generation: 2, events: [oldEvent, nextEvent],
+    })
+    const afterLateRun = runReducer(afterCurrentEvents, {
+      type: 'SET_RUN', runId: previous.id, generation: 1,
+      run: previous, agentState: previous.state, artifacts: [],
+    })
+    const afterLateItems = runReducer(afterLateRun, {
+      type: 'SET_PROJECTED_ITEMS', runId: previous.id, generation: 1, items: [oldItem],
+    })
+
+    expect(afterLateEvent).toBe(afterSwitch)
+    expect(afterCurrentEvents.run?.id).toBe(next.id)
+    expect(afterCurrentEvents.events).toEqual([nextEvent])
+    expect(afterLateRun).toBe(afterCurrentEvents)
+    expect(afterLateItems).toBe(afterCurrentEvents)
+    expect(afterLateItems.items).toEqual([])
   })
 })
 

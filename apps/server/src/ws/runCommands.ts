@@ -13,7 +13,7 @@ import { z } from 'zod'
 
 import { optionalPositiveInteger, requiredRunProvider } from './payload.js'
 import { respondDecision } from './decisionCommand.js'
-import { sendRunSnapshot, snapshotRun, subscribeToRun } from './subscriptions.js'
+import { reserveRunCapture, sendRunSnapshot, snapshotRun, subscribeToRun } from './subscriptions.js'
 import type { WsCommandRegistry } from './commandRegistry.js'
 import type { AuthContext } from '../security/types.js'
 
@@ -98,7 +98,11 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
     payloadSchema: runIdPayloadSchema,
     auth: 'required',
     csrf: false,
-    handler: (payload, context) => snapshotRun(payload.runId, context.dependencies.store),
+    handler: (payload, context) => {
+      const scheduled = reserveRunCapture<Awaited<ReturnType<typeof snapshotRun>>>(context.ws, payload.runId)
+      context.setResponseDelivery(scheduled.deliver)
+      return scheduled.start(() => snapshotRun(payload.runId, context.dependencies.store))
+    },
   })
 
   registry.register({
@@ -173,8 +177,15 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
     auth: 'required',
     csrf: false,
     handler: (payload, context) => {
-      subscribeToRun(context.ws, payload.runId, context.dependencies.store, context.dependencies.events, context.subscriptions)
-      return snapshotRun(payload.runId, context.dependencies.store)
+      const scheduled = reserveRunCapture<Awaited<ReturnType<typeof snapshotRun>>>(context.ws, payload.runId)
+      context.setResponseDelivery(scheduled.deliver)
+      try {
+        subscribeToRun(context.ws, payload.runId, context.dependencies.store, context.dependencies.events, context.subscriptions)
+      } catch (error) {
+        scheduled.cancel()
+        throw error
+      }
+      return scheduled.start(() => snapshotRun(payload.runId, context.dependencies.store))
     },
   })
 

@@ -123,7 +123,11 @@ function AppShell() {
     placeResolution,
     clearRun,
     items,
+    abortRunSelection: abortRawRunSelection,
+    beginRunSelection: beginRawRunSelection,
+    captureRunSelection: captureRawRunSelection,
     hydrateRun,
+    isRunSelectionCurrent: isRawRunSelectionCurrent,
     acceptRun,
     startRun,
     stopSubmitting,
@@ -136,6 +140,7 @@ function AppShell() {
   } = useRunController()
   const {
     activeThreadId,
+    applyWorkspaceBootstrap,
     canonicalThreadItems,
     clearCanonicalThreadItems,
     ensureActiveThread: ensureSessionActiveThread,
@@ -316,11 +321,22 @@ function AppShell() {
     requestMapFocus(mapLayerId)
   }, [mapScene.layers, requestMapFocus, setSelectedArtifactId])
 
-  const { clearActiveRunState, hydrateRunState } = useWorkspaceRunProjection({
+  const {
+    abortRunSelection,
+    beginRunSelection,
+    captureRunSelection,
+    clearActiveRunState,
+    hydrateRunState,
+    isRunSelectionCurrent,
+  } = useWorkspaceRunProjection({
+    abortRunSelection: abortRawRunSelection,
+    beginRunSelection: beginRawRunSelection,
+    captureRunSelection: captureRawRunSelection,
     clearArtifacts,
     clearCanonicalThreadItems,
     clearRun,
     hydrateRun,
+    isRunSelectionCurrent: isRawRunSelectionCurrent,
     setActiveThreadId,
     setModel,
     setProvider,
@@ -331,11 +347,15 @@ function AppShell() {
   })
 
   const { authMe, authStatus, authMode, clearAuth, retryAuth } = useWorkspaceBootstrap({
+    abortRunSelection,
     applyProviders,
     applyTools: applyToolDescriptors,
+    applyWorkspaceBootstrap,
+    beginRunSelection,
     clearActiveRunState,
     getThreadHistory,
     hydrateRunState,
+    isRunSelectionCurrent,
     loadWorkspaceBootstrap,
     readWorkspacePointer,
     setActiveThreadId,
@@ -425,6 +445,9 @@ function AppShell() {
   })
 
   const { handleInterruptRun, handleRespondDecision, handleSubmit } = useRunLifecycleActions({
+    abortRunSelection,
+    beginRunSelection,
+    captureRunSelection,
     session,
     currentThreadId,
     query,
@@ -438,6 +461,7 @@ function AppShell() {
     clearArtifacts,
     clearCanonicalThreadItems,
     hydrateRunState,
+    isRunSelectionCurrent,
     refreshCanonicalThreadHistory,
     refreshSessionHistory,
     respondDecision,
@@ -472,6 +496,8 @@ function AppShell() {
     handleRestoreThread,
     handleSelectThread,
   } = useThreadLifecycleActions({
+    abortRunSelection,
+    beginRunSelection,
     session,
     currentThreadId,
     clearActiveRunState,
@@ -482,6 +508,7 @@ function AppShell() {
     getThreadHistory,
     hasMoreRunHistory,
     hydrateRunState,
+    isRunSelectionCurrent,
     isRunHistoryLoading,
     loadRunHistory,
     purgeTrashedThread,
@@ -511,10 +538,13 @@ function AppShell() {
   const onRestoreThreadAction = useVoidCallback(handleRestoreThread)
   const onPurgeThreadAction = useVoidCallback(handlePurgeThread)
   const handleRunTool = useToolExecutionAction({
+    abortRunSelection,
+    beginRunSelection,
     sessionId: session?.id,
     threadId: currentThreadId,
     runId: run?.id,
     hydrateRunState,
+    isRunSelectionCurrent,
     runTool,
     setIsToolSubmitting,
     setToolRunResult,
@@ -537,10 +567,23 @@ function AppShell() {
   })
 
   const handleSelectHistoryRun = useCallback((runId: string) => {
-    void hydrateRunState(runId)
+    const selection = beginRunSelection()
+    void hydrateRunState(runId, selection).then(hydration => {
+      if (hydration.status === 'superseded') return
+    }).catch(error => {
+      if (!isRunSelectionCurrent(selection)) return
+      setUiError(formatUiError(error, '历史运行加载失败，请稍后重试。'))
+    })
     setPanelMode('history')
     setActiveNav('history')
-  }, [hydrateRunState, setActiveNav, setPanelMode])
+  }, [
+    beginRunSelection,
+    hydrateRunState,
+    isRunSelectionCurrent,
+    setActiveNav,
+    setPanelMode,
+    setUiError,
+  ])
 
   const inspectorDetails: WorkspaceInspectorDetailsInput = {
     runStatus: run?.status,
@@ -711,7 +754,10 @@ function AppShell() {
                       void handleCancelAutomation(automationRunId)
                     },
                     onOpenAutomationRun: (sessionId, runId, threadId) => {
-                      void hydrateRunState(runId).then(loadedRun => {
+                      const selection = beginRunSelection()
+                      void hydrateRunState(runId, selection).then(hydration => {
+                        if (hydration.status === 'superseded' || !isRunSelectionCurrent(selection)) return
+                        const loadedRun = hydration.run
                         if (loadedRun.sessionId !== sessionId || (threadId && loadedRun.threadId !== threadId)) {
                           throw new Error('Automation 交付运行归属与持久化导航目标不一致。')
                         }
@@ -719,6 +765,7 @@ function AppShell() {
                         setPanelMode('summary')
                         setActiveSidebarItem('assistant')
                       }).catch(error => {
+                        if (!isRunSelectionCurrent(selection)) return
                         setUiError(formatUiError(error, 'Automation 交付运行加载失败，请稍后重试。'))
                       })
                     },

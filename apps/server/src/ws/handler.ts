@@ -16,7 +16,7 @@ import { StoreNotFoundError } from '../store/storeErrors.js'
 import { AuthorizationError } from '../security/authorizationService.js'
 import { makeId } from '../utils/ids.js'
 import { failure, parseMessage, push, success, type ClientMsg } from './protocol.js'
-import { sendWs } from './subscriptions.js'
+import { clearRunDeliveries, sendWs } from './subscriptions.js'
 import type { SecurityServices } from '../security/routes.js'
 import { WsMessageRateLimiter } from '../security/rateLimiter.js'
 import type { AuthContext } from '../security/types.js'
@@ -68,6 +68,7 @@ export function createWsHandler(server: Server, dependencies: WsDependencies) {
       clearInterval(keepalive)
       subscriptions.forEach(unsubscribe => unsubscribe())
       subscriptions.clear()
+      clearRunDeliveries(ws)
       wsRateLimiter.releaseConnection(connectionId)
       wsConnectionsActive.dec()
       if (error) {
@@ -116,19 +117,36 @@ export function createWsHandler(server: Server, dependencies: WsDependencies) {
               wsMessagesTotal.inc({ type: msg.type, direction: 'outbound' })
               return
             }
+            let responseDelivery: ((message: string) => void) | null = null
+            const deliverResponse = (message: string) => {
+              if (responseDelivery) responseDelivery(message)
+              else sendWs(ws, message)
+            }
             try {
               const registeredCommand = commandRegistry.get(msg.type)
               if (!registeredCommand) throw new Error(`WS 命令 '${msg.type}' 尚未注册。`)
               assertRegisteredCommandCsrf(msg, authContext, registeredCommand)
-              const result = await commandRegistry.execute(msg, { dependencies, runtime, runTasks, files, ws, subscriptions, auth: authContext ?? null })
-              sendWs(ws, success(msg.id, result))
+              const result = await commandRegistry.execute(msg, {
+                dependencies,
+                runtime,
+                runTasks,
+                files,
+                ws,
+                subscriptions,
+                auth: authContext ?? null,
+                setResponseDelivery: deliver => {
+                  if (responseDelivery) throw new Error('WS 响应交付器不能重复注册。')
+                  responseDelivery = deliver
+                },
+              })
+              deliverResponse(success(msg.id, result))
               wsMessagesTotal.inc({ type: msg.type, direction: 'outbound' })
             } catch (error) {
               const code = error instanceof StoreNotFoundError ? 'not_found'
                 : error instanceof AuthorizationError ? 'forbidden'
                 : 'command_failed'
               logger.warn({ error: errorLogPayload(error), code }, 'ws command failed')
-              sendWs(ws, failure(msg.id, code, formatError(error)))
+              deliverResponse(failure(msg.id, code, formatError(error)))
               wsMessagesTotal.inc({ type: msg.type, direction: 'outbound' })
             }
           })

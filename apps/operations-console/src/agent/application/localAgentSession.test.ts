@@ -14,6 +14,7 @@ import { EventEmitter } from 'node:events'
 import {
   analysisRunSchema,
   conversationItemSchema,
+  runEventSchema,
   runSnapshotSchema,
   workspaceBootstrapSnapshotSchema,
   type AnalysisRun,
@@ -71,19 +72,113 @@ describe('LocalAgentSession', () => {
     expect(client.requests.some(request => request.type === 'run:start')).toBe(false)
   })
 
-  it('upserts cumulative streaming items by itemId instead of duplicating text', async () => {
+  it('applies cursor-checked text deltas without duplicating the item', async () => {
     const client = new TestClient()
     const session = new LocalAgentSession({ connectClient: async () => client })
     await session.initialize()
     await session.submit('你好')
 
-    client.push(itemPush('答'))
-    client.push(itemPush('答案'))
+    client.push(itemPush('', 0))
+    client.push(deltaPush('答', 1, 0))
+    client.push(deltaPush('案', 2, 1))
 
     await vi.waitFor(() => {
       expect(session.snapshot().items).toHaveLength(1)
       expect(session.snapshot().items[0]?.body).toBe('答案')
     })
+  })
+
+  it('resubscribes on a cursor gap and restores the exact authoritative body', async () => {
+    const client = new TestClient()
+    const session = new LocalAgentSession({ connectClient: async () => client })
+    await session.initialize()
+    await session.submit('你好')
+    client.push(itemPush('', 0))
+    const restored = conversationItemSchema.parse({
+      itemId: 'item_answer', itemType: 'message', runId: 'run_1', threadId: 'thread_1',
+      role: 'assistant', body: '完整答案', status: 'running',
+      timestamp: '2026-07-27T00:00:01.000Z',
+    })
+    client.subscriptionSnapshot = runSnapshotSchema.parse({
+      run: client.startRun,
+      items: [restored],
+      events: [],
+      itemStream: {
+        streamId: 'stream_1',
+        cursors: [{ itemId: restored.itemId, sequence: 2, utf16Offset: 4 }],
+      },
+    })
+
+    client.push(deltaPush('答案', 2, 2))
+
+    await vi.waitFor(() => expect(session.snapshot().items[0]?.body).toBe('完整答案'))
+    expect(client.requests.filter(request => request.type === 'run:subscribe')).toHaveLength(2)
+  })
+
+  it('uses a new stream snapshot as an authoritative reset instead of merging stale items', async () => {
+    const client = new TestClient()
+    const session = new LocalAgentSession({ connectClient: async () => client })
+    await session.initialize()
+    await session.submit('你好')
+    client.push(itemPush('', 0))
+    client.push(deltaPush('旧答案', 1, 0))
+    expect(session.snapshot().items).toHaveLength(1)
+
+    client.push({
+      type: 'run.snapshot',
+      id: null,
+      payload: { data: runSnapshotSchema.parse({
+        run: client.startRun,
+        items: [],
+        events: [],
+        itemStream: { streamId: 'stream_restarted', cursors: [] },
+      }) },
+    })
+
+    expect(session.snapshot().items).toEqual([])
+  })
+
+  it('leaves buffering after a failed resubscribe so later exact deltas can continue', async () => {
+    const client = new TestClient()
+    const session = new LocalAgentSession({ connectClient: async () => client })
+    await session.initialize()
+    await session.submit('你好')
+    client.push(itemPush('', 0))
+    client.subscriptionError = new Error('snapshot unavailable')
+
+    client.push(deltaPush('缺口', 2, 1))
+    await vi.waitFor(() => expect(session.snapshot().error).toContain('重同步失败'))
+    client.push(deltaPush('恢复', 1, 0))
+
+    await vi.waitFor(() => expect(session.snapshot().items[0]?.body).toBe('恢复'))
+  })
+
+  it('preserves a pushed event when authoritative snapshots are projected around it', async () => {
+    const client = new TestClient()
+    const session = new LocalAgentSession({ connectClient: async () => client })
+    await session.initialize()
+    await session.submit('事件账本不得回滚')
+    const event = runEventSchema.parse({
+      eventId: 'event_ledger', runId: 'run_1', threadId: 'thread_1',
+      type: 'step.completed', message: '持久化事件',
+      timestamp: '2026-07-27T00:00:02.000Z',
+    })
+    const snapshot = (events: unknown[]) => ({
+      type: 'run.snapshot' as const,
+      id: null,
+      payload: { data: runSnapshotSchema.parse({
+        run: client.startRun,
+        items: [],
+        events,
+        itemStream: { streamId: 'stream_1', cursors: [] },
+      }) },
+    })
+
+    client.push(snapshot([]))
+    client.push({ type: 'run.event', id: null, payload: { data: event } })
+    client.push(snapshot([event]))
+
+    expect(session.snapshot().events.map(current => current.eventId)).toEqual([event.eventId])
   })
 
   it('switches to the new run returned by a clarification response', async () => {
@@ -105,6 +200,7 @@ describe('LocalAgentSession', () => {
     client.startRun = waiting
     const next = run('run_next', 'running')
     client.decisionRun = next
+    client.onRespondDecision = () => client.push(itemPush('旧运行文本', 0, 'run_waiting'))
     const session = new LocalAgentSession({ connectClient: async () => client })
     await session.initialize()
     await session.submit('明天会下雨吗？')
@@ -112,7 +208,9 @@ describe('LocalAgentSession', () => {
     await session.respondDecision({ decisionId: 'decision_place', text: '杭州' })
 
     expect(session.snapshot().run?.id).toBe('run_next')
-    expect(client.requests.at(-1)).toMatchObject({
+    expect(session.snapshot().items).toEqual([])
+    expect(session.snapshot().error).toBeNull()
+    expect(client.requests.find(request => request.type === 'run:respond-decision')).toMatchObject({
       type: 'run:respond-decision',
       payload: { runId: 'run_waiting', decisionId: 'decision_place', text: '杭州' },
     })
@@ -129,6 +227,40 @@ describe('LocalAgentSession', () => {
     expect(session.snapshot().run?.id).toBe('run_waiting')
     expect(session.snapshot().threadId).toBe('thread_1')
   })
+
+  it('does not let a delayed reconnect subscription resurrect a cleared conversation', async () => {
+    const firstClient = new TestClient()
+    const secondClient = new TestClient()
+    const completedRun = run('run_completed', 'completed')
+    firstClient.startRun = completedRun
+    secondClient.startRun = completedRun
+    let releaseReconnect!: () => void
+    secondClient.subscriptionBarrier = new Promise<void>(resolve => {
+      releaseReconnect = resolve
+    })
+    let connections = 0
+    const session = new LocalAgentSession({
+      connectClient: async () => (connections++ === 0 ? firstClient : secondClient),
+    })
+    await session.initialize()
+    await session.submit('已完成运行')
+
+    const reconnect = (session as unknown as {
+      connect(reconnecting: boolean): Promise<void>
+    }).connect(true)
+    await vi.waitFor(() => {
+      expect(secondClient.requests.some(request => request.type === 'run:subscribe')).toBe(true)
+    })
+
+    session.newConversation()
+    releaseReconnect()
+    await reconnect
+
+    expect(session.snapshot().run).toBeNull()
+    expect(session.snapshot().threadId).toBeNull()
+    expect(session.snapshot().items).toEqual([])
+    expect(session.snapshot().events).toEqual([])
+  })
 })
 
 class TestClient implements LocalAgentClientPort {
@@ -136,6 +268,10 @@ class TestClient implements LocalAgentClientPort {
   readonly requests: Array<{ type: WsControlCommand; payload: Record<string, unknown> }> = []
   startRun = run('run_1', 'running')
   decisionRun = this.startRun
+  subscriptionSnapshot: z.infer<typeof runSnapshotSchema> | null = null
+  subscriptionError: Error | null = null
+  subscriptionBarrier: Promise<void> | null = null
+  onRespondDecision: (() => void) | null = null
 
   async send<T>(
     type: WsControlCommand,
@@ -143,6 +279,15 @@ class TestClient implements LocalAgentClientPort {
     schema: z.ZodType<T>,
   ): Promise<T> {
     this.requests.push({ type, payload })
+    if (type === 'run:respond-decision') this.onRespondDecision?.()
+    if (type === 'run:subscribe' && this.subscriptionError) {
+      const error = this.subscriptionError
+      this.subscriptionError = null
+      throw error
+    }
+    if (type === 'run:subscribe' && this.subscriptionBarrier) {
+      await this.subscriptionBarrier
+    }
     const value: unknown = type === 'workspace:bootstrap'
       ? bootstrap()
       : type === 'run:start'
@@ -150,7 +295,17 @@ class TestClient implements LocalAgentClientPort {
         : type === 'run:respond-decision'
           ? this.decisionRun
           : type === 'run:subscribe' || type === 'run:get'
-            ? runSnapshotSchema.parse({ run: this.startRun, items: [], events: [] })
+            ? type === 'run:subscribe' && this.subscriptionSnapshot
+              ? this.subscriptionSnapshot
+              : runSnapshotSchema.parse({
+                run: type === 'run:subscribe' && this.decisionRun.id !== this.startRun.id
+                  && payload.runId === this.decisionRun.id
+                  ? this.decisionRun
+                  : this.startRun,
+                items: [],
+                events: [],
+                itemStream: { streamId: 'stream_1', cursors: [] },
+              })
             : this.startRun
     return schema.parse(value)
   }
@@ -247,21 +402,42 @@ function run(id: string, status: AnalysisRun['status']): AnalysisRun {
   })
 }
 
-function itemPush(body: string): LocalAgentPush {
+function itemPush(body: string, sequence: number, runId = 'run_1'): LocalAgentPush {
+  const item = conversationItemSchema.parse({
+    itemId: 'item_answer',
+    itemType: 'message',
+    runId,
+    threadId: 'thread_1',
+    role: 'assistant',
+    body,
+    status: 'running',
+    timestamp: '2026-07-27T00:00:01.000Z',
+  })
   return {
     type: 'run.item',
     id: null,
     payload: {
-      data: conversationItemSchema.parse({
-        itemId: 'item_answer',
-        itemType: 'message',
-        runId: 'run_1',
-        threadId: 'thread_1',
-        role: 'assistant',
-        body,
-        status: 'running',
-        timestamp: '2026-07-27T00:00:01.000Z',
-      }),
+      data: {
+        updateType: 'item_upsert',
+        schemaVersion: 1,
+        streamId: 'stream_1',
+        cursor: { sequence, utf16Offset: body.length },
+        item,
+      },
+    },
+  }
+}
+
+function deltaPush(text: string, sequence: number, utf16Offset: number): LocalAgentPush {
+  return {
+    type: 'run.item.delta',
+    id: null,
+    payload: {
+      data: {
+        updateType: 'text_delta', schemaVersion: 1, streamId: 'stream_1',
+        runId: 'run_1', threadId: 'thread_1', itemId: 'item_answer',
+        sequence, utf16Offset, text,
+      },
     },
   }
 }

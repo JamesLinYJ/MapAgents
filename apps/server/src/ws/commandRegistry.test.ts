@@ -93,10 +93,12 @@ function emptyContext(auth: AuthContext | null = null): Parameters<WsCommandRegi
   return {
     dependencies: {} as Parameters<WsCommandRegistry['execute']>[1]['dependencies'],
     runtime: {} as Parameters<WsCommandRegistry['execute']>[1]['runtime'],
+    runTasks: {} as Parameters<WsCommandRegistry['execute']>[1]['runTasks'],
     files: {} as Parameters<WsCommandRegistry['execute']>[1]['files'],
     ws: {} as Parameters<WsCommandRegistry['execute']>[1]['ws'],
     subscriptions: new Map(),
     auth,
+    setResponseDelivery: () => {},
   }
 }
 

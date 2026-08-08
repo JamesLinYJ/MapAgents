@@ -16,6 +16,7 @@ import type {
   RunCheckpoint, RunSteeringRecord, TranscriptEntry, TranscriptEntryKind, ThreadManifest,
   ThreadMemoryDocument, CompactionRecord, ToolValueRef, MeteorologicalDatasetRecord,
 } from '../schemas/types.js'
+import type { ConversationItemStoreUpdate } from '../conversation/itemUpdates.js'
 import { ArtifactStore, type VisibleArtifactOptions } from './artifactStore.js'
 import { ConversationProjectionIndex } from './conversationProjectionIndex.js'
 import { ContentObjectGateway } from './contentObjectGateway.js'
@@ -119,6 +120,8 @@ export class PlatformPersistenceFacade {
         runBus: events.runs,
         eventBus: events.runEvents,
         itemBus: events.conversationItems,
+        itemUpsertBus: events.conversationItemUpserts,
+        itemDeltaBus: events.conversationItemDeltas,
       },
     )
     this.artifactStore = new ArtifactStore(
@@ -338,8 +341,8 @@ export class PlatformPersistenceFacade {
     return this.runStore.listEvents(runId)
   }
 
-  async appendItem(item: ConversationItem): Promise<void> {
-    await this.runStore.appendItem(item)
+  async appendItem(update: ConversationItemStoreUpdate): Promise<void> {
+    await this.runStore.appendItem(update)
   }
 
   async enqueueRunInput(input: {
@@ -362,6 +365,10 @@ export class PlatformPersistenceFacade {
 
   async listItems(runId: string): Promise<ConversationItem[]> {
     return this.runStore.listItems(runId)
+  }
+
+  async listItemSnapshot(runId: string) {
+    return this.runStore.listItemSnapshot(runId)
   }
 
   async getThreadManifest(threadId: string): Promise<ThreadManifest> {

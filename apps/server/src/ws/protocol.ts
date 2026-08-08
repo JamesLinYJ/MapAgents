@@ -38,7 +38,7 @@ export function failure(id: string | null, code: string, message: string): strin
 }
 
 export function push(
-  type: 'run.item' | 'run.event' | 'run.snapshot'
+  type: 'run.item' | 'run.item.delta' | 'run.event' | 'run.snapshot'
     | 'thread.entry' | 'thread.updated' | 'thread.compacted' | 'thread.memory.updated'
     | 'map.scene.updated'
     | 'keepalive',

@@ -11,3 +11,4 @@
 
 export * from './presentation.js'
 export * from './projection.js'
+export * from './streamProjection.js'

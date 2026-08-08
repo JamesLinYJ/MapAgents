@@ -39,7 +39,6 @@ export class RuntimeTranscriptProjector {
     return {
       assistantItemId: null,
       reasoningItemId: null,
-      reasoningText: '',
       lastAssistantText: '',
       completedAssistantItems: [],
       subAgentCallItemIds: new Map(),
@@ -60,7 +59,6 @@ export class RuntimeTranscriptProjector {
         if (!projection.assistantItemId) {
           projection.assistantItemId = itemSink.startItem('message', { role: 'assistant' }).itemId
         }
-        projection.lastAssistantText += event.data.delta
         itemSink.deltaItem(projection.assistantItemId, event.data.delta)
       }
       if (event.data.type === 'model') {
@@ -69,7 +67,6 @@ export class RuntimeTranscriptProjector {
           if (!projection.reasoningItemId) {
             projection.reasoningItemId = itemSink.startItem('reasoning', { role: 'assistant' }).itemId
           }
-          projection.reasoningText += delta
           itemSink.deltaItem(projection.reasoningItemId, delta)
         }
       }
@@ -85,23 +82,25 @@ export class RuntimeTranscriptProjector {
           .filter(part => part.type === 'output_text')
           .map(part => part.text)
           .join('')
-        if (content) projection.lastAssistantText = content
+        if (content && !projection.assistantItemId) projection.lastAssistantText = content
       }
       return
     }
     if (event.name === 'reasoning_item_created') {
       if (projection.reasoningItemId) {
-        itemSink.completeItem(projection.reasoningItemId, { body: projection.reasoningText })
+        itemSink.completeItem(projection.reasoningItemId)
         projection.reasoningItemId = null
       }
       return
     }
     if (event.name === 'tool_called') {
-      if (projection.lastAssistantText.trim()) {
-        const text = projection.lastAssistantText.trim()
+      if (projection.assistantItemId || projection.lastAssistantText.trim()) {
         const itemId = projection.assistantItemId
           ?? itemSink.startItem('message', { role: 'assistant' }).itemId
-        itemSink.completeItem(itemId, { body: text })
+        const completed = itemSink.completeItem(itemId, projection.assistantItemId
+          ? {}
+          : { body: projection.lastAssistantText })
+        const text = completed.body ?? ''
         projection.completedAssistantItems.push({ itemId, text, entryId: null })
         projection.assistantItemId = null
         projection.lastAssistantText = ''

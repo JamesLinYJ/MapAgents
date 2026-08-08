@@ -13,7 +13,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { ItemSink } from '../conversation/itemSink.js'
 import { ToolRegistry } from '../framework/registry.js'
 import type { ToolProvider, ToolResult } from '../framework/types.js'
-import type { AgentWorkflow } from '../schemas/types.js'
+import type { AgentWorkflow, ConversationItem } from '../schemas/types.js'
+import type { ConversationItemWrite } from '../conversation/itemUpdates.js'
 import type { ToolExecutionStore } from '../store/runtimePorts.js'
 import { ToolResultCommitService } from '../tools/resultPersistence.js'
 import { formatToolResultForModel, ToolExecutionCoordinator, validateAgentWorkflowDraft } from './toolExecutionCoordinator.js'
@@ -226,7 +227,7 @@ describe('ToolExecutionCoordinator', () => {
 
   it('persists the Chinese tool label with transcript and conversation items', async () => {
     const transcriptWrites: Array<Record<string, unknown>> = []
-    const conversationItems: Array<{ metadata: Record<string, unknown> }> = []
+    const conversationItems: ConversationItem[] = []
     const store = {
       activeTranscript: vi.fn(async () => []),
       appendTranscript: vi.fn(async (input: Record<string, unknown>) => {
@@ -250,7 +251,9 @@ describe('ToolExecutionCoordinator', () => {
     const registry = new ToolRegistry()
     registry.register(testProvider())
     const itemSink = new ItemSink(
-      item => { conversationItems.push(item) },
+      (update: ConversationItemWrite) => {
+        if (update.updateType === 'replace_item') conversationItems.push(update.item)
+      },
       'run_1',
       'thread_1',
     )

@@ -31,11 +31,21 @@ const MESSAGE_TEXT_MAX_BYTES = 48 * 1024
  * 每次 run 状态变化时重复复制到桌面 IPC 或本机 CLI。
  */
 export function projectRunSnapshotForTransport(input: RunSnapshot): RunSnapshot {
+  const items = selectSnapshotItems(input.items).map(projectConversationItemForTransport)
   return runSnapshotSchema.parse({
     run: projectRunForTransport(input.run),
-    items: input.items.slice(-MAX_SNAPSHOT_ITEMS).map(projectConversationItemForTransport),
+    items,
     events: input.events.slice(-MAX_SNAPSHOT_EVENTS).map(projectRunEventForTransport),
+    itemStream: projectItemStreamCursors(input.itemStream, items),
   })
+}
+
+function selectSnapshotItems(items: readonly ConversationItem[]): ConversationItem[] {
+  const selectedIds = new Set(items.slice(-MAX_SNAPSHOT_ITEMS).map(item => item.itemId))
+  for (const item of items) {
+    if (item.status === 'running') selectedIds.add(item.itemId)
+  }
+  return items.filter(item => selectedIds.has(item.itemId))
 }
 
 export function projectRunForTransport(run: AnalysisRun): AnalysisRun {
@@ -87,13 +97,16 @@ export function projectConversationItemForTransport(
   const item = conversationItemSchema.parse(input)
   const isToolItem = item.itemType === 'function_call'
     || item.itemType === 'function_call_output'
+  const isStreamedTextItem = item.itemType === 'message' || item.itemType === 'reasoning'
   return conversationItemSchema.parse({
     ...item,
-    body: projectOptionalText(
-      item.body,
-      isToolItem ? TOOL_TEXT_MAX_BYTES : MESSAGE_TEXT_MAX_BYTES,
-      isToolItem,
-    ),
+    body: isStreamedTextItem
+      ? item.body
+      : projectOptionalText(
+          item.body,
+          isToolItem ? TOOL_TEXT_MAX_BYTES : MESSAGE_TEXT_MAX_BYTES,
+          isToolItem,
+        ),
     arguments: projectOptionalText(item.arguments, TOOL_TEXT_MAX_BYTES, true),
     output: projectOptionalText(item.output, TOOL_TEXT_MAX_BYTES, true),
     metadata: {
@@ -101,6 +114,22 @@ export function projectConversationItemForTransport(
       ...(isToolItem ? { transportProjection: 'bounded_tool_record' } : {}),
     },
   })
+}
+
+function projectItemStreamCursors(
+  stream: RunSnapshot['itemStream'],
+  items: readonly ConversationItem[],
+): RunSnapshot['itemStream'] {
+  const projectedItems = new Map(items.map(item => [item.itemId, item]))
+  return {
+    streamId: stream.streamId,
+    cursors: stream.cursors
+      .filter(cursor => projectedItems.has(cursor.itemId))
+      .map(cursor => ({
+        ...cursor,
+        utf16Offset: (projectedItems.get(cursor.itemId)?.body ?? '').length,
+      })),
+  }
 }
 
 export function projectRunEventForTransport(input: RunEvent): RunEvent {

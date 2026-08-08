@@ -122,7 +122,8 @@ export class RuntimeSdkExecutor {
         }
         await transcriptProjector.linkAssistantTranscriptEntries(options.runId, assembly, projection, itemSink)
         if (projection.reasoningItemId) {
-          itemSink.completeItem(projection.reasoningItemId, { body: projection.reasoningText })
+          itemSink.completeItem(projection.reasoningItemId)
+          projection.reasoningItemId = null
         }
         await this.updateUsage(options.runId, stream.rawResponses)
 

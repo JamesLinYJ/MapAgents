@@ -10,7 +10,15 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-import type { AgentThreadRecord, AnalysisRun, ConversationItem, SessionRecord } from '../schemas/types.js'
+import type {
+  AgentThreadRecord,
+  AnalysisRun,
+  ConversationItem,
+  ConversationItemTextDelta,
+  RunItemUpsert,
+  SessionRecord,
+} from '../schemas/types.js'
+import type { AppendConversationItemBody } from '../conversation/itemUpdates.js'
 import { ConversationProjectionIndex } from './conversationProjectionIndex.js'
 import { InMemoryEventBus } from './eventBus.js'
 import type { ConversationPayloadStore } from './conversationPayloadStore.js'
@@ -118,8 +126,11 @@ function createRunStore(overrides: Partial<ConversationPayloadStore> = {}) {
     }),
     saveThread: vi.fn().mockRejectedValue(new Error('projection unavailable')),
     appendConversationItem: vi.fn().mockResolvedValue(undefined),
+    listConversationItems: vi.fn().mockResolvedValue([]),
   } as unknown as ConversationPersistence
   const itemBus = new InMemoryEventBus<ConversationItem>()
+  const itemUpsertBus = new InMemoryEventBus<RunItemUpsert>()
+  const itemDeltaBus = new InMemoryEventBus<ConversationItemTextDelta>()
   const store = new RunStore(
     index,
     payloadStore,
@@ -130,9 +141,11 @@ function createRunStore(overrides: Partial<ConversationPayloadStore> = {}) {
       runBus: new InMemoryEventBus<AnalysisRun>(),
       eventBus: new InMemoryEventBus(),
       itemBus,
+      itemUpsertBus,
+      itemDeltaBus,
     },
   )
-  return { store, index, payloadStore, repository, itemBus }
+  return { store, index, payloadStore, repository, itemBus, itemUpsertBus, itemDeltaBus }
 }
 
 describe('RunStore projections', () => {
@@ -282,4 +295,192 @@ describe('RunStore projections', () => {
     )
     expect(liveItems.map(item => item.body)).toEqual(['', '第一段', '第一段第二段', '最终回答'])
   })
+
+  it('reconstructs live snapshots from strictly ordered deltas without persisting each frame', async () => {
+    const { store, repository, itemBus, itemDeltaBus } = createRunStore()
+    const fullItems: ConversationItem[] = []
+    const deltas: ConversationItemTextDelta[] = []
+    itemBus.subscribe('run_1', item => fullItems.push(item))
+    itemDeltaBus.subscribe('run_1', delta => deltas.push(delta))
+    const started: ConversationItem = {
+      itemId: 'item_delta_1',
+      itemType: 'message',
+      runId: 'run_1',
+      threadId: 'thread_1',
+      role: 'assistant',
+      body: '',
+      name: null,
+      arguments: null,
+      output: null,
+      turnId: null,
+      callId: null,
+      phase: null,
+      status: 'running',
+      isError: false,
+      metadata: {},
+      timestamp: '2026-07-09T00:00:01.000Z',
+    }
+
+    await store.appendItem(started)
+    await store.appendItem(appendBody('杭州'))
+    await store.appendItem(appendBody('有雨'))
+
+    expect(repository.appendConversationItem).toHaveBeenCalledTimes(1)
+    expect(fullItems).toEqual([started])
+    expect(deltas).toEqual([
+      expect.objectContaining({ sequence: 1, utf16Offset: 0, text: '杭州' }),
+      expect.objectContaining({ sequence: 2, utf16Offset: 2, text: '有雨' }),
+    ])
+    expect(new Set(deltas.map(delta => delta.streamId)).size).toBe(1)
+    const snapshot = await store.listItemSnapshot('run_1')
+    expect(snapshot.items).toContainEqual(expect.objectContaining({
+      itemId: 'item_delta_1',
+      body: '杭州有雨',
+      status: 'running',
+    }))
+    expect(snapshot.itemStream.cursors).toContainEqual({
+      itemId: 'item_delta_1', sequence: 2, utf16Offset: 4,
+    })
+  })
+
+  it('serializes concurrent item writers before assigning stream cursors', async () => {
+    const { store, repository, itemUpsertBus } = createRunStore()
+    const upserts: RunItemUpsert[] = []
+    itemUpsertBus.subscribe('run_1', update => upserts.push(update))
+    let unblockFirstWrite!: () => void
+    const firstWrite = new Promise<void>(resolve => { unblockFirstWrite = resolve })
+    vi.mocked(repository.appendConversationItem)
+      .mockImplementationOnce(() => firstWrite)
+      .mockResolvedValue(undefined)
+    const started: ConversationItem = {
+      itemId: 'item_concurrent_1', itemType: 'message', runId: 'run_1', threadId: 'thread_1',
+      role: 'assistant', body: '', name: null, arguments: null, output: null,
+      turnId: null, callId: null, phase: null, status: 'running', isError: false,
+      metadata: {}, timestamp: '2026-07-09T00:00:01.000Z',
+    }
+
+    const startWrite = store.appendItem(started)
+    await vi.waitFor(() => expect(repository.appendConversationItem).toHaveBeenCalledTimes(1))
+    const terminalWrite = store.appendItem({ ...started, status: 'completed' })
+    await Promise.resolve()
+
+    expect(repository.appendConversationItem).toHaveBeenCalledTimes(1)
+    unblockFirstWrite()
+    await Promise.all([startWrite, terminalWrite])
+    expect(upserts.map(update => update.cursor.sequence)).toEqual([0, 1])
+  })
+
+  it('atomically closes item writes before waiting for an in-flight durable item', async () => {
+    const { store, repository } = createRunStore()
+    let unblockFirstWrite!: () => void
+    const firstWrite = new Promise<void>(resolve => { unblockFirstWrite = resolve })
+    vi.mocked(repository.appendConversationItem).mockImplementationOnce(() => firstWrite)
+    const started: ConversationItem = {
+      itemId: 'item_closing_1', itemType: 'message', runId: 'run_1', threadId: 'thread_1',
+      role: 'assistant', body: '', name: null, arguments: null, output: null,
+      turnId: null, callId: null, phase: null, status: 'running', isError: false,
+      metadata: {}, timestamp: '2026-07-09T00:00:01.000Z',
+    }
+    const itemWrite = store.appendItem(started)
+    await vi.waitFor(() => expect(repository.appendConversationItem).toHaveBeenCalledOnce())
+
+    const completion = store.complete('run_1', 'completed')
+    await expect(store.appendItem({ ...started, itemId: 'item_too_late' }))
+      .rejects.toThrow('已封口')
+    expect(repository.saveRunWithCheckpoint).not.toHaveBeenCalled()
+
+    unblockFirstWrite()
+    await itemWrite
+    await completion
+    expect(repository.saveRunWithCheckpoint).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the item fence closed when an older running-status write commits before completion', async () => {
+    const { store, repository } = createRunStore()
+    let releaseRunningSave!: () => void
+    const runningSave = new Promise<void>(resolve => { releaseRunningSave = resolve })
+    vi.mocked(repository.saveRunWithCheckpoint)
+      .mockImplementationOnce(() => runningSave)
+      .mockResolvedValue(undefined)
+
+    const olderStatusWrite = store.updateStatus('run_1', 'running')
+    await vi.waitFor(() => expect(repository.saveRunWithCheckpoint).toHaveBeenCalledOnce())
+    const completion = store.complete('run_1', 'completed')
+    releaseRunningSave()
+    await Promise.all([olderStatusWrite, completion])
+
+    await expect(store.appendItem({
+      itemId: 'item_after_completion', itemType: 'message', runId: 'run_1', threadId: 'thread_1',
+      role: 'assistant', body: '迟到正文', name: null, arguments: null, output: null,
+      turnId: null, callId: null, phase: null, status: 'completed', isError: false,
+      metadata: {}, timestamp: '2026-07-09T00:00:02.000Z',
+    })).rejects.toThrow('已封口')
+    expect(repository.appendConversationItem).not.toHaveBeenCalled()
+  })
+
+  it('reopens item writes only after a later running status commits', async () => {
+    const { store, repository } = createRunStore()
+    let releaseCompletionSave!: () => void
+    const completionSave = new Promise<void>(resolve => { releaseCompletionSave = resolve })
+    vi.mocked(repository.saveRunWithCheckpoint)
+      .mockImplementationOnce(() => completionSave)
+      .mockResolvedValue(undefined)
+    const item: ConversationItem = {
+      itemId: 'item_after_resume', itemType: 'message', runId: 'run_1', threadId: 'thread_1',
+      role: 'assistant', body: '恢复后的正文', name: null, arguments: null, output: null,
+      turnId: null, callId: null, phase: null, status: 'completed', isError: false,
+      metadata: {}, timestamp: '2026-07-09T00:00:03.000Z',
+    }
+
+    const completion = store.complete('run_1', 'waiting_approval')
+    await vi.waitFor(() => expect(repository.saveRunWithCheckpoint).toHaveBeenCalledOnce())
+    const reopen = store.updateStatus('run_1', 'running')
+    await expect(store.appendItem(item)).rejects.toThrow('已封口')
+    releaseCompletionSave()
+    await Promise.all([completion, reopen])
+
+    await expect(store.appendItem(item)).resolves.toBeUndefined()
+  })
+
+  it('rejects text without a start or after terminal, and keeps terminal metadata replacements versioned', async () => {
+    const { store, itemUpsertBus } = createRunStore()
+    const upserts: RunItemUpsert[] = []
+    itemUpsertBus.subscribe('run_1', update => upserts.push(update))
+    const started: ConversationItem = {
+      itemId: 'item_delta_1', itemType: 'message', runId: 'run_1', threadId: 'thread_1',
+      role: 'assistant', body: '', name: null, arguments: null, output: null,
+      turnId: null, callId: null, phase: null, status: 'running', isError: false,
+      metadata: {}, timestamp: '2026-07-09T00:00:01.000Z',
+    }
+    await expect(store.appendItem(appendBody('缺失'))).rejects.toThrow('缺少 replace_item start')
+    await store.appendItem(started)
+    await store.appendItem(appendBody('杭州'))
+    await store.appendItem({ ...started, body: '杭州', status: 'completed' })
+    await expect(store.appendItem(appendBody('迟到'))).rejects.toThrow('已结束')
+    await store.appendItem({
+      ...started,
+      body: '杭州',
+      status: 'completed',
+      metadata: { transcriptEntryId: 'entry_1' },
+    })
+
+    expect(upserts.map(update => update.cursor.sequence)).toEqual([0, 2, 3])
+    expect((await store.listItemSnapshot('run_1')).itemStream.cursors).toContainEqual({
+      itemId: 'item_delta_1', sequence: 3, utf16Offset: 2,
+    })
+    await expect(store.appendItem({ ...started, body: '杭州', status: 'running' }))
+      .rejects.toThrow('不能重新进入 running')
+    await expect(store.appendItem({ ...started, body: '上海', status: 'completed' }))
+      .rejects.toThrow('终态正文和状态不可改写')
+  })
 })
+
+function appendBody(text: string): AppendConversationItemBody {
+  return {
+    updateType: 'append_body',
+    runId: 'run_1',
+    threadId: 'thread_1',
+    itemId: 'item_delta_1',
+    text,
+  }
+}

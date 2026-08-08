@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6
 // --------------------------------------------------------------------------
 
-import type { ConversationItem } from '@geo-agent-platform/shared-types'
+import type { ConversationItem, ConversationItemTextDelta } from '@geo-agent-platform/shared-types'
 import { describe, expect, it } from 'vitest'
 
 import { ConversationProjectionIndex } from './projection.js'
@@ -172,7 +172,61 @@ describe('ConversationProjectionIndex', () => {
     expect(projection.getStats().materializations).toBe(1)
     expect(projection.getStats().comparisons).toBeLessThan(count * 16)
   })
+
+  it('appends contiguous text deltas in place without removing or re-sorting the item', () => {
+    const projection = new ConversationProjectionIndex([
+      makeItem({ itemId: 'streamed', runId: 'run-1', body: '', status: 'running' }),
+    ], 'live')
+    const before = projection.getStats()
+
+    expect(projection.appendTextDelta(delta({ sequence: 1, utf16Offset: 0, text: '杭州' }))).toBe('applied')
+    expect(projection.appendTextDelta(delta({ sequence: 2, utf16Offset: 2, text: '有雨' }))).toBe('applied')
+
+    expect(projection.toArray()[0]?.body).toBe('杭州有雨')
+    expect(projection.getStats().removals).toBe(before.removals)
+    expect(projection.getIndexSnapshot().orderedIds).toEqual(['streamed'])
+  })
+
+  it('deduplicates replayed deltas and reports sequence, offset, and content gaps explicitly', () => {
+    const projection = new ConversationProjectionIndex([
+      makeItem({ itemId: 'streamed', runId: 'run-1', body: '杭州', status: 'running' }),
+    ], 'live')
+
+    expect(projection.appendTextDelta(delta({ sequence: 7, utf16Offset: 0, text: '杭州' }))).toBe('duplicate')
+    expect(projection.appendTextDelta(delta({ sequence: 8, utf16Offset: 2, text: '有雨' }))).toBe('applied')
+    expect(projection.appendTextDelta(delta({ sequence: 10, utf16Offset: 4, text: '。' }))).toBe('sequence_gap')
+    expect(projection.appendTextDelta(delta({ sequence: 9, utf16Offset: 8, text: '。' }))).toBe('offset_gap')
+    expect(projection.appendTextDelta(delta({ sequence: 7, utf16Offset: 0, text: '上海' }))).toBe('content_conflict')
+    expect(projection.toArray()[0]?.body).toBe('杭州有雨')
+  })
+
+  it('appends only body and never invents an output-field stream', () => {
+    const projection = new ConversationProjectionIndex([
+      makeItem({
+        itemId: 'streamed', runId: 'run-1', itemType: 'function_call_output',
+        body: '', output: 'durable-output', status: 'running',
+      }),
+    ], 'live')
+
+    expect(projection.appendTextDelta(delta({ sequence: 1, utf16Offset: 0, text: '正文' })))
+      .toBe('applied')
+    expect(projection.toArray()[0]).toMatchObject({ body: '正文', output: 'durable-output' })
+  })
 })
+
+function delta(
+  overrides: Pick<ConversationItemTextDelta, 'sequence' | 'utf16Offset' | 'text'>,
+): ConversationItemTextDelta {
+  return {
+    updateType: 'text_delta',
+    schemaVersion: 1,
+    streamId: 'stream-1',
+    runId: 'run-1',
+    threadId: 'thread-1',
+    itemId: 'streamed',
+    ...overrides,
+  }
+}
 
 function makeItem(overrides: Partial<ConversationItem>): ConversationItem {
   return {

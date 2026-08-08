@@ -13,36 +13,98 @@
 // 的位置，流式完成和 transcript 身份回填不得把旧消息移动到工具后面。
 
 import { describe, expect, it } from 'vitest'
-import type { ConversationItem, RunEvent } from '../schemas/types.js'
+import type {
+  ConversationItem,
+  RunEvent,
+} from '../schemas/types.js'
+import type {
+  AppendConversationItemBody,
+  ConversationItemWrite,
+  ReplaceConversationItem,
+} from '../conversation/itemUpdates.js'
 import { InMemoryEventBus } from '../store/eventBus.js'
 import { ItemSink } from '../conversation/itemSink.js'
 import { RunEventSink, TurnFinalizer } from './turnRunner.js'
 
 describe('ItemSink', () => {
-  it('publishes started, delta, and completed ConversationItem updates', async () => {
-    const bus = new InMemoryEventBus<ConversationItem>()
-    const items: ConversationItem[] = []
-    bus.subscribe('run_1', (item) => items.push(item))
-
-    const sink = new ItemSink((item) => bus.publish(item.runId, item), 'run_1', 'thread_1')
+  it('publishes start/final items and an ordered text delta without cumulative snapshots', async () => {
+    const updates: ConversationItemWrite[] = []
+    const sink = new ItemSink(update => updates.push(update), 'run_1', 'thread_1')
     sink.startItem('message', { itemId: 'item_1', role: 'assistant' })
     sink.deltaItem('item_1', '你')
     sink.deltaItem('item_1', '好')
     sink.completeItem('item_1')
     await sink.flush()
 
-    expect(items).toHaveLength(4)
+    const items = updates.filter(isItemReplacement).map(update => update.item)
+    const deltas = updates.filter(isBodyAppend)
+    expect(items).toHaveLength(2)
     expect(items[0].status).toBe('running')
-    expect(items[1].body).toBe('你')
-    expect(items[2].body).toBe('你好')
-    expect(items[3].status).toBe('completed')
-    expect(items[3].body).toBe('你好')
+    expect(deltas).toEqual([
+      expect.objectContaining({ itemId: 'item_1', text: '你' }),
+      expect.objectContaining({ itemId: 'item_1', text: '好' }),
+    ])
+    expect(items[1].status).toBe('completed')
+    expect(items[1].body).toBe('你好')
     expect(new Set(items.map(item => item.timestamp)).size).toBe(1)
+  })
+
+  it('keeps 32 KiB streaming transport linear while preserving the exact final text', async () => {
+    const updates: ConversationItemWrite[] = []
+    const sink = new ItemSink(update => updates.push(update), 'run_1', 'thread_1')
+    const expected = '0123456789abcdef'.repeat(2_048)
+    sink.startItem('message', { itemId: 'item_large', role: 'assistant' })
+    for (let offset = 0; offset < expected.length; offset += 16) {
+      sink.deltaItem('item_large', expected.slice(offset, offset + 16))
+    }
+    sink.completeItem('item_large')
+    await sink.flush()
+
+    const items = updates.filter(isItemReplacement).map(update => update.item)
+    const deltas = updates.filter(isBodyAppend)
+    expect(deltas).toHaveLength(2_048)
+    expect(deltas.map(delta => delta.text).join('')).toBe(expected)
+    expect(items.at(-1)?.body).toBe(expected)
+    expect(deltas.reduce(
+      (total, delta) => total + Buffer.byteLength(delta.text, 'utf8'),
+      0,
+    )).toBe(Buffer.byteLength(expected, 'utf8'))
+  })
+
+  it('splits one oversized Unicode delta at a bounded UTF-8 frame without delaying it', async () => {
+    const updates: ConversationItemWrite[] = []
+    const sink = new ItemSink(update => updates.push(update), 'run_1', 'thread_1')
+    const expected = '🌧️杭州'.repeat(4_000)
+    sink.startItem('message', { itemId: 'item_unicode', role: 'assistant' })
+    sink.deltaItem('item_unicode', expected)
+    sink.completeItem('item_unicode')
+    await sink.flush()
+
+    const deltas = updates.filter(isBodyAppend)
+    expect(deltas.length).toBeGreaterThan(1)
+    expect(deltas.every(delta => Buffer.byteLength(delta.text, 'utf8') <= 16 * 1024)).toBe(true)
+    expect(deltas.map(delta => delta.text).join('')).toBe(expected)
+    expect(updates.filter(isItemReplacement).at(-1)?.item.body).toBe(expected)
+  })
+
+  it('keeps streamed whitespace exact even when a secondary accumulator disagrees', async () => {
+    const updates: ConversationItemWrite[] = []
+    const sink = new ItemSink(update => updates.push(update), 'run_1', 'thread_1')
+    sink.startItem('message', { itemId: 'item_whitespace', role: 'assistant' })
+    sink.deltaItem('item_whitespace', ' 结论。\n')
+
+    const completed = sink.completeItem('item_whitespace', { body: '结论。' })
+    await sink.flush()
+
+    expect(completed.body).toBe(' 结论。\n')
+    expect(updates.filter(isItemReplacement).at(-1)?.item.body).toBe(' 结论。\n')
   })
 
   it('keeps item order stable when metadata is linked after completion', async () => {
     const items: ConversationItem[] = []
-    const sink = new ItemSink((item) => items.push(item), 'run_1', 'thread_1')
+    const sink = new ItemSink((update) => {
+      if (isItemReplacement(update)) items.push(update.item)
+    }, 'run_1', 'thread_1')
 
     const assistant = sink.startItem('message', { itemId: 'assistant_1', role: 'assistant' })
     sink.deltaItem(assistant.itemId, '先说明。')
@@ -66,11 +128,12 @@ describe('ItemSink', () => {
     const order: string[] = []
     let releaseFirst: (() => void) | null = null
     const firstWrite = new Promise<void>(resolve => { releaseFirst = resolve })
-    const sink = new ItemSink(async item => {
-      order.push(`start:${item.itemId}`)
-      if (item.itemId === 'item_1') await firstWrite
-      if (item.itemId === 'item_2') throw new Error('database write failed')
-      order.push(`end:${item.itemId}`)
+    const sink = new ItemSink(async update => {
+      const itemId = update.updateType === 'replace_item' ? update.item.itemId : update.itemId
+      order.push(`start:${itemId}`)
+      if (itemId === 'item_1') await firstWrite
+      if (itemId === 'item_2') throw new Error('database write failed')
+      order.push(`end:${itemId}`)
     }, 'run_1', 'thread_1')
 
     sink.startItem('message', { itemId: 'item_1' })
@@ -94,7 +157,9 @@ describe('TurnFinalizer', () => {
 
     const finalizer = new TurnFinalizer(
       new RunEventSink((event) => eventBus.publish(event.runId, event), 'run_1', 'thread_1'),
-      new ItemSink((item) => itemBus.publish(item.runId, item), 'run_1', 'thread_1'),
+      new ItemSink((update) => {
+        if (isItemReplacement(update)) itemBus.publish(update.item.runId, update.item)
+      }, 'run_1', 'thread_1'),
       () => undefined,
     )
 
@@ -106,3 +171,11 @@ describe('TurnFinalizer', () => {
     expect(items[0].metadata.resultType).toBe('success')
   })
 })
+
+function isBodyAppend(update: ConversationItemWrite): update is AppendConversationItemBody {
+  return update.updateType === 'append_body'
+}
+
+function isItemReplacement(update: ConversationItemWrite): update is ReplaceConversationItem {
+  return update.updateType === 'replace_item'
+}

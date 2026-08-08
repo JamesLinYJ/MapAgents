@@ -21,10 +21,11 @@ import type {
 
 import { formatUiError, transcriptEntriesToConversationItems } from '../bootstrap'
 import type { PanelMode, PrimaryNav, SidebarItemId } from '../types'
+import type { RunHydrationCapability } from './useWorkspaceRunProjection'
 
 type ListUpdater<T> = T[] | ((current: T[]) => T[])
 
-export interface ThreadLifecycleOptions {
+export interface ThreadLifecycleOptions extends RunHydrationCapability {
   session?: SessionRecord
   currentThreadId?: string | null
   clearActiveRunState: () => void
@@ -34,7 +35,6 @@ export interface ThreadLifecycleOptions {
   getThread: (threadId: string) => Promise<ThreadDetailSnapshot>
   getThreadHistory: (threadId: string, cursor?: string | null, limit?: number) => Promise<ThreadHistoryPage>
   hasMoreRunHistory: boolean
-  hydrateRunState: (runId: string) => Promise<AnalysisRun>
   isRunHistoryLoading: boolean
   loadRunHistory: (sessionId: string, append?: boolean) => Promise<unknown>
   purgeTrashedThread: (threadId: string) => Promise<void>
@@ -57,6 +57,8 @@ export interface ThreadLifecycleOptions {
 export function useThreadLifecycleActions(options: ThreadLifecycleOptions) {
   const {
     session,
+    abortRunSelection,
+    beginRunSelection,
     currentThreadId,
     clearActiveRunState,
     clearUploads,
@@ -66,6 +68,7 @@ export function useThreadLifecycleActions(options: ThreadLifecycleOptions) {
     getThreadHistory,
     hasMoreRunHistory,
     hydrateRunState,
+    isRunSelectionCurrent,
     isRunHistoryLoading,
     loadRunHistory,
     purgeTrashedThread,
@@ -108,18 +111,21 @@ export function useThreadLifecycleActions(options: ThreadLifecycleOptions) {
   ])
 
   const handleSelectThread = useCallback(async (threadId: string) => {
+    const selection = beginRunSelection()
     try {
       setUiError(undefined)
       const [threadPayload, historyPage] = await Promise.all([
         getThread(threadId),
         getThreadHistory(threadId, null, 200),
       ])
+      if (!isRunSelectionCurrent(selection)) return
       const canonicalItems = transcriptEntriesToConversationItems(historyPage.entries)
       const runs = threadPayload.runs ?? []
-      setActiveThreadId(threadPayload.thread.id)
-      setThreadRuns(runs)
       if (threadPayload.latestRun?.id) {
-        await hydrateRunState(threadPayload.latestRun.id)
+        const hydration = await hydrateRunState(threadPayload.latestRun.id, selection)
+        if (hydration.status === 'superseded' || !isRunSelectionCurrent(selection)) return
+        setActiveThreadId(threadPayload.thread.id)
+        setThreadRuns(runs)
         setCanonicalThreadItems(threadPayload.thread.id, canonicalItems)
         if (sessionId) {
           syncUrl(sessionId, threadPayload.latestRun.id, threadPayload.thread.id)
@@ -132,13 +138,18 @@ export function useThreadLifecycleActions(options: ThreadLifecycleOptions) {
       setCanonicalThreadItems(threadPayload.thread.id, canonicalItems)
       if (sessionId) syncUrl(sessionId, undefined, threadPayload.thread.id)
     } catch (error) {
+      if (!isRunSelectionCurrent(selection)) return
+      abortRunSelection(selection)
       setUiError(formatUiError(error, '历史记录加载失败，请稍后重试。'))
     }
   }, [
     clearActiveRunState,
+    abortRunSelection,
+    beginRunSelection,
     getThread,
     getThreadHistory,
     hydrateRunState,
+    isRunSelectionCurrent,
     sessionId,
     setActiveThreadId,
     setCanonicalThreadItems,

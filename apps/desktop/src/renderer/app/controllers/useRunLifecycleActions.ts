@@ -20,13 +20,16 @@ import type {
 
 import { supportsAgentSdkLiveSupervisor } from '../../shared/providerCapabilities'
 import { projectTimeline } from '../../features/conversation/timelineProjector'
+import type { RunSelectionToken } from '../../features/runs/useRunState'
 import { formatUiError, reportNonBlockingError } from '../bootstrap'
 import { mergeThreadRuns } from '../derivedState'
 import type { PanelMode, PrimaryNav, SidebarItemId } from '../types'
+import type { RunHydrationCapability } from './useWorkspaceRunProjection'
 
 type ListUpdater<T> = T[] | ((current: T[]) => T[])
 
-export interface RunLifecycleOptions {
+export interface RunLifecycleOptions extends RunHydrationCapability {
+  captureRunSelection: (runId: string) => RunSelectionToken | null
   session?: SessionRecord
   currentThreadId?: string | null
   query: string
@@ -35,11 +38,10 @@ export interface RunLifecycleOptions {
   provider: string
   model: string
   run?: AnalysisRun
-  acceptRun: (run: AnalysisRun) => void
+  acceptRun: (run: AnalysisRun, selection?: RunSelectionToken) => boolean
   cancelRun: (runId: string) => Promise<AnalysisRun>
   clearArtifacts: () => void
   clearCanonicalThreadItems: () => void
-  hydrateRunState: (runId: string) => Promise<AnalysisRun>
   refreshCanonicalThreadHistory: (threadId: string) => Promise<unknown>
   refreshSessionHistory: (sessionId: string) => Promise<unknown>
   respondDecision: (
@@ -67,7 +69,7 @@ export interface RunLifecycleOptions {
     model?: string,
     executionMode?: AgentExecutionMode,
   ) => Promise<AnalysisRun>
-  startRun: () => void
+  startRun: (selection: RunSelectionToken) => boolean
   startThreadRun: (
     threadId: string,
     query: string,
@@ -75,13 +77,16 @@ export interface RunLifecycleOptions {
     model?: string,
     executionMode?: AgentExecutionMode,
   ) => Promise<AnalysisRun>
-  stopSubmitting: () => void
+  stopSubmitting: (selection: RunSelectionToken) => boolean
   syncUrl: (sessionId: string, runId?: string, threadId?: string) => void
 }
 
 export function useRunLifecycleActions(options: RunLifecycleOptions) {
   const {
     session,
+    abortRunSelection,
+    beginRunSelection,
+    captureRunSelection,
     currentThreadId,
     query,
     items,
@@ -94,6 +99,7 @@ export function useRunLifecycleActions(options: RunLifecycleOptions) {
     clearArtifacts,
     clearCanonicalThreadItems,
     hydrateRunState,
+    isRunSelectionCurrent,
     refreshCanonicalThreadHistory,
     refreshSessionHistory,
     respondDecision,
@@ -130,17 +136,22 @@ export function useRunLifecycleActions(options: RunLifecycleOptions) {
     if (!submittedQuery) return
 
     if (!forceNewThread && run?.status === 'running') {
+      const selection = captureRunSelection(run.id)
+      if (!selection) return
       try {
         setUiError(undefined)
         await steerRun(run.id, submittedQuery, `steer_${crypto.randomUUID()}`)
+        if (!isRunSelectionCurrent(selection)) return
         setQuery('')
       } catch (error) {
+        if (!isRunSelectionCurrent(selection)) return
         setUiError(formatUiError(error, '引导消息提交失败，请重试。'))
       }
       return
     }
 
     const targetThreadId = forceNewThread ? undefined : currentThreadId
+    let selection: RunSelectionToken | null = null
     try {
       const selectedProvider = providers.find(item => item.provider === provider)
       if (selectedProvider && !selectedProvider.configured) {
@@ -152,8 +163,9 @@ export function useRunLifecycleActions(options: RunLifecycleOptions) {
         return
       }
 
+      selection = beginRunSelection()
       setUiError(undefined)
-      startRun()
+      startRun(selection)
       setActiveNav('analysis')
       setPanelMode('summary')
       setActiveSidebarItem('assistant')
@@ -173,10 +185,12 @@ export function useRunLifecycleActions(options: RunLifecycleOptions) {
       const createdRun = targetThreadId
         ? await startThreadRun(targetThreadId, submittedQuery, provider, model || undefined, executionMode)
         : await startAnalysis(session.id, submittedQuery, provider, model || undefined, executionMode)
+      if (!isRunSelectionCurrent(selection)) return
+      const acceptedSelection = selection
       setQuery('')
       const nextThreadId = createdRun.threadId ?? targetThreadId
       startTransition(() => {
-        acceptRun(createdRun)
+        acceptRun(createdRun, acceptedSelection)
         setProvider(createdRun.modelProvider ?? provider)
         setModel(createdRun.modelName ?? model)
         setActiveThreadId(nextThreadId ?? undefined)
@@ -189,15 +203,21 @@ export function useRunLifecycleActions(options: RunLifecycleOptions) {
       })
       syncUrl(session.id, createdRun.id, nextThreadId ?? undefined)
     } catch (error) {
+      if (selection && !isRunSelectionCurrent(selection)) return
+      if (selection) abortRunSelection(selection)
       setUiError(formatUiError(error, '任务提交失败，请重试。'))
-      stopSubmitting()
+      if (selection) stopSubmitting(selection)
     }
   }, [
     acceptRun,
+    abortRunSelection,
+    beginRunSelection,
+    captureRunSelection,
     clearArtifacts,
     clearCanonicalThreadItems,
     currentThreadId,
     items,
+    isRunSelectionCurrent,
     model,
     provider,
     providers,
@@ -231,25 +251,36 @@ export function useRunLifecycleActions(options: RunLifecycleOptions) {
   }, [query, submitMessage])
 
   const handleInterruptRun = useCallback(async () => {
-    if (!run?.id) {
-      stopSubmitting()
-      return
-    }
+    if (!run?.id) return
+    const selection = beginRunSelection()
     try {
       setUiError(undefined)
       const cancelledRun = await cancelRun(run.id)
-      acceptRun(cancelledRun)
+      if (!isRunSelectionCurrent(selection)) return
+      acceptRun(cancelledRun, selection)
       if (cancelledRun.sessionId) {
         void refreshSessionHistory(cancelledRun.sessionId).catch(error => {
           reportNonBlockingError('refreshSessionHistory:cancelRun', error)
         })
       }
     } catch (error) {
+      if (!isRunSelectionCurrent(selection)) return
+      abortRunSelection(selection)
       setUiError(formatUiError(error, '中断运行失败，请稍后再试。'))
     } finally {
-      stopSubmitting()
+      stopSubmitting(selection)
     }
-  }, [acceptRun, cancelRun, refreshSessionHistory, run?.id, setUiError, stopSubmitting])
+  }, [
+    acceptRun,
+    abortRunSelection,
+    beginRunSelection,
+    cancelRun,
+    isRunSelectionCurrent,
+    refreshSessionHistory,
+    run?.id,
+    setUiError,
+    stopSubmitting,
+  ])
 
   const handleRespondDecision = useCallback(async (
     decisionId: string,
@@ -257,16 +288,19 @@ export function useRunLifecycleActions(options: RunLifecycleOptions) {
     text?: string | null,
   ) => {
     if (!run?.id) return
+    const selection = beginRunSelection()
     let decisionSubmitted = false
     try {
       setUiError(undefined)
-      startRun()
+      startRun(selection)
       const nextRun = await respondDecision(run.id, decisionId, optionId, text)
       decisionSubmitted = true
+      if (!isRunSelectionCurrent(selection)) return
       const nextThreadId = nextRun.threadId ?? currentThreadId
       if (nextThreadId) await refreshCanonicalThreadHistory(nextThreadId)
+      if (!isRunSelectionCurrent(selection)) return
+      if (!acceptRun(nextRun, selection)) return
       startTransition(() => {
-        acceptRun(nextRun)
         setProvider(nextRun.modelProvider ?? provider)
         setModel(nextRun.modelName ?? model)
         setActiveThreadId(nextThreadId ?? undefined)
@@ -278,20 +312,26 @@ export function useRunLifecycleActions(options: RunLifecycleOptions) {
         })
       }
       syncUrl(nextRun.sessionId, nextRun.id, nextThreadId ?? undefined)
-      await hydrateRunState(nextRun.id)
+      const hydration = await hydrateRunState(nextRun.id, selection)
+      if (hydration.status === 'superseded') return
     } catch (error) {
+      if (!isRunSelectionCurrent(selection)) return
+      abortRunSelection(selection)
       if (decisionSubmitted) {
         reportNonBlockingError('hydrateConversation:respondDecision', error)
         setUiError('决策已经提交，但完整对话历史恢复失败。请刷新页面重新加载记录，不要重复提交决策。')
       } else {
         setUiError(formatUiError(error, '决策提交失败，请重试。'))
       }
-      stopSubmitting()
+      stopSubmitting(selection)
     }
   }, [
     acceptRun,
+    abortRunSelection,
+    beginRunSelection,
     currentThreadId,
     hydrateRunState,
+    isRunSelectionCurrent,
     model,
     provider,
     refreshCanonicalThreadHistory,

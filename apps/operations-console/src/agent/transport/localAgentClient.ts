@@ -12,10 +12,11 @@
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 
-import type {
-  WsControlCommand,
-  WsControlRequest,
-  WsRunPush,
+import {
+  wsRunPushSchema,
+  type WsControlCommand,
+  type WsControlRequest,
+  type WsRunPush,
 } from '@geo-agent-platform/shared-types/transport'
 import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 import WebSocket from 'ws'
@@ -24,6 +25,17 @@ import { z } from 'zod'
 const MAX_FRAME_BYTES = 64 * 1024
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 const DEFAULT_TIMEOUT_MS = 45_000
+const RUN_PUSH_TYPES = new Set([
+  'run.item',
+  'run.item.delta',
+  'run.event',
+  'run.snapshot',
+  'thread.entry',
+  'thread.updated',
+  'thread.compacted',
+  'thread.memory.updated',
+  'map.scene.updated',
+])
 
 const envelopeSchema = z.object({
   type: z.string().min(1),
@@ -212,8 +224,18 @@ export class LocalAgentClient {
       pending.reject(new Error(detail))
       return
     }
-    if (message.id !== null || !isPushType(message.type)) return
-    this.events.emit('push', message as LocalAgentPush)
+    if (message.id !== null) return
+    if (message.type === 'keepalive') {
+      this.events.emit('push', message as LocalAgentPush)
+      return
+    }
+    if (!RUN_PUSH_TYPES.has(message.type)) return
+    const push = wsRunPushSchema.safeParse(message)
+    if (!push.success) {
+      this.disconnect(new Error(`Agent 控制 push '${message.type}' 不符合协议。`))
+      return
+    }
+    this.events.emit('push', push.data)
   }
 
   private disconnect(error: Error): void {
@@ -221,6 +243,9 @@ export class LocalAgentClient {
     this.intentionallyClosed = true
     this.rejectPending(error)
     this.events.emit('disconnected', error)
+    if (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING) {
+      this.socket.terminate()
+    }
   }
 
   private rejectPending(error: Error): void {
@@ -268,20 +293,6 @@ function waitForOpen(socket: WebSocket, timeoutMs: number): Promise<void> {
     socket.once('open', onOpen)
     socket.once('error', onError)
   })
-}
-
-function isPushType(type: string): type is LocalAgentPush['type'] {
-  return [
-    'run.item',
-    'run.event',
-    'run.snapshot',
-    'thread.entry',
-    'thread.updated',
-    'thread.compacted',
-    'thread.memory.updated',
-    'map.scene.updated',
-    'keepalive',
-  ].includes(type)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -64,12 +64,30 @@ describe('LocalAgentClient', () => {
   })
 
   it('delivers only recognized server push envelopes', async () => {
+    const item = {
+      itemId: 'item_1', itemType: 'message', runId: 'run_1', threadId: 'thread_1',
+      turnId: null, callId: null, role: 'assistant', body: '', name: null,
+      arguments: null, output: null, isError: false, phase: null, status: 'running',
+      metadata: {}, timestamp: '2026-08-08T00:00:00.000Z',
+    }
     const server = await openServer(socket => {
       setTimeout(() => {
         socket.send(`${JSON.stringify({
           type: 'run.item',
           id: null,
-          payload: { data: { itemId: 'item_1' } },
+          payload: { data: {
+            updateType: 'item_upsert', schemaVersion: 1, streamId: 'stream_1',
+            cursor: { sequence: 0, utf16Offset: 0 }, item,
+          } },
+        })}\n`)
+        socket.send(`${JSON.stringify({
+          type: 'run.item.delta',
+          id: null,
+          payload: { data: {
+            updateType: 'text_delta', schemaVersion: 1, streamId: 'stream_1',
+            runId: 'run_1', threadId: 'thread_1', itemId: 'item_1',
+            sequence: 1, utf16Offset: 0, text: '杭州',
+          } },
         })}\n`)
         socket.send(`${JSON.stringify({
           type: 'untrusted.extension',
@@ -82,8 +100,24 @@ describe('LocalAgentClient', () => {
     const pushes: string[] = []
     client.onPush(message => pushes.push(message.type))
 
-    await vi.waitFor(() => expect(pushes).toEqual(['run.item']))
+    await vi.waitFor(() => expect(pushes).toEqual(['run.item', 'run.item.delta']))
     client.close()
+  })
+
+  it('disconnects when a recognized push violates its cursor protocol', async () => {
+    const server = await openServer(socket => {
+      setTimeout(() => socket.send(`${JSON.stringify({
+        type: 'run.item.delta', id: null,
+        payload: { data: { itemId: 'item_1', text: '杭州' } },
+      })}\n`), 5)
+    })
+    const client = await connect(server)
+    const disconnected = vi.fn()
+    client.onDisconnected(disconnected)
+
+    await vi.waitFor(() => expect(disconnected).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('不符合协议') }),
+    ))
   })
 
   it('hard-fails malformed protocol responses and rejects pending writes', async () => {

@@ -14,8 +14,10 @@ import type {
   AnalysisRun,
   CompactionRecord,
   ConversationItem,
+  ConversationItemTextDelta,
   MapScene,
   RunEvent,
+  RunItemUpsert,
   ThreadManifest,
   ThreadMemoryDocument,
   TranscriptEntry,
@@ -26,6 +28,8 @@ import { InMemoryEventBus } from './eventBus.js'
 export class PlatformEventHub {
   readonly runEvents = new InMemoryEventBus<RunEvent>()
   readonly conversationItems = new InMemoryEventBus<ConversationItem>()
+  readonly conversationItemUpserts = new InMemoryEventBus<RunItemUpsert>()
+  readonly conversationItemDeltas = new InMemoryEventBus<ConversationItemTextDelta>()
   readonly runs = new InMemoryEventBus<AnalysisRun>()
   readonly threadEntries = new InMemoryEventBus<TranscriptEntry>()
   readonly threadUpdates = new InMemoryEventBus<{

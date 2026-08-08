@@ -65,7 +65,6 @@ export interface RuntimeAssembly {
 export interface StreamProjectionState {
   assistantItemId: string | null
   reasoningItemId: string | null
-  reasoningText: string
   lastAssistantText: string
   completedAssistantItems: Array<{ itemId: string; text: string; entryId: string | null }>
   subAgentCallItemIds: Map<string, string>

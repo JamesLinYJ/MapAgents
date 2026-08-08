@@ -9,7 +9,10 @@
 //   协助:       OpenAI Codex:GPT-5.6
 // --------------------------------------------------------------------------
 
-import type { ConversationItem } from '@geo-agent-platform/shared-types'
+import type {
+  ConversationItem,
+  ConversationItemTextDelta,
+} from '@geo-agent-platform/shared-types'
 
 export type ConversationProjectionSource = 'canonical' | 'live'
 
@@ -19,6 +22,14 @@ export interface ConversationProjectionStats {
   comparisons: number
   materializations: number
 }
+
+export type ConversationDeltaApplyResult =
+  | 'applied'
+  | 'duplicate'
+  | 'missing_item'
+  | 'sequence_gap'
+  | 'offset_gap'
+  | 'content_conflict'
 
 /**
  * 对话实时流的可重建索引。
@@ -36,6 +47,7 @@ export class ConversationProjectionIndex {
   private readonly transcriptEntryMembers = new Map<string, Set<string>>()
   private readonly itemTranscriptEntry = new Map<string, string>()
   private readonly activeSources = new Map<string, ConversationProjectionSource>()
+  private readonly lastDeltaSequences = new Map<string, number>()
   private readonly sourceRecords: Record<ConversationProjectionSource, Map<string, ConversationItem>> = {
     canonical: new Map<string, ConversationItem>(),
     live: new Map<string, ConversationItem>(),
@@ -58,6 +70,10 @@ export class ConversationProjectionIndex {
 
   get size(): number {
     return this.orderedIds.length
+  }
+
+  getItem(itemId: string): ConversationItem | undefined {
+    return this.itemsById.get(itemId)
   }
 
   /** 返回稳定的展示快照；没有更新时复用同一个数组。 */
@@ -106,6 +122,7 @@ export class ConversationProjectionIndex {
   upsert(item: ConversationItem, source: ConversationProjectionSource = 'live'): void {
     const previous = this.sourceRecords[source].get(item.itemId)
     if (previous === item) return
+    this.lastDeltaSequences.delete(item.itemId)
     this.counters.upserts += 1
 
     const activeSource = this.activeSources.get(item.itemId)
@@ -138,7 +155,50 @@ export class ConversationProjectionIndex {
     for (const item of items) this.upsert(item, source)
   }
 
+  /**
+   * 仅在 sequence 与 UTF-16 offset 连续时原位追加正文。正文变化不影响排序或
+   * transcript 身份，因此直接更新双索引，避免每个 delta 都执行 O(n) deactivate。
+   */
+  appendTextDelta(
+    delta: ConversationItemTextDelta,
+    source: ConversationProjectionSource = 'live',
+  ): ConversationDeltaApplyResult {
+    const current = this.itemsById.get(delta.itemId)
+    if (!current || current.runId !== delta.runId) return 'missing_item'
+    const body = current.body ?? ''
+    if (delta.utf16Offset < body.length) {
+      const existing = body.slice(delta.utf16Offset, delta.utf16Offset + delta.text.length)
+      if (existing !== delta.text) return 'content_conflict'
+      const previousSequence = this.lastDeltaSequences.get(delta.itemId) ?? 0
+      this.lastDeltaSequences.set(delta.itemId, Math.max(previousSequence, delta.sequence))
+      return 'duplicate'
+    }
+    if (delta.utf16Offset > body.length) return 'offset_gap'
+
+    const previousSequence = this.lastDeltaSequences.get(delta.itemId)
+    if (previousSequence !== undefined && delta.sequence !== previousSequence + 1) {
+      return 'sequence_gap'
+    }
+
+    const nextBody = body + delta.text
+    const next: ConversationItem = {
+      ...current,
+      body: nextBody,
+    }
+    if (this.activeSources.get(delta.itemId) === source) {
+      this.sourceRecords[source].set(delta.itemId, next)
+      this.itemsById.set(delta.itemId, next)
+      this.snapshot = null
+      this.counters.upserts += 1
+    } else {
+      this.upsert(next, source)
+    }
+    this.lastDeltaSequences.set(delta.itemId, delta.sequence)
+    return 'applied'
+  }
+
   remove(itemId: string): void {
+    this.lastDeltaSequences.delete(itemId)
     for (const source of ['canonical', 'live'] as const) {
       if (this.sourceRecords[source].has(itemId)) this.removeSourceItem(itemId, source)
     }

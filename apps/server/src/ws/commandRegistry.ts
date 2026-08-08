@@ -29,6 +29,7 @@ export interface WsCommandContext {
   ws: WebSocket
   subscriptions: Map<string, () => void>
   auth: AuthContext | null
+  setResponseDelivery(deliver: (message: string) => void): void
 }
 
 export interface WsCommandDefinition<TPayload extends z.ZodTypeAny = z.ZodTypeAny> {

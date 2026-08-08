@@ -15,7 +15,6 @@ import type {
   ArtifactRef,
   CompactionRecord,
   ContentRef,
-  ConversationItem,
   RunCheckpoint,
   RunEvent,
   RunSteeringRecord,
@@ -25,6 +24,7 @@ import type {
   TranscriptEntry,
   TranscriptEntryKind,
 } from '../schemas/types.js'
+import type { ConversationItemStoreUpdate } from '../conversation/itemUpdates.js'
 import type { VisibleArtifactResource } from './postgres/artifactRepository.js'
 import type { FileLifecyclePort } from './fileLifecycleService.js'
 import type { MeteorologicalStore } from './postgres/meteorologicalStore.js'
@@ -66,7 +66,7 @@ export interface AgentRuntimeStore {
   ): Promise<void>
   readAgentsSdkState(runId: string): Promise<string>
   appendEvent(runId: string, event: RunEvent): Promise<void>
-  appendItem(item: ConversationItem): Promise<void>
+  appendItem(update: ConversationItemStoreUpdate): Promise<void>
   enqueueRunInput(input: {
     inputId: string
     entryId: string

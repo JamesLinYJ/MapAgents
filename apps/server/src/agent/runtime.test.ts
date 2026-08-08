@@ -29,6 +29,7 @@ import {
   subAgentDeliverySchema,
   supervisorDeliverySchema,
   type ConversationItem,
+  type ConversationItemTextDelta,
 } from '../schemas/types.js'
 import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import {
@@ -1424,14 +1425,22 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     const assistantUpdates = outcome.liveItems.filter(item => (
       item.itemType === 'message' && item.role === 'assistant'
     ))
+    const assistantItemId = assistantUpdates[0]?.itemId
+    const assistantDeltas = outcome.liveItemDeltas.filter(delta => delta.itemId === assistantItemId)
 
     expect(assistantUpdates.map(item => [item.status, item.body])).toEqual([
       ['running', null],
-      ['running', '逐字'],
-      ['running', '逐字显示。'],
       ['completed', '逐字显示。'],
     ])
     expect(new Set(assistantUpdates.map(item => item.itemId))).toHaveLength(1)
+    expect(assistantDeltas.map(delta => ({
+      sequence: delta.sequence,
+      utf16Offset: delta.utf16Offset,
+      text: delta.text,
+    }))).toEqual([
+      { sequence: 1, utf16Offset: 0, text: '逐字' },
+      { sequence: 2, utf16Offset: 2, text: '显示。' },
+    ])
   })
 
   it('negotiates native Responses web search only for a capable provider', async () => {
@@ -2782,7 +2791,13 @@ async function executeTextRun(
       runtimeConfigSnapshot: testRuntimeConfig(),
     })
     const liveItems: ConversationItem[] = []
-    testPlatformEventHub(store).conversationItems.subscribe(run.id, item => liveItems.push(structuredClone(item)))
+    const liveItemDeltas: ConversationItemTextDelta[] = []
+    const eventHub = testPlatformEventHub(store)
+    eventHub.conversationItems.subscribe(run.id, item => liveItems.push(structuredClone(item)))
+    eventHub.conversationItemDeltas.subscribe(
+      run.id,
+      delta => liveItemDeltas.push(structuredClone(delta)),
+    )
     const completed = await testRuntime(
       store,
       tools,
@@ -2793,6 +2808,7 @@ async function executeTextRun(
       run: structuredClone(completed),
       items: structuredClone(await store.listItems(run.id)),
       liveItems,
+      liveItemDeltas,
       transcript: structuredClone(await store.activeTranscript(thread.id)),
     }
   } finally {

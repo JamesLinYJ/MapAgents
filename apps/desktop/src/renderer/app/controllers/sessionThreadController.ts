@@ -76,15 +76,14 @@ export function useSessionThreadController() {
   const clearCanonicalThreadItems = useSessionStore(state => state.clearCanonicalThreadItems)
   const canonicalThreadItems = canonicalThreadId === activeThreadId ? storedCanonicalThreadItems : []
 
-  const applyBootstrap = useCallback((snapshot: DesktopWorkspaceBootstrapSnapshot) => {
+  const applyWorkspaceBootstrap = useCallback((snapshot: DesktopWorkspaceBootstrapSnapshot) => {
     startTransition(() => applyBootstrapState(snapshot))
   }, [applyBootstrapState])
 
-  const loadWorkspaceBootstrap = useCallback(async (sessionId?: string, workspaceId?: string) => {
-    const snapshot = await bootstrapWorkspace(sessionId, workspaceId)
-    applyBootstrap(snapshot)
-    return snapshot
-  }, [applyBootstrap])
+  const loadWorkspaceBootstrap = useCallback(
+    (sessionId?: string, workspaceId?: string) => bootstrapWorkspace(sessionId, workspaceId),
+    [],
+  )
 
   const refreshSessionHistory = useCallback(async (sessionId: string) => {
     const threads = await listSessionThreads(sessionId)
@@ -224,6 +223,7 @@ export function useSessionThreadController() {
     hasMoreRunHistory: Boolean(runHistoryCursor),
     isRunHistoryLoading,
     loadRunHistory,
+    applyWorkspaceBootstrap,
     loadWorkspaceBootstrap,
     refreshSessionHistory,
     refreshCanonicalThreadHistory,

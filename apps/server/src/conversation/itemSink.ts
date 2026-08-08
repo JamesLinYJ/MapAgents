@@ -15,18 +15,19 @@
 
 import type { ConversationItem } from '../schemas/types.js'
 import { makeId, nowUtc } from '../utils/ids.js'
+import type { ConversationItemWrite } from './itemUpdates.js'
 import { OrderedWriteBuffer } from './orderedWriteBuffer.js'
 
-type AppendItem = (item: ConversationItem) => void | Promise<void>
+type AppendItemUpdate = (update: ConversationItemWrite) => void | Promise<void>
 
 export class ItemSink {
-  private textBuffers = new Map<string, string>()
+  private textBuffers = new Map<string, string[]>()
   private itemDrafts = new Map<string, ConversationItem>()
   private itemSnapshots = new Map<string, ConversationItem>()
   private readonly writes = new OrderedWriteBuffer()
 
   constructor(
-    private appendItem: AppendItem,
+    private appendUpdate: AppendItemUpdate,
     private runId: string,
     private threadId: string | null,
   ) {}
@@ -73,21 +74,25 @@ export class ItemSink {
       timestamp: nowUtc(),
     }
     this.itemDrafts.set(item.itemId, item)
+    this.textBuffers.set(item.itemId, [])
     return this.publish(item)
   }
 
   deltaItem(itemId: string, text: string): void {
-    const current = this.textBuffers.get(itemId) ?? ''
-    const body = current + text
-    this.textBuffers.set(itemId, body)
-    const draft = this.itemDrafts.get(itemId)
-    if (!draft) return
-    this.publish({
-      ...draft,
-      body,
-      output: draft.itemType === 'function_call_output' ? body : draft.output,
-      status: 'running',
-    })
+    if (!text) return
+    if (!this.itemDrafts.has(itemId)) {
+      throw new Error(`不能向未启动或已完成的 ConversationItem '${itemId}' 追加文本`)
+    }
+    for (const chunk of splitTextDelta(text)) {
+      this.textBuffers.get(itemId)?.push(chunk)
+      this.writes.enqueue(() => this.appendUpdate({
+        updateType: 'append_body',
+        runId: this.runId,
+        threadId: this.threadId,
+        itemId,
+        text: chunk,
+      }))
+    }
   }
 
   completeItem(itemId: string, opts: {
@@ -97,26 +102,33 @@ export class ItemSink {
     callId?: string
     name?: string
     metadata?: Record<string, unknown>
-  } = {}): void {
+  } = {}): ConversationItem {
     const draft = this.itemDrafts.get(itemId)
     const previous = this.itemSnapshots.get(itemId)
     const base = draft ?? previous
     const itemType: ConversationItem['itemType'] = base?.itemType ?? 'message'
-    const body = opts.body ?? this.textBuffers.get(itemId) ?? base?.body ?? ''
+    const bufferedChunks = this.textBuffers.get(itemId)
+    const body = bufferedChunks?.length
+      ? bufferedChunks.join('')
+      : opts.body ?? base?.body ?? ''
+    const isError = opts.isError ?? base?.isError ?? false
+    const status: ConversationItem['status'] = opts.isError !== undefined
+      ? opts.isError ? 'failed' : 'completed'
+      : base?.status && base.status !== 'running' ? base.status : 'completed'
     const item: ConversationItem = {
       itemId, itemType,
       runId: this.runId, threadId: this.threadId,
       role: base?.role ?? 'assistant', body,
       name: opts.name ?? base?.name ?? null, callId: opts.callId ?? base?.callId ?? null,
-      output: opts.output ?? base?.output ?? null, isError: opts.isError ?? base?.isError ?? false,
-      status: opts.isError ? 'failed' : 'completed',
+      output: opts.output ?? base?.output ?? null, isError,
+      status,
       metadata: { ...(base?.metadata ?? {}), ...(opts.metadata ?? {}) },
       turnId: base?.turnId ?? null, arguments: base?.arguments ?? null, phase: base?.phase ?? null,
       timestamp: base?.timestamp ?? nowUtc(),
     }
-    this.publish(item)
-    this.textBuffers.delete(itemId)
-    this.itemDrafts.delete(itemId)
+    const published = this.publish(item)
+    this.releaseStreamState(itemId)
+    return published
   }
 
   appendResult(
@@ -137,11 +149,44 @@ export class ItemSink {
 
   private publish(item: ConversationItem): ConversationItem {
     this.itemSnapshots.set(item.itemId, item)
-    this.writes.enqueue(() => this.appendItem(item))
+    this.writes.enqueue(() => this.appendUpdate({ updateType: 'replace_item', item }))
     return item
+  }
+
+  private releaseStreamState(itemId: string): void {
+    this.textBuffers.delete(itemId)
+    this.itemDrafts.delete(itemId)
   }
 
   async flush(): Promise<void> {
     await this.writes.flush()
   }
+}
+
+const MAX_TEXT_DELTA_UTF8_BYTES = 16 * 1024
+
+/**
+ * 只拆分单次上游 delta，绝不跨 callback 合并或等待计时器。按 Unicode code
+ * point 行进，保证代理对和 UTF-8 字节序列都不会被截断。
+ */
+function splitTextDelta(text: string): string[] {
+  if (Buffer.byteLength(text, 'utf8') <= MAX_TEXT_DELTA_UTF8_BYTES) return [text]
+  const chunks: string[] = []
+  let start = 0
+  let bytes = 0
+  for (let index = 0; index < text.length;) {
+    const codePoint = text.codePointAt(index)
+    if (codePoint === undefined) break
+    const width = codePoint > 0xffff ? 2 : 1
+    const codePointBytes = Buffer.byteLength(text.slice(index, index + width), 'utf8')
+    if (bytes > 0 && bytes + codePointBytes > MAX_TEXT_DELTA_UTF8_BYTES) {
+      chunks.push(text.slice(start, index))
+      start = index
+      bytes = 0
+    }
+    bytes += codePointBytes
+    index += width
+  }
+  if (start < text.length) chunks.push(text.slice(start))
+  return chunks
 }
