@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -57,13 +57,7 @@ describe('createSupervisorLogger', () => {
     }, 'API 监督事件')
     await output.close()
 
-    const files = await readdir(paths.operationsRoot)
-    const activeLog = files.find(file => (
-      file.startsWith(`supervisor-${paths.workspaceId}.`)
-      && file.endsWith('.jsonl')
-    ))
-    expect(activeLog).toBeTruthy()
-    const lines = (await readFile(path.join(paths.operationsRoot, activeLog ?? ''), 'utf8'))
+    const lines = (await readFile(paths.systemLogFile, 'utf8'))
       .split(/\r?\n/u)
       .filter(Boolean)
     expect(lines).toHaveLength(1)
@@ -81,6 +75,63 @@ describe('createSupervisorLogger', () => {
     expect(JSON.stringify(entry)).not.toContain('调试提示词')
     expect(JSON.stringify(entry)).not.toContain('direct-secret-value')
     expect(JSON.stringify(entry)).not.toContain('C:\\private')
+  })
+
+  it('rotates a previous UTC day before accepting the first new record', async () => {
+    const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-system-log-'))
+    cleanupPaths.push(projectRoot)
+    const paths = await resolveOperationsPaths({ projectRoot, profile: 'development' })
+    const previousRecord = '{"msg":"前一 UTC 日"}\n'
+    const previousTime = new Date('2026-08-06T23:59:00.000Z')
+    const currentTime = new Date('2026-08-07T00:01:00.000Z')
+    await writeFile(paths.systemLogFile, previousRecord, 'utf8')
+    await utimes(paths.systemLogFile, previousTime, previousTime)
+
+    const output = createSupervisorLogger(paths, 'info', {
+      includeStdout: false,
+      now: () => currentTime,
+    })
+    output.logger.info({ serviceId: 'api' }, '当前 UTC 日')
+    await output.close()
+
+    const active = await readFile(paths.systemLogFile, 'utf8')
+    expect(active).toContain('当前 UTC 日')
+    expect(active).not.toContain('前一 UTC 日')
+    const rotated = (await readdir(paths.operationsRoot))
+      .filter(file => file.startsWith(`supervisor-${paths.workspaceId}.`))
+      .filter(file => file.endsWith('.jsonl'))
+      .filter(file => file !== path.basename(paths.systemLogFile))
+    expect(rotated).toHaveLength(1)
+    expect(await readFile(path.join(paths.operationsRoot, rotated[0] ?? ''), 'utf8'))
+      .toBe(previousRecord)
+  })
+
+  it('serializes the UTC day change between two records in the same process', async () => {
+    const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-system-log-'))
+    cleanupPaths.push(projectRoot)
+    const paths = await resolveOperationsPaths({ projectRoot, profile: 'development' })
+    let currentTime = new Date('2026-08-06T23:59:59.999Z')
+    const output = createSupervisorLogger(paths, 'info', {
+      includeStdout: false,
+      now: () => currentTime,
+    })
+
+    output.logger.info({ serviceId: 'api' }, 'UTC 日界前')
+    currentTime = new Date('2026-08-07T00:00:00.001Z')
+    output.logger.info({ serviceId: 'api' }, 'UTC 日界后')
+    await output.close()
+
+    const active = await readFile(paths.systemLogFile, 'utf8')
+    expect(active).toContain('UTC 日界后')
+    expect(active).not.toContain('UTC 日界前')
+    const rotated = (await readdir(paths.operationsRoot))
+      .filter(file => file.startsWith(`supervisor-${paths.workspaceId}.`))
+      .filter(file => file.endsWith('.jsonl'))
+      .filter(file => file !== path.basename(paths.systemLogFile))
+    expect(rotated).toHaveLength(1)
+    const previous = await readFile(path.join(paths.operationsRoot, rotated[0] ?? ''), 'utf8')
+    expect(previous).toContain('UTC 日界前')
+    expect(previous).not.toContain('UTC 日界后')
   })
 
   it('rebuilds a failed file stream with exponential backoff without buffering duplicate writes', async () => {
