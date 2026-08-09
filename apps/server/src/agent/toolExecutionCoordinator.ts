@@ -29,6 +29,7 @@ import { ItemSink } from '../conversation/itemSink.js'
 import { RunEventSink } from './turnRunner.js'
 import { developerToolsEnabledForRuntime, ToolExecutionPolicy } from './toolExecutionPolicy.js'
 import {
+  AGENT_WORKFLOW_CONTROL_TOOLS,
   completeAgentWorkflowStep,
   failAgentWorkflowStep,
   findRunnableAgentWorkflowStep,
@@ -71,12 +72,18 @@ export class ToolExecutionCoordinator {
   private readonly claimedWorkflowSteps = new Map<string, string>()
   private readonly externalAgentCalls = new Map<string, string>()
   private readonly outputMetadata = new Map<string, AgentToolOutputMetadata>()
+  private readonly callObjectiveRevisions = new Map<string, number>()
+  private modelInputObjectiveRevision: number
   private workflowMutation: Promise<void> = Promise.resolve()
   private resultMutation: Promise<void> = Promise.resolve()
   private readonly policy: ToolExecutionPolicy
   private readonly recoveryLedger: ToolCallRecoveryLedger
 
   constructor(private readonly options: CoordinatorOptions) {
+    const objectiveRevision = options.store.getRun(options.runId).state.objectiveRevision
+    this.modelInputObjectiveRevision = Number.isInteger(objectiveRevision) && objectiveRevision > 0
+      ? objectiveRevision
+      : 1
     this.recoveryLedger = new ToolCallRecoveryLedger(
       options.store,
       options.runId,
@@ -91,6 +98,22 @@ export class ToolExecutionCoordinator {
         ? developerToolsEnabledForRuntime(this.options.runtimeConfig)
         : false,
     })
+  }
+
+  bindModelInputObjectiveRevision(objectiveRevision: number): void {
+    if (!Number.isInteger(objectiveRevision) || objectiveRevision < 1) {
+      throw new Error(`无效的模型输入 objective revision '${objectiveRevision}'`)
+    }
+    if (objectiveRevision < this.modelInputObjectiveRevision) {
+      throw new Error(
+        `模型输入 objective revision 不能从 ${this.modelInputObjectiveRevision} 回退到 ${objectiveRevision}`,
+      )
+    }
+    this.modelInputObjectiveRevision = objectiveRevision
+  }
+
+  currentModelInputObjectiveRevision(): number {
+    return this.modelInputObjectiveRevision
   }
 
   isExecutionEnabled(): boolean {
@@ -209,11 +232,16 @@ export class ToolExecutionCoordinator {
     if (!tool) throw new Error(`工具 '${toolName}' 未注册`)
     const invocation = splitWorkflowStepIdentity(args)
     const existing = (await this.options.store.activeTranscript(this.options.threadId))
-      .some(entry => entry.kind === 'tool_call' && entry.payload.callId === callId)
+      .find(entry => entry.kind === 'tool_call' && entry.payload.callId === callId)
     if (existing) {
+      this.callObjectiveRevisions.set(callId, objectiveRevisionFromPayload(
+        existing.payload,
+        1,
+      ))
       this.preparedCalls.add(callId)
       return
     }
+    const objectiveRevision = this.modelInputObjectiveRevision
     await this.options.store.appendTranscript({
       threadId: this.options.threadId,
       runId: this.options.runId,
@@ -225,6 +253,7 @@ export class ToolExecutionCoordinator {
         label: tool.label,
         arguments: invocation.toolArgs,
         workflowStepId: invocation.workflowStepId,
+        objectiveRevision,
         ledgerStatus: 'prepared',
       },
     })
@@ -232,8 +261,9 @@ export class ToolExecutionCoordinator {
       name: toolName,
       callId,
       arguments: JSON.stringify(invocation.toolArgs),
-      metadata: { toolLabel: tool.label },
+      metadata: { toolLabel: tool.label, objectiveRevision },
     })
+    this.callObjectiveRevisions.set(callId, objectiveRevision)
     this.preparedCalls.add(callId)
     this.callItems.set(callId, item.itemId)
   }
@@ -247,11 +277,16 @@ export class ToolExecutionCoordinator {
     if (this.preparedCalls.has(callId)) return
     const invocation = splitWorkflowStepIdentity(args)
     const existing = (await this.options.store.activeTranscript(this.options.threadId))
-      .some(entry => entry.kind === 'tool_call' && entry.payload.callId === callId)
+      .find(entry => entry.kind === 'tool_call' && entry.payload.callId === callId)
     if (existing) {
+      this.callObjectiveRevisions.set(callId, objectiveRevisionFromPayload(
+        existing.payload,
+        1,
+      ))
       this.preparedCalls.add(callId)
       return
     }
+    const objectiveRevision = this.modelInputObjectiveRevision
     await this.options.store.appendTranscript({
       threadId: this.options.threadId,
       runId: this.options.runId,
@@ -263,9 +298,11 @@ export class ToolExecutionCoordinator {
         label: agentName,
         arguments: invocation.toolArgs,
         workflowStepId: invocation.workflowStepId,
+        objectiveRevision,
         ledgerStatus: 'prepared',
       },
     })
+    this.callObjectiveRevisions.set(callId, objectiveRevision)
     this.preparedCalls.add(callId)
   }
 
@@ -342,6 +379,14 @@ export class ToolExecutionCoordinator {
     return metadata
   }
 
+  private requireCallObjectiveRevision(callId: string): number {
+    const objectiveRevision = this.callObjectiveRevisions.get(callId)
+    if (objectiveRevision === undefined) {
+      throw new Error(`工具调用 '${callId}' 缺少 objective revision 绑定`)
+    }
+    return objectiveRevision
+  }
+
   async failExternalAgentStep(callId: string, message: string): Promise<void> {
     try {
       await this.failClaimedAgentWorkflowStep(callId, message)
@@ -381,6 +426,7 @@ export class ToolExecutionCoordinator {
   ): Promise<ToolResult> {
     this.options.signal.throwIfAborted()
     await this.prepare(toolName, args, callId)
+    const objectiveRevision = this.requireCallObjectiveRevision(callId)
     const invocation = splitWorkflowStepIdentity(args)
     const itemId = this.callItems.get(callId)
     try {
@@ -388,25 +434,31 @@ export class ToolExecutionCoordinator {
       if (ownerAgentId) this.policy.assertExternalAgentIsRunning(ownerAgentId)
       else await this.claimAgentWorkflowStep(toolName, callId, undefined, invocation.workflowStepId)
       await this.updatePendingToolCall(callId, true)
-      await this.appendLedger(callId, toolName, 'started')
+      await this.appendLedger(callId, toolName, 'started', objectiveRevision)
       const toolLabel = this.toolLabel(toolName)
-      this.options.eventSink.emit('tool.started', toolLabel, { tool: toolName, toolLabel, callId })
+      this.options.eventSink.emit('tool.started', toolLabel, {
+        tool: toolName,
+        toolLabel,
+        callId,
+        objectiveRevision,
+      })
       const existingArtifactIds = new Set(
         this.options.store.getRun(this.options.runId).state.artifacts.map(artifact => artifact.artifactId),
       )
       const result = await this.options.registry.execute(toolName, invocation.toolArgs, this.createToolContext())
       await this.enqueueResultMutation(async () => {
-        await this.options.resultCommitService.commit({
+        const commit = await this.options.resultCommitService.commit({
           runId: this.options.runId,
           toolName,
           toolLabel: this.toolLabel(toolName),
           args: invocation.toolArgs,
           result,
+          objectiveRevision,
         })
-        if (typeof result.payload.planMode === 'boolean') {
+        if (commit.controlsApplied && typeof result.payload.planMode === 'boolean') {
           this.options.onPlanModeChanged?.(result.payload.planMode)
         }
-        this.emitAgentWorkflowControlEvent(toolName)
+        if (commit.controlsApplied) this.emitAgentWorkflowControlEvent(toolName)
         await this.completeClaimedAgentWorkflowStep(callId, result.message)
         for (const ref of result.valueRefs ?? []) this.options.valueState.set(ref.refId, ref)
         this.options.eventSink.emit('tool.completed', result.message, {
@@ -414,28 +466,29 @@ export class ToolExecutionCoordinator {
           toolLabel,
           callId,
           result: result.payload,
+          objectiveRevision,
         })
         if (itemId) {
           this.options.itemSink.completeItem(itemId, {
             callId,
             name: toolName,
             output: JSON.stringify(result.payload),
-            metadata: { toolLabel: this.toolLabel(toolName), resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [] },
+            metadata: { toolLabel: this.toolLabel(toolName), resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [], objectiveRevision },
           })
         }
         const outputItemId = this.options.itemSink.startItem('function_call_output', {
           callId,
           name: toolName,
           role: 'tool',
-          metadata: { toolLabel: this.toolLabel(toolName), resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [] },
+          metadata: { toolLabel: this.toolLabel(toolName), resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [], objectiveRevision },
         }).itemId
         this.options.itemSink.completeItem(outputItemId, {
           callId,
           name: toolName,
           output: JSON.stringify(result.payload),
-          metadata: { toolLabel: this.toolLabel(toolName), resultId: result.resultId, source: result.source, valueRefs: result.valueRefs ?? [], artifacts: result.artifacts ?? [] },
+          metadata: { toolLabel: this.toolLabel(toolName), resultId: result.resultId, source: result.source, valueRefs: result.valueRefs ?? [], artifacts: result.artifacts ?? [], objectiveRevision },
         })
-        await this.appendToolResult(callId, toolName, result)
+        await this.appendToolResult(callId, toolName, result, objectiveRevision)
         const generatedArtifactIds = this.options.store.getRun(this.options.runId).state.artifacts
           .map(artifact => artifact.artifactId)
           .filter(artifactId => !existingArtifactIds.has(artifactId))
@@ -462,8 +515,8 @@ export class ToolExecutionCoordinator {
       const message = errorMessage(error)
       await this.enqueueResultMutation(async () => {
         await this.failClaimedAgentWorkflowStep(callId, message)
-        await this.appendLedger(callId, toolName, 'failed', message)
-        await this.appendToolFailure(callId, toolName, message)
+        await this.appendLedger(callId, toolName, 'failed', objectiveRevision, message)
+        await this.appendToolFailure(callId, toolName, message, objectiveRevision)
         this.outputMetadata.set(callId, agentToolOutputMetadataSchema.parse({
           schemaVersion: 1,
           callId,
@@ -487,7 +540,7 @@ export class ToolExecutionCoordinator {
           name: toolName,
           isError: true,
           body: message,
-          metadata: { toolLabel: this.toolLabel(toolName) },
+          metadata: { toolLabel: this.toolLabel(toolName), objectiveRevision },
         })
         // started 后失败是已知终态，可以清理 pending；进程直接崩溃时不会执行到这里。
         await this.updatePendingToolCall(callId, false)
@@ -781,7 +834,12 @@ export class ToolExecutionCoordinator {
     }
   }
 
-  private async appendToolResult(callId: string, toolName: string, result: ToolResult): Promise<void> {
+  private async appendToolResult(
+    callId: string,
+    toolName: string,
+    result: ToolResult,
+    objectiveRevision: number,
+  ): Promise<void> {
     const content = JSON.stringify({
       message: result.message,
       payload: result.payload,
@@ -797,6 +855,7 @@ export class ToolExecutionCoordinator {
       kind: 'tool_result',
       payload: {
         callId,
+        objectiveRevision,
         name: toolName,
         label: this.toolLabel(toolName),
         summary: result.message,
@@ -810,7 +869,12 @@ export class ToolExecutionCoordinator {
     })
   }
 
-  private async appendToolFailure(callId: string, toolName: string, message: string): Promise<void> {
+  private async appendToolFailure(
+    callId: string,
+    toolName: string,
+    message: string,
+    objectiveRevision: number,
+  ): Promise<void> {
     await this.options.store.appendTranscript({
       threadId: this.options.threadId,
       runId: this.options.runId,
@@ -818,6 +882,7 @@ export class ToolExecutionCoordinator {
       kind: 'tool_result',
       payload: {
         callId,
+        objectiveRevision,
         name: toolName,
         label: this.toolLabel(toolName),
         summary: message,
@@ -833,6 +898,7 @@ export class ToolExecutionCoordinator {
     callId: string,
     toolName: string,
     ledgerStatus: 'started' | 'failed',
+    objectiveRevision: number,
     error?: string,
   ): Promise<void> {
     await this.options.store.appendTranscript({
@@ -842,6 +908,7 @@ export class ToolExecutionCoordinator {
       kind: 'checkpoint',
       payload: {
         callId,
+        objectiveRevision,
         name: toolName,
         label: this.toolLabel(toolName),
         ledgerStatus,
@@ -855,14 +922,6 @@ function projectWorkflowStepToTodos(todos: TodoItem[], step: AgentWorkflowStep):
   const status = step.status === 'skipped' ? 'completed' : step.status
   return todos.map(todo => todo.stepId === step.stepId ? { ...todo, status } : todo)
 }
-
-const AGENT_WORKFLOW_CONTROL_TOOLS = new Set([
-  'request_clarification',
-  'enter_plan_mode',
-  'submit_agent_workflow',
-  'revise_agent_workflow',
-  'todo_write',
-])
 
 const AGENT_WORKFLOW_DEFINITION_TOOLS = new Set([
   'submit_agent_workflow',
@@ -1094,6 +1153,13 @@ function splitWorkflowStepIdentity(args: Record<string, unknown>): {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function objectiveRevisionFromPayload(payload: Record<string, unknown>, fallback: number): number {
+  const value = payload.objectiveRevision
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
+    ? value
+    : fallback
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

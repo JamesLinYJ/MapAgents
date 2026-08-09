@@ -100,6 +100,7 @@ export function createSubAgentExecutionContext(
 ): AgentsExecutionContext {
   return {
     runId: dependencies.runId,
+    currentObjectiveRevision: () => dependencies.coordinator.currentModelInputObjectiveRevision(),
     isExecutionEnabled: () => dependencies.coordinator.isExecutionEnabled(),
     isSdkExtensionEnabled: () => false,
     isToolEnabled: toolName => dependencies.coordinator.isToolEnabledForSubAgent(config.agentId, toolName),

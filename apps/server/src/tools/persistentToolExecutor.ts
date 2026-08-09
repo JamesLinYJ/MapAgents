@@ -46,6 +46,7 @@ export async function executePersistedTool(
   },
 ): Promise<ToolResult> {
   const run = deps.store.getRun(input.runId)
+  const objectiveRevision = run.state.objectiveRevision
   const values = new Map(run.state.toolValueRefs.map(ref => [ref.refId, ref]))
   const pendingLogWrites: Promise<void>[] = []
   const context: ToolContext = {
@@ -106,7 +107,7 @@ export async function executePersistedTool(
         type: 'tool.completed',
         message,
         timestamp: nowUtc(),
-        payload: { level, toolName: input.toolName },
+        payload: { level, toolName: input.toolName, objectiveRevision },
       }))
     },
   }
@@ -119,7 +120,7 @@ export async function executePersistedTool(
     name: input.toolName,
     callId,
     arguments: JSON.stringify(input.args),
-    metadata: { toolLabel: tool.label },
+    metadata: { toolLabel: tool.label, objectiveRevision },
   })
   try {
     const result = await deps.registry.execute(input.toolName, input.args, context)
@@ -129,18 +130,19 @@ export async function executePersistedTool(
       toolLabel: tool.label,
       args: input.args,
       result,
+      objectiveRevision,
     })
     itemSink.completeItem(callItem.itemId, {
       callId,
       name: input.toolName,
       output: JSON.stringify(result.payload),
-      metadata: { toolLabel: tool.label, resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [] },
+      metadata: { toolLabel: tool.label, resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [], objectiveRevision },
     })
     const outputItem = itemSink.startItem('function_call_output', {
       callId,
       name: input.toolName,
       role: 'tool',
-      metadata: { toolLabel: tool.label, resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [] },
+      metadata: { toolLabel: tool.label, resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [], objectiveRevision },
     })
     itemSink.completeItem(outputItem.itemId, {
       callId,
@@ -152,6 +154,7 @@ export async function executePersistedTool(
         source: result.source,
         valueRefs: result.valueRefs ?? [],
         artifacts: result.artifacts ?? [],
+        objectiveRevision,
       },
     })
     await Promise.all(pendingLogWrites)
@@ -163,7 +166,7 @@ export async function executePersistedTool(
       name: input.toolName,
       body: error instanceof Error ? error.message : '工具执行失败。',
       isError: true,
-      metadata: { toolLabel: tool.label },
+      metadata: { toolLabel: tool.label, objectiveRevision },
     })
     await Promise.allSettled(pendingLogWrites)
     await itemSink.flush()

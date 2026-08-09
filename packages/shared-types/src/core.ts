@@ -195,6 +195,7 @@ export const agentWorkflowRevisionSchema = agentWorkflowDraftSchema.extend({
 
 export const agentWorkflowSchema = z.object({
   agentWorkflowId: z.string().min(1),
+  objectiveRevision: z.number().int().positive().default(1),
   revision: z.number().int().positive(),
   goal: z.string().min(1),
   status: agentWorkflowStatusSchema,
@@ -235,6 +236,7 @@ export const toolValueRefSchema = z.object({
 
 export const toolCallSchema = z.object({
   stepId: z.string(),
+  objectiveRevision: z.number().int().positive().optional(),
   tool: z.string(),
   toolLabel: z.string().nullable().default(null),
   args: z.record(z.string(), z.unknown()).prefault({}),
@@ -363,6 +365,7 @@ export const runGoalStatusSchema = z.enum([
 
 export const runGoalSchema = runGoalInputSchema.extend({
   goalId: z.string().min(1),
+  objectiveRevision: z.number().int().positive().default(1),
   status: runGoalStatusSchema,
   recheckCount: z.number().int().nonnegative().default(0),
   lastVerdict: runGoalVerdictSchema.nullable().default(null),
@@ -469,6 +472,7 @@ export const agentStateSchema = z.object({
   sessionId: z.string(),
   threadId: z.string().nullable().default(null),
   userQuery: z.string(),
+  objectiveRevision: z.number().int().positive().default(1),
   modelProvider: z.string().nullable().default(null),
   modelName: z.string().nullable().default(null),
   parsedIntent: userIntentSchema.nullable().default(null),

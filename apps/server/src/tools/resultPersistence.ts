@@ -33,6 +33,11 @@ export interface ToolResultCommitInput {
   toolLabel: string
   args: Record<string, unknown>
   result: ToolResult
+  objectiveRevision: number
+}
+
+export interface ToolResultCommitOutcome {
+  controlsApplied: boolean
 }
 
 /**
@@ -47,14 +52,14 @@ export interface ToolResultCommitInput {
 export class ToolResultCommitService {
   constructor(private readonly store: ToolExecutionStore) {}
 
-  async commit(input: ToolResultCommitInput): Promise<void> {
-    const { runId, toolName, toolLabel, args, result } = input
+  async commit(input: ToolResultCommitInput): Promise<ToolResultCommitOutcome> {
+    const { runId, toolName, toolLabel, args, result, objectiveRevision } = input
     const { store } = this
     const refs: ToolValueRef[] = (result.valueRefs ?? []).map(ref => ({
       ...ref,
       sourceTool: toolName,
       sourceResultId: result.resultId,
-      metadata: ref.metadata ?? {},
+      metadata: { ...(ref.metadata ?? {}), objectiveRevision },
       createdAt: nowUtc(),
       unit: ref.unit ?? null,
     }))
@@ -67,7 +72,7 @@ export class ToolResultCommitService {
         name: artifact.name,
         uri: artifact.uri,
         display: artifact.display,
-        metadata: { ...(artifact.metadata ?? {}), relativePath },
+        metadata: { ...(artifact.metadata ?? {}), relativePath, objectiveRevision },
         isIntermediate: false,
       }
     })
@@ -77,9 +82,13 @@ export class ToolResultCommitService {
         requireRunArtifactFile(store.runtimeRoot, runId, artifact.metadata.relativePath)
       )))
       generatedArtifacts = await createGeoArtifacts(result, runId, store.runtimeRoot)
-      const artifacts = dedupeArtifacts([...explicitArtifacts, ...generatedArtifacts])
+      const artifacts = dedupeArtifacts([...explicitArtifacts, ...generatedArtifacts]).map(artifact => ({
+        ...artifact,
+        metadata: { ...artifact.metadata, objectiveRevision },
+      }))
       const toolResult = {
         stepId: makeId('step'),
+        objectiveRevision,
         tool: toolName,
         toolLabel,
         args,
@@ -97,17 +106,31 @@ export class ToolResultCommitService {
         featureCount: null,
         valueRefs: refs,
       }
-      const mutation = (state: AgentState): Partial<AgentState> => ({
-        toolValueRefs: dedupeValueRefs([...state.toolValueRefs, ...refs]),
-        artifacts: dedupeArtifacts([...state.artifacts, ...artifacts]),
-        ...agentWorkflowControlState(result.payload, state.agentWorkflow, state.todos),
-        ...clarificationControlState(result.payload, state.decisions),
-        ...todoControlState(result.payload),
-        toolResults: [
-          ...state.toolResults.filter(item => item.resultId !== result.resultId),
-          toolResult,
-        ],
-      })
+      let controlsEligible = false
+      const mutation = (state: AgentState): Partial<AgentState> => {
+        controlsEligible = state.objectiveRevision === objectiveRevision
+        const controlState = controlsEligible
+          ? {
+              ...agentWorkflowControlState(
+                result.payload,
+                state.agentWorkflow,
+                state.todos,
+                objectiveRevision,
+              ),
+              ...clarificationControlState(result.payload, state.decisions),
+              ...todoControlState(result.payload),
+            }
+          : {}
+        return {
+          toolValueRefs: dedupeValueRefs([...state.toolValueRefs, ...refs]),
+          artifacts: dedupeArtifacts([...state.artifacts, ...artifacts]),
+          ...controlState,
+          toolResults: [
+            ...state.toolResults.filter(item => item.resultId !== result.resultId),
+            toolResult,
+          ],
+        }
+      }
       const committed = await store.commitToolResult(runId, result.resultId, mutation, refs, artifacts)
       if (!committed) {
         // 并发幂等重放可能复用同一个显式 artifact path。重新读取 durable
@@ -118,6 +141,7 @@ export class ToolResultCommitService {
           ...unownedExplicitArtifacts(store, runId, explicitArtifacts),
         ])
       }
+      return { controlsApplied: committed && controlsEligible }
     } catch (error) {
       // PostgreSQL 事务失败时，文件已经完成原子写入但没有对应的 durable
       // metadata。立即清理本次请求的对象，避免把“未提交”误留成可读结果；
@@ -161,7 +185,15 @@ export async function persistToolExecutionResult(
   args: Record<string, unknown>,
   result: ToolResult,
 ): Promise<void> {
-  await new ToolResultCommitService(store).commit({ runId, toolName, toolLabel, args, result })
+  const objectiveRevision = store.getRun(runId).state.objectiveRevision
+  await new ToolResultCommitService(store).commit({
+    runId,
+    toolName,
+    toolLabel,
+    args,
+    result,
+    objectiveRevision,
+  })
 }
 
 // 智能体工作流由系统工具提交或修订。结构和依赖图在领域状态机中验证，
@@ -170,6 +202,7 @@ function agentWorkflowControlState(
   payload: Record<string, unknown>,
   current: AgentWorkflow | null,
   currentTodos: TodoItem[],
+  objectiveRevision: number,
 ): Partial<{
   planMode: boolean
   agentWorkflow: AgentWorkflow
@@ -178,13 +211,13 @@ function agentWorkflowControlState(
   const updates: Partial<{ planMode: boolean; agentWorkflow: AgentWorkflow; todos: TodoItem[] }> = {}
   if (typeof payload.planMode === 'boolean') updates.planMode = payload.planMode
   if (isRecord(payload.agentWorkflowDraft)) {
-    const workflow = createAgentWorkflow(payload.agentWorkflowDraft)
+    const workflow = createAgentWorkflow(payload.agentWorkflowDraft, objectiveRevision)
     updates.agentWorkflow = workflow
     updates.todos = projectWorkflowTodos(workflow, currentTodos)
   }
   if (isRecord(payload.agentWorkflowRevision)) {
     if (!current) throw new Error('当前运行没有可以调整的智能体工作流。')
-    const workflow = reviseAgentWorkflow(current, payload.agentWorkflowRevision)
+    const workflow = reviseAgentWorkflow(current, payload.agentWorkflowRevision, objectiveRevision)
     updates.agentWorkflow = workflow
     updates.todos = projectWorkflowTodos(workflow, currentTodos)
   }

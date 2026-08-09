@@ -114,11 +114,16 @@ export class RuntimeTranscriptProjector {
           raw,
           itemSink,
           sdkToolPresentation(raw.name, assembly),
+          assembly.context.currentObjectiveRevision(),
         )
       } else if (raw.type === 'function_call' && assembly.subAgentToolNames.has(raw.name)) {
-        const exists = (await this.store.activeTranscript(assembly.threadId))
-          .some(entry => entry.kind === 'tool_call' && entry.payload.callId === raw.callId)
-        if (!exists) {
+        const entries = await this.store.activeTranscript(assembly.threadId)
+        const existingToolCall = entries
+          .find(entry => entry.kind === 'tool_call' && entry.payload.callId === raw.callId)
+        const objectiveRevision = existingToolCall
+          ? objectiveRevisionFromPayload(existingToolCall.payload, 1)
+          : assembly.context.currentObjectiveRevision()
+        if (!existingToolCall) {
           const parsedArgs = parseArguments(raw.arguments)
           await this.store.appendTranscript({
             threadId: assembly.threadId,
@@ -131,6 +136,7 @@ export class RuntimeTranscriptProjector {
               label: '子智能体任务',
               arguments: parsedArgs,
               ledgerStatus: 'started',
+              objectiveRevision,
             },
           })
         }
@@ -139,7 +145,7 @@ export class RuntimeTranscriptProjector {
             name: raw.name,
             callId: raw.callId,
             arguments: raw.arguments,
-            metadata: { toolLabel: '子智能体任务' },
+            metadata: { toolLabel: '子智能体任务', objectiveRevision },
           })
           projection.subAgentCallItemIds.set(raw.callId, item.itemId)
         }
@@ -157,6 +163,7 @@ export class RuntimeTranscriptProjector {
             raw,
             itemSink,
             sdkToolPresentation(raw.name, assembly),
+            assembly.context.currentObjectiveRevision(),
           )
         }
       }
@@ -193,6 +200,11 @@ export class RuntimeTranscriptProjector {
           )
         : null
       if (raw.type === 'function_call_result' && assembly.subAgentToolNames.has(raw.name)) {
+        const entries = await this.store.activeTranscript(assembly.threadId)
+        const objectiveRevision = objectiveRevisionForCall(
+          entries,
+          raw.callId,
+        )
         const failed = raw.status === 'incomplete'
         const itemId = projection.subAgentCallItemIds.get(raw.callId)
         if (itemId) {
@@ -201,7 +213,7 @@ export class RuntimeTranscriptProjector {
             callId: raw.callId,
             body: failed ? '子智能体执行失败' : '子智能体已返回结果',
             isError: failed,
-            metadata: { toolLabel: '子智能体任务' },
+            metadata: { toolLabel: '子智能体任务', objectiveRevision },
           })
           projection.subAgentCallItemIds.delete(raw.callId)
         }
@@ -210,6 +222,7 @@ export class RuntimeTranscriptProjector {
           callId: raw.callId,
           agentId: raw.name,
           status: failed ? 'failed' : 'completed',
+          objectiveRevision,
         })
       }
       if (
@@ -220,6 +233,10 @@ export class RuntimeTranscriptProjector {
         )
       ) {
         const transcript = await this.store.activeTranscript(assembly.threadId)
+        const objectiveRevision = objectiveRevisionForCall(
+          transcript,
+          raw.callId,
+        )
         const exists = transcript.some(entry => (
           entry.kind === 'tool_result' && entry.payload.callId === raw.callId
         ))
@@ -244,6 +261,7 @@ export class RuntimeTranscriptProjector {
               valueRefIds: metadata?.valueRefIds ?? [],
               artifactIds: metadata?.artifactIds ?? [],
               source: metadata?.display?.source ?? presentation.source,
+              objectiveRevision,
             },
           })
           if (!assembly.subAgentToolNames.has(raw.name)) {
@@ -254,6 +272,7 @@ export class RuntimeTranscriptProjector {
               metadata: {
                 toolLabel: metadata?.display?.label ?? presentation.label,
                 source: metadata?.display?.source ?? presentation.source,
+                objectiveRevision,
               },
             })
             itemSink.completeItem(outputItem.itemId, {
@@ -267,6 +286,7 @@ export class RuntimeTranscriptProjector {
                 resultId: metadata?.resultId ?? null,
                 valueRefIds: metadata?.valueRefIds ?? [],
                 artifactIds: metadata?.artifactIds ?? [],
+                objectiveRevision,
               },
             })
           }
@@ -352,6 +372,7 @@ export class RuntimeTranscriptProjector {
     item: Extract<AgentInputItem, { type: 'function_call' }>,
     itemSink: ItemSink,
     presentation: { label: string; source: string },
+    objectiveRevision = 1,
   ): Promise<void> {
     const args = parseArguments(item.arguments)
     const sdkStatus = item.status ?? 'completed'
@@ -367,20 +388,21 @@ export class RuntimeTranscriptProjector {
         arguments: args,
         ledgerStatus: 'started',
         source: presentation.source,
+        objectiveRevision,
       },
     })
     const callItem = itemSink.startItem('function_call', {
       name: item.name,
       callId: item.callId,
       arguments: item.arguments,
-      metadata: { toolLabel: presentation.label, source: presentation.source },
+      metadata: { toolLabel: presentation.label, source: presentation.source, objectiveRevision },
     })
     itemSink.completeItem(callItem.itemId, {
       name: item.name,
       callId: item.callId,
       body: sdkStatus === 'incomplete' ? `${presentation.label}未完成` : `${presentation.label}已发起`,
       isError: item.status === 'incomplete',
-      metadata: { toolLabel: presentation.label, source: presentation.source },
+      metadata: { toolLabel: presentation.label, source: presentation.source, objectiveRevision },
     })
   }
 
@@ -391,6 +413,7 @@ export class RuntimeTranscriptProjector {
     item: Extract<AgentInputItem, { type: 'hosted_tool_call' }>,
     itemSink: ItemSink,
     presentation: { label: string; source: string },
+    objectiveRevision = 1,
   ): Promise<void> {
     if (!item.id) throw new Error(`SDK 服务端工具 '${item.name}' 缺少响应项 ID`)
     const entries = await this.store.activeTranscript(threadId)
@@ -415,6 +438,7 @@ export class RuntimeTranscriptProjector {
         arguments: argumentsText,
         status: item.status ?? 'completed',
         source: presentation.source,
+        objectiveRevision,
       },
     })
     const callItem = itemSink.startItem('function_call', {
@@ -425,6 +449,7 @@ export class RuntimeTranscriptProjector {
         toolLabel: presentation.label,
         source: presentation.source,
         sdkItemType: 'hosted_tool_call',
+        objectiveRevision,
       },
     })
     itemSink.completeItem(callItem.itemId, {
@@ -438,6 +463,7 @@ export class RuntimeTranscriptProjector {
         toolLabel: presentation.label,
         source: presentation.source,
         sdkItemType: 'hosted_tool_call',
+        objectiveRevision,
       },
     })
   }
@@ -449,6 +475,7 @@ export class RuntimeTranscriptProjector {
     item: Extract<AgentInputItem, { type: 'function_call' }>,
     itemSink: ItemSink,
     label: string,
+    objectiveRevision = 1,
   ): Promise<void> {
     await this.store.appendTranscript({
       threadId,
@@ -462,13 +489,14 @@ export class RuntimeTranscriptProjector {
         arguments: parseArguments(item.arguments),
         ledgerStatus: 'rejected',
         source: 'openai_agents_sdk',
+        objectiveRevision,
       },
     })
     const callItem = itemSink.startItem('function_call', {
       name: item.name,
       callId: item.callId,
       arguments: item.arguments,
-      metadata: { toolLabel: label, source: 'openai_agents_sdk' },
+      metadata: { toolLabel: label, source: 'openai_agents_sdk', objectiveRevision },
     })
     itemSink.completeItem(callItem.itemId, {
       name: item.name,
@@ -479,6 +507,7 @@ export class RuntimeTranscriptProjector {
         toolLabel: label,
         source: 'openai_agents_sdk',
         rejectedBy: 'tool_not_found',
+        objectiveRevision,
       },
     })
   }
@@ -487,6 +516,7 @@ export class RuntimeTranscriptProjector {
     assembly: RuntimeAssembly,
     content: string,
     itemId?: string | null,
+    objectiveRevision = assembly.context.currentObjectiveRevision(),
   ) {
     return this.store.appendTranscript({
       threadId: assembly.threadId,
@@ -494,8 +524,8 @@ export class RuntimeTranscriptProjector {
       turnId: assembly.turnId,
       kind: 'message',
       payload: itemId
-        ? { role: 'assistant', content, itemId }
-        : { role: 'assistant', content },
+        ? { role: 'assistant', content, itemId, objectiveRevision }
+        : { role: 'assistant', content, objectiveRevision },
     })
   }
 
@@ -507,6 +537,10 @@ export class RuntimeTranscriptProjector {
     const entries = await this.store.activeTranscript(assembly.threadId)
     const toolCall = entries.find(entry => entry.kind === 'tool_call' && entry.payload.callId === callId)
     if (!toolCall) throw new Error(`SDK Session 收到未准备的工具调用 '${callId}'`)
+    const objectiveRevision = objectiveRevisionFromPayload(
+      toolCall.payload,
+      1,
+    )
     const existingContent = typeof toolCall.payload.assistantContent === 'string' && toolCall.payload.assistantContent.trim()
       ? toolCall.payload.assistantContent.trim()
       : null
@@ -532,9 +566,26 @@ export class RuntimeTranscriptProjector {
         callId,
         content,
         source: 'openai_agents_session',
+        objectiveRevision,
       },
     })
   }
+}
+
+function objectiveRevisionForCall(
+  entries: ReadonlyArray<{ kind: string; payload: Record<string, unknown> }>,
+  callId: string,
+): number {
+  const toolCall = entries.find(entry => entry.kind === 'tool_call' && entry.payload.callId === callId)
+  if (!toolCall) throw new Error(`SDK 工具结果 '${callId}' 缺少 canonical tool_call`)
+  return objectiveRevisionFromPayload(toolCall.payload, 1)
+}
+
+function objectiveRevisionFromPayload(payload: Record<string, unknown>, fallback: number): number {
+  const value = payload.objectiveRevision
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
+    ? value
+    : fallback
 }
 
 function parseOutputMetadata(

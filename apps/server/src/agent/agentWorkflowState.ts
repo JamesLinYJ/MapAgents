@@ -21,12 +21,21 @@ import {
 } from '../schemas/types.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 
-export function createAgentWorkflow(input: unknown): AgentWorkflow {
+export const AGENT_WORKFLOW_CONTROL_TOOLS: ReadonlySet<string> = new Set([
+  'request_clarification',
+  'enter_plan_mode',
+  'submit_agent_workflow',
+  'revise_agent_workflow',
+  'todo_write',
+])
+
+export function createAgentWorkflow(input: unknown, objectiveRevision = 1): AgentWorkflow {
   const draft = agentWorkflowDraftSchema.parse(input)
   assertValidDependencyGraph(draft)
   const now = nowUtc()
   return agentWorkflowSchema.parse({
     agentWorkflowId: makeId('agent_workflow'),
+    objectiveRevision,
     revision: 1,
     goal: draft.goal,
     status: 'running',
@@ -39,7 +48,11 @@ export function createAgentWorkflow(input: unknown): AgentWorkflow {
   })
 }
 
-export function reviseAgentWorkflow(current: AgentWorkflow, input: unknown): AgentWorkflow {
+export function reviseAgentWorkflow(
+  current: AgentWorkflow,
+  input: unknown,
+  objectiveRevision = current.objectiveRevision,
+): AgentWorkflow {
   const revision = agentWorkflowRevisionSchema.parse(input)
   assertValidDependencyGraph(revision)
   if (current.status === 'completed' || current.status === 'cancelled') {
@@ -49,6 +62,7 @@ export function reviseAgentWorkflow(current: AgentWorkflow, input: unknown): Age
   const previous = new Map(current.steps.map(step => [step.stepId, step]))
   return agentWorkflowSchema.parse({
     ...current,
+    objectiveRevision,
     revision: current.revision + 1,
     goal: revision.goal,
     status: 'running',
@@ -61,6 +75,24 @@ export function reviseAgentWorkflow(current: AgentWorkflow, input: unknown): Age
         ? { ...prior, title: step.title, reason: step.reason, ownerAgentId: step.ownerAgentId }
         : runtimeStep(step)
     }),
+  })
+}
+
+// 用户为同一 Run 追加输入后，旧工作流的完成态只能作为历史证据，不能继续
+// 充当新目标版本的交付凭证。步骤结果保留给显式 revise 复用，但工作流必须
+// 回到 adjusting，直到模型按新输入提交下一版执行契约。
+export function advanceAgentWorkflowObjectiveRevision(
+  workflow: AgentWorkflow,
+  objectiveRevision: number,
+): AgentWorkflow {
+  if (objectiveRevision <= workflow.objectiveRevision) return workflow
+  return agentWorkflowSchema.parse({
+    ...workflow,
+    objectiveRevision,
+    status: 'adjusting',
+    changeReason: `Run 输入已更新到 objective revision ${objectiveRevision}。`,
+    updatedAt: nowUtc(),
+    completedAt: null,
   })
 }
 
@@ -126,7 +158,9 @@ export function completeAgentWorkflowStep(
     }
   }, { updatedAt: now })
   const finished = next.steps.every(step => step.status === 'completed' || step.status === 'skipped')
-  return finished
+  // adjusting 表示输入 revision 已改变或执行契约失败。即使旧 revision 启动的
+  // 在途步骤随后返回，也不能把该旧契约重新提升为 completed。
+  return finished && next.status !== 'adjusting'
     ? agentWorkflowSchema.parse({ ...next, status: 'completed', completedAt: now })
     : next
 }

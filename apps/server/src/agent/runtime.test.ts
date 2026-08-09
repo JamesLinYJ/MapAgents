@@ -534,6 +534,190 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     }
   })
 
+  it('discards a Goal verdict when steering advances the objective revision during Judge', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-goal-steering-race-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, 'Goal revision 终态竞态')
+      const run = await store.createRun(session.id, '按当前输入交付结论', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        goal: testGoalInput({ maxRechecks: 2, maxTokenBudget: 100 }),
+        runtimeConfigSnapshot: testRuntimeConfig(),
+      })
+      let modelTurns = 0
+      let steeringObserved = false
+      const model = scriptedModel(request => {
+        modelTurns += 1
+        if (modelTurns === 1) return { text: '旧 revision 的候选结论。' }
+        steeringObserved = requestTexts(request).some(text => text.includes('新增空间范围核验'))
+        return { text: '新 revision 已覆盖新增空间范围并完成核验。' }
+      })
+
+      let releaseFirstJudge = (): void => {}
+      const firstJudgeRelease = new Promise<void>(resolve => { releaseFirstJudge = resolve })
+      let markFirstJudgeStarted = (): void => {}
+      const firstJudgeStarted = new Promise<void>(resolve => { markFirstJudgeStarted = resolve })
+      let judgements = 0
+      const goalJudge: GoalJudgePort = {
+        evaluate: async input => {
+          judgements += 1
+          if (judgements === 1) {
+            markFirstJudgeStarted()
+            await firstJudgeRelease
+            return {
+              status: 'satisfied',
+              reason: '旧 revision verdict 不得提交。',
+              evidence: [{ source: 'transcript', referenceId: 'entry_old', statement: '旧候选文本。' }],
+              missingCriteria: [],
+              attempt: input.goal.recheckCount + 1,
+              evaluatedAt: new Date().toISOString(),
+              tokenUsage: 2,
+            }
+          }
+          return {
+            status: 'satisfied',
+            reason: '新 revision verdict 已绑定当前输入。',
+            evidence: [{ source: 'transcript', referenceId: 'entry_new', statement: '新输入已被模型处理。' }],
+            missingCriteria: [],
+            attempt: input.goal.recheckCount + 1,
+            evaluatedAt: new Date().toISOString(),
+            tokenUsage: 3,
+          }
+        },
+      }
+      const runtime = testRuntime(store, new ToolRegistry(), registryWith(fakeAdapter(model)), goalJudge)
+
+      const running = runtime.run(runOptions(run, thread.id))
+      await firstJudgeStarted
+      await runtime.steer(run.id, 'steer_during_judge', '新增空间范围核验。')
+      releaseFirstJudge()
+      const completed = await running
+
+      expect(completed.status).toBe('completed')
+      expect(modelTurns).toBe(2)
+      expect(judgements).toBe(2)
+      expect(steeringObserved).toBe(true)
+      expect(completed.state.objectiveRevision).toBe(2)
+      expect(completed.state.goal).toMatchObject({
+        objectiveRevision: 2,
+        status: 'satisfied',
+        lastVerdict: { reason: '新 revision verdict 已绑定当前输入。' },
+      })
+      const events = await store.listEvents(run.id)
+      expect(JSON.stringify(events)).not.toContain('旧 revision verdict 不得提交。')
+      const items = await store.listItems(run.id)
+      expect(items).toContainEqual(expect.objectContaining({
+        metadata: expect.objectContaining({
+          objectiveRevision: 1,
+          supersededByNewObjectiveRevision: true,
+        }),
+      }))
+      expect(items).toContainEqual(expect.objectContaining({
+        metadata: expect.objectContaining({
+          objectiveRevision: 2,
+          goalStatus: 'satisfied',
+        }),
+      }))
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
+  it('marks only the current candidate superseded when steering queues before the model stream ends', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-stream-steering-race-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '模型流结束前的 revision 竞态')
+      const run = await store.createRun(session.id, '核验范围并交付', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: testRuntimeConfig(),
+      })
+      const tools = new ToolRegistry()
+      tools.register(providerFromTools('stream-revision-tool', [{
+        ...toolDefinition('query_layer', ['query']),
+        handler: async () => result('inspect_scope', [], { inspected: true }),
+      }]))
+
+      let releaseOldCandidate = (): void => {}
+      const oldCandidateRelease = new Promise<void>(resolve => { releaseOldCandidate = resolve })
+      let markOldCandidateStarted = (): void => {}
+      const oldCandidateStarted = new Promise<void>(resolve => { markOldCandidateStarted = resolve })
+      let modelCalls = 0
+      let steeringObserved = false
+      const baseModel = scriptedModel(() => ({ text: '未使用' }))
+      const model: Model = {
+        ...baseModel,
+        async *getStreamedResponse(request): AsyncIterable<ResponseStreamEvent> {
+          modelCalls += 1
+          let scripted: ScriptedResponse
+          if (modelCalls === 1) {
+            scripted = {
+              text: '先核验旧范围。',
+              toolCalls: [{ id: 'call_inspect_scope', name: 'query_layer', arguments: '{"query":"old"}' }],
+            }
+          } else if (modelCalls === 2) {
+            scripted = { text: '旧 revision 候选结论。' }
+          } else {
+            steeringObserved = requestTexts(request).some(text => text.includes('扩展到新范围'))
+            scripted = { text: '新 revision 最终结论。' }
+          }
+          const response = structuredResponse(scripted, request)
+          const responseId = makeIdForResponse()
+          yield { type: 'response_started' }
+          // 首轮工具前文本形成 completedAssistantItems；第二轮故意
+          // 不发 delta，模拟只在 message_output_created 产生 lastAssistantText 的 provider。
+          if (modelCalls === 1 && response.text) {
+            yield { type: 'output_text_delta', delta: response.text }
+          }
+          if (modelCalls === 2) {
+            markOldCandidateStarted()
+            await oldCandidateRelease
+          }
+          yield {
+            type: 'response_done',
+            response: {
+              id: responseId,
+              usage: { requests: 1, inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+              output: outputItems(response, responseId),
+            },
+          }
+        },
+      }
+      const runtime = testRuntime(store, tools, registryWith(fakeAdapter(model)))
+
+      const running = runtime.run(runOptions(run, thread.id))
+      await oldCandidateStarted
+      await runtime.steer(run.id, 'steer_before_stream_end', '扩展到新范围。')
+      releaseOldCandidate()
+      const completed = await running
+
+      expect(completed.status).toBe('completed')
+      expect(modelCalls).toBe(3)
+      expect(steeringObserved).toBe(true)
+      const items = await store.listItems(run.id)
+      const superseded = items.filter(item => item.metadata.supersededByNewObjectiveRevision === true)
+      expect(superseded).toHaveLength(1)
+      expect(superseded[0]).toMatchObject({
+        role: 'assistant',
+        body: '旧 revision 候选结论。',
+        metadata: { objectiveRevision: 1 },
+      })
+      const earlierPreamble = items.find(item => item.body?.includes('先核验旧范围'))
+      expect(earlierPreamble?.metadata).not.toHaveProperty('supersededByNewObjectiveRevision')
+      const freshAnswer = items.find(item => item.body === '新 revision 最终结论。')
+      expect(freshAnswer?.metadata).toMatchObject({ objectiveRevision: 2 })
+      expect(freshAnswer?.metadata).not.toHaveProperty('supersededByNewObjectiveRevision')
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
   it('fails hard with an exhausted Goal when the configured recheck limit is reached', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-goal-exhausted-'))
     try {

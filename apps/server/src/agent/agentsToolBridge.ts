@@ -22,6 +22,7 @@ import { toolExecutionLane, type ToolExecutionLane } from './runToolConcurrencyG
 
 export interface AgentsExecutionContext {
   runId: string
+  currentObjectiveRevision(): number
   isExecutionEnabled(): boolean
   isSdkExtensionEnabled(): boolean
   isToolEnabled(toolName: string): boolean
@@ -206,6 +207,7 @@ function requireContext(runContext?: RunContext<unknown>): AgentsExecutionContex
   const context = runContext?.context
   if (!isRecord(context)
     || typeof context.runId !== 'string'
+    || typeof context.currentObjectiveRevision !== 'function'
     || typeof context.isExecutionEnabled !== 'function'
     || typeof context.isSdkExtensionEnabled !== 'function'
     || typeof context.isToolEnabled !== 'function'

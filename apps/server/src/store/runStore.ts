@@ -210,6 +210,7 @@ export class RunStore {
         sessionId,
         threadId: opts?.threadId ?? null,
         userQuery: query,
+        objectiveRevision: 1,
         modelProvider: opts?.modelProvider ?? null,
         modelName: opts?.modelName ?? null,
         loopTrace: [],
@@ -244,6 +245,7 @@ export class RunStore {
         runLifecycle: { status: 'created', reason: null, updatedAt: null },
         goal: opts?.goal ? {
           goalId: makeId('goal'),
+          objectiveRevision: 1,
           condition: opts.goal.condition,
           acceptanceCriteria: [...opts.goal.acceptanceCriteria],
           maxRechecks: opts.goal.maxRechecks,

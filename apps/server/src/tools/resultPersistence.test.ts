@@ -15,7 +15,7 @@ import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import { createTestPersistenceFacade } from '../../test-support/persistenceFacadeHarness.js'
-import { persistToolExecutionResult } from './resultPersistence.js'
+import { persistToolExecutionResult, ToolResultCommitService } from './resultPersistence.js'
 
 describe('tool result persistence', () => {
   it('preserves all results from concurrent tool completions', async () => {
@@ -411,6 +411,96 @@ describe('tool result persistence', () => {
         status: 'pending',
         allowFreeText: true,
         payload: expect.objectContaining({ clarificationKind: 'platform' }),
+      }))
+    } finally {
+      await store?.flushConversationStore()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps stale-revision evidence but does not project its workflow or clarification into current state', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-result-stale-control-'))
+    let store: PlatformPersistenceFacade | undefined
+    try {
+      store = createTestPersistenceFacade(path.join(root, 'sessions'))
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '迟到控制结果')
+      const run = await store.createRun(session.id, '当前已是新目标版本', { threadId: thread.id })
+      await store.updateRunState(run.id, {
+        objectiveRevision: 2,
+        todos: [{ todoId: 'todo_current', title: '当前版本任务', status: 'running' }],
+      })
+      const service = new ToolResultCommitService(store)
+
+      const workflowCommit = await service.commit({
+        runId: run.id,
+        toolName: 'submit_agent_workflow',
+        toolLabel: '提交智能体工作流',
+        args: {},
+        objectiveRevision: 1,
+        result: {
+          message: '旧版本工作流迟到',
+          payload: {
+            route: line(),
+            agentWorkflowDraft: {
+              goal: '旧版本目标',
+              steps: [{
+                stepId: 'old_step',
+                title: '执行旧版本工具',
+                kind: 'tool',
+                toolName: 'inspect_dataset',
+                ownerAgentId: 'supervisor',
+                args: {},
+                reason: '测试迟到提交',
+                dependsOn: [],
+              }],
+            },
+            todos: [{ todoId: 'todo_old', title: '旧版本任务', status: 'completed' }],
+          },
+          warnings: [],
+          resultId: 'result_old_workflow',
+          source: 'test',
+          valueRefs: [{ refId: 'ref_old', kind: 'route', label: '旧版本路线', value: line() }],
+        },
+      })
+      const clarificationCommit = await service.commit({
+        runId: run.id,
+        toolName: 'request_clarification',
+        toolLabel: '请求澄清',
+        args: {},
+        objectiveRevision: 1,
+        result: {
+          message: '旧版本澄清迟到',
+          payload: {
+            clarification: {
+              clarificationId: 'clarification_old',
+              question: '旧版本问题？',
+            },
+          },
+          warnings: [],
+          resultId: 'result_old_clarification',
+          source: 'test',
+        },
+      })
+
+      const latest = store.getRun(run.id).state
+      expect(workflowCommit.controlsApplied).toBe(false)
+      expect(clarificationCommit.controlsApplied).toBe(false)
+      expect(latest.objectiveRevision).toBe(2)
+      expect(latest.agentWorkflow).toBeNull()
+      expect(latest.clarification).toBeNull()
+      expect(latest.decisions).toEqual([])
+      expect(latest.todos).toEqual([
+        expect.objectContaining({ todoId: 'todo_current', title: '当前版本任务', status: 'running' }),
+      ])
+      expect(latest.toolResults.map(result => result.objectiveRevision)).toEqual([1, 1])
+      expect(latest.toolValueRefs).toContainEqual(expect.objectContaining({
+        refId: 'ref_old',
+        metadata: expect.objectContaining({ objectiveRevision: 1 }),
+      }))
+      expect(latest.artifacts).toContainEqual(expect.objectContaining({
+        metadata: expect.objectContaining({ objectiveRevision: 1 }),
       }))
     } finally {
       await store?.flushConversationStore()

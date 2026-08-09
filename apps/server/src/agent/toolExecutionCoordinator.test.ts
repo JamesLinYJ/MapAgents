@@ -229,6 +229,7 @@ describe('ToolExecutionCoordinator', () => {
     const transcriptWrites: Array<Record<string, unknown>> = []
     const conversationItems: ConversationItem[] = []
     const store = {
+      getRun: () => ({ state: { objectiveRevision: 1 } }),
       activeTranscript: vi.fn(async () => []),
       appendTranscript: vi.fn(async (input: Record<string, unknown>) => {
         transcriptWrites.push(input)
@@ -371,6 +372,128 @@ describe('ToolExecutionCoordinator', () => {
     expect(warnings).toContain('工具“检查数据集”调用失败：数据集参数无效')
     expect(errors).toContain('数据集参数无效')
     expect(failedTool).toBe('inspect_dataset')
+  })
+
+  it('keeps a delayed tool result bound to the model-input revision that started its call', async () => {
+    let markStarted = (): void => {}
+    const started = new Promise<void>(resolve => { markStarted = resolve })
+    let release = (): void => {}
+    const released = new Promise<void>(resolve => { release = resolve })
+    const provider = testProvider()
+    const definition = provider.tools()[0]
+    if (!definition) throw new Error('测试工具缺失')
+    const delayedProvider: ToolProvider = {
+      ...provider,
+      tools: () => [{
+        ...definition,
+        handler: async () => {
+          markStarted()
+          await released
+          return {
+            message: '旧 revision 调用完成',
+            payload: {},
+            warnings: [],
+            resultId: 'result_delayed_revision',
+            source: 'test',
+          }
+        },
+      }],
+    }
+    const harness = coordinatorHarness(delayedProvider, false)
+    harness.coordinator.bindModelInputObjectiveRevision(1)
+
+    const executing = harness.coordinator.executeDirect('inspect_dataset', { datasetId: 'dataset_1' })
+    await started
+    harness.setObjectiveRevision(2)
+    harness.coordinator.bindModelInputObjectiveRevision(2)
+    release()
+    await expect(executing).resolves.toMatchObject({ resultId: 'result_delayed_revision' })
+
+    expect(harness.getState().toolResults).toContainEqual(expect.objectContaining({
+      resultId: 'result_delayed_revision',
+      objectiveRevision: 1,
+    }))
+    expect(harness.getTranscriptWrites()).toContainEqual(expect.objectContaining({
+      kind: 'tool_call',
+      payload: expect.objectContaining({ objectiveRevision: 1 }),
+    }))
+    expect(harness.getTranscriptWrites()).toContainEqual(expect.objectContaining({
+      kind: 'tool_result',
+      payload: expect.objectContaining({ objectiveRevision: 1 }),
+    }))
+  })
+
+  it('does not publish stale workflow control callbacks or events after the objective advances', async () => {
+    let markStarted = (): void => {}
+    const started = new Promise<void>(resolve => { markStarted = resolve })
+    let release = (): void => {}
+    const released = new Promise<void>(resolve => { release = resolve })
+    const base = testProvider()
+    const definition = base.tools()[0]
+    const manifestDefinition = base.manifest.tools[0]
+    if (!definition || !manifestDefinition) throw new Error('测试工具缺失')
+    const provider: ToolProvider = {
+      manifest: {
+        ...base.manifest,
+        id: 'test-stale-workflow-control',
+        tools: [{
+          ...manifestDefinition,
+          name: 'submit_agent_workflow',
+          label: '提交智能体工作流',
+          jsonSchema: { type: 'object', properties: {} },
+        }],
+      },
+      tools: () => [{
+        ...definition,
+        name: 'submit_agent_workflow',
+        label: '提交智能体工作流',
+        jsonSchema: { type: 'object', properties: {} },
+        handler: async () => {
+          markStarted()
+          await released
+          return {
+            message: '旧 revision 工作流已生成',
+            payload: {
+              planMode: false,
+              agentWorkflowDraft: {
+                goal: '旧版本目标',
+                steps: [{
+                  stepId: 'old_step',
+                  title: '执行旧版本工具',
+                  kind: 'tool',
+                  toolName: 'inspect_dataset',
+                  ownerAgentId: 'supervisor',
+                  args: {},
+                  reason: '验证迟到控制结果',
+                  dependsOn: [],
+                }],
+              },
+            },
+            warnings: [],
+            resultId: 'result_stale_workflow_control',
+            source: 'test',
+          }
+        },
+      }],
+    }
+    const onPlanModeChanged = vi.fn()
+    const harness = coordinatorHarness(provider, true, [], null, onPlanModeChanged)
+
+    const executing = harness.coordinator.executeDirect('submit_agent_workflow', {})
+    await started
+    harness.setObjectiveRevision(2)
+    harness.coordinator.bindModelInputObjectiveRevision(2)
+    release()
+    await expect(executing).resolves.toMatchObject({ resultId: 'result_stale_workflow_control' })
+    await harness.flushEvents()
+
+    expect(harness.getState()).toMatchObject({
+      objectiveRevision: 2,
+      planMode: true,
+      agentWorkflow: null,
+    })
+    expect(onPlanModeChanged).not.toHaveBeenCalled()
+    expect(harness.getEvents().some(event => event.type === 'agent_workflow.created')).toBe(false)
   })
 
   it('derives planning access from the tool read/write contract', async () => {
@@ -613,13 +736,10 @@ function coordinatorHarness(
   planMode: boolean,
   approvals: Array<{ action: string; status: string; payload: Record<string, unknown> }> = [],
   agentWorkflow: AgentWorkflow | null = null,
-): {
-  coordinator: ToolExecutionCoordinator
-  getState: () => {
-    agentWorkflow: AgentWorkflow | null
-  }
-} {
+  onPlanModeChanged?: (enabled: boolean) => void,
+) {
   let state = {
+    objectiveRevision: 1,
     planMode,
     agentWorkflow,
     todos: [],
@@ -634,10 +754,16 @@ function coordinatorHarness(
     approvals,
   }
   let transcriptSequence = 0
+  const transcriptWrites: Array<Record<string, unknown>> = []
+  const events: Array<{ type: string }> = []
+  const eventSink = new RunEventSink(event => { events.push(event) }, 'run_plan_boundary', 'thread_1')
   const store = {
     runtimeRoot: 'C:/runtime',
     activeTranscript: vi.fn(async () => []),
-    appendTranscript: vi.fn(async () => ({ entryId: `entry_${++transcriptSequence}` })),
+    appendTranscript: vi.fn(async (input: Record<string, unknown>) => {
+      transcriptWrites.push(input)
+      return { entryId: `entry_${++transcriptSequence}` }
+    }),
     saveRunCheckpoint: vi.fn(async () => undefined),
     appendToolValue: vi.fn(async () => undefined),
     persistArtifact: vi.fn(async () => undefined),
@@ -650,6 +776,7 @@ function coordinatorHarness(
       _artifacts: readonly unknown[],
     ) => {
       state = { ...state, ...mutation(state) }
+      return true
     }),
     mutateRunState: vi.fn(async (_runId: string, mutation: (current: typeof state) => Partial<typeof state>) => {
       state = { ...state, ...mutation(state) }
@@ -672,12 +799,17 @@ function coordinatorHarness(
       threadId: 'thread_1',
       turnId: 'turn_1',
       inlineToolResultMaxChars: 4_000,
-      eventSink: new RunEventSink(async () => undefined, 'run_plan_boundary', 'thread_1'),
+      eventSink,
       itemSink: new ItemSink(async () => undefined, 'run_plan_boundary', 'thread_1'),
       valueState: new Map(),
       signal: new AbortController().signal,
+      ...(onPlanModeChanged ? { onPlanModeChanged } : {}),
     }),
     getState: () => state,
+    setObjectiveRevision: (objectiveRevision: number) => { state = { ...state, objectiveRevision } },
+    getTranscriptWrites: () => transcriptWrites,
+    getEvents: () => events,
+    flushEvents: () => eventSink.flush(),
   }
 }
 

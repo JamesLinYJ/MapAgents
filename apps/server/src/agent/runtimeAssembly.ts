@@ -241,6 +241,7 @@ export class RuntimeAssemblyFactory {
       : []
     const context: AgentsExecutionContext = {
       runId: options.runId,
+      currentObjectiveRevision: () => coordinator.currentModelInputObjectiveRevision(),
       isExecutionEnabled: () => coordinator.isExecutionEnabled(),
       isSdkExtensionEnabled: () => coordinator.isSdkExtensionEnabled(),
       isToolEnabled: toolName => coordinator.isToolEnabled(toolName),
@@ -513,8 +514,12 @@ export class RuntimeAssemblyFactory {
         }
         if (item.type === 'function_call') {
           const transcript = await store.activeTranscript(threadId)
-          const exists = transcript
-            .some(entry => entry.kind === 'tool_call' && entry.payload.callId === item.callId)
+          const existingToolCall = transcript
+            .find(entry => entry.kind === 'tool_call' && entry.payload.callId === item.callId)
+          const itemObjectiveRevision = existingToolCall
+            ? objectiveRevisionFromPayload(existingToolCall.payload, 1)
+            : currentAssembly.context.currentObjectiveRevision()
+          const exists = Boolean(existingToolCall)
           const terminal = transcript
             .some(entry => entry.kind === 'tool_result' && entry.payload.callId === item.callId)
           if (!exists) {
@@ -529,6 +534,7 @@ export class RuntimeAssemblyFactory {
                 item,
                 itemSink,
                 label,
+                itemObjectiveRevision,
               )
             } else if (transcriptProjector.isPlatformManagedTool(item.name, currentAssembly)) {
               throw new Error(`SDK Session 收到未准备的工具调用 '${item.callId}'`)
@@ -540,6 +546,7 @@ export class RuntimeAssemblyFactory {
                 item,
                 itemSink,
                 sdkNativeToolPresentation(item.name, currentAssembly),
+                itemObjectiveRevision,
               )
             }
           }
@@ -561,6 +568,10 @@ export class RuntimeAssemblyFactory {
         await flushPendingSessionAssistantMessage()
         if (item.type === 'function_call_result') {
           const transcript = await store.activeTranscript(threadId)
+          const itemObjectiveRevision = objectiveRevisionForCall(
+            transcript,
+            item.callId,
+          )
           const exists = transcript
             .some(entry => entry.kind === 'tool_result' && entry.payload.callId === item.callId)
           if (exists) {
@@ -604,6 +615,7 @@ export class RuntimeAssemblyFactory {
               contentRef: null,
               ledgerStatus,
               resultId: null,
+              objectiveRevision: itemObjectiveRevision,
               ...(isSdkRejectedTool
                 ? { source: 'openai_agents_sdk' }
                 : isSdkNativeTool ? { source: nativePresentation.source } : {}),
@@ -617,6 +629,7 @@ export class RuntimeAssemblyFactory {
               metadata: {
                 toolLabel: nativePresentation.label,
                 source: nativePresentation.source,
+                objectiveRevision: itemObjectiveRevision,
               },
             })
             itemSink.completeItem(outputItem.itemId, {
@@ -627,6 +640,7 @@ export class RuntimeAssemblyFactory {
               metadata: {
                 toolLabel: nativePresentation.label,
                 source: nativePresentation.source,
+                objectiveRevision: itemObjectiveRevision,
               },
             })
           }
@@ -672,6 +686,20 @@ export class RuntimeAssemblyFactory {
     assembly = completedAssembly
     return completedAssembly
   }
+}
+
+function objectiveRevisionForCall(
+  entries: ReadonlyArray<{ kind: string; payload: Record<string, unknown> }>,
+  callId: string,
+): number {
+  const toolCall = entries.find(entry => entry.kind === 'tool_call' && entry.payload.callId === callId)
+  if (!toolCall) throw new Error(`SDK Session 工具结果 '${callId}' 缺少 canonical tool_call`)
+  return objectiveRevisionFromPayload(toolCall.payload, 1)
+}
+
+function objectiveRevisionFromPayload(payload: Record<string, unknown>, fallback: number): number {
+  const value = payload.objectiveRevision
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : fallback
 }
 
 function createThreadValueState(

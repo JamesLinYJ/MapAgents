@@ -114,6 +114,7 @@ describe('createAgentsTools', () => {
     let executionEnabled = false
     const runContext = new RunContext({
       runId: 'run_plan_boundary',
+      currentObjectiveRevision: () => 1,
       isExecutionEnabled: () => executionEnabled,
       isSdkExtensionEnabled: () => executionEnabled,
       isToolEnabled: toolName => executionEnabled || toolName === 'catalog_lookup',

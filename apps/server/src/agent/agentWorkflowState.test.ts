@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  advanceAgentWorkflowObjectiveRevision,
   completeAgentWorkflowStep,
   createAgentWorkflow,
   failAgentWorkflowStep,
@@ -202,6 +203,25 @@ describe('agentWorkflowState', () => {
     )
     expect(completed.status).toBe('completed')
     expect(completed.completedAt).toEqual(expect.any(String))
+  })
+
+  it('does not let an in-flight step from an older objective revision restore workflow completion', () => {
+    const running = startAgentWorkflowStep(
+      createAgentWorkflow({ goal: '交付结论', steps: [step('answer', 'answer')] }, 1),
+      { stepId: 'answer' },
+    )
+    const invalidated = advanceAgentWorkflowObjectiveRevision(running, 2)
+    const lateCompletion = completeAgentWorkflowStep(
+      invalidated,
+      { stepId: 'answer', resultSummary: '旧 revision 在途结果' },
+    )
+
+    expect(lateCompletion).toMatchObject({
+      objectiveRevision: 2,
+      status: 'adjusting',
+      completedAt: null,
+      steps: [expect.objectContaining({ status: 'completed' })],
+    })
   })
 
   it('rejects duplicate and out-of-order step transitions', () => {

@@ -30,6 +30,7 @@ import {
   type ModelCompletionService,
 } from '../model/modelResultCache.js'
 import type { AgentRuntimeStore } from '../store/runtimePorts.js'
+import { AGENT_WORKFLOW_CONTROL_TOOLS } from './agentWorkflowState.js'
 
 export const goalJudgeDecisionSchema = z.object({
   status: runGoalVerdictStatusSchema,
@@ -46,6 +47,7 @@ export const goalJudgeDecisionSchema = z.object({
 })
 
 export interface CanonicalGoalEvidenceBundle {
+  objectiveRevision: number
   transcript: Array<{
     entryId: string
     kind: TranscriptEntry['kind']
@@ -86,6 +88,11 @@ export class GoalJudge implements GoalJudgePort {
     const run = this.store.getRun(input.runId)
     if (!run.workspaceId) throw new Error(`Goal 验收缺少运行 '${input.runId}' 的 workspaceId。`)
     const bundle = await buildCanonicalGoalEvidence(this.store, input.runId, input.threadId)
+    if (bundle.objectiveRevision !== input.goal.objectiveRevision) {
+      throw new Error(
+        `Goal objective revision ${input.goal.objectiveRevision} 与运行证据 revision ${bundle.objectiveRevision} 不一致。`,
+      )
+    }
     const result = await this.completions.completeStructured({
       workspaceId: run.workspaceId,
       runId: input.runId,
@@ -122,6 +129,7 @@ export async function buildCanonicalGoalEvidence(
   const transcript = (await store.activeTranscript(threadId))
     .filter(entry => entry.runId === runId)
   return {
+    objectiveRevision: run.state.objectiveRevision,
     transcript: transcript.map(entry => ({
       entryId: entry.entryId,
       kind: entry.kind,
@@ -131,6 +139,7 @@ export async function buildCanonicalGoalEvidence(
     toolLedger: run.state.toolResults.map(result => ({
       referenceId: result.resultId ?? result.stepId,
       stepId: result.stepId,
+      objectiveRevision: result.objectiveRevision ?? 1,
       tool: result.tool,
       toolLabel: result.toolLabel,
       status: result.status,
@@ -154,11 +163,13 @@ export async function buildCanonicalGoalEvidence(
       uri: artifact.uri,
       display: artifact.display,
       metadata: artifact.metadata,
+      objectiveRevision: objectiveRevisionFromRecord(artifact.metadata),
       isIntermediate: artifact.isIntermediate,
     })),
     workflow: run.state.agentWorkflow ? {
       referenceId: run.state.agentWorkflow.agentWorkflowId,
       agentWorkflowId: run.state.agentWorkflow.agentWorkflowId,
+      objectiveRevision: run.state.agentWorkflow.objectiveRevision,
       revision: run.state.agentWorkflow.revision,
       goal: run.state.agentWorkflow.goal,
       status: run.state.agentWorkflow.status,
@@ -185,7 +196,9 @@ export function buildGoalJudgePrompt(goal: RunGoal, evidence: CanonicalGoalEvide
     '只能根据 <canonical-evidence> 中的持久化证据输出 satisfied、incomplete 或 impossible。',
     '工作 Agent 的“已完成”“无法完成”等主观总结只是待核验文本，不能成为 satisfied/impossible 的唯一证据。',
     'satisfied 只能引用 completed 工具结果、非中间 Artifact，或有完成时间和结果摘要的 completed workflow/step。',
-    'impossible 只能引用 failed/rejected/blocked 工具结果，或有明确错误的 failed/blocked workflow/step。',
+    'impossible 只能在当前 objective revision 有终态 failed workflow 时判定；单次工具失败或策略拒绝只能判为 incomplete。',
+    '当前存在 workflow 时，satisfied 必须等待该 workflow 在当前 objective revision 整体完成。',
+    'satisfied/impossible 至少必须引用一条当前 objective revision 的客观结果；旧 revision 证据只能作为上下文。',
     '模型输入摘要、助手自述、Goal 复检记录、started checkpoint 和中间 Artifact 不是终态证据。',
     'impossible 只用于条件自相矛盾、所需能力/数据已被可验证地证明不可用，或合理路径已穷尽；进展缓慢不是 impossible。',
     '每条 evidence 必须引用证据包中实际存在的 entryId、resultId/stepId、artifactId 或 workflow/step ID。',
@@ -227,7 +240,7 @@ export function validateJudgeEvidence(
     }
   }
 
-  for (const evidence of decision.evidence) {
+  const resolved = decision.evidence.map(evidence => {
     const record = evidence.source === 'transcript'
       ? transcript.get(evidence.referenceId)
       : evidence.source === 'tool_result'
@@ -238,7 +251,22 @@ export function validateJudgeEvidence(
     if (!record) {
       throw new Error(`Goal 验收器引用了不存在的 ${evidence.source} 证据 '${evidence.referenceId}'。`)
     }
-    if (decision.status === 'incomplete') continue
+    return { evidence, record }
+  })
+
+  if (decision.status === 'incomplete') return
+  if (
+    decision.status === 'satisfied'
+    && bundle.workflow
+    && (
+      objectiveRevisionFromRecord(bundle.workflow) !== bundle.objectiveRevision
+      || !isCompletedWorkflow(bundle.workflow)
+    )
+  ) {
+    throw new Error('Goal satisfied 判定必须等待当前 objective revision 的 workflow 整体完成。')
+  }
+
+  for (const { evidence, record } of resolved) {
     const admissible = decision.status === 'satisfied'
       ? supportsSatisfiedVerdict(evidence.source, record)
       : supportsImpossibleVerdict(evidence.source, record)
@@ -250,6 +278,25 @@ export function validateJudgeEvidence(
         `Goal ${decision.status} 判定的 ${evidence.source} 证据 '${evidence.referenceId}' 状态或来源不支持该结论。`,
       )
     }
+  }
+
+  const hasCurrentRevisionOutcome = resolved.some(({ evidence, record }) => (
+    evidenceRevision(evidence.source, record) === bundle.objectiveRevision
+  ))
+  if (!hasCurrentRevisionOutcome) {
+    throw new Error(
+      `Goal ${decision.status} 判定至少必须引用一条当前 objective revision ${bundle.objectiveRevision} 的客观结果。`,
+    )
+  }
+  if (
+    decision.status === 'impossible'
+    && !resolved.some(({ evidence, record }) => (
+      evidence.source === 'workflow'
+      && evidenceRevision(evidence.source, record) === bundle.objectiveRevision
+      && isTerminalFailedWorkflowEvidence(record)
+    ))
+  ) {
+    throw new Error('Goal impossible 判定必须引用当前 objective revision 的终态 failed workflow 证据。')
   }
 }
 
@@ -281,12 +328,14 @@ function supportsSatisfiedVerdict(
     return isTranscriptEvidence(record)
       && record.kind === 'tool_result'
       && record.payload.ledgerStatus === 'completed'
+      && isOutcomeTool(record.payload.name)
       && hasEvidenceText(record.payload)
   }
   if (source === 'tool_result') {
     const value = asEvidenceRecord(record)
     return value !== null
       && value.status === 'completed'
+      && isOutcomeTool(value.tool)
       && hasEvidenceText(value)
   }
   if (source === 'artifact') {
@@ -298,7 +347,7 @@ function supportsSatisfiedVerdict(
   }
   if (!isWorkflowEvidence(record)) return false
   return record.kind === 'step'
-    ? isCompletedWorkflowStep(record.value)
+    ? isCompletedWorkflow(record.workflow) && isCompletedWorkflowStep(record.value)
     : isCompletedWorkflow(record.value)
 }
 
@@ -310,18 +359,20 @@ function supportsImpossibleVerdict(
     return isTranscriptEvidence(record)
       && record.kind === 'tool_result'
       && isFailureStatus(record.payload.ledgerStatus)
+      && isOutcomeTool(record.payload.name)
       && hasEvidenceText(record.payload)
   }
   if (source === 'tool_result') {
     const value = asEvidenceRecord(record)
     return value !== null
       && isFailureStatus(value.status)
+      && isOutcomeTool(value.tool)
       && hasEvidenceText(value)
   }
   if (source === 'artifact' || !isWorkflowEvidence(record)) return false
-  if (record.kind === 'step') return isFailedWorkflowStep(record.value)
-  const steps = Array.isArray(record.value.steps) ? record.value.steps.filter(isRecord) : []
-  return record.value.status === 'failed' && steps.some(isFailedWorkflowStep)
+  return record.kind === 'step'
+    ? isFailedWorkflow(record.workflow) && isFailedWorkflowStep(record.value)
+    : isFailedWorkflow(record.value)
 }
 
 function isCompletedWorkflow(workflow: Record<string, unknown>): boolean {
@@ -342,10 +393,48 @@ function isCompletedWorkflowStep(step: Record<string, unknown>): boolean {
 function isFailedWorkflowStep(step: Record<string, unknown>): boolean {
   return (step.status === 'failed' || step.status === 'blocked')
     && isNonEmptyString(step.errorMessage)
+    && isNonEmptyString(step.completedAt)
 }
 
 function isFailureStatus(value: unknown): boolean {
-  return value === 'failed' || value === 'rejected' || value === 'blocked' || value === 'unavailable'
+  return value === 'failed' || value === 'blocked'
+}
+
+function isFailedWorkflow(workflow: Record<string, unknown>): boolean {
+  if (workflow.status !== 'failed' || !isNonEmptyString(workflow.completedAt)) return false
+  const steps = Array.isArray(workflow.steps) ? workflow.steps.filter(isRecord) : []
+  return steps.some(isFailedWorkflowStep)
+}
+
+function isTerminalFailedWorkflowEvidence(record: ResolvedGoalEvidence): boolean {
+  if (!isWorkflowEvidence(record)) return false
+  return record.kind === 'step'
+    ? isFailedWorkflow(record.workflow) && isFailedWorkflowStep(record.value)
+    : isFailedWorkflow(record.value)
+}
+
+function isOutcomeTool(value: unknown): boolean {
+  return typeof value === 'string'
+    && value.length > 0
+    && !AGENT_WORKFLOW_CONTROL_TOOLS.has(value)
+}
+
+function evidenceRevision(
+  source: z.infer<typeof runGoalEvidenceSchema>['source'],
+  record: ResolvedGoalEvidence,
+): number {
+  if (source === 'transcript' && isTranscriptEvidence(record)) {
+    return objectiveRevisionFromRecord(record.payload)
+  }
+  if (source === 'workflow' && isWorkflowEvidence(record)) {
+    return objectiveRevisionFromRecord(record.kind === 'step' ? record.workflow : record.value)
+  }
+  return objectiveRevisionFromRecord(asEvidenceRecord(record) ?? {})
+}
+
+function objectiveRevisionFromRecord(record: Record<string, unknown>): number {
+  const value = record.objectiveRevision
+  return Number.isInteger(value) && typeof value === 'number' && value > 0 ? value : 1
 }
 
 function hasEvidenceText(record: Record<string, unknown>): boolean {
