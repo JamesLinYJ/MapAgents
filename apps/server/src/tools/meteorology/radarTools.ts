@@ -23,11 +23,10 @@ import {
 import {
   artifactTarget,
   assertSuffix,
-  collectionFiles,
-  datasetValue,
   downloadDisplay,
   isRecord,
   mergeArtifactMetadata,
+  meteorologicalMembersFingerprint,
   miniAppDisplay,
   NETCDF_SUFFIXES,
   RADAR_PRODUCTS,
@@ -36,6 +35,8 @@ import {
   requiredRefKind,
   result,
   thirdPartyProvenance,
+  verifiedCollectionFiles,
+  verifiedDatasetValue,
 } from './toolRuntime.js'
 
 export function createRadarMeteorologyTools(deps: MeteorologyToolDeps): ToolDef[] {
@@ -71,14 +72,15 @@ export function createRadarMeteorologyTools(deps: MeteorologyToolDeps): ToolDef[
 
 async function inspectRadarStationCollection(args: Record<string, unknown>, ctx: ToolContext, deps: MeteorologyToolDeps): Promise<ToolResult> {
   const collection = refObject(requiredRefKind(ctx, args, 'radar_collection_ref', ['radar_file_collection']).value)
-  const files = collectionFiles(collection, 'radar_collection_ref')
+  const files = await verifiedCollectionFiles(ctx, collection, 'radar_collection_ref')
+  const membersFingerprint = meteorologicalMembersFingerprint(files)
   const worker = await deps.callWorker('inspect_radar_station_collection', { files }, ctx.signal)
   const refs: ValueRef[] = [{
     refId: makeId('ref'),
     kind: 'radar_station_collection',
     label: '雷达站文件集',
-    value: { files, inspection: worker.payload },
-    metadata: { sourceCollectionRef: args.radar_collection_ref },
+    value: { files, inspection: worker.payload, membersFingerprint },
+    metadata: { sourceCollectionRef: args.radar_collection_ref, membersFingerprint },
   }]
   const candidateTimes = Array.isArray(worker.payload.candidateTimes) ? worker.payload.candidateTimes.filter(isRecord) : []
   for (const item of candidateTimes) {
@@ -89,7 +91,7 @@ async function inspectRadarStationCollection(args: Record<string, unknown>, ctx:
       kind: 'radar_target_time',
       label: `${timestamp} 雷达候选时次`,
       value: timestamp,
-      metadata: { fileCount: item.fileCount },
+      metadata: { fileCount: item.fileCount, membersFingerprint },
     })
   }
   return result('inspect_radar_station_collection', worker.message, worker.payload, refs, [], thirdPartyProvenance('radar_mosaic_agent', {
@@ -118,8 +120,13 @@ async function recommendRadarMosaicStrategy(args: Record<string, unknown>, ctx: 
 
 async function renderRadarMosaic(args: Record<string, unknown>, ctx: ToolContext, deps: MeteorologyToolDeps): Promise<ToolResult> {
   const collection = refObject(requiredRefKind(ctx, args, 'radar_collection_ref', ['radar_station_collection']).value)
-  const files = collectionFiles(collection, 'radar_collection_ref')
-  const targetTime = String(requiredRefKind(ctx, args, 'target_time_ref', ['radar_target_time']).value)
+  const files = await verifiedCollectionFiles(ctx, collection, 'radar_collection_ref')
+  const membersFingerprint = meteorologicalMembersFingerprint(files)
+  const targetTimeRef = requiredRefKind(ctx, args, 'target_time_ref', ['radar_target_time'])
+  if (targetTimeRef.metadata?.membersFingerprint !== membersFingerprint) {
+    throw new Error('target_time_ref 与 radar_collection_ref 的数据集成员不匹配')
+  }
+  const targetTime = String(targetTimeRef.value)
   const strategySource = refObject(requiredRefKind(ctx, args, 'strategy_ref', ['radar_mosaic_strategy']).value)
   const strategy = typeof strategySource.strategy === 'string' ? strategySource.strategy : ''
   if (!strategy) throw new Error('strategy_ref 不包含天气雷达组网拼图策略')
@@ -163,7 +170,9 @@ async function renderRadarMosaic(args: Record<string, unknown>, ctx: ToolContext
       mapPngArtifactId: mapPng.artifactId,
       npzArtifactId: npz.artifactId,
       npzRelativePath: npz.relativePath,
+      membersFingerprint,
     },
+    metadata: { membersFingerprint },
   }
   return result('render_radar_mosaic', worker.message, worker.payload, [ref], [png, mapPng, npz], thirdPartyProvenance('radar_mosaic_agent', {
     radarCollectionRef: args.radar_collection_ref,
@@ -176,9 +185,13 @@ async function compareRadarMosaicReference(args: Record<string, unknown>, ctx: T
   const mosaic = refObject(requiredRefKind(ctx, args, 'radar_mosaic_result_ref', ['radar_mosaic_result']).value)
   const npzRelativePath = typeof mosaic.npzRelativePath === 'string' ? mosaic.npzRelativePath : ''
   if (!npzRelativePath) throw new Error('radar_mosaic_result_ref 缺少 NPZ 文件路径')
-  const reference = datasetValue(ctx, requiredRefKind(ctx, args, 'dataset_ref', ['meteorological_dataset', 'meteorological_file']))
+  const reference = await verifiedDatasetValue(ctx, requiredRefKind(ctx, args, 'dataset_ref', ['meteorological_dataset', 'meteorological_file']))
   assertSuffix(reference.name, NETCDF_SUFFIXES, 'NC 参考数据')
-  const targetTime = String(requiredRefKind(ctx, args, 'target_time_ref', ['radar_target_time']).value)
+  const targetTimeRef = requiredRefKind(ctx, args, 'target_time_ref', ['radar_target_time'])
+  if (typeof mosaic.membersFingerprint !== 'string' || targetTimeRef.metadata?.membersFingerprint !== mosaic.membersFingerprint) {
+    throw new Error('target_time_ref 与 radar_mosaic_result_ref 的数据集成员不匹配')
+  }
+  const targetTime = String(targetTimeRef.value)
   const comparison = artifactTarget(ctx, 'png', `${targetTime} 天气雷达组网拼图对比`)
   const referencePng = artifactTarget(ctx, 'png', `${targetTime} NC 参考图`)
   const worker = await deps.callWorker('compare_radar_mosaic_reference', {

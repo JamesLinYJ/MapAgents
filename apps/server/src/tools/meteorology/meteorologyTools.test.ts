@@ -9,13 +9,17 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
+import { mkdir, rm, writeFile } from 'node:fs/promises'
+import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ToolContext } from '../../framework/types.js'
+import type { ToolContext, ValueRef } from '../../framework/types.js'
+import type { MeteorologicalDatasetRecord } from '../../schemas/types.js'
 import { ToolRegistry } from '../../framework/registry.js'
 import { validateToolProvider } from '../../framework/validation.js'
 import { parseEnv } from '../../framework/env.js'
 import { createMeteorologyProvider } from './index.js'
 import { createMeteorologyTools } from './meteorologyTools.js'
+import { convertMeteorologicalUnitValue, meteorologicalMembersFingerprint } from './toolRuntime.js'
 import {
   clearMeteorologyWorkerCatalogCache,
   REQUIRED_METEOROLOGY_WORKER_TOOLS,
@@ -37,11 +41,13 @@ const testEnv = parseEnv({
 })
 const provider = createMeteorologyProvider(testEnv)
 const meteorologyTools = createMeteorologyTools(testEnv)
+const workerGeoJsonOutputs: string[] = []
 
-afterEach(() => {
+afterEach(async () => {
   clearMeteorologyWorkerCatalogCache()
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
+  await Promise.all(workerGeoJsonOutputs.splice(0).map(file => rm(file, { force: true })))
 })
 
 describe('nowcast tools', () => {
@@ -102,6 +108,16 @@ describe('nowcast tools', () => {
     expect(result.message).toContain('当前对话')
   })
 
+  it('does not widen thread scope when the execution has no thread', async () => {
+    const listMeteorologicalDatasets = vi.fn().mockResolvedValue([])
+    const toolContext = context(new Map(), { threadId: null })
+    toolContext.listMeteorologicalDatasets = listMeteorologicalDatasets
+    const tool = meteorologyTools.find(candidate => candidate.name === 'list_meteorological_files')!
+
+    await expect(tool.handler({ scope: 'thread' }, toolContext)).rejects.toThrow('没有 threadId')
+    expect(listMeteorologicalDatasets).not.toHaveBeenCalled()
+  })
+
   it('does not hide meteorology tools when the worker is temporarily unreachable during provider load', async () => {
     const fetch = vi.fn().mockRejectedValue(new Error('worker restarting'))
     vi.stubGlobal('fetch', fetch)
@@ -144,6 +160,73 @@ describe('nowcast tools', () => {
     expect(result.valueRefs?.[0].value).toEqual({ lat: 30.2462469, lng: 120.206011, label: '市民中心' })
   })
 
+  it('normalizes a projected layer scope once before publishing the nowcast area', async () => {
+    const [x, y] = [13_358_338.895192828, 3_503_549.843504374]
+    const state = new Map<string, unknown>([[
+      'ref_layer',
+      valueRef('ref_layer', 'layer', {
+        featureCollection: {
+          type: 'FeatureCollection',
+          features: [{
+            type: 'Feature', properties: { name: '测试区' },
+            geometry: {
+              type: 'Polygon',
+              coordinates: [[[x, y], [x + 1_000, y], [x + 1_000, y + 1_000], [x, y + 1_000], [x, y]]],
+            },
+          }],
+        },
+      }, { metadata: { crs: 'EPSG:3857' } }),
+    ]])
+    const tool = meteorologyTools.find(candidate => candidate.name === 'prepare_nowcast_scope')!
+    const result = await tool.handler({ question: '测试区未来降雨？', scope_ref: 'ref_layer', area_name: '测试区' }, context(state))
+    const area = result.valueRefs?.[0].value as {
+      features: Array<{ geometry: { coordinates: number[][][] } }>
+    }
+
+    expect(result.valueRefs?.[0].metadata).toMatchObject({
+      crs: 'OGC:CRS84', sourceCrs: 'EPSG:3857', reprojected: true,
+    })
+    expect(area.features[0]?.geometry.coordinates[0]?.[0]?.[0]).toBeCloseTo(120, 8)
+    expect(area.features[0]?.geometry.coordinates[0]?.[0]?.[1]).toBeCloseTo(30, 8)
+  })
+
+  it('rejects projected-looking nowcast boundaries without a declared CRS', async () => {
+    const state = new Map<string, unknown>([[
+      'ref_boundary',
+      valueRef('ref_boundary', 'feature_collection', {
+        type: 'FeatureCollection',
+        features: [{
+          type: 'Feature', properties: { name: '测试区' },
+          geometry: {
+            type: 'Polygon',
+            coordinates: [[
+              [13_358_338, 3_503_549], [13_359_338, 3_503_549],
+              [13_359_338, 3_504_549], [13_358_338, 3_504_549], [13_358_338, 3_503_549],
+            ]],
+          },
+        }],
+      }),
+    ]])
+    const tool = meteorologyTools.find(candidate => candidate.name === 'prepare_nowcast_scope')!
+
+    await expect(tool.handler({ question: '测试区未来降雨？', scope_ref: 'ref_boundary' }, context(state)))
+      .rejects.toThrow('投影坐标必须显式声明 CRS')
+  })
+
+  it('accepts and validates bbox scopes through the registered tool contract', async () => {
+    const registry = new ToolRegistry()
+    registry.register(provider)
+    const state = new Map<string, unknown>([[
+      'ref_bbox', valueRef('ref_bbox', 'bbox', [119, 29, 121, 31], { metadata: { crs: 'OGC:CRS84' } }),
+    ]])
+
+    const result = await registry.execute('prepare_nowcast_scope', {
+      question: '这个范围未来降雨？', scope_ref: 'ref_bbox',
+    }, context(state))
+
+    expect(result.valueRefs?.[0]).toMatchObject({ kind: 'bbox', value: [119, 29, 121, 31] })
+  })
+
   it('fails instead of fetching or fabricating a boundary when no existing reference is provided', async () => {
     const tool = meteorologyTools.find(candidate => candidate.name === 'prepare_nowcast_scope')!
     await expect(tool.handler({ question: '接下来天气怎么样？' }, context()))
@@ -175,6 +258,7 @@ describe('nowcast tools', () => {
           scope: { renderBbox: [119, 29, 121, 31] },
           mapCandidates: [
             {
+              datasetId: 'dataset_latest', contentHash: '1'.repeat(64), filename: 'latest.nc',
               label: '180分钟 QPF',
               reason: '最新时次',
               leadMinutes: 180,
@@ -182,6 +266,7 @@ describe('nowcast tools', () => {
               relativePath: 'uploads/latest.nc',
             },
             {
+              datasetId: 'dataset_peak', contentHash: '2'.repeat(64), filename: 'peak.nc',
               label: '30分钟 QPF',
               reason: '降雨峰值时次',
               leadMinutes: 30,
@@ -195,7 +280,10 @@ describe('nowcast tools', () => {
     const tool = meteorologyTools.find(candidate => candidate.name === 'answer_nowcast_question')!
     const result = await tool.handler(
       { nowcast_analysis_ref: 'ref_analysis', question: '接下来天气怎么样？' },
-      context(state),
+      context(state, { datasets: [
+        datasetRecord('dataset_latest', 'thread_1', 'latest.nc', 'uploads/latest.nc', '1'.repeat(64)),
+        datasetRecord('dataset_peak', 'thread_1', 'peak.nc', 'uploads/peak.nc', '2'.repeat(64)),
+      ] }),
     )
 
     expect(workerToolCalls(fetchMock)).toHaveLength(2)
@@ -225,11 +313,13 @@ describe('nowcast tools', () => {
       bounds: [119, 29, 121, 31],
       coordinates: [[119, 31], [121, 31], [121, 29], [119, 29]],
     }])
+    const radarFiles = [{ datasetId: 'dataset_radar', contentHash: '3'.repeat(64), name: 'sample.bz2', relativePath: 'uploads/sample.bz2' }]
+    const membersFingerprint = meteorologicalMembersFingerprint(radarFiles)
     const state = new Map<string, unknown>([
       ['ref_radar_collection', valueRef('ref_radar_collection', 'radar_station_collection', {
-        files: [{ name: 'sample.bz2', relativePath: 'uploads/sample.bz2' }],
+        files: radarFiles,
       })],
-      ['ref_time', valueRef('ref_time', 'radar_target_time', '202604091955')],
+      ['ref_time', valueRef('ref_time', 'radar_target_time', '202604091955', { metadata: { membersFingerprint } })],
       ['ref_strategy', valueRef('ref_strategy', 'radar_mosaic_strategy', { strategy: 'quality' })],
     ])
     const tool = meteorologyTools.find(candidate => candidate.name === 'render_radar_mosaic')!
@@ -242,7 +332,9 @@ describe('nowcast tools', () => {
       tolerance_sec: 600,
       grid_res_km: 0.5,
       min_dbz: 3,
-    }, context(state))
+    }, context(state, {
+      datasets: [datasetRecord('dataset_radar', 'thread_1', 'sample.bz2', 'uploads/sample.bz2', '3'.repeat(64))],
+    }))
 
     const body = workerToolBody(fetchMock)
     expect(body.args).toMatchObject({
@@ -295,11 +387,19 @@ describe('nowcast tools', () => {
     }])
     const state = new Map<string, unknown>([
       ['ref_radar_files', valueRef('ref_radar_files', 'radar_file_collection', {
-        files: [{ name: 'RADA_CHN_Z9001_VOL_20260409195500_O_DOR_SAD_CAP_FMT.bin.bz2', relativePath: 'objects/sha256/aa/hash.bz2' }],
+        files: [{
+          datasetId: 'dataset_radar', contentHash: '4'.repeat(64),
+          name: 'RADA_CHN_Z9001_VOL_20260409195500_O_DOR_SAD_CAP_FMT.bin.bz2', relativePath: 'objects/sha256/aa/hash.bz2',
+        }],
       })],
     ])
     const tool = meteorologyTools.find(candidate => candidate.name === 'inspect_radar_station_collection')!
-    const result = await tool.handler({ radar_collection_ref: 'ref_radar_files' }, context(state))
+    const result = await tool.handler({ radar_collection_ref: 'ref_radar_files' }, context(state, {
+      datasets: [datasetRecord(
+        'dataset_radar', 'thread_1', 'RADA_CHN_Z9001_VOL_20260409195500_O_DOR_SAD_CAP_FMT.bin.bz2',
+        'objects/sha256/aa/hash.bz2', '4'.repeat(64),
+      )],
+    }))
 
     expect(workerToolBody(fetchMock)).toMatchObject({
       args: {
@@ -325,12 +425,16 @@ describe('nowcast tools', () => {
     const state = new Map<string, unknown>([
       ['ref_mosaic', valueRef('ref_mosaic', 'radar_mosaic_result', {
         npzRelativePath: 'artifacts/run_1/mosaic.npz',
+        membersFingerprint: 'radar_members_1',
       })],
       ['ref_dataset', valueRef('ref_dataset', 'meteorological_dataset', {
+        datasetId: 'dataset_reference', contentHash: '5'.repeat(64),
         name: 'reference.nc',
         relativePath: 'objects/sha256/bb/reference.nc',
+      }, { metadata: lineage('dataset_reference', '5'.repeat(64)) })],
+      ['ref_time', valueRef('ref_time', 'radar_target_time', '202604091955', {
+        metadata: { membersFingerprint: 'radar_members_1' },
       })],
-      ['ref_time', valueRef('ref_time', 'radar_target_time', '202604091955')],
     ])
     const tool = meteorologyTools.find(candidate => candidate.name === 'compare_radar_mosaic_reference')!
     const result = await tool.handler({
@@ -341,7 +445,9 @@ describe('nowcast tools', () => {
       product_label: '回波顶高',
       product_unit: 'km',
       min_display: 2,
-    }, context(state))
+    }, context(state, {
+      datasets: [datasetRecord('dataset_reference', 'thread_1', 'reference.nc', 'objects/sha256/bb/reference.nc', '5'.repeat(64))],
+    }))
 
     expect(workerToolBody(fetchMock)).toMatchObject({
       args: {
@@ -383,18 +489,23 @@ describe('nowcast tools', () => {
   it('sends the original filename with dataset object paths', async () => {
     stubRuntimeEnv()
     const fetchMock = stubWorkerFetch([{
-      variables: [{ name: 'QPF', analysisReady: true, mapReady: true }],
-      times: [],
-      levels: [],
+      variables: [{ name: 'QPF', unit: 'mm', analysisReady: true, mapReady: true }],
+      bounds: [119, 29, 121, 31],
+      times: ['2026-08-08T00:00:00Z'],
+      levels: [850],
     }])
     const state = new Map<string, unknown>([
       ['ref_file', valueRef('ref_file', 'meteorological_file', {
+        datasetId: 'dataset_1',
+        contentHash: 'a'.repeat(64),
         name: '202604091955_202604092000.nc',
         relativePath: 'objects/sha256/ab/abcdef',
-      })],
+      }, { metadata: lineage('dataset_1', 'a'.repeat(64)) })],
     ])
     const tool = meteorologyTools.find(candidate => candidate.name === 'meteorological_inspect')!
-    await tool.handler({ dataset_ref: 'ref_file' }, context(state))
+    const result = await tool.handler({ dataset_ref: 'ref_file' }, context(state, {
+      datasets: [datasetRecord('dataset_1', 'thread_1', '202604091955_202604092000.nc', 'objects/sha256/ab/abcdef', 'a'.repeat(64))],
+    }))
 
     expect(workerToolBody(fetchMock)).toMatchObject({
       args: {
@@ -402,19 +513,134 @@ describe('nowcast tools', () => {
         file_name: '202604091955_202604092000.nc',
       },
     })
+    expect(result.valueRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'meteorological_dataset', metadata: lineage('dataset_1', 'a'.repeat(64)) }),
+      expect.objectContaining({
+        kind: 'meteorological_variable', unit: 'mm',
+        metadata: lineage('dataset_1', 'a'.repeat(64), 'QPF'),
+      }),
+      expect.objectContaining({ kind: 'bbox', metadata: lineage('dataset_1', 'a'.repeat(64)) }),
+      expect.objectContaining({ kind: 'meteorological_time_index', metadata: lineage('dataset_1', 'a'.repeat(64)) }),
+      expect.objectContaining({ kind: 'meteorological_level_index', metadata: lineage('dataset_1', 'a'.repeat(64)) }),
+    ]))
+  })
+
+  it('resolves latest_upload only inside the current thread', async () => {
+    stubRuntimeEnv()
+    const fetchMock = stubWorkerFetch([{ variables: [], times: [], levels: [] }])
+    const datasets = [
+      datasetRecord('dataset_other_thread', 'thread_other', 'other.nc', 'objects/other.nc', 'b'.repeat(64), '2026-08-08T02:00:00.000Z'),
+      datasetRecord('dataset_current_thread', 'thread_1', 'current.nc', 'objects/current.nc', 'c'.repeat(64), '2026-08-08T01:00:00.000Z'),
+    ]
+    const tool = meteorologyTools.find(candidate => candidate.name === 'meteorological_inspect')!
+
+    await tool.handler({ dataset_id: 'latest_upload' }, context(new Map(), { datasets }))
+
+    expect(workerToolBody(fetchMock).args).toMatchObject({
+      file_name: 'current.nc',
+      file_relative_path: 'objects/current.nc',
+    })
+  })
+
+  it('rejects latest_upload as a magic dataset_ref instead of bypassing valueRef resolution', async () => {
+    const registry = new ToolRegistry()
+    registry.register(provider)
+
+    await expect(registry.execute('meteorological_inspect', {
+      dataset_ref: 'latest_upload',
+    }, context())).rejects.toThrow('未知 valueRef')
+  })
+
+  it('rejects a schema-declared valueRef kind before the handler executes', async () => {
+    const registry = new ToolRegistry()
+    registry.register(provider)
+    const state = scientificState({ variableKind: 'bbox' })
+
+    await expect(registry.execute('meteorological_stats', {
+      dataset_ref: 'ref_dataset_b',
+      variable_ref: 'ref_variable',
+    }, context(state))).rejects.toThrow('variable_ref 必须引用 meteorological_variable，实际为 bbox')
+  })
+
+  it('rejects a variable from dataset A when dataset B is selected', async () => {
+    const state = scientificState({ variableDatasetId: 'dataset_a', variableHash: 'a'.repeat(64) })
+    const tool = meteorologyTools.find(candidate => candidate.name === 'meteorological_stats')!
+
+    await expect(tool.handler({
+      dataset_ref: 'ref_dataset_b',
+      variable_ref: 'ref_variable',
+    }, context(state, {
+      datasets: [datasetRecord('dataset_b', 'thread_1', 'b.nc', 'objects/b.nc', 'b'.repeat(64))],
+    }))).rejects.toThrow('与 dataset_ref dataset_b@')
+  })
+
+  it('batch-verifies a sequence collection once and rejects an unrelated variable before worker execution', async () => {
+    stubRuntimeEnv()
+    const fetchMock = stubWorkerFetch([])
+    const files = [
+      { datasetId: 'dataset_b', contentHash: 'b'.repeat(64), name: 'b.nc', relativePath: 'objects/b.nc' },
+      { datasetId: 'dataset_c', contentHash: 'c'.repeat(64), name: 'c.nc', relativePath: 'objects/c.nc' },
+    ]
+    const state = new Map<string, unknown>([
+      ['ref_collection', valueRef('ref_collection', 'meteorological_file_collection', { files })],
+      ['ref_variable_a', valueRef('ref_variable_a', 'meteorological_variable', {
+        datasetId: 'dataset_a', contentHash: 'a'.repeat(64), name: 'QPF',
+      }, { unit: 'mm', metadata: lineage('dataset_a', 'a'.repeat(64), 'QPF') })],
+    ])
+    const ctx = context(state, { datasets: [
+      datasetRecord('dataset_b', 'thread_1', 'b.nc', 'objects/b.nc', 'b'.repeat(64)),
+      datasetRecord('dataset_c', 'thread_1', 'c.nc', 'objects/c.nc', 'c'.repeat(64)),
+    ] })
+    const resolveMany = vi.fn(ctx.resolveMeteorologicalDatasets!)
+    ctx.resolveMeteorologicalDatasets = resolveMany
+    const tool = meteorologyTools.find(candidate => candidate.name === 'create_nowcast_sequence')!
+
+    await expect(tool.handler({
+      file_collection_ref: 'ref_collection',
+      variable_ref: 'ref_variable_a',
+    }, ctx)).rejects.toThrow('variable_ref 不属于短时临近预报文件集')
+    expect(resolveMany).toHaveBeenCalledOnce()
+    expect(resolveMany).toHaveBeenCalledWith(['dataset_b', 'dataset_c'])
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects a Kelvin threshold for a millimetre variable before worker execution', async () => {
+    const state = scientificState({ thresholdUnit: 'K' })
+    const tool = meteorologyTools.find(candidate => candidate.name === 'meteorological_threshold')!
+
+    await expect(tool.handler({
+      dataset_ref: 'ref_dataset_b',
+      variable_ref: 'ref_variable',
+      threshold_ref: 'ref_threshold',
+    }, context(state, {
+      datasets: [datasetRecord('dataset_b', 'thread_1', 'b.nc', 'objects/b.nc', 'b'.repeat(64))],
+    }))).rejects.toThrow('单位 K 与变量单位 mm 不兼容')
+  })
+
+  it('supports only explicit compatible unit conversions', () => {
+    expect(convertMeteorologicalUnitValue(0, '°C', 'K', 'threshold_ref')).toBeCloseTo(273.15)
+    expect(convertMeteorologicalUnitValue(1, 'kg m-2', 'mm', 'threshold_ref')).toBeCloseTo(1)
   })
 
   it('accepts rainfall threshold objects through the registry validator', async () => {
     const registry = new ToolRegistry()
     registry.register(provider)
+    const state = scientificState()
     const result = await registry.execute('define_rainfall_risk_thresholds', {
+      dataset_ref: 'ref_dataset_b',
+      variable_ref: 'ref_variable',
       thresholds: [
         { label: '小雨', min: 0, max: 1, color: '#f0f0f0' },
         { label: '强降雨', min: 1, max: 999, color: '#d73027' },
       ],
-    }, context())
+    }, context(state, {
+      datasets: [datasetRecord('dataset_b', 'thread_1', 'b.nc', 'objects/b.nc', 'b'.repeat(64))],
+    }))
 
-    expect(result.valueRefs?.[0]).toMatchObject({ kind: 'rainfall_risk_thresholds' })
+    expect(result.valueRefs?.[0]).toMatchObject({
+      kind: 'rainfall_risk_thresholds', unit: 'mm',
+      metadata: lineage('dataset_b', 'b'.repeat(64), 'QPF'),
+    })
     expect(result.payload.thresholds).toHaveLength(2)
   })
 
@@ -432,17 +658,24 @@ describe('nowcast tools', () => {
     }])
     const state = new Map<string, unknown>([
       ['ref_dataset', valueRef('ref_dataset', 'meteorological_dataset', {
+        datasetId: 'dataset_1',
+        contentHash: 'a'.repeat(64),
         name: 'rain.nc',
         relativePath: 'objects/sha256/aa/rain.nc',
-      })],
-      ['ref_variable', valueRef('ref_variable', 'meteorological_variable', { name: 'QPF' })],
+      }, { metadata: lineage('dataset_1', 'a'.repeat(64)) })],
+      ['ref_variable', valueRef('ref_variable', 'meteorological_variable', {
+        datasetId: 'dataset_1', contentHash: 'a'.repeat(64), name: 'QPF',
+      }, { unit: 'mm', metadata: lineage('dataset_1', 'a'.repeat(64), 'QPF') })],
       ['ref_boundary', valueRef('ref_boundary', 'meteorological_file', {
+        datasetId: 'dataset_boundary',
+        contentHash: 'd'.repeat(64),
         name: 'boundary.geojson',
         relativePath: 'objects/sha256/bb/boundary.geojson',
-      })],
+      }, { metadata: lineage('dataset_boundary', 'd'.repeat(64)) })],
       ['ref_thresholds', valueRef('ref_thresholds', 'rainfall_risk_thresholds', {
+        unit: 'mm', variable: 'QPF',
         thresholds: [{ label: '强降雨', min: 1, max: 999, color: '#d73027' }],
-      })],
+      }, { unit: 'mm', metadata: lineage('dataset_1', 'a'.repeat(64), 'QPF') })],
     ])
     const tool = meteorologyTools.find(candidate => candidate.name === 'render_rainfall_risk_map')!
     const result = await tool.handler({
@@ -450,7 +683,12 @@ describe('nowcast tools', () => {
       variable_ref: 'ref_variable',
       boundary_ref: 'ref_boundary',
       thresholds_ref: 'ref_thresholds',
-    }, context(state))
+    }, context(state, {
+      datasets: [
+        datasetRecord('dataset_1', 'thread_1', 'rain.nc', 'objects/sha256/aa/rain.nc', 'a'.repeat(64)),
+        datasetRecord('dataset_boundary', 'thread_1', 'boundary.geojson', 'objects/sha256/bb/boundary.geojson', 'd'.repeat(64)),
+      ],
+    }))
 
     const body = workerToolBody(fetchMock)
     expect(body.args).toMatchObject({
@@ -494,17 +732,22 @@ describe('nowcast tools', () => {
     }])
     const state = new Map<string, unknown>([
       ['ref_dataset', valueRef('ref_dataset', 'meteorological_dataset', {
+        datasetId: 'dataset_1',
+        contentHash: 'a'.repeat(64),
         name: 'rain.nc',
         relativePath: 'objects/sha256/aa/rain.nc',
-      })],
-      ['ref_variable', valueRef('ref_variable', 'meteorological_variable', { name: 'QPF' })],
+      }, { metadata: lineage('dataset_1', 'a'.repeat(64)) })],
+      ['ref_variable', valueRef('ref_variable', 'meteorological_variable', {
+        datasetId: 'dataset_1', contentHash: 'a'.repeat(64), name: 'QPF',
+      }, { unit: 'mm', metadata: lineage('dataset_1', 'a'.repeat(64), 'QPF') })],
       ['ref_layer', valueRef('ref_layer', 'layer', {
         layerKey: 'hangzhou_admin',
         featureCollection: { type: 'FeatureCollection', features: [feature('测试区')] },
       })],
       ['ref_thresholds', valueRef('ref_thresholds', 'rainfall_risk_thresholds', {
+        unit: 'mm', variable: 'QPF',
         thresholds: [{ label: '强降雨', min: 1, max: 999, color: '#d73027' }],
-      })],
+      }, { unit: 'mm', metadata: lineage('dataset_1', 'a'.repeat(64), 'QPF') })],
     ])
     const tool = meteorologyTools.find(candidate => candidate.name === 'render_rainfall_risk_map')!
     await tool.handler({
@@ -512,7 +755,9 @@ describe('nowcast tools', () => {
       variable_ref: 'ref_variable',
       boundary_ref: 'ref_layer',
       thresholds_ref: 'ref_thresholds',
-    }, context(state))
+    }, context(state, {
+      datasets: [datasetRecord('dataset_1', 'thread_1', 'rain.nc', 'objects/sha256/aa/rain.nc', 'a'.repeat(64))],
+    }))
 
     const body = workerToolBody(fetchMock)
     expect(body.args.boundary_relative_path).toMatch(/^artifacts\/run_1\/boundary_.*\.geojson$/u)
@@ -521,12 +766,17 @@ describe('nowcast tools', () => {
   it('creates rainfall thresholds and area rainfall artifacts with third-party provenance', async () => {
     stubRuntimeEnv()
     const thresholdTool = meteorologyTools.find(candidate => candidate.name === 'define_rainfall_risk_thresholds')!
+    const thresholdState = scientificState()
     const thresholds = await thresholdTool.handler({
+      dataset_ref: 'ref_dataset_b',
+      variable_ref: 'ref_variable',
       thresholds: [
         { label: '小雨', min: 0, max: 1, color: '#f0f0f0' },
         { label: '强降雨', min: 1, max: 999, color: '#d73027' },
       ],
-    }, context())
+    }, context(thresholdState, {
+      datasets: [datasetRecord('dataset_b', 'thread_1', 'b.nc', 'objects/b.nc', 'b'.repeat(64))],
+    }))
     expect(thresholds.valueRefs?.[0]).toMatchObject({ kind: 'rainfall_risk_thresholds' })
     expect(thresholds.payload.thresholds).toHaveLength(2)
     expect(thresholds.provenance).toMatchObject({
@@ -541,12 +791,16 @@ describe('nowcast tools', () => {
     }])
     const state = new Map<string, unknown>([
       ['ref_collection', valueRef('ref_collection', 'meteorological_file_collection', {
-        files: [{ name: '202604091955_202604092000.nc', relativePath: 'uploads/a.nc' }],
+        files: [{
+          datasetId: 'dataset_table', contentHash: 'e'.repeat(64),
+          name: '202604091955_202604092000.nc', relativePath: 'uploads/a.nc',
+        }],
       })],
       ['ref_boundary', valueRef('ref_boundary', 'meteorological_file', {
+        datasetId: 'dataset_table_boundary', contentHash: 'f'.repeat(64),
         name: 'boundary.geojson',
         relativePath: 'uploads/boundary.geojson',
-      })],
+      }, { metadata: lineage('dataset_table_boundary', 'f'.repeat(64)) })],
     ])
     const tableTool = meteorologyTools.find(candidate => candidate.name === 'generate_area_rainfall_table')!
     const table = await tableTool.handler({
@@ -554,7 +808,12 @@ describe('nowcast tools', () => {
       boundary_ref: 'ref_boundary',
       top_n: 1,
       style: { titleText: '测试表格' },
-    }, context(state))
+    }, context(state, {
+      datasets: [
+        datasetRecord('dataset_table', 'thread_1', '202604091955_202604092000.nc', 'uploads/a.nc', 'e'.repeat(64)),
+        datasetRecord('dataset_table_boundary', 'thread_1', 'boundary.geojson', 'uploads/boundary.geojson', 'f'.repeat(64)),
+      ],
+    }))
 
     const body = workerToolBody(fetchMock)
     expect(body.args).toMatchObject({
@@ -605,15 +864,41 @@ function workerResponse(payload: Record<string, unknown>): Response {
 
 function stubWorkerFetch(payloads: Record<string, unknown>[]) {
   const queue = [...payloads]
-  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     if (url.endsWith('/tools/catalog')) return response(workerCatalog())
     const payload = queue.shift()
     if (!payload) throw new Error(`测试缺少 Worker 工具响应: ${url}`)
+    await simulateWorkerGeoJsonOutput(init, payload)
     return workerResponse(payload)
   })
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
+}
+
+async function simulateWorkerGeoJsonOutput(init: RequestInit | undefined, payload: Record<string, unknown>): Promise<void> {
+  if (typeof init?.body !== 'string') return
+  const body = JSON.parse(init.body) as { args?: Record<string, unknown> }
+  const relativePath = body.args?.output_geojson_relative_path
+  if (typeof relativePath !== 'string') return
+  const bounds = Array.isArray(payload.bounds) && payload.bounds.length === 4
+    ? payload.bounds as [number, number, number, number]
+    : [119, 29, 121, 31] as [number, number, number, number]
+  const [west, south, east, north] = bounds
+  const target = path.resolve(testEnv.RUNTIME_ROOT, relativePath)
+  await mkdir(path.dirname(target), { recursive: true })
+  await writeFile(target, JSON.stringify({
+    type: 'FeatureCollection',
+    features: [{
+      type: 'Feature',
+      properties: { risk_level: '强降雨' },
+      geometry: {
+        type: 'Polygon',
+        coordinates: [[[west, south], [east, south], [east, north], [west, north], [west, south]]],
+      },
+    }],
+  }), 'utf8')
+  workerGeoJsonOutputs.push(target)
 }
 
 function workerToolCalls(fetchMock: ReturnType<typeof vi.fn>) {
@@ -667,22 +952,104 @@ function stubRuntimeEnv() {
   vi.stubEnv('ENABLED_TOOL_PROVIDERS', 'geo-platform-meteorology')
 }
 
-function valueRef(refId: string, kind: string, value: unknown) {
-  return { refId, kind, label: refId, value }
+function valueRef(
+  refId: string,
+  kind: string,
+  value: unknown,
+  extras: Partial<Pick<ValueRef, 'unit' | 'metadata'>> = {},
+): ValueRef {
+  return { refId, kind, label: refId, value, ...extras }
 }
 
-function context(state = new Map<string, unknown>()): ToolContext {
+function context(
+  state = new Map<string, unknown>(),
+  options: { datasets?: MeteorologicalDatasetRecord[]; threadId?: string | null } = {},
+): ToolContext {
+  const threadId = options.threadId === undefined ? 'thread_1' : options.threadId
+  const datasets = options.datasets ?? []
   return {
     runId: 'run_1',
     sessionId: 'session_1',
-    threadId: 'thread_1',
+    threadId,
     state,
     resolveValueRef: refId => {
       const value = state.get(refId)
       if (!value) throw new Error(`未知 valueRef：${refId}`)
       return value as ReturnType<ToolContext['resolveValueRef']>
     },
+    resolveMeteorologicalDataset: async input => {
+      if (input.selector === 'explicit_dataset_id') {
+        return datasets.find(dataset => dataset.datasetId === input.datasetId) ?? null
+      }
+      return datasets
+        .filter(dataset => dataset.threadId === threadId)
+        .filter(dataset => !input.filename || dataset.filename.toLowerCase() === input.filename.toLowerCase())
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null
+    },
+    resolveMeteorologicalDatasets: async datasetIds => datasets.filter(dataset => datasetIds.includes(dataset.datasetId)),
     invokeStructuredModel: async () => ({}),
     log: () => undefined,
+  }
+}
+
+function lineage(datasetId: string, contentHash: string, variable?: string): Record<string, string> {
+  return { datasetId, contentHash, ...(variable ? { variable } : {}) }
+}
+
+function scientificState(options: {
+  variableKind?: string
+  variableDatasetId?: string
+  variableHash?: string
+  thresholdUnit?: string
+} = {}): Map<string, unknown> {
+  const datasetId = 'dataset_b'
+  const contentHash = 'b'.repeat(64)
+  const variableDatasetId = options.variableDatasetId ?? datasetId
+  const variableHash = options.variableHash ?? contentHash
+  return new Map<string, unknown>([
+    ['ref_dataset_b', valueRef('ref_dataset_b', 'meteorological_dataset', {
+      datasetId,
+      contentHash,
+      name: 'b.nc',
+      relativePath: 'objects/b.nc',
+    }, { metadata: lineage(datasetId, contentHash) })],
+    ['ref_variable', valueRef('ref_variable', options.variableKind ?? 'meteorological_variable', {
+      datasetId: variableDatasetId,
+      contentHash: variableHash,
+      name: 'QPF',
+    }, { unit: 'mm', metadata: lineage(variableDatasetId, variableHash, 'QPF') })],
+    ['ref_threshold', valueRef('ref_threshold', 'meteorological_threshold', 5, {
+      unit: options.thresholdUnit ?? 'mm',
+      metadata: lineage(datasetId, contentHash, 'QPF'),
+    })],
+  ])
+}
+
+function datasetRecord(
+  datasetId: string,
+  threadId: string,
+  filename: string,
+  fileRelativePath: string,
+  contentHash: string,
+  updatedAt = '2026-08-08T00:00:00.000Z',
+): MeteorologicalDatasetRecord {
+  return {
+    datasetId,
+    workspaceId: 'workspace_1',
+    createdByUserId: 'user_1',
+    visibility: 'workspace',
+    sessionId: 'session_1',
+    threadId,
+    filename,
+    originalFilename: filename,
+    fileId: `${datasetId}_file`,
+    fileRelativePath,
+    sizeBytes: 1024,
+    contentHash,
+    mediaType: 'application/x-netcdf',
+    status: 'ready',
+    metadata: { source: 'upload' },
+    createdAt: updatedAt,
+    updatedAt,
   }
 }

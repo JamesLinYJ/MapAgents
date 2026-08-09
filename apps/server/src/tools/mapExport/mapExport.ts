@@ -14,9 +14,10 @@
 
 import path from 'node:path'
 import type { ToolDef } from '../../framework/types.js'
+import { geoJsonSpatialMetadata, requireRenderableCrs84Bounds } from '../../gis/geojsonCrs.js'
 import { atomicWriteText } from '../../store/durableFileIo.js'
 import { makeId } from '../../utils/ids.js'
-import { geoJsonInputSchema, resolveGeoJsonInput } from '../spatial/geoJsonInput.js'
+import { geoJsonInputSchema, resolveCanonicalGeoJsonInput } from '../spatial/geoJsonInput.js'
 import { MAP_EXPORT_PROMPT } from '../spatial/prompts.js'
 
 export function createMapExportTool(runtimeRoot: string): ToolDef {
@@ -38,14 +39,15 @@ export function createMapExportTool(runtimeRoot: string): ToolDef {
       required: ['geojson'],
     },
     async handler(args, ctx) {
-      const geojson = resolveGeoJsonInput(args.geojson, ctx, 'geojson')
+      const resolved = resolveCanonicalGeoJsonInput(args.geojson, ctx, 'geojson')
+      const geojson = resolved.entity
       const filename = safeFilename(args.filename)
       const artifactId = makeId('artifact')
       const relativePath = path.posix.join('artifacts', ctx.runId, `${artifactId}.geojson`)
       const target = resolveRuntimePath(runtimeRoot, relativePath)
       const serialized = JSON.stringify(geojson, null, 2)
+      const bounds = requireRenderableCrs84Bounds(resolved.bounds, '导出的 GeoJSON')
       await atomicWriteText(target, serialized)
-      const bounds = geoJsonBounds(geojson)
 
       return {
         message: `地图数据已导出为 ${filename}`,
@@ -72,7 +74,7 @@ export function createMapExportTool(runtimeRoot: string): ToolDef {
               title: filename,
               replacementGroup: null,
               bounds,
-              crs: 'EPSG:4326',
+              crs: resolved.crs,
               minZoom: 0,
               maxZoom: 22,
               source: {
@@ -103,7 +105,11 @@ export function createMapExportTool(runtimeRoot: string): ToolDef {
             },
           },
           relativePath,
-          metadata: { relativePath, downloadUrl: `/api/v1/artifacts/${artifactId}/download` },
+          metadata: {
+            relativePath,
+            downloadUrl: `/api/v1/artifacts/${artifactId}/download`,
+            ...geoJsonSpatialMetadata(resolved),
+          },
         }],
         valueRefs: [{
           refId: makeId('ref'),
@@ -113,35 +119,6 @@ export function createMapExportTool(runtimeRoot: string): ToolDef {
         }],
       }
     },
-  }
-}
-
-function geoJsonBounds(value: unknown): [number, number, number, number] {
-  const coordinates: Array<[number, number]> = []
-  collectCoordinates(value, coordinates)
-  if (!coordinates.length) throw new Error('导出的 GeoJSON 没有可制图坐标')
-  const xs = coordinates.map(([x]) => x)
-  const ys = coordinates.map(([, y]) => y)
-  const west = Math.min(...xs)
-  const east = Math.max(...xs)
-  const south = Math.min(...ys)
-  const north = Math.max(...ys)
-  return [west === east ? west - 0.0001 : west, south === north ? south - 0.0001 : south, west === east ? east + 0.0001 : east, south === north ? north + 0.0001 : north]
-}
-
-function collectCoordinates(value: unknown, output: Array<[number, number]>): void {
-  if (Array.isArray(value)) {
-    if (value.length >= 2 && typeof value[0] === 'number' && typeof value[1] === 'number') {
-      output.push([value[0], value[1]])
-      return
-    }
-    for (const child of value) collectCoordinates(child, output)
-    return
-  }
-  if (typeof value !== 'object' || value === null) return
-  for (const [key, child] of Object.entries(value)) {
-    if (key === 'properties') continue
-    collectCoordinates(child, output)
   }
 }
 

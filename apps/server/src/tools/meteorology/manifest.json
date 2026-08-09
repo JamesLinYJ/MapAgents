@@ -661,6 +661,24 @@
       "jsonSchema": {
         "type": "object",
         "properties": {
+          "dataset_ref": {
+            "type": "string",
+            "title": "数据集引用",
+            "description": "必须使用当前 run 中已存在的 valueRef ID",
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_dataset"
+            ]
+          },
+          "variable_ref": {
+            "type": "string",
+            "title": "降水变量引用",
+            "description": "必须使用当前 run 中已存在的 valueRef ID",
+            "x-source": "value_ref",
+            "x-value-ref-kinds": [
+              "meteorological_variable"
+            ]
+          },
           "thresholds": {
             "type": "array",
             "minItems": 1,
@@ -732,7 +750,10 @@
             ]
           }
         },
-        "required": [],
+        "required": [
+          "dataset_ref",
+          "variable_ref"
+        ],
         "x-mini-app": {
           "type": "rainfall_risk_map_console"
         }
@@ -1060,7 +1081,7 @@
           },
           "scope_ref": {
             "type": "string",
-            "title": "已有边界或地点引用",
+            "title": "已有边界、范围或地点引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
             "x-source": "value_ref",
             "x-value-ref-kinds": [
@@ -1068,7 +1089,8 @@
               "nowcast_area",
               "layer",
               "nowcast_coordinate",
-              "place_candidate"
+              "place_candidate",
+              "bbox"
             ]
           },
           "area_name": {
@@ -1121,15 +1143,16 @@
           },
           "scope_ref": {
             "type": "string",
-            "title": "区划或地点范围引用",
+            "title": "区划、范围或地点引用",
             "description": "必须使用当前 run 中已存在的 valueRef ID",
             "x-source": "value_ref",
             "x-value-ref-kinds": [
-              "nowcast_area",
-              "nowcast_coordinate",
               "feature_collection",
+              "nowcast_area",
               "layer",
-              "place_candidate"
+              "nowcast_coordinate",
+              "place_candidate",
+              "bbox"
             ]
           }
         },

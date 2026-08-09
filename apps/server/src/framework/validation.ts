@@ -28,7 +28,7 @@ export function validateToolDefinition(tool: ToolDef): void {
     }
     validateJsonSchema(jsonSchema, `${tool.name}.jsonSchema`);
 }
-export function validateToolProvider(provider: ToolProvider): void {
+export function validateToolProvider(provider: ToolProvider): ToolDef[] {
     validateManifest(provider.manifest);
     const tools = provider.tools();
     for (const tool of tools) ensureToolSchemas(tool);
@@ -58,6 +58,7 @@ export function validateToolProvider(provider: ToolProvider): void {
         if (!runtimeNames.has(entry.name))
             throw new Error(`Provider "${provider.manifest.id}" 的工具 "${entry.name}" 缺少运行时实现`);
     }
+    return tools;
 }
 function validateManifestParity(manifestTool: ToolManifestEntry, runtimeTool: ToolDef): void {
     // Manifest 是 UI、Agent 与运行时共享的公开契约；运行时实现不能悄悄扩展参数或改写描述。
@@ -100,7 +101,22 @@ function validateManifest(manifest: ToolManifest): void {
         validateJsonSchema(tool.jsonSchema, `${manifest.id}.${tool.name}.jsonSchema`);
     }
 }
-function validateJsonSchema(schema: Record<string, unknown>, field: string): void {
+function validateJsonSchema(
+    schema: Record<string, unknown>,
+    field: string,
+    root: Record<string, unknown> = schema,
+    seenRefs: Set<string> = new Set(),
+): void {
+    let hasRef = false;
+    if (schema.$ref !== undefined) {
+        if (typeof schema.$ref !== 'string' || !schema.$ref.startsWith('#/'))
+            throw new Error(`${field}.$ref 必须是本地 JSON Pointer`);
+        const ref = schema.$ref;
+        if (seenRefs.has(ref)) throw new Error(`${field}.$ref 存在循环: ${ref}`);
+        const target = resolveLocalJsonSchemaRef(root, ref, field);
+        validateJsonSchema(target, `${field}.$ref(${ref})`, root, new Set(seenRefs).add(ref));
+        hasRef = true;
+    }
     const supportedTypes = new Set(['object', 'array', 'string', 'number', 'integer', 'boolean', 'null']);
     const types = typeof schema.type === 'string'
         ? [schema.type]
@@ -118,10 +134,10 @@ function validateJsonSchema(schema: Record<string, unknown>, field: string): voi
         for (const [index, alternative] of alternatives.entries()) {
             if (!isRecord(alternative))
                 throw new Error(`${field}.${keyword}.${index} 必须是 schema 对象`);
-            validateJsonSchema(alternative, `${field}.${keyword}.${index}`);
+            validateJsonSchema(alternative, `${field}.${keyword}.${index}`, root, new Set(seenRefs));
         }
     }
-    if (types.length === 0 && !hasComposite) {
+    if (types.length === 0 && !hasComposite && !hasRef) {
         throw new Error(`${field}.type 不受支持，且未声明 anyOf/oneOf/allOf`);
     }
     if (types.some(type => !supportedTypes.has(type))) {
@@ -135,18 +151,43 @@ function validateJsonSchema(schema: Record<string, unknown>, field: string): voi
         for (const [key, value] of Object.entries(isRecord(schema.properties) ? schema.properties : {})) {
             if (!isRecord(value))
                 throw new Error(`${field}.properties.${key} 必须是 schema 对象`);
-            validateJsonSchema(value, `${field}.properties.${key}`);
+            validateJsonSchema(value, `${field}.properties.${key}`, root, new Set(seenRefs));
         }
         if (schema.required !== undefined && !Array.isArray(schema.required))
             throw new Error(`${field}.required 必须是数组`);
         if (isRecord(schema.additionalProperties))
-            validateJsonSchema(schema.additionalProperties, `${field}.additionalProperties`);
+            validateJsonSchema(schema.additionalProperties, `${field}.additionalProperties`, root, new Set(seenRefs));
     }
     if (types.includes('array') && schema.items !== undefined) {
         if (!isRecord(schema.items))
             throw new Error(`${field}.items 必须是 schema 对象`);
-        validateJsonSchema(schema.items, `${field}.items`);
+        validateJsonSchema(schema.items, `${field}.items`, root, new Set(seenRefs));
     }
+    if (schema.prefixItems !== undefined) {
+        if (!Array.isArray(schema.prefixItems))
+            throw new Error(`${field}.prefixItems 必须是 schema 数组`);
+        for (const [index, item] of schema.prefixItems.entries()) {
+            if (!isRecord(item)) throw new Error(`${field}.prefixItems.${index} 必须是 schema 对象`);
+            validateJsonSchema(item, `${field}.prefixItems.${index}`, root, new Set(seenRefs));
+        }
+    }
+    if (schema.$defs !== undefined) {
+        if (!isRecord(schema.$defs)) throw new Error(`${field}.$defs 必须是 schema 对象`);
+        for (const [key, definition] of Object.entries(schema.$defs)) {
+            if (!isRecord(definition)) throw new Error(`${field}.$defs.${key} 必须是 schema 对象`);
+            validateJsonSchema(definition, `${field}.$defs.${key}`, root, new Set(seenRefs));
+        }
+    }
+}
+
+function resolveLocalJsonSchemaRef(root: Record<string, unknown>, ref: string, field: string): Record<string, unknown> {
+    let current: unknown = root;
+    for (const token of ref.slice(2).split('/').map(value => value.replace(/~1/gu, '/').replace(/~0/gu, '~'))) {
+        if (!isRecord(current) || !(token in current)) throw new Error(`${field}.$ref 不存在: ${ref}`);
+        current = current[token];
+    }
+    if (!isRecord(current)) throw new Error(`${field}.$ref 不是 schema 对象: ${ref}`);
+    return current;
 }
 function requireText(value: string | undefined, field: string): void {
     if (!value?.trim())

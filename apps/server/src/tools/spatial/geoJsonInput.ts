@@ -10,7 +10,7 @@
 // --------------------------------------------------------------------------
 
 import type { ToolContext } from '../../framework/types.js'
-import { parseGeoJsonEntity } from '../../gis/geojson.js'
+import { normalizeGeoJsonToCrs84, type CanonicalGeoJson } from '../../gis/geojsonCrs.js'
 
 export const GEOJSON_VALUE_REF_KINDS = ['feature_collection', 'geojson', 'route', 'layer'] as const
 
@@ -32,8 +32,16 @@ export function resolveGeoJsonInput(
   value: unknown,
   context: Pick<ToolContext, 'resolveValueRef'>,
   field: string,
-): ReturnType<typeof parseGeoJsonEntity> {
-  if (typeof value !== 'string') return parseGeoJsonEntity(value, field)
+): CanonicalGeoJson['entity'] {
+  return resolveCanonicalGeoJsonInput(value, context, field).entity
+}
+
+export function resolveCanonicalGeoJsonInput(
+  value: unknown,
+  context: Pick<ToolContext, 'resolveValueRef'>,
+  field: string,
+): CanonicalGeoJson {
+  if (typeof value !== 'string') return normalizeGeoJsonToCrs84(value, field)
   const refId = value.trim()
   if (!refId) throw new Error(`${field} valueRef 不能为空`)
   const reference = context.resolveValueRef(refId)
@@ -43,7 +51,7 @@ export function resolveGeoJsonInput(
   const candidate = reference.kind === 'layer' && isRecord(reference.value)
     ? reference.value.featureCollection
     : reference.value
-  return parseGeoJsonEntity(candidate, `${field}(${refId})`)
+  return normalizeGeoJsonToCrs84(candidate, `${field}(${refId})`, reference.metadata?.crs)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

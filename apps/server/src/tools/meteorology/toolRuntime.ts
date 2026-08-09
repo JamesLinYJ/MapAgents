@@ -9,21 +9,41 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
+import { readFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
+import {
+  METEOROLOGICAL_BOUNDARY_SUFFIXES as BOUNDARY_SUFFIXES,
+  METEOROLOGICAL_DATASET_SUFFIXES as DATASET_SUFFIXES,
+  METEOROLOGICAL_RADAR_SUFFIXES as RADAR_SUFFIXES,
+  METEOROLOGICAL_TOOL_FILE_SUFFIXES as METEOROLOGICAL_FILE_SUFFIXES,
+} from '@geo-agent-platform/shared-types/meteorology'
 
 import type { ToolArtifact, ToolContext, ToolResult, ValueRef } from '../../framework/types.js'
-import type { ArtifactDisplay, MapBounds, MapLayerStyle } from '../../schemas/types.js'
+import {
+  normalizeGeoJsonToCrs84,
+  type CanonicalGeoJson,
+} from '../../gis/geojsonCrs.js'
+import type { ArtifactDisplay, MapBounds, MapLayerStyle, MeteorologicalDatasetRecord } from '../../schemas/types.js'
 import { atomicWriteText } from '../../store/durableFileIo.js'
 import { makeId } from '../../utils/ids.js'
 import type { MeteorologyToolDeps } from './toolDefinition.js'
 
-export const DATASET_SUFFIXES = ['.nc', '.nc4', '.tif', '.tiff', '.grib', '.grb', '.grb2', '.h5', '.hdf5']
+export { DATASET_SUFFIXES, METEOROLOGICAL_FILE_SUFFIXES }
 export const NETCDF_SUFFIXES = ['.nc', '.nc4']
-const RADAR_SUFFIXES = ['.bz2']
-const BOUNDARY_SUFFIXES = ['.zip', '.shp', '.geojson', '.json']
-export const METEOROLOGICAL_FILE_SUFFIXES = [...DATASET_SUFFIXES, ...RADAR_SUFFIXES, ...BOUNDARY_SUFFIXES]
 export const RADAR_PRODUCTS = ['reflectivity', 'velocity', 'spectrum_width', 'zdr', 'cc', 'dp', 'kdp', 'snrh', 'echo_top']
 export const BOUNDARY_REF_KINDS = ['meteorological_file', 'feature_collection', 'nowcast_area', 'layer']
+
+export interface MeteorologicalDatasetLineage {
+  datasetId: string
+  contentHash: string
+}
+
+export interface MeteorologicalDatasetFile {
+  name: string
+  relativePath: string
+  lineage: MeteorologicalDatasetLineage
+}
 
 const THIRD_PARTY_SOURCE_SNAPSHOTS = {
   radar_mosaic_agent: 'packages/gis-meteorology/src/gis_meteorology/third_party/radar_mosaic_agent/source/original',
@@ -52,18 +72,38 @@ export function result(
   }
 }
 
-export function resultRefs(name: string, label: string, payload: Record<string, unknown>): ValueRef[] {
-  const refs: ValueRef[] = [{ refId: makeId('ref'), kind: `${name}_result`, label, value: payload }]
+export function resultRefs(
+  name: string,
+  label: string,
+  payload: Record<string, unknown>,
+  lineage?: MeteorologicalDatasetLineage,
+  variable?: string | null,
+): ValueRef[] {
+  const unit = textValue(payload.unit) ?? textValue(payload.units)
+  const refs: ValueRef[] = [{
+    refId: makeId('ref'), kind: `${name}_result`, label, value: payload,
+    ...(unit ? { unit } : {}),
+    ...(lineage ? { metadata: meteorologicalLineageMetadata(lineage, variable) } : {}),
+  }]
   if (name === 'meteorological_stats') {
     for (const key of ['min', 'mean', 'median', 'p50', 'p90', 'max']) {
       const value = payload[key]
       if (typeof value !== 'number' || !Number.isFinite(value)) continue
-      refs.push({ refId: makeId('ref'), kind: 'meteorological_threshold', label: `${label} / ${key}`, value, unit: typeof payload.unit === 'string' ? payload.unit : null })
+      refs.push({
+        refId: makeId('ref'), kind: 'meteorological_threshold', label: `${label} / ${key}`, value,
+        unit,
+        ...(lineage ? { metadata: meteorologicalLineageMetadata(lineage, variable) } : {}),
+      })
     }
     const levels = ['min', 'p50', 'p90', 'max']
       .map(key => payload[key])
       .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
-    if (levels.length >= 2) refs.push({ refId: makeId('ref'), kind: 'meteorological_contour_levels', label: `${label} / 等值线层级`, value: [...new Set(levels)] })
+    if (levels.length >= 2) refs.push({
+      refId: makeId('ref'), kind: 'meteorological_contour_levels', label: `${label} / 等值线层级`,
+      value: [...new Set(levels)],
+      unit,
+      ...(lineage ? { metadata: meteorologicalLineageMetadata(lineage, variable) } : {}),
+    })
   }
   return refs
 }
@@ -94,24 +134,43 @@ export async function datasetFileFromArgs(
   args: Record<string, unknown>,
   refKey: string,
   allowedKinds: string[],
-): Promise<{ name: string; relativePath: string }> {
+): Promise<MeteorologicalDatasetFile> {
   const refId = typeof args[refKey] === 'string' ? String(args[refKey]).trim() : ''
-  if (refId && refId !== 'latest_upload') {
-    return datasetValue(ctx, requiredRefKind(ctx, args, refKey, allowedKinds))
+  if (refId) {
+    if (refId === 'latest_upload') {
+      throw new Error(`${refKey} 只接受 valueRef ID；当前 thread 最新上传请使用 dataset_id='latest_upload'`)
+    }
+    return verifiedDatasetValue(ctx, requiredRefKind(ctx, args, refKey, allowedKinds), refKey)
   }
 
   const datasetId = typeof args.dataset_id === 'string' && args.dataset_id.trim()
     ? args.dataset_id.trim()
-    : refId === 'latest_upload' ? 'latest_upload' : null
+    : null
   const filename = typeof args.filename === 'string' && args.filename.trim() ? args.filename.trim() : null
   if (!ctx.resolveMeteorologicalDataset) {
     throw new Error('当前运行上下文不支持解析气象数据集')
   }
-  const dataset = await ctx.resolveMeteorologicalDataset({ datasetId, filename })
+  const usesCurrentThread = !datasetId || datasetId === 'latest_upload'
+  if (usesCurrentThread && !ctx.threadId) {
+    throw new Error('当前运行没有 threadId，不能解析 latest_upload')
+  }
+  const dataset = await ctx.resolveMeteorologicalDataset(usesCurrentThread
+    ? { selector: 'current_thread_latest', filename }
+    : { selector: 'explicit_dataset_id', datasetId })
   if (!dataset) {
     throw new Error('当前 thread 没有可用的气象数据集；请先上传 NetCDF、GRIB、GeoTIFF、HDF5 或雷达 bz2 文件。')
   }
-  return { name: dataset.filename, relativePath: dataset.fileRelativePath }
+  if (dataset.status !== 'ready') throw new Error(`气象数据集 '${dataset.datasetId}' 状态为 ${dataset.status}，尚不可执行`)
+  return {
+    name: dataset.filename,
+    relativePath: dataset.fileRelativePath,
+    lineage: requireMeteorologicalLineage({
+      refId: dataset.datasetId,
+      kind: 'meteorological_dataset',
+      label: dataset.filename,
+      value: { datasetId: dataset.datasetId, contentHash: dataset.contentHash },
+    }, 'resolved dataset'),
+  }
 }
 
 export function datasetValue(_ctx: ToolContext, ref: ValueRef): { name: string; relativePath: string } {
@@ -123,11 +182,183 @@ export function datasetValue(_ctx: ToolContext, ref: ValueRef): { name: string; 
   return { name: typeof value.name === 'string' ? value.name : ref.label, relativePath }
 }
 
+export function lineagedDatasetValue(ctx: ToolContext, ref: ValueRef, key = 'dataset_ref'): MeteorologicalDatasetFile {
+  return { ...datasetValue(ctx, ref), lineage: requireMeteorologicalLineage(ref, key) }
+}
+
+export async function verifiedDatasetValue(
+  ctx: ToolContext,
+  ref: ValueRef,
+  key = 'dataset_ref',
+): Promise<MeteorologicalDatasetFile> {
+  const claimed = lineagedDatasetValue(ctx, ref, key)
+  if (!ctx.resolveMeteorologicalDataset) throw new Error('当前运行上下文不支持校验气象数据集血缘')
+  const dataset = await ctx.resolveMeteorologicalDataset({
+    selector: 'explicit_dataset_id',
+    datasetId: claimed.lineage.datasetId,
+  })
+  if (!dataset) throw new Error(`${key} 引用的数据集不存在或当前 workspace/session 未授权`)
+  return verifyPersistedDatasetClaim(claimed, dataset, key)
+}
+
+function verifyPersistedDatasetClaim(
+  claimed: MeteorologicalDatasetFile,
+  dataset: MeteorologicalDatasetRecord | null,
+  key: string,
+): MeteorologicalDatasetFile {
+  if (!dataset) throw new Error(`${key} 引用的数据集不存在或当前 workspace/session 未授权`)
+  if (dataset.status !== 'ready') throw new Error(`${key} 引用的数据集状态为 ${dataset.status}，尚不可执行`)
+  const persistedLineage = requireMeteorologicalLineage({
+    refId: dataset.datasetId,
+    kind: 'meteorological_dataset',
+    label: dataset.filename,
+    value: { datasetId: dataset.datasetId, contentHash: dataset.contentHash },
+  }, `${key} persisted dataset`)
+  if (!sameMeteorologicalLineage(claimed.lineage, persistedLineage)) {
+    throw new Error(`${key} 的 contentHash 已过期或与持久化数据集不匹配`)
+  }
+  if (claimed.relativePath !== dataset.fileRelativePath || claimed.name !== dataset.filename) {
+    throw new Error(`${key} 的文件路径或文件名与持久化数据集不匹配`)
+  }
+  return { name: dataset.filename, relativePath: dataset.fileRelativePath, lineage: persistedLineage }
+}
+
+export function meteorologicalLineageMetadata(
+  lineage: MeteorologicalDatasetLineage,
+  variable?: string | null,
+): Record<string, string> {
+  return {
+    datasetId: lineage.datasetId,
+    contentHash: lineage.contentHash,
+    ...(variable?.trim() ? { variable: variable.trim() } : {}),
+  }
+}
+
+export function requireMeteorologicalLineage(ref: ValueRef, key: string): MeteorologicalDatasetLineage {
+  const value = isRecord(ref.value) ? ref.value : null
+  const valueLineage = readMeteorologicalLineage(value)
+  const metadataLineage = readMeteorologicalLineage(ref.metadata)
+  if (valueLineage && metadataLineage && !sameMeteorologicalLineage(valueLineage, metadataLineage)) {
+    throw new Error(`${key} 的 value 与 metadata 数据集血缘冲突`)
+  }
+  const lineage = valueLineage ?? metadataLineage
+  if (!lineage) throw new Error(`${key} 缺少不可变 datasetId/contentHash 血缘`)
+  return lineage
+}
+
+export function requireMatchingMeteorologicalLineage(
+  ref: ValueRef,
+  expected: MeteorologicalDatasetLineage,
+  key: string,
+): ValueRef {
+  const actual = requireMeteorologicalLineage(ref, key)
+  if (!sameMeteorologicalLineage(actual, expected)) {
+    throw new Error(`${key} 属于数据集 ${actual.datasetId}@${actual.contentHash}，与 dataset_ref ${expected.datasetId}@${expected.contentHash} 不匹配`)
+  }
+  return ref
+}
+
+export function requireMatchingMeteorologicalVariable(ref: ValueRef, expectedVariable: string, key: string): ValueRef {
+  const expected = expectedVariable.trim()
+  const value = isRecord(ref.value) ? ref.value : null
+  const actual = textValue(ref.metadata?.variable)
+    ?? (value ? textValue(value.variable) ?? textValue(value.name) : null)
+  if (!actual) throw new Error(`${key} 缺少变量血缘`)
+  if (actual !== expected) throw new Error(`${key} 属于变量 ${actual}，与 variable_ref ${expected} 不匹配`)
+  return ref
+}
+
+export function valueRefUnit(ref: ValueRef): string | null {
+  if (typeof ref.unit === 'string' && ref.unit.trim()) return ref.unit.trim()
+  if (isRecord(ref.value)) {
+    const direct = textValue(ref.value.unit) ?? textValue(ref.value.units)
+    if (direct) return direct
+    if (isRecord(ref.value.metadata)) {
+      const nested = textValue(ref.value.metadata.unit) ?? textValue(ref.value.metadata.units)
+      if (nested) return nested
+    }
+  }
+  return textValue(ref.metadata?.unit) ?? textValue(ref.metadata?.units)
+}
+
+export function convertMeteorologicalUnitValue(
+  value: number,
+  sourceUnit: string | null,
+  targetUnit: string | null,
+  key: string,
+): number {
+  if (!sourceUnit || !targetUnit) {
+    throw new Error(`${key} 与变量必须同时声明单位，不能隐式假定单位一致`)
+  }
+  const sourceKey = normalizeUnitKey(sourceUnit)
+  const targetKey = normalizeUnitKey(targetUnit)
+  if (sourceKey === targetKey) return value
+  const source = UNIT_CONVERSIONS[sourceKey]
+  const target = UNIT_CONVERSIONS[targetKey]
+  if (!source || !target || source.dimension !== target.dimension) {
+    throw new Error(`${key} 单位 ${sourceUnit} 与变量单位 ${targetUnit} 不兼容`)
+  }
+  return target.fromBase(source.toBase(value))
+}
+
+function readMeteorologicalLineage(record: Record<string, unknown> | undefined | null): MeteorologicalDatasetLineage | null {
+  if (!record) return null
+  const datasetId = typeof record.datasetId === 'string' ? record.datasetId.trim() : ''
+  const contentHash = typeof record.contentHash === 'string' ? record.contentHash.trim() : ''
+  return datasetId && contentHash ? { datasetId, contentHash } : null
+}
+
+function sameMeteorologicalLineage(left: MeteorologicalDatasetLineage, right: MeteorologicalDatasetLineage): boolean {
+  return left.datasetId === right.datasetId && left.contentHash === right.contentHash
+}
+
+interface UnitConversion {
+  dimension: 'length' | 'pressure' | 'speed' | 'temperature'
+  toBase(value: number): number
+  fromBase(value: number): number
+}
+
+const linearUnit = (dimension: UnitConversion['dimension'], scale: number): UnitConversion => ({
+  dimension,
+  toBase: value => value * scale,
+  fromBase: value => value / scale,
+})
+
+const kelvinUnit: UnitConversion = { dimension: 'temperature', toBase: value => value, fromBase: value => value }
+const celsiusUnit: UnitConversion = { dimension: 'temperature', toBase: value => value + 273.15, fromBase: value => value - 273.15 }
+const fahrenheitUnit: UnitConversion = {
+  dimension: 'temperature',
+  toBase: value => (value - 32) * 5 / 9 + 273.15,
+  fromBase: value => (value - 273.15) * 9 / 5 + 32,
+}
+
+const UNIT_CONVERSIONS: Record<string, UnitConversion> = {
+  k: kelvinUnit, kelvin: kelvinUnit,
+  c: celsiusUnit, degc: celsiusUnit, celsius: celsiusUnit,
+  f: fahrenheitUnit, degf: fahrenheitUnit, fahrenheit: fahrenheitUnit,
+  m: linearUnit('length', 1), meter: linearUnit('length', 1), metre: linearUnit('length', 1),
+  cm: linearUnit('length', 0.01),
+  mm: linearUnit('length', 0.001), millimeter: linearUnit('length', 0.001), millimetre: linearUnit('length', 0.001),
+  'kgm-2': linearUnit('length', 0.001), 'kg/m2': linearUnit('length', 0.001), 'kg/m^2': linearUnit('length', 0.001),
+  pa: linearUnit('pressure', 1), hpa: linearUnit('pressure', 100), mbar: linearUnit('pressure', 100),
+  'm/s': linearUnit('speed', 1), 'ms-1': linearUnit('speed', 1), 'km/h': linearUnit('speed', 1 / 3.6),
+}
+
+function normalizeUnitKey(unit: string): string {
+  return unit.trim().toLowerCase().replace(/°/gu, 'deg').replace(/\s+/gu, '')
+}
+
 type MeteorologicalArtifactExt = 'png' | 'tif' | 'geojson' | 'docx' | 'xlsx' | 'npz'
 
 export type MeteorologicalArtifactTarget = ToolArtifact & {
   relativePath: string
   metadata: Record<string, unknown>
+}
+
+export type CanonicalGeoJsonArtifact = CanonicalGeoJson & {
+  serializedContent: string
+  sizeBytes: number
+  featureCount: number
 }
 
 export function artifactTarget(ctx: ToolContext, artifactType: MeteorologicalArtifactExt, name: string): MeteorologicalArtifactTarget {
@@ -301,11 +532,16 @@ export function geoJsonDisplay(
     colorField?: string | null
     categories?: Array<{ value: string | number | boolean; label: string; color: string }>
     legendTitle?: string
+    coordinateCrs?: string
+    featureCount?: number
+    sizeBytes?: number
   } = {},
 ): ArtifactDisplay {
   const title = options.title ?? artifact.name
   const bounds = requireMapBounds(options.bounds ?? payload.bounds ?? geoJsonBounds(payload), `${title} bounds`)
-  const features = Array.isArray(payload.features) ? payload.features.length : 0
+  const features = options.featureCount
+    ?? (Array.isArray(payload.features) ? payload.features.length : payload.type === 'Feature' ? 1 : 0)
+  const sizeBytes = options.sizeBytes ?? Buffer.byteLength(JSON.stringify(payload), 'utf8')
   const categories = options.categories ?? []
   const style: MapLayerStyle = styleKind === 'line'
     ? {
@@ -323,10 +559,10 @@ export function geoJsonDisplay(
       title,
       replacementGroup: null,
       bounds,
-      crs: 'EPSG:4326',
+      crs: options.coordinateCrs ?? 'EPSG:4326',
       minZoom: 0,
       maxZoom: 22,
-      source: { kind: 'geojson', url: artifact.uri, featureCount: features, sizeBytes: 0 },
+      source: { kind: 'geojson', url: artifact.uri, featureCount: features, sizeBytes },
       style,
       legend: categories.length
         ? { kind: 'categorical', title: options.legendTitle ?? title, categories }
@@ -425,15 +661,50 @@ function textValue(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
-export async function writeJsonArtifact(deps: MeteorologyToolDeps, relativePath: string, payload: Record<string, unknown>): Promise<void> {
-  await writeRuntimeJson(deps, relativePath, payload)
+export async function writeJsonArtifact(
+  deps: MeteorologyToolDeps,
+  relativePath: string,
+  payload: Record<string, unknown>,
+): Promise<CanonicalGeoJsonArtifact> {
+  const canonical = normalizeGeoJsonToCrs84(payload, `气象 Worker GeoJSON '${relativePath}'`)
+  const artifact = serializeCanonicalGeoJson(canonical)
+  await atomicWriteText(resolveRuntimeArtifactPath(deps.runtimeRoot, relativePath), artifact.serializedContent)
+  return artifact
 }
 
-async function writeRuntimeJson(deps: MeteorologyToolDeps, relativePath: string, payload: unknown): Promise<void> {
-  const root = path.resolve(deps.runtimeRoot)
+export async function normalizeGeoJsonArtifactFile(
+  deps: MeteorologyToolDeps,
+  relativePath: string,
+  declaredCrs?: unknown,
+): Promise<CanonicalGeoJsonArtifact> {
+  const target = resolveRuntimeArtifactPath(deps.runtimeRoot, relativePath)
+  let payload: unknown
+  try {
+    payload = JSON.parse(await readFile(target, 'utf8'))
+  } catch (error) {
+    throw new Error(`气象 Worker GeoJSON '${relativePath}' 无法读取或不是有效 JSON`, { cause: error })
+  }
+  const canonical = normalizeGeoJsonToCrs84(payload, `气象 Worker GeoJSON '${relativePath}'`, declaredCrs)
+  const artifact = serializeCanonicalGeoJson(canonical)
+  await atomicWriteText(target, artifact.serializedContent)
+  return artifact
+}
+
+function serializeCanonicalGeoJson(canonical: CanonicalGeoJson): CanonicalGeoJsonArtifact {
+  const serializedContent = JSON.stringify(canonical.entity)
+  return {
+    ...canonical,
+    serializedContent,
+    sizeBytes: Buffer.byteLength(serializedContent, 'utf8'),
+    featureCount: canonical.entity.type === 'FeatureCollection' ? canonical.entity.features.length : 1,
+  }
+}
+
+function resolveRuntimeArtifactPath(runtimeRoot: string, relativePath: string): string {
+  const root = path.resolve(runtimeRoot)
   const target = path.resolve(root, relativePath)
   if (!target.startsWith(root + path.sep)) throw new Error('artifact 路径越出 runtime 根目录')
-  await atomicWriteText(target, JSON.stringify(payload))
+  return target
 }
 
 export function inputKind(name: string): 'dataset' | 'radar' | 'boundary' {
@@ -451,6 +722,14 @@ export function collectionFiles(collection: Record<string, unknown>, key: string
   return files
 }
 
+export async function verifiedCollectionFiles(
+  ctx: ToolContext,
+  collection: Record<string, unknown>,
+  key: string,
+): Promise<Record<string, unknown>[]> {
+  return verifiedFileObjects(ctx, collectionFiles(collection, key), `${key}.files`)
+}
+
 export function uploadSourceKey(entry: { name: string; sourceRelativePath?: string | null }): string {
   return entry.sourceRelativePath || entry.name
 }
@@ -464,6 +743,8 @@ export function sequenceFiles(sequence: Record<string, unknown>): Record<string,
     const relativePath = typeof item.relativePath === 'string' ? item.relativePath : ''
     if (!relativePath) throw new Error(`nowcast_sequence.datasets[${index}] 缺少 relativePath`)
     return {
+      datasetId: typeof item.datasetId === 'string' ? item.datasetId : '',
+      contentHash: typeof item.contentHash === 'string' ? item.contentHash : '',
       fileId: typeof item.datasetId === 'string' ? item.datasetId : `dataset_${index + 1}`,
       name: typeof item.filename === 'string' ? item.filename : path.posix.basename(relativePath),
       relativePath,
@@ -471,14 +752,100 @@ export function sequenceFiles(sequence: Record<string, unknown>): Record<string,
   })
 }
 
-export function assertSuffix(filename: string, suffixes: string[], label: string): void {
+export async function verifiedSequenceFiles(
+  ctx: ToolContext,
+  sequence: Record<string, unknown>,
+  key = 'sequence_ref',
+): Promise<Record<string, unknown>[]> {
+  return verifiedFileObjects(ctx, sequenceFiles(sequence), `${key}.datasets`)
+}
+
+async function verifiedFileObjects(
+  ctx: ToolContext,
+  files: Record<string, unknown>[],
+  key: string,
+): Promise<Record<string, unknown>[]> {
+  if (!ctx.resolveMeteorologicalDatasets) throw new Error('当前运行上下文不支持批量校验气象数据集血缘')
+  const claims = files.map((file, index) => ({
+    file,
+    claim: claimedDatasetFile(file, `${key}[${index}]`),
+    itemKey: `${key}[${index}]`,
+  }))
+  const datasetIds = [...new Set(claims.map(item => item.claim.lineage.datasetId))]
+  const datasets = await ctx.resolveMeteorologicalDatasets(datasetIds)
+  const byId = new Map(datasets.map(dataset => [dataset.datasetId, dataset]))
+  if (byId.size !== datasetIds.length) throw new Error(`${key} 包含不存在或未授权的气象数据集`)
+  return claims.map(({ file, claim, itemKey }) => {
+    const verified = verifyPersistedDatasetClaim(claim, byId.get(claim.lineage.datasetId) ?? null, itemKey)
+    return canonicalFileObject(file, verified)
+  })
+}
+
+export async function verifiedFileObject(
+  ctx: ToolContext,
+  file: Record<string, unknown>,
+  key: string,
+): Promise<Record<string, unknown>> {
+  const verified = await verifiedDatasetValue(ctx, datasetFileRef(file, key), key)
+  return canonicalFileObject(file, verified)
+}
+
+export function meteorologicalMembersFingerprint(files: Record<string, unknown>[]): string {
+  const members = files.map((file, index) => {
+    const datasetId = typeof file.datasetId === 'string' ? file.datasetId.trim() : ''
+    const contentHash = typeof file.contentHash === 'string' ? file.contentHash.trim() : ''
+    if (!datasetId || !contentHash) throw new Error(`气象文件集第 ${index + 1} 项缺少 datasetId/contentHash`)
+    return `${datasetId}@${contentHash}`
+  }).sort()
+  return createHash('sha256').update(members.join('\n')).digest('hex')
+}
+
+function claimedDatasetFile(file: Record<string, unknown>, key: string): MeteorologicalDatasetFile {
+  const ref = datasetFileRef(file, key)
+  const value = refObject(ref.value)
+  const relativePath = typeof value.relativePath === 'string' ? value.relativePath : ''
+  if (!relativePath) throw new Error(`${key} 不包含数据文件路径`)
+  return {
+    name: typeof value.name === 'string' ? value.name : ref.label,
+    relativePath,
+    lineage: requireMeteorologicalLineage(ref, key),
+  }
+}
+
+function datasetFileRef(file: Record<string, unknown>, key: string): ValueRef {
+  const datasetId = typeof file.datasetId === 'string' ? file.datasetId.trim() : ''
+  const contentHash = typeof file.contentHash === 'string' ? file.contentHash.trim() : ''
+  const name = typeof file.name === 'string' ? file.name.trim() : typeof file.filename === 'string' ? file.filename.trim() : ''
+  const relativePath = typeof file.relativePath === 'string' ? file.relativePath.trim() : ''
+  return {
+    refId: datasetId || key,
+    kind: 'meteorological_file',
+    label: name || key,
+    value: { datasetId, contentHash, name, relativePath },
+    metadata: { datasetId, contentHash },
+  }
+}
+
+function canonicalFileObject(file: Record<string, unknown>, verified: MeteorologicalDatasetFile): Record<string, unknown> {
+  return {
+    ...file,
+    datasetId: verified.lineage.datasetId,
+    contentHash: verified.lineage.contentHash,
+    fileId: typeof file.fileId === 'string' && file.fileId.trim() ? file.fileId : verified.lineage.datasetId,
+    name: verified.name,
+    filename: verified.name,
+    relativePath: verified.relativePath,
+  }
+}
+
+export function assertSuffix(filename: string, suffixes: ReadonlyArray<string>, label: string): void {
   const lower = filename.toLowerCase()
   if (!suffixes.some(suffix => lower.endsWith(suffix))) {
     throw new Error(`${label} 文件类型不受支持: ${filename}`)
   }
 }
 
-export function assertFileObjectsSuffix(files: Record<string, unknown>[], suffixes: string[], label: string): void {
+export function assertFileObjectsSuffix(files: Record<string, unknown>[], suffixes: ReadonlyArray<string>, label: string): void {
   for (const [index, file] of files.entries()) {
     const name = typeof file.name === 'string' ? file.name : typeof file.filename === 'string' ? file.filename : ''
     if (!name) throw new Error(`${label} 文件集合第 ${index + 1} 项缺少 name`)
@@ -489,13 +856,16 @@ export function assertFileObjectsSuffix(files: Record<string, unknown>[], suffix
 export async function boundaryInputRelativePath(ctx: ToolContext, args: Record<string, unknown>, key: string, deps: MeteorologyToolDeps): Promise<string> {
   const ref = requiredRefKind(ctx, args, key, BOUNDARY_REF_KINDS)
   if (ref.kind === 'meteorological_file') {
-    const file = datasetValue(ctx, ref)
+    const file = await verifiedDatasetValue(ctx, ref, key)
     assertSuffix(file.name, BOUNDARY_SUFFIXES, '边界')
     return file.relativePath
   }
   const payload = featureCollectionFromBoundaryRef(ref, key)
   const relativePath = path.posix.join('artifacts', ctx.runId, `${makeId('boundary')}.geojson`)
-  await writeRuntimeJson(deps, relativePath, payload)
+  await writeJsonArtifact(deps, relativePath, {
+    ...payload,
+    ...(ref.metadata?.crs ? { crs: ref.metadata.crs } : {}),
+  })
   return relativePath
 }
 
@@ -523,6 +893,9 @@ export function coordinateFromRef(ref: ValueRef): { lat: number; lng: number; la
   const label = typeof payload.label === 'string' && payload.label.trim() ? payload.label.trim() : ref.label
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
     throw new Error(`scope_ref '${ref.refId}' 不包含有效经纬度`)
+  }
+  if (lng < -180 || lng > 180 || lat < -90 || lat > 90) {
+    throw new Error(`scope_ref '${ref.refId}' 坐标必须是 CRS84 [经度, 纬度] 有效范围`)
   }
   return { lat, lng, label }
 }

@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { ToolRegistry } from './registry.js'
 import type { ToolContext, ToolProvider } from './types.js'
@@ -37,6 +37,17 @@ describe('ToolRegistry contract', () => {
       properties: { hidden_parameter: { type: 'string' } },
     }
     expect(() => registry.register(drifted)).toThrow('jsonSchema 与 manifest 不一致')
+  })
+
+  it('materializes a provider tool catalog only once during registration', () => {
+    const registry = new ToolRegistry()
+    const currentProvider = provider()
+    const tools = vi.fn(currentProvider.tools)
+    currentProvider.tools = tools
+
+    registry.register(currentProvider)
+
+    expect(tools).toHaveBeenCalledOnce()
   })
 
   it('rejects unknown parameters before execution', async () => {
@@ -124,6 +135,47 @@ describe('ToolRegistry contract', () => {
 
   it('hard-fails unknown value references', () => {
     expect(() => context().resolveValueRef('missing')).toThrow('未知 valueRef')
+  })
+
+  it('enforces valueRef kinds from the actually matched oneOf branch before execution', async () => {
+    const registry = new ToolRegistry()
+    const handler = vi.fn()
+    registry.register(valueRefBranchProvider(handler))
+    const ctx = context()
+    ctx.resolveValueRef = refId => ({ refId, kind: 'kind_b', label: refId, value: {} })
+
+    await expect(registry.execute('branch_ref', {
+      selection: { mode: 'a', input: 'ref_b' },
+    }, ctx)).rejects.toThrow('selection.input 必须引用 kind_a，实际为 kind_b')
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('enforces local $defs refs inside array prefixItems before execution', async () => {
+    const registry = new ToolRegistry()
+    const handler = vi.fn()
+    registry.register(valueRefBranchProvider(handler))
+    const ctx = context()
+    ctx.resolveValueRef = refId => ({ refId, kind: 'kind_b', label: refId, value: {} })
+
+    await expect(registry.execute('branch_ref', {
+      selection: { mode: 'b', input: 'ref_b' },
+      tuple: ['ref_b'],
+    }, ctx)).rejects.toThrow('tuple.0 必须引用 kind_a，实际为 kind_b')
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('enforces both a local $ref target and its sibling valueRef constraint', async () => {
+    const registry = new ToolRegistry()
+    const handler = vi.fn()
+    registry.register(valueRefBranchProvider(handler))
+    const ctx = context()
+    ctx.resolveValueRef = refId => ({ refId, kind: 'kind_a', label: refId, value: {} })
+
+    await expect(registry.execute('branch_ref', {
+      selection: { mode: 'a', input: 'ref_a' },
+      sibling: 'ref_a',
+    }, ctx)).rejects.toThrow('sibling 必须引用 kind_b，实际为 kind_a')
+    expect(handler).not.toHaveBeenCalled()
   })
 
   it('keeps runtime optional fields while exposing nullable fields to Agents SDK', () => {
@@ -303,6 +355,64 @@ function nestedProvider(): ToolProvider {
       tools: [definition],
     },
     tools: () => [{ ...definition, handler: async () => ({ message: '成功', payload: {}, warnings: [], resultId: 'result_nested', source: 'test' }) }],
+  }
+}
+
+function valueRefBranchProvider(onExecute: () => void = () => undefined): ToolProvider {
+  const jsonSchema = {
+    type: 'object',
+    $defs: {
+      refA: { type: 'string', 'x-value-ref-kinds': ['kind_a'] },
+      refB: { type: 'string', 'x-value-ref-kinds': ['kind_b'] },
+    },
+    properties: {
+      selection: {
+        oneOf: [
+          {
+            type: 'object',
+            properties: {
+              mode: { type: 'string', enum: ['a'] },
+              input: { $ref: '#/$defs/refA' },
+            },
+            required: ['mode', 'input'],
+          },
+          {
+            type: 'object',
+            properties: {
+              mode: { type: 'string', enum: ['b'] },
+              input: { $ref: '#/$defs/refB' },
+            },
+            required: ['mode', 'input'],
+          },
+        ],
+      },
+      tuple: {
+        type: 'array',
+        prefixItems: [{ $ref: '#/$defs/refA' }],
+      },
+      sibling: {
+        $ref: '#/$defs/refA',
+        'x-value-ref-kinds': ['kind_b'],
+      },
+    },
+    required: ['selection'],
+  }
+  const definition = {
+    name: 'branch_ref', label: '分支引用', description: '分支 valueRef 校验', prompt: '根据分支校验 valueRef 类型。', group: '测试', tags: [],
+    isReadOnly: true, isDestructive: false, jsonSchema,
+  }
+  return {
+    manifest: {
+      id: 'branch-ref-provider', name: '分支引用测试', version: '1', author: 'test', language: 'typescript', description: '分支引用测试',
+      tools: [definition],
+    },
+    tools: () => [{
+      ...definition,
+      handler: async () => {
+        onExecute()
+        return { message: '成功', payload: {}, warnings: [], resultId: 'result_branch', source: 'test' }
+      },
+    }],
   }
 }
 

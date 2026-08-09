@@ -36,6 +36,7 @@ import {
 } from '@turf/turf'
 import type { Feature, FeatureCollection, LineString, MultiPolygon, Polygon } from 'geojson'
 import type { ToolDef } from '../../framework/types.js'
+import { GEOJSON_CRS84 } from '../../gis/crs.js'
 import {
   combinePolygonFeatures,
   parseGeoJsonEntity,
@@ -46,8 +47,9 @@ import {
   requirePolygonFeature,
   requireSingleFeature,
 } from '../../gis/geojson.js'
+import { geoJsonSpatialMetadata, normalizeGeoJsonToCrs84 } from '../../gis/geojsonCrs.js'
 import { makeId } from '../../utils/ids.js'
-import { geoJsonInputSchema, resolveGeoJsonInput } from '../spatial/geoJsonInput.js'
+import { geoJsonInputSchema, resolveCanonicalGeoJsonInput } from '../spatial/geoJsonInput.js'
 import { SPATIAL_ANALYSIS_PROMPT } from '../spatial/prompts.js'
 
 type TurfUnits = 'kilometers' | 'meters' | 'miles'
@@ -88,8 +90,10 @@ export function createSpatialAnalysisTool(): ToolDef {
     },
     async handler(args, ctx) {
       const operation = requiredText(args, 'operation')
-      const source = resolveGeoJsonInput(args.sourceGeojson, ctx, 'sourceGeojson')
-      const target = args.targetGeojson === undefined ? null : resolveGeoJsonInput(args.targetGeojson, ctx, 'targetGeojson')
+      const source = resolveCanonicalGeoJsonInput(args.sourceGeojson, ctx, 'sourceGeojson').entity
+      const target = args.targetGeojson === undefined
+        ? null
+        : resolveCanonicalGeoJsonInput(args.targetGeojson, ctx, 'targetGeojson').entity
       const units = parseUnits(args.units)
 
       switch (operation) {
@@ -270,7 +274,7 @@ function success(message: string, payload: Record<string, unknown>) {
     warnings: [] as string[],
     resultId,
     source: 'turf',
-    provenance: { backend: 'turf', deterministic: true },
+    provenance: { backend: 'turf', deterministic: true, coordinateCrs: GEOJSON_CRS84 },
     valueRefs: buildValueRefs(payload),
   }
 }
@@ -284,10 +288,24 @@ function buildValueRefs(payload: Record<string, unknown>) {
     refs.push({ refId: makeId('ref'), kind: 'distance', label: '距离', value: payload.distance, unit: typeof payload.units === 'string' ? payload.units : 'km' })
   }
   if (Array.isArray(payload.point)) {
-    refs.push({ refId: makeId('ref'), kind: 'point', label: '坐标点', value: payload.point })
+    const point = normalizeGeoJsonToCrs84({ type: 'Point', coordinates: payload.point }, '空间分析结果点')
+    refs.push({
+      refId: makeId('ref'),
+      kind: 'point',
+      label: '坐标点',
+      value: payload.point,
+      metadata: geoJsonSpatialMetadata(point),
+    })
   }
   if (payload.result && typeof payload.result === 'object') {
-    refs.push({ refId: makeId('ref'), kind: 'geojson', label: 'GeoJSON 结果', value: payload.result })
+    const result = normalizeGeoJsonToCrs84(payload.result, '空间分析 GeoJSON 结果')
+    refs.push({
+      refId: makeId('ref'),
+      kind: 'geojson',
+      label: 'GeoJSON 结果',
+      value: result.entity,
+      metadata: geoJsonSpatialMetadata(result),
+    })
   }
   return refs
 }

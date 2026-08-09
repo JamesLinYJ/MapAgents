@@ -24,8 +24,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from shapely.geometry import Point, mapping, shape
-
 from .readers import GridQuery, MeteorologicalReaderFacade, coord_edges, finite_values
 
 
@@ -38,6 +36,25 @@ NOWCAST_ANSWER_SCHEMA: dict[str, Any] = {
         "confidence": {"type": "number"},
         "warnings": {"type": "array", "items": {"type": "string"}},
     },
+}
+
+_PRECIPITATION_UNIT_SCALE_TO_MM = {
+    "mm": 1.0,
+    "millimeter": 1.0,
+    "millimeters": 1.0,
+    "millimetre": 1.0,
+    "millimetres": 1.0,
+    "kgm-2": 1.0,
+    "kgm^-2": 1.0,
+    "kgm**-2": 1.0,
+    "kg/m2": 1.0,
+    "kg/m^2": 1.0,
+    "kg/m**2": 1.0,
+    "m": 1000.0,
+    "meter": 1000.0,
+    "meters": 1000.0,
+    "metre": 1000.0,
+    "metres": 1000.0,
 }
 
 
@@ -154,8 +171,16 @@ class NowcastSequenceService:
                     f"不能满足 {horizon_minutes} 分钟时效。"
                 )
         normalized = [self._replace_index(item, index) for index, item in enumerate(items)]
-        variables = self._available_variables(normalized[0])
-        variable = profile.choose_precipitation_variable(variables)
+        member_variable_sets = [self._available_variables(item) for item in normalized]
+        variable = profile.choose_precipitation_variable(member_variable_sets[0])
+        for item, member_variables in zip(normalized, member_variable_sets, strict=True):
+            if variable.casefold() not in {name.casefold() for name in member_variables}:
+                raise ValueError(
+                    f"短时临近预报序列成员 {item.filename} 缺少已选降水变量 {variable}。"
+                )
+            declared_unit = _declared_variable_unit(item.metadata, variable)
+            if declared_unit is not None:
+                _precipitation_scale_to_mm(declared_unit, dataset_label=item.filename, variable=variable)
         bounds = normalized[0].metadata.get("bounds") if isinstance(normalized[0].metadata, dict) else None
         issue_time = next((item.issue_time for item in normalized if item.issue_time is not None), None)
         return MeteorologicalSequence(sequence_id=sequence_id, datasets=normalized, profile=profile, variable=variable, bounds=bounds, issue_time=issue_time)
@@ -252,7 +277,13 @@ class NowcastAnalysisService:
             for region in regions:
                 query = GridQuery(variable=sequence.variable, bbox=region.get("bbox") or bbox, area=region.get("collection"), purpose="nowcast")
                 grid = self.reader.read_slice(item.path, query, filename=item.filename)
-                stats = summarize_grid(grid.data, rain_threshold=sequence.profile.rain_thresholds_mm["none"], coverage_threshold=sequence.profile.rain_coverage_threshold)
+                data_mm = normalize_precipitation_to_mm(
+                    grid.data,
+                    grid.unit,
+                    dataset_label=item.filename,
+                    variable=sequence.variable,
+                )
+                stats = summarize_grid(data_mm, rain_threshold=sequence.profile.rain_thresholds_mm["none"], coverage_threshold=sequence.profile.rain_coverage_threshold)
                 timelines[region["id"]].append(
                     {
                         "datasetId": item.dataset_id,
@@ -260,12 +291,14 @@ class NowcastAnalysisService:
                         "sequenceIndex": item.sequence_index,
                         "validTime": item.valid_time.isoformat() if item.valid_time else None,
                         "leadMinutes": item.lead_minutes,
+                        "sourceUnit": str(grid.unit).strip(),
+                        "unit": "mm",
                         "stats": stats,
                         "rainLevel": classify_rain_level(stats, sequence.profile),
                     }
                 )
                 if region["id"] == regions[0]["id"]:
-                    centroid = high_value_centroid(grid.data, grid.lat, grid.lon, threshold=max(sequence.profile.rain_thresholds_mm["light"], stats.get("p90") or 0))
+                    centroid = high_value_centroid(data_mm, grid.lat, grid.lon, threshold=max(sequence.profile.rain_thresholds_mm["light"], stats.get("p90") or 0))
                     if centroid:
                         centroids.append({"sequenceIndex": item.sequence_index, **centroid})
         region_summaries = [
@@ -283,6 +316,7 @@ class NowcastAnalysisService:
             "kind": "nowcast_precipitation_analysis",
             "sequenceId": sequence.sequence_id,
             "variable": sequence.variable,
+            "unit": "mm",
             "scope": {key: value for key, value in scope.items() if key != "regions"},
             "regions": region_summaries,
             "movement": movement,
@@ -453,21 +487,29 @@ def build_analysis_scope(
 ) -> dict[str, Any]:
     warnings: list[str] = []
     if coordinate is not None:
+        geometry_module = _shapely_geometry()
         lat = float(coordinate["lat"])
         lon = float(coordinate["lng"])
-        radius_deg = max(float(point_buffer_meters), 1.0) / 111_320
-        polygon = Point(lon, lat).buffer(radius_deg)
+        radius_meters = float(point_buffer_meters)
+        if not math.isfinite(lat) or not math.isfinite(lon) or not math.isfinite(radius_meters):
+            raise ValueError("短时临近预报地点经纬度与缓冲半径必须是有限数值。")
+        if not -90 <= lat <= 90 or not -180 <= lon <= 180:
+            raise ValueError("短时临近预报地点必须位于有效的 CRS84 经纬度范围内。")
+        if radius_meters <= 0:
+            raise ValueError("短时临近预报地点缓冲半径必须大于 0 米。")
+        polygon = _local_metric_point_buffer(lon, lat, radius_meters)
         label = str(coordinate.get("label") or "地点")
-        collection = _single_feature_collection(mapping(polygon), {"name": label, "kind": "point_buffer"})
+        collection = _single_feature_collection(geometry_module.mapping(polygon), {"name": label, "kind": "point_buffer"})
         return {
             "type": "coordinate_buffer",
             "label": label,
-            "pointBufferMeters": point_buffer_meters,
+            "pointBufferMeters": radius_meters,
             "renderBbox": _geom_bounds(polygon),
             "regions": [{"id": "point", "label": label, "collection": collection, "bbox": _geom_bounds(polygon)}],
             "warnings": warnings,
         }
     if area is not None:
+        geometry_module = _shapely_geometry()
         features = area.get("features") if isinstance(area, dict) else None
         if not isinstance(features, list) or not features:
             raise ValueError("短时临近预报（短临）分析区域必须是非空 FeatureCollection。")
@@ -479,7 +521,7 @@ def build_analysis_scope(
                 continue
             props = feature.get("properties") or {}
             label = str(props.get(field) or props.get("name") or props.get("NAME") or f"区域{index + 1}")
-            geom = shape(geometry)
+            geom = geometry_module.shape(geometry)
             regions.append(
                 {
                     "id": f"region_{index}",
@@ -536,6 +578,67 @@ def summarize_grid(data: Any, *, rain_threshold: float, coverage_threshold: floa
         "median": float(np.percentile(effective_values, 50)),
         "p90": float(np.percentile(effective_values, 90)),
     }
+
+
+def normalize_precipitation_to_mm(
+    data: Any,
+    unit: str | None,
+    *,
+    dataset_label: str,
+    variable: str,
+) -> Any:
+    """将单个短临切片统一为毫米，且不修改 reader 返回的原数组。"""
+    np = _np()
+    scale = _precipitation_scale_to_mm(unit, dataset_label=dataset_label, variable=variable)
+    values = np.asanyarray(data, dtype="float64")
+    return values if scale == 1.0 else values * scale
+
+
+def _precipitation_scale_to_mm(
+    unit: str | None,
+    *,
+    dataset_label: str,
+    variable: str,
+) -> float:
+    if unit is None or not str(unit).strip():
+        raise ValueError(
+            f"短时临近预报降水变量 {variable} 在数据集 {dataset_label} 中缺少单位；"
+            "必须明确为 mm、kg m-2 或 m。"
+        )
+    normalized = str(unit).strip().casefold()
+    normalized = (
+        normalized.replace("−", "-")
+        .replace("⁻", "-")
+        .replace("²", "2")
+        .replace("·", "")
+        .replace("⋅", "")
+        .replace("{", "")
+        .replace("}", "")
+    )
+    normalized = re.sub(r"\s+", "", normalized)
+    scale = _PRECIPITATION_UNIT_SCALE_TO_MM.get(normalized)
+    if scale is not None:
+        return scale
+    raise ValueError(
+        f"短时临近预报降水变量 {variable} 在数据集 {dataset_label} 中的单位 {unit!r} "
+        "与降水深度维度不兼容；仅支持 mm、kg m-2 或 m，降水速率需先按时段积分。"
+    )
+
+
+def _declared_variable_unit(metadata: dict[str, Any], variable: str) -> str | None:
+    descriptors = metadata.get("variables") if isinstance(metadata, dict) else None
+    if not isinstance(descriptors, list):
+        return None
+    for descriptor in descriptors:
+        if not isinstance(descriptor, dict):
+            continue
+        if str(descriptor.get("name") or "").casefold() != variable.casefold():
+            continue
+        unit = descriptor.get("unit")
+        if unit is None:
+            unit = descriptor.get("units")
+        return str(unit) if unit is not None else None
+    return None
 
 
 def classify_rain_level(stats: dict[str, Any], profile: NowcastProductProfile) -> str:
@@ -713,6 +816,21 @@ def _single_feature_collection(geometry: dict[str, Any], properties: dict[str, A
     return {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": properties, "geometry": geometry}]}
 
 
+def _local_metric_point_buffer(lon: float, lat: float, radius_meters: float) -> Any:
+    """在以目标点为中心的等距方位投影中做米制缓冲，再返回 CRS84。"""
+    pyproj = _pyproj()
+    geometry_module = _shapely_geometry()
+    transform = _shapely_transform()
+    crs84 = pyproj.CRS.from_user_input("OGC:CRS84")
+    local_crs = pyproj.CRS.from_proj4(
+        f"+proj=aeqd +lat_0={lat:.12g} +lon_0={lon:.12g} +datum=WGS84 +units=m +no_defs"
+    )
+    to_local = pyproj.Transformer.from_crs(crs84, local_crs, always_xy=True)
+    to_crs84 = pyproj.Transformer.from_crs(local_crs, crs84, always_xy=True)
+    center = transform(to_local.transform, geometry_module.Point(lon, lat))
+    return transform(to_crs84.transform, center.buffer(radius_meters, quad_segs=32))
+
+
 def _geom_bounds(geom: Any) -> list[float]:
     west, south, east, north = geom.bounds
     return [float(west), float(south), float(east), float(north)]
@@ -814,3 +932,18 @@ def _rain_level_label(level: Any) -> str:
 def _np() -> Any:
     import numpy as np
     return np
+
+
+def _shapely_geometry() -> Any:
+    import shapely.geometry
+    return shapely.geometry
+
+
+def _shapely_transform() -> Any:
+    from shapely.ops import transform
+    return transform
+
+
+def _pyproj() -> Any:
+    import pyproj
+    return pyproj

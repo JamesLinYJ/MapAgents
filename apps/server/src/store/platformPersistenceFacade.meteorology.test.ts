@@ -34,6 +34,25 @@ describe('MeteorologicalStore domain port', () => {
     expect(fixture.queries[0]?.text).toContain('"thread_id" =')
   })
 
+  it('resolves latest_upload inside the requested thread instead of taking a newer sibling thread upload', async () => {
+    const fixture = createMeteorologicalDb([
+      datasetRow('dataset-current', 'session-a', 'thread-current', 'current.nc', '2026-07-01T01:00:00.000Z'),
+      datasetRow('dataset-sibling', 'session-a', 'thread-sibling', 'sibling.nc', '2026-07-01T02:00:00.000Z'),
+    ])
+    const store = new PlatformPersistenceFacade(fixture.db, path.join(os.tmpdir(), 'geo-store-meteorology-latest-thread'), {
+      fileLifecycle: emptyFileLifecycle(),
+    })
+
+    const dataset = await store.meteorology.resolveMeteorologicalDataset({
+      sessionId: 'session-a',
+      threadId: 'thread-current',
+      datasetId: 'latest_upload',
+    })
+
+    expect(dataset?.datasetId).toBe('dataset-current')
+    expect(fixture.queries[0]?.text).toContain('"thread_id" =')
+  })
+
   it('applies filename filtering inside the thread scope without requiring sessionId', async () => {
     const fixture = createMeteorologicalDb([
       datasetRow('dataset-a', 'session-a', 'thread-a', 'target.nc', '2026-07-01T00:00:00.000Z'),
@@ -70,6 +89,46 @@ describe('MeteorologicalStore domain port', () => {
     expect(fixture.queries[0]?.text).toContain('"workspace_id" =')
     expect(fixture.queries[0]?.text).toContain('"thread_id" =')
     expect(fixture.queries[0]?.text).toContain('."filename") = lower')
+  })
+
+  it('resolves a requested dataset batch with one IN query and preserves session scope', async () => {
+    const fixture = createMeteorologicalDb([
+      datasetRow('dataset-a', 'session-a', 'thread-a', 'a.nc', '2026-07-01T00:00:00.000Z'),
+      datasetRow('dataset-b', 'session-a', 'thread-a', 'b.nc', '2026-07-01T01:00:00.000Z'),
+      datasetRow('dataset-c', 'session-b', 'thread-b', 'c.nc', '2026-07-01T02:00:00.000Z'),
+    ])
+    const store = new PlatformPersistenceFacade(fixture.db, path.join(os.tmpdir(), 'geo-store-meteorology-batch'), {
+      fileLifecycle: emptyFileLifecycle(),
+    })
+
+    const rows = await store.meteorology.listMeteorologicalDatasets({
+      datasetIds: ['dataset-a', 'dataset-b', 'dataset-a'],
+      sessionId: 'session-a',
+      limit: 3,
+    })
+
+    expect(rows.map(row => row.datasetId).sort()).toEqual(['dataset-a', 'dataset-b'])
+    expect(fixture.queries).toHaveLength(1)
+    expect(fixture.queries[0]?.text.toLowerCase()).toContain('"dataset_id" in')
+    expect(fixture.queries[0]?.text).toContain('"session_id" =')
+  })
+
+  it('requires the original session when resolving an explicit dataset without a workspace', async () => {
+    const fixture = createMeteorologicalDb([
+      datasetRow('dataset-private', 'session-b', 'thread-b', 'private.nc', '2026-07-01T00:00:00.000Z'),
+    ])
+    const store = new PlatformPersistenceFacade(fixture.db, path.join(os.tmpdir(), 'geo-store-meteorology-explicit-session'), {
+      fileLifecycle: emptyFileLifecycle(),
+    })
+
+    const dataset = await store.meteorology.resolveMeteorologicalDataset({
+      sessionId: 'session-a',
+      datasetId: 'dataset-private',
+    })
+
+    expect(dataset).toBeNull()
+    expect(fixture.queries[0]?.text).toContain('"dataset_id" =')
+    expect(fixture.queries[0]?.text).toContain('"session_id" =')
   })
 
   it('counts only ready datasets inside the declared workspace, session and thread scope', async () => {
@@ -138,6 +197,12 @@ function createMeteorologicalDb(rows: DatasetRow[]): { db: Database; queries: Ca
 // 测试目标是确认作用域谓词进入查询，而不是做端到端 SQL 引擎替身。
 function filterRows(rows: DatasetRow[], query: CapturedQuery): DatasetRow[] {
   let valueIndex = 0
+  const datasetIdsExpression = /"dataset_id"\s+in\s*\(([^)]+)\)/iu.exec(query.text)
+  const datasetIdCount = datasetIdsExpression?.[1]?.match(/\$\d+/gu)?.length ?? 0
+  const datasetIds = datasetIdCount > 0
+    ? new Set(query.values.slice(valueIndex, valueIndex + datasetIdCount).map(String))
+    : null
+  valueIndex += datasetIdCount
   const workspaceId = query.text.includes('"workspace_id" =') ? String(query.values[valueIndex++]) : null
   const sessionId = query.text.includes('"session_id" =') ? String(query.values[valueIndex++]) : null
   const threadId = query.text.includes('"thread_id" =') ? String(query.values[valueIndex++]) : null
@@ -146,6 +211,7 @@ function filterRows(rows: DatasetRow[], query: CapturedQuery): DatasetRow[] {
   const limit = Number(query.values.at(-1) ?? rows.length)
 
   return rows
+    .filter(row => !datasetIds || datasetIds.has(String(row.dataset_id)))
     .filter(row => !workspaceId || row.workspace_id === workspaceId)
     .filter(row => !sessionId || row.session_id === sessionId)
     .filter(row => !threadId || row.thread_id === threadId)

@@ -67,10 +67,16 @@ export async function executePersistedTool(
     }),
     resolveMeteorologicalDataset: datasetInput => deps.store.meteorology.resolveMeteorologicalDataset({
       sessionId: run.sessionId,
-      threadId: null,
+      threadId: datasetInput.selector === 'current_thread_latest' ? run.threadId : null,
       workspaceId: run.workspaceId,
-      datasetId: datasetInput.datasetId ?? null,
-      filename: datasetInput.filename ?? null,
+      datasetId: datasetInput.selector === 'explicit_dataset_id' ? datasetInput.datasetId : 'latest_upload',
+      filename: datasetInput.selector === 'current_thread_latest' ? datasetInput.filename ?? null : null,
+    }),
+    resolveMeteorologicalDatasets: datasetIds => deps.store.meteorology.listMeteorologicalDatasets({
+      datasetIds,
+      workspaceId: run.workspaceId,
+      sessionId: run.workspaceId ? null : run.sessionId,
+      limit: Math.max(1, datasetIds.length),
     }),
     invokeStructuredModel: async (prompt, schema, options) => {
       const adapter = deps.modelRegistry.resolveProvider(run.modelProvider)

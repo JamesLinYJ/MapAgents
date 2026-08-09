@@ -15,7 +15,7 @@
 // --------------------------------------------------------------------------
 
 import { createServer } from 'node:http'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {
@@ -1550,22 +1550,28 @@ function previewToolProvider(): ToolProvider {
     },
     tools: () => [{
       ...definition,
-      handler: async () => ({
-        message: '风险图已生成',
-        payload: { variable: 'QPF', mapMode: 'regional' },
-        warnings: [],
-        resultId: 'result_preview',
-        source: 'test',
-        artifacts: [{
-          artifactId: 'artifact_preview_png',
-          artifactType: 'raster_png',
-          name: '风险图预览',
-          uri: '/api/v1/results/artifact_preview_png/file',
-          relativePath: 'artifacts/run_preview/artifact_preview_png.png',
-          display: { surfaces: ['mini_app', 'download'], primarySurface: 'mini_app', map: null },
-          metadata: { previewRole: 'rainfall_risk_map', relativePath: 'artifacts/run_preview/artifact_preview_png.png' },
-        }],
-      }),
+      handler: async (_args, ctx) => {
+        const relativePath = path.posix.join('artifacts', ctx.runId, 'artifact_preview_png.png')
+        const target = path.join(ctx.runtimeRoot, relativePath)
+        await mkdir(path.dirname(target), { recursive: true })
+        await writeFile(target, 'preview', 'utf8')
+        return {
+          message: '风险图已生成',
+          payload: { variable: 'QPF', mapMode: 'regional' },
+          warnings: [],
+          resultId: 'result_preview',
+          source: 'test',
+          artifacts: [{
+            artifactId: 'artifact_preview_png',
+            artifactType: 'raster_png',
+            name: '风险图预览',
+            uri: '/api/v1/results/artifact_preview_png/file',
+            relativePath,
+            display: { surfaces: ['mini_app', 'download'], primarySurface: 'mini_app', map: null },
+            metadata: { previewRole: 'rainfall_risk_map', relativePath },
+          }],
+        }
+      },
     }],
   }
 }

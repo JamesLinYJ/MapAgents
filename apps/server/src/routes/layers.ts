@@ -16,8 +16,8 @@ import type { PlatformPersistenceFacade } from '../store/platformPersistenceFaca
 import type { Env } from '../framework/env.js'
 import type { SecurityServices } from '../security/routes.js'
 import { requireAuth } from '../security/routes.js'
-import type { GeoJsonFeatureCollection } from '../gis/geojson.js'
-import { parseGeoJsonEntity, toFeatureCollection } from '../gis/geojson.js'
+import { toFeatureCollection } from '../gis/geojson.js'
+import { normalizeGeoJsonToCrs84, type CanonicalGeoJson } from '../gis/geojsonCrs.js'
 import { HttpClientError, routeErrorResponse } from './errors.js'
 import { parseStreamingMultipart, type StreamingMultipartForm } from './streamingMultipart.js'
 
@@ -127,7 +127,7 @@ async function importLayerFromForm(
     if (opts.requireSession && !sessionId) return { error: 'sessionId 不能为空。', status: 400 }
     const owner = sessionId && resolveOwner ? await resolveOwner(sessionId) : null
     const threadId = form.field('threadId') ?? form.field('thread_id') ?? opts.threadId ?? null
-    const collection = parseGeoJsonPayload(await parseJsonFile(file.tempPath), env)
+    const canonicalGeoJson = parseGeoJsonPayload(await parseJsonFile(file.tempPath), env, form.field('crs') ?? undefined)
     const layer = await managedLayers.importGeoJsonLayer({
       layerKey: opts.layerKey ?? null,
       name: form.field('name') ?? opts.defaultName ?? stripExtension(file.name),
@@ -139,7 +139,7 @@ async function importLayerFromForm(
       sessionId,
       threadId,
       sourceFilename: file.name,
-      collection,
+      canonicalGeoJson,
       workspaceId: owner?.workspaceId ?? opts.workspaceId ?? null,
       createdByUserId: owner?.createdByUserId ?? opts.createdByUserId ?? null,
       visibility: opts.visibility ?? 'workspace',
@@ -156,13 +156,16 @@ async function importLayerFromForm(
 function parseGeoJsonPayload(
   value: unknown,
   env: Pick<Env, 'MAX_GEOJSON_FEATURES' | 'MAX_GEOJSON_COORDINATES'>,
-): GeoJsonFeatureCollection {
-  let collection: GeoJsonFeatureCollection
+  declaredCrs?: string,
+): CanonicalGeoJson {
+  let canonical: CanonicalGeoJson
   try {
-    collection = toFeatureCollection(parseGeoJsonEntity(value, 'GeoJSON'))
-  } catch {
-    throw new HttpClientError('GeoJSON 内容格式无效。', 422)
+    canonical = normalizeGeoJsonToCrs84(value, 'GeoJSON', declaredCrs)
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new HttpClientError(`GeoJSON 内容格式无效：${detail}`, 422)
   }
+  const collection = toFeatureCollection(canonical.entity)
   const features = collection.features
   if (features.length > env.MAX_GEOJSON_FEATURES) {
     throw new HttpClientError(`GeoJSON feature 数量超过限制：${features.length}/${env.MAX_GEOJSON_FEATURES}`, 413)
@@ -171,7 +174,7 @@ function parseGeoJsonPayload(
   if (coordinateCount > env.MAX_GEOJSON_COORDINATES) {
     throw new HttpClientError(`GeoJSON 坐标数量超过限制：${coordinateCount}/${env.MAX_GEOJSON_COORDINATES}`, 413)
   }
-  return collection
+  return canonical
 }
 
 async function parseJsonFile(filePath: string): Promise<unknown> {

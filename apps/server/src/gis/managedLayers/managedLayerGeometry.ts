@@ -10,10 +10,10 @@
 
 import type { LayerPropertyDescriptor } from '../../schemas/types.js'
 import { makeId } from '../../utils/ids.js'
-import type { GeoJsonFeature, Geometry, Position } from '../geojson.js'
+import { toFeatureCollection, type GeoJsonFeature } from '../geojson.js'
+import { normalizeGeoJsonToCrs84, requireRenderableCrs84Bounds, type CanonicalGeoJson } from '../geojsonCrs.js'
 import type {
   ImportGeoJsonLayerInput,
-  LayerBounds,
   ManagedLayerOwnership,
   PreparedManagedLayerImport,
 } from './managedLayerTypes.js'
@@ -25,7 +25,8 @@ interface PropertySchemaAccumulator {
 }
 
 export function prepareManagedLayerImport(input: ImportGeoJsonLayerInput): PreparedManagedLayerImport {
-  const features = requireFeatures(input)
+  const canonical = requireCanonicalGeoJson(input)
+  const features = requireFeatures(canonical)
   const layerKey = sanitizeLayerKey(input.layerKey ?? makeId('layer'))
   const geometryTypes = [...new Set(features.map(feature => feature.geometry.type))]
   const geometryType = geometryTypes.length === 1 ? geometryTypes[0] ?? 'Mixed' : 'Mixed'
@@ -36,26 +37,27 @@ export function prepareManagedLayerImport(input: ImportGeoJsonLayerInput): Prepa
     mapLayerId: `map_layer_${layerKey}`,
     ownership: resolveOwnership(input),
     geometryType,
-    bounds: normalizeBounds(computeBounds(features)),
+    bounds: requireRenderableCrs84Bounds(canonical.bounds, '托管图层 GeoJSON'),
     propertySchema: buildPropertySchema(features),
     style: defaultVectorStyle(geometryType),
   }
 }
 
-function requireFeatures(input: ImportGeoJsonLayerInput): GeoJsonFeature[] {
-  const { collection } = input
-  if (collection.type !== 'FeatureCollection' || !Array.isArray(collection.features)) {
-    throw new Error('GeoJSON 必须是 FeatureCollection')
+function requireCanonicalGeoJson(input: ImportGeoJsonLayerInput): CanonicalGeoJson {
+  if (input.canonicalGeoJson && input.collection) {
+    throw new Error('托管图层只能提交 canonicalGeoJson 或原始 collection，不能同时提交两个事实源')
   }
+  if (input.canonicalGeoJson) return input.canonicalGeoJson
+  if (!input.collection) throw new Error('托管图层缺少 GeoJSON 输入')
+  return normalizeGeoJsonToCrs84(input.collection, '托管图层 GeoJSON')
+}
+
+function requireFeatures(canonical: CanonicalGeoJson): GeoJsonFeature[] {
+  const collection = toFeatureCollection(canonical.entity)
   if (collection.features.length === 0) {
     throw new Error('GeoJSON 至少需要一个 feature')
   }
-  return collection.features.map((feature, index) => {
-    if (feature.type !== 'Feature' || !isGeometry(feature.geometry)) {
-      throw new Error(`GeoJSON 第 ${index + 1} 个 feature 缺少有效 geometry`)
-    }
-    return feature
-  })
+  return collection.features
 }
 
 function resolveOwnership(input: ImportGeoJsonLayerInput): ManagedLayerOwnership {
@@ -64,11 +66,6 @@ function resolveOwnership(input: ImportGeoJsonLayerInput): ManagedLayerOwnership
   return input.threadId
     ? { scope: 'thread', workspaceId: input.workspaceId, threadId: input.threadId }
     : { scope: 'workspace', workspaceId: input.workspaceId, threadId: null }
-}
-
-function isGeometry(value: unknown): value is Geometry {
-  return isRecord(value) && typeof value.type === 'string'
-    && (value.type === 'GeometryCollection' ? Array.isArray(value.geometries) : 'coordinates' in value)
 }
 
 function defaultVectorStyle(geometryType: string): Record<string, unknown> {
@@ -120,45 +117,6 @@ function inferDataType(value: unknown): string {
   if (value === null || value === undefined) return 'null'
   if (Array.isArray(value)) return 'array'
   return typeof value
-}
-
-function normalizeBounds(bounds: LayerBounds | null): LayerBounds {
-  if (!bounds) throw new Error('GeoJSON 不包含有效坐标')
-  const [west, south, east, north] = bounds
-  const lonPadding = west === east ? 0.0001 : 0
-  const latPadding = south === north ? 0.0001 : 0
-  return [
-    Math.max(-180, west - lonPadding),
-    Math.max(-90, south - latPadding),
-    Math.min(180, east + lonPadding),
-    Math.min(90, north + latPadding),
-  ]
-}
-
-function computeBounds(features: GeoJsonFeature[]): LayerBounds | null {
-  const coordinates: Position[] = []
-  for (const feature of features) collectCoordinates(feature.geometry, coordinates)
-  if (!coordinates.length) return null
-  const xs = coordinates.map(coordinate => coordinate[0])
-  const ys = coordinates.map(coordinate => coordinate[1])
-  return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]
-}
-
-function collectCoordinates(geometry: Geometry, output: Position[]): void {
-  if (geometry.type === 'GeometryCollection') {
-    for (const child of geometry.geometries) collectCoordinates(child, output)
-    return
-  }
-  collectPositionArray(geometry.coordinates, output)
-}
-
-function collectPositionArray(value: unknown, output: Position[]): void {
-  if (!Array.isArray(value)) return
-  if (value.length >= 2 && typeof value[0] === 'number' && typeof value[1] === 'number') {
-    output.push([value[0], value[1]])
-    return
-  }
-  for (const child of value) collectPositionArray(child, output)
 }
 
 function sanitizeLayerKey(value: string): string {

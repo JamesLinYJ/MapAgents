@@ -75,10 +75,11 @@ export interface ToolContext {
     auth?: AuthContext | null;
     state: Map<string, unknown>;
     resolveValueRef(refId: string): ValueRef;
-    resolveMeteorologicalDataset?(input: {
-        datasetId?: string | null;
-        filename?: string | null;
-    }): Promise<MeteorologicalDatasetRecord | null>;
+    resolveMeteorologicalDataset?(input:
+        | { selector: 'explicit_dataset_id'; datasetId: string }
+        | { selector: 'current_thread_latest'; filename?: string | null }
+    ): Promise<MeteorologicalDatasetRecord | null>;
+    resolveMeteorologicalDatasets?(datasetIds: string[]): Promise<MeteorologicalDatasetRecord[]>;
     listMeteorologicalDatasets?(input?: {
         scope?: 'session' | 'thread';
         filename?: string | null;

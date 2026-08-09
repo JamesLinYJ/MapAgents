@@ -171,7 +171,10 @@ describe('geo tools', () => {
       importGeoJsonLayer: async (input: Record<string, unknown>) => {
         expect(input.sessionId).toBe('session_1')
         expect(input.threadId).toBe('thread_1')
-        expect(input.collection).toMatchObject({ type: 'FeatureCollection' })
+        expect(input.canonicalGeoJson).toMatchObject({
+          crs: 'OGC:CRS84',
+          entity: { type: 'Feature' },
+        })
         return layer('layer_1', String(input.name), ['analysis'])
       },
     } as unknown as ManagedLayerService
@@ -187,7 +190,10 @@ describe('geo tools', () => {
 
     expect(result.valueRefs).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'layer', value: expect.objectContaining({ layerKey: 'layer_1', featureCollection: expect.any(Object) }) }),
-      expect.objectContaining({ kind: 'feature_collection', metadata: { sourceLayerKey: 'layer_1' } }),
+      expect.objectContaining({
+        kind: 'feature_collection',
+        metadata: expect.objectContaining({ sourceLayerKey: 'layer_1', crs: 'OGC:CRS84' }),
+      }),
     ]))
   })
 
@@ -255,7 +261,7 @@ describe('geo tools', () => {
         queryFeatures: async () => [{ geometry: polygon, properties: { name: '测试区' } }],
         featureCount: async () => 1,
         importGeoJsonLayer: async (input: Record<string, unknown>) => {
-          importedCollection = input.collection
+          importedCollection = (input.canonicalGeoJson as { entity?: unknown } | undefined)?.entity
           return layer('analysis_layer', String(input.name), ['analysis'])
         },
       } as unknown as ManagedLayerService

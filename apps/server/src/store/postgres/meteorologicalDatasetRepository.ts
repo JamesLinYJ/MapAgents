@@ -8,7 +8,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { and, count, desc, eq, sql, type SQL } from 'drizzle-orm'
+import { and, count, desc, eq, inArray, sql, type SQL } from 'drizzle-orm'
 
 import type { Database } from '../../db/connection.js'
 import { platformMeteorologicalDatasets, platformSessions } from '../../db/schema.js'
@@ -25,6 +25,7 @@ export interface ListMeteorologicalDatasetsFilters {
   status?: string | null
   workspaceId?: string | null
   limit?: number
+  datasetIds?: string[]
 }
 
 export interface ResolveMeteorologicalDatasetFilters {
@@ -70,6 +71,10 @@ export class MeteorologicalDatasetRepository {
       const conditions: SQL[] = [eq(platformMeteorologicalDatasets.datasetId, explicitDatasetId)]
       if (filters.workspaceId) {
         conditions.push(eq(platformMeteorologicalDatasets.workspaceId, filters.workspaceId))
+      } else {
+        // 无 workspace 的旧数据只能在原 session 内按 ID 解析，避免
+        // 全局唯一 datasetId 成为跨租户的隐式授权凭证。
+        conditions.push(eq(platformMeteorologicalDatasets.sessionId, filters.sessionId))
       }
       const rows = await this.db
         .select()
@@ -148,6 +153,7 @@ function toDatasetValues(dataset: MeteorologicalDatasetRecord): typeof platformM
 
 function buildConditions(filters: ListMeteorologicalDatasetsFilters): SQL[] {
   const conditions: SQL[] = []
+  if (filters.datasetIds?.length) conditions.push(inArray(platformMeteorologicalDatasets.datasetId, [...new Set(filters.datasetIds)]))
   if (filters.workspaceId) conditions.push(eq(platformMeteorologicalDatasets.workspaceId, filters.workspaceId))
   if (filters.sessionId) conditions.push(eq(platformMeteorologicalDatasets.sessionId, filters.sessionId))
   if (filters.threadId) conditions.push(eq(platformMeteorologicalDatasets.threadId, filters.threadId))

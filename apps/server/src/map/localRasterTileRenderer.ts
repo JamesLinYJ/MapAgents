@@ -17,6 +17,7 @@ import proj4 from 'proj4'
 import QuickLRU from 'quick-lru'
 import sharp from 'sharp'
 
+import { GEOJSON_CRS84, normalizeCrsIdentifier } from '../gis/crs.js'
 import type { MapLayerSource } from '../schemas/types.js'
 import type { MapTileExecutionSpec } from '../store/postgres/mapStore.js'
 import type { MapTileResponse, RasterTileSource } from './mapTileSource.js'
@@ -256,9 +257,9 @@ function projectTileBounds(z: number, x: number, y: number, targetCrs: string): 
 }
 
 function projectionFor(value: string): string {
-  const normalized = value.trim().toUpperCase().replace(/\s+/gu, '')
-  if (normalized === 'EPSG:4326' || normalized === 'CRS:84') return 'EPSG:4326'
-  if (normalized === 'EPSG:3857' || normalized === 'EPSG:900913') return 'EPSG:3857'
+  const normalized = normalizeCrsIdentifier(value, '本地栅格 CRS')
+  if (normalized === GEOJSON_CRS84) return 'EPSG:4326'
+  if (normalized === 'EPSG:3857') return normalized
   const utm = /^EPSG:(326|327)(\d{2})$/u.exec(normalized)
   if (utm?.[1] && utm[2]) {
     const zone = Number(utm[2])

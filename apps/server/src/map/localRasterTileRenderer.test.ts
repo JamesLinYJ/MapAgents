@@ -78,7 +78,7 @@ function rasterSpec(relativePath: string) {
       status: 'ready',
       errorMessage: null,
       bounds: [-180, -85, 180, 85],
-      crs: 'EPSG:4326',
+      crs: 'http://www.opengis.net/def/crs/OGC/1.3/CRS84',
       minZoom: 0,
       maxZoom: 22,
       source: { kind: 'raster_tiles', tileJsonUrl: '/tiles.json', tileSize: 256 },

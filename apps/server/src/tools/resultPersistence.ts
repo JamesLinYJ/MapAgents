@@ -12,11 +12,17 @@
 // Agent 自动调用与 Debug 工作台直跑必须共享同一条结果持久化路径。PostgreSQL
 // 是 Run、Tool Value 和 Artifact 元数据的结构化事实源；文件只保存 Artifact 内容。
 
-import { rm } from 'node:fs/promises'
+import { lstat, rm } from 'node:fs/promises'
 import path from 'node:path'
 import type { ToolResult, ValueRef } from '../framework/types.js'
 import type { AgentState, ArtifactRef, ClarificationState, DecisionRequest, AgentWorkflow, TodoItem, ToolValueRef } from '../schemas/types.js'
 import type { ToolExecutionStore } from '../store/runtimePorts.js'
+import {
+  geoJsonSpatialMetadata,
+  normalizeGeoJsonToCrs84,
+  requireRenderableCrs84Bounds,
+  type CanonicalGeoJson,
+} from '../gis/geojsonCrs.js'
 import { atomicWriteText } from '../store/durableFileIo.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 import { createAgentWorkflow, reviseAgentWorkflow } from '../agent/agentWorkflowState.js'
@@ -52,63 +58,98 @@ export class ToolResultCommitService {
       createdAt: nowUtc(),
       unit: ref.unit ?? null,
     }))
-    const explicitArtifacts: ArtifactRef[] = (result.artifacts ?? []).map(artifact => ({
-      artifactId: artifact.artifactId,
-      runId,
-      artifactType: artifact.artifactType,
-      name: artifact.name,
-      uri: artifact.uri,
-      display: artifact.display,
-      metadata: { ...(artifact.metadata ?? {}), ...(artifact.relativePath ? { relativePath: artifact.relativePath } : {}) },
-      isIntermediate: false,
-    }))
-    const generatedArtifacts = await createGeoArtifacts(result, runId, store.runtimeRoot)
-    const artifacts = dedupeArtifacts([...explicitArtifacts, ...generatedArtifacts])
-    const toolResult = {
-      stepId: makeId('step'),
-      tool: toolName,
-      toolLabel,
-      args,
-      status: 'completed' as const,
-      message: result.message,
-      startedAt: null,
-      completedAt: nowUtc(),
-      resultId: result.resultId,
-      source: result.source,
-      confidence: null,
-      usedQuery: null,
-      provenance: result.provenance ?? {},
-      crs: {},
-      geometryType: null,
-      featureCount: null,
-      valueRefs: refs,
-    }
-    const mutation = (state: AgentState): Partial<AgentState> => ({
-      toolValueRefs: dedupeValueRefs([...state.toolValueRefs, ...refs]),
-      artifacts: dedupeArtifacts([...state.artifacts, ...artifacts]),
-      ...agentWorkflowControlState(result.payload, state.agentWorkflow, state.todos),
-      ...clarificationControlState(result.payload, state.decisions),
-      ...todoControlState(result.payload),
-      toolResults: [
-        ...state.toolResults.filter(item => item.resultId !== result.resultId),
-        toolResult,
-      ],
+    const explicitArtifacts: ArtifactRef[] = (result.artifacts ?? []).map(artifact => {
+      const relativePath = requireRunArtifactRelativePath(runId, artifact.relativePath)
+      return {
+        artifactId: artifact.artifactId,
+        runId,
+        artifactType: artifact.artifactType,
+        name: artifact.name,
+        uri: artifact.uri,
+        display: artifact.display,
+        metadata: { ...(artifact.metadata ?? {}), relativePath },
+        isIntermediate: false,
+      }
     })
+    let generatedArtifacts: ArtifactRef[] = []
     try {
+      await Promise.all(explicitArtifacts.map(artifact => (
+        requireRunArtifactFile(store.runtimeRoot, runId, artifact.metadata.relativePath)
+      )))
+      generatedArtifacts = await createGeoArtifacts(result, runId, store.runtimeRoot)
+      const artifacts = dedupeArtifacts([...explicitArtifacts, ...generatedArtifacts])
+      const toolResult = {
+        stepId: makeId('step'),
+        tool: toolName,
+        toolLabel,
+        args,
+        status: 'completed' as const,
+        message: result.message,
+        startedAt: null,
+        completedAt: nowUtc(),
+        resultId: result.resultId,
+        source: result.source,
+        confidence: null,
+        usedQuery: null,
+        provenance: result.provenance ?? {},
+        crs: {},
+        geometryType: null,
+        featureCount: null,
+        valueRefs: refs,
+      }
+      const mutation = (state: AgentState): Partial<AgentState> => ({
+        toolValueRefs: dedupeValueRefs([...state.toolValueRefs, ...refs]),
+        artifacts: dedupeArtifacts([...state.artifacts, ...artifacts]),
+        ...agentWorkflowControlState(result.payload, state.agentWorkflow, state.todos),
+        ...clarificationControlState(result.payload, state.decisions),
+        ...todoControlState(result.payload),
+        toolResults: [
+          ...state.toolResults.filter(item => item.resultId !== result.resultId),
+          toolResult,
+        ],
+      })
       const committed = await store.commitToolResult(runId, result.resultId, mutation, refs, artifacts)
       if (!committed) {
-        // 幂等重试已经有 durable 结果；本次尝试生成的文件没有对应 metadata，
-        // 立即删除，避免相同 resultId 在重试时积累孤儿 Artifact 内容。
-        await removeGeneratedArtifactFiles(store.runtimeRoot, generatedArtifacts)
+        // 并发幂等重放可能复用同一个显式 artifact path。重新读取 durable
+        // 所有权，只清理没有被任何已提交 Artifact 引用的显式文件；自动生成
+        // 文件使用本次唯一 ID，可以直接清理。
+        await removeArtifactFiles(store.runtimeRoot, runId, [
+          ...generatedArtifacts,
+          ...unownedExplicitArtifacts(store, runId, explicitArtifacts),
+        ])
       }
     } catch (error) {
       // PostgreSQL 事务失败时，文件已经完成原子写入但没有对应的 durable
       // metadata。立即清理本次请求的对象，避免把“未提交”误留成可读结果；
       // GC 仍可处理进程在清理前崩溃的极端残留。
-      await removeGeneratedArtifactFiles(store.runtimeRoot, generatedArtifacts)
+      await removeArtifactFiles(store.runtimeRoot, runId, [
+        ...generatedArtifacts,
+        ...unownedExplicitArtifacts(store, runId, explicitArtifacts),
+      ])
       throw error
     }
   }
+}
+
+function unownedExplicitArtifacts(
+  store: ToolExecutionStore,
+  runId: string,
+  candidates: ArtifactRef[],
+): ArtifactRef[] {
+  let durable: ArtifactRef[]
+  try {
+    durable = store.getRun(runId).state.artifacts
+  } catch {
+    // 无法证明文件没有 durable 所有者时宁可交给 GC，不能删除可能已发布的内容。
+    return []
+  }
+  const durableIds = new Set(durable.map(artifact => artifact.artifactId))
+  const durablePaths = new Set(durable.map(artifact => artifact.metadata.relativePath).filter((value): value is string => typeof value === 'string'))
+  return candidates.filter(artifact => {
+    const relativePath = artifact.metadata.relativePath
+    return !durableIds.has(artifact.artifactId)
+      && (typeof relativePath !== 'string' || !durablePaths.has(relativePath))
+  })
 }
 
 /** Compatibility entry point for callers still being migrated to the service. */
@@ -254,44 +295,74 @@ export function resolveRuntimeValueRef(state: Map<string, unknown>, refId: strin
 }
 
 async function createGeoArtifacts(result: ToolResult, runId: string, runtimeRoot: string): Promise<ArtifactRef[]> {
-  const artifacts: ArtifactRef[] = []
+  const plans: GeoArtifactPlan[] = []
   const serialized = new Set<string>()
+  const seenGeoJsonObjects = new WeakSet<object>()
   for (const ref of result.valueRefs ?? []) {
     const geojson = extractGeoJson(ref.value, ref.kind)
     if (!geojson) continue
-    const artifact = await writeGeoArtifact(runtimeRoot, runId, ref.label || result.message, ref.kind, geojson, serialized)
-    if (artifact) artifacts.push(artifact)
+    if (seenGeoJsonObjects.has(geojson)) continue
+    seenGeoJsonObjects.add(geojson)
+    const canonical = normalizeGeoJsonToCrs84(geojson, `valueRef '${ref.refId}'`, ref.metadata?.crs)
+    appendGeoArtifactPlan(plans, serialized, ref.label || result.message, ref.kind, canonical)
   }
   for (const [key, value] of Object.entries(result.payload)) {
     const geojson = extractGeoJson(value)
     if (!geojson) continue
-    const artifact = await writeGeoArtifact(runtimeRoot, runId, key === 'route' ? '规划路线' : key, key, geojson, serialized)
-    if (artifact) artifacts.push(artifact)
+    // 工具通常会把同一个 GeoJSON 对象同时放进 payload 和 valueRef。按对象
+    // 身份先去重，避免再次解析、重投影和序列化；深拷贝候选仍由 canonical
+    // 内容集合去重，保持确定性。
+    if (seenGeoJsonObjects.has(geojson)) continue
+    seenGeoJsonObjects.add(geojson)
+    const canonical = normalizeGeoJsonToCrs84(geojson, `工具结果 payload.${key}`)
+    appendGeoArtifactPlan(plans, serialized, key === 'route' ? '规划路线' : key, key, canonical)
   }
-  return artifacts
+  // 所有候选必须先完成解析、CRS 规范化和去重，之后才允许第一次文件写入。
+  // 写阶段若部分成功后失败，立即清理本轮已发布的文件。
+  const artifacts: ArtifactRef[] = []
+  try {
+    for (const plan of plans) artifacts.push(await writeGeoArtifact(runtimeRoot, runId, plan))
+    return artifacts
+  } catch (error) {
+    await removeArtifactFiles(runtimeRoot, runId, artifacts)
+    throw error
+  }
+}
+
+interface GeoArtifactPlan {
+  name: string
+  kind: string
+  canonical: CanonicalGeoJson
+  content: string
+}
+
+function appendGeoArtifactPlan(
+  plans: GeoArtifactPlan[],
+  serialized: Set<string>,
+  name: string,
+  kind: string,
+  canonical: CanonicalGeoJson,
+): void {
+  requireRenderableCrs84Bounds(canonical.bounds, 'GeoJSON Artifact')
+  const content = JSON.stringify(canonical.entity)
+  if (serialized.has(content)) return
+  serialized.add(content)
+  plans.push({ name, kind, canonical, content })
 }
 
 async function writeGeoArtifact(
   runtimeRoot: string,
   runId: string,
-  name: string,
-  kind: string,
-  geojson: Record<string, unknown>,
-  serialized: Set<string>,
-): Promise<ArtifactRef | null> {
-  const content = JSON.stringify(geojson)
-  if (serialized.has(content)) return null
-  serialized.add(content)
+  plan: GeoArtifactPlan,
+): Promise<ArtifactRef> {
+  const { canonical, content, kind, name } = plan
+  const bounds = requireRenderableCrs84Bounds(canonical.bounds, 'GeoJSON Artifact')
   const artifactId = makeId('artifact')
   const relativePath = path.posix.join('artifacts', runId, `${artifactId}.geojson`)
   const root = path.resolve(runtimeRoot)
   const target = path.resolve(root, relativePath)
   if (!target.startsWith(root + path.sep)) throw new Error('artifact 路径越出 runtime 根目录')
-  // 先写同目录 staging 文件，再原子 rename，避免读请求看到半截 GeoJSON。
-  // 数据库元数据随后在同一个 Tool Result 事务中提交；事务失败时不会留下
-  // 指向半截内容的 Artifact 元数据，失败发布文件由后续运行目录维护回收。
-  await atomicWriteText(target, content)
-  return {
+  const artifact: ArtifactRef = {
     artifactId,
     runId,
     artifactType: 'geojson',
@@ -303,17 +374,17 @@ async function writeGeoArtifact(
       map: {
         title: name,
         replacementGroup: null,
-        bounds: requireGeoJsonBounds(geojson),
-        crs: 'EPSG:4326',
+        bounds,
+        crs: canonical.crs,
         minZoom: 0,
         maxZoom: 22,
         source: {
           kind: 'geojson',
           url: `/api/v1/results/${artifactId}/geojson`,
-          featureCount: countGeoJsonFeatures(geojson),
+          featureCount: countGeoJsonFeatures(canonical.entity),
           sizeBytes: Buffer.byteLength(content, 'utf8'),
         },
-        style: defaultGeoJsonStyle(geojson),
+        style: defaultGeoJsonStyle(canonical.entity),
         legend: null,
         temporal: null,
         capabilities: {
@@ -326,67 +397,65 @@ async function writeGeoArtifact(
         },
       },
     },
-    metadata: { relativePath, kind },
+    metadata: { relativePath, kind, ...geoJsonSpatialMetadata(canonical) },
     isIntermediate: false,
   }
+  // 描述符和全部派生元数据先在内存中构造完成，再原子发布内容，避免后续
+  // 派生失败留下没有对应事务记录的文件。
+  await atomicWriteText(target, content)
+  return artifact
 }
 
-async function removeGeneratedArtifactFiles(
+async function removeArtifactFiles(
   runtimeRoot: string,
+  runId: string,
   artifacts: readonly ArtifactRef[],
 ): Promise<void> {
   const root = path.resolve(runtimeRoot)
   for (const artifact of artifacts) {
-    const relativePath = typeof artifact.metadata.relativePath === 'string'
-      ? artifact.metadata.relativePath
-      : ''
-    if (!relativePath) continue
-    const target = path.resolve(root, relativePath)
-    if (!target.startsWith(root + path.sep)) throw new Error('artifact 路径越出 runtime 根目录')
+    const target = resolveRunArtifactPath(root, runId, artifact.metadata.relativePath)
     await rm(target, { force: true })
   }
 }
 
-function requireGeoJsonBounds(geojson: Record<string, unknown>): [number, number, number, number] {
-  const coordinates: Array<[number, number]> = []
-  collectGeoJsonCoordinates(geojson, coordinates)
-  if (!coordinates.length) throw new Error('GeoJSON Artifact 没有可制图坐标')
-  const longitudes = coordinates.map(([longitude]) => longitude)
-  const latitudes = coordinates.map(([, latitude]) => latitude)
-  const west = Math.min(...longitudes)
-  const east = Math.max(...longitudes)
-  const south = Math.min(...latitudes)
-  const north = Math.max(...latitudes)
-  if (west === east || south === north) {
-    const longitudePadding = west === east ? 0.0001 : 0
-    const latitudePadding = south === north ? 0.0001 : 0
-    return [west - longitudePadding, south - latitudePadding, east + longitudePadding, north + latitudePadding]
+async function requireRunArtifactFile(runtimeRoot: string, runId: string, value: unknown): Promise<string> {
+  const relativePath = requireRunArtifactRelativePath(runId, value)
+  const target = resolveRunArtifactPath(path.resolve(runtimeRoot), runId, relativePath)
+  let entry: Awaited<ReturnType<typeof lstat>>
+  try {
+    entry = await lstat(target)
+  } catch (error) {
+    throw new Error(`artifact 文件不存在：${relativePath}`, { cause: error })
   }
-  return [west, south, east, north]
+  if (!entry.isFile()) throw new Error(`artifact 不是常规文件：${relativePath}`)
+  return relativePath
 }
 
-function collectGeoJsonCoordinates(value: unknown, output: Array<[number, number]>): void {
-  if (Array.isArray(value)) {
-    if (value.length >= 2 && typeof value[0] === 'number' && typeof value[1] === 'number') {
-      if (Number.isFinite(value[0]) && Number.isFinite(value[1])) output.push([value[0], value[1]])
-      return
-    }
-    for (const child of value) collectGeoJsonCoordinates(child, output)
-    return
-  }
-  if (!isRecord(value)) return
-  if ('coordinates' in value) collectGeoJsonCoordinates(value.coordinates, output)
-  if (Array.isArray(value.features)) collectGeoJsonCoordinates(value.features, output)
-  if ('geometry' in value) collectGeoJsonCoordinates(value.geometry, output)
-  if (Array.isArray(value.geometries)) collectGeoJsonCoordinates(value.geometries, output)
+function resolveRunArtifactPath(runtimeRoot: string, runId: string, value: unknown): string {
+  const relativePath = requireRunArtifactRelativePath(runId, value)
+  const target = path.resolve(runtimeRoot, relativePath)
+  if (!target.startsWith(runtimeRoot + path.sep)) throw new Error('artifact 路径越出 runtime 根目录')
+  return target
 }
 
-function countGeoJsonFeatures(geojson: Record<string, unknown>): number {
+function requireRunArtifactRelativePath(runId: string, value: unknown): string {
+  if (typeof value !== 'string' || !value.trim()) throw new Error('artifact 缺少 relativePath')
+  const relativePath = value.trim()
+  if (relativePath.includes('\\')) throw new Error('artifact relativePath 必须使用 POSIX 分隔符')
+  const normalized = path.posix.normalize(relativePath)
+  const runRoot = path.posix.join('artifacts', runId)
+  if (normalized !== relativePath || !normalized.startsWith(`${runRoot}/`)) {
+    throw new Error(`artifact relativePath 必须位于当前运行目录 ${runRoot}/`)
+  }
+  return normalized
+}
+
+function countGeoJsonFeatures(geojson: { type: string; features?: unknown[] }): number {
   if (geojson.type === 'FeatureCollection' && Array.isArray(geojson.features)) return geojson.features.length
   return 1
 }
 
-function defaultGeoJsonStyle(geojson: Record<string, unknown>) {
+function defaultGeoJsonStyle(geojson: unknown) {
   const geometryTypes = new Set<string>()
   collectGeoJsonGeometryTypes(geojson, geometryTypes)
   if ([...geometryTypes].some(type => type.includes('Polygon'))) {

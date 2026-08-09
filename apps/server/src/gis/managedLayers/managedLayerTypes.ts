@@ -10,6 +10,7 @@
 
 import type { LayerPropertyDescriptor, ResourceVisibility } from '../../schemas/types.js'
 import type { GeoJsonFeature, GeoJsonFeatureCollection, Geometry } from '../geojson.js'
+import type { CanonicalGeoJson } from '../geojsonCrs.js'
 
 export type LayerBounds = [number, number, number, number]
 
@@ -32,7 +33,8 @@ export interface StoredFeature {
 }
 
 export interface ImportGeoJsonLayerInput {
-  collection: GeoJsonFeatureCollection
+  collection?: GeoJsonFeatureCollection
+  canonicalGeoJson?: CanonicalGeoJson
   layerKey?: string | null
   name: string
   sourceType: string

@@ -21,7 +21,8 @@
     "./desktop": { "types": "./dist/desktop.d.ts", "import": "./dist/desktop.js", "default": "./dist/desktop.js" },
     "./local-operations": { "types": "./dist/localOperations.d.ts", "import": "./dist/localOperations.js", "default": "./dist/localOperations.js" },
     "./map": { "types": "./dist/map.d.ts", "import": "./dist/map.js", "default": "./dist/map.js" },
-    "./release": { "types": "./dist/release.d.ts", "import": "./dist/release.js", "default": "./dist/release.js" }
+    "./release": { "types": "./dist/release.d.ts", "import": "./dist/release.js", "default": "./dist/release.js" },
+    "./meteorology": { "types": "./dist/meteorology.d.ts", "import": "./dist/meteorology.js", "default": "./dist/meteorology.js" }
   },
   "types": "./dist/index.d.ts",
   "scripts": {

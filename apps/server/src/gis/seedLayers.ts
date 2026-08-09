@@ -18,8 +18,7 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
 import type { ManagedLayerService } from './managedLayers/managedLayerService.js'
-import type { GeoJsonFeatureCollection } from './geojson.js'
-import { parseGeoJsonEntity, toFeatureCollection } from './geojson.js'
+import { normalizeGeoJsonToCrs84, type CanonicalGeoJson } from './geojsonCrs.js'
 import type { LayerDescriptor } from '../schemas/types.js'
 
 const layerKeySchema = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/u, 'layer_key 必须是稳定 SQL 标识符')
@@ -59,7 +58,7 @@ export async function seedLayersFromDirectory(
   for (const entry of catalog) {
     const filename = entry.filename ?? `${entry.layer_key}.geojson`
     const filePath = resolveSeedFile(seedDirectory, filename)
-    const collection = await readSeedFeatureCollection(filePath)
+    const canonicalGeoJson = await readSeedFeatureCollection(filePath, entry.srid)
     const layer = await managedLayers.importGeoJsonLayer({
       layerKey: entry.layer_key,
       name: entry.name,
@@ -71,7 +70,7 @@ export async function seedLayersFromDirectory(
       sessionId: null,
       threadId: null,
       sourceFilename: filename,
-      collection,
+      canonicalGeoJson,
     })
     summaries.push(publicSeedSummary(layer))
   }
@@ -98,14 +97,14 @@ function resolveSeedFile(seedDirectory: string, filename: string): string {
   return resolved
 }
 
-async function readSeedFeatureCollection(filePath: string): Promise<GeoJsonFeatureCollection> {
+async function readSeedFeatureCollection(filePath: string, srid: number): Promise<CanonicalGeoJson> {
   const raw = await readFile(filePath, 'utf8')
-  return parseGeoJsonPayload(JSON.parse(raw), filePath)
+  return parseGeoJsonPayload(JSON.parse(raw), filePath, srid)
 }
 
-function parseGeoJsonPayload(value: unknown, source: string): GeoJsonFeatureCollection {
+function parseGeoJsonPayload(value: unknown, source: string, srid: number): CanonicalGeoJson {
   try {
-    return toFeatureCollection(parseGeoJsonEntity(value, '系统图层 seed'))
+    return normalizeGeoJsonToCrs84(value, '系统图层 seed', `EPSG:${srid}`)
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     throw new Error(`系统图层 seed 不是有效 GeoJSON：${source}；${detail}`)

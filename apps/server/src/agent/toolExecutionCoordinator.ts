@@ -728,10 +728,16 @@ export class ToolExecutionCoordinator {
       }),
       resolveMeteorologicalDataset: input => this.options.store.meteorology.resolveMeteorologicalDataset({
         sessionId: this.options.sessionId,
-        threadId: null,
+        threadId: input.selector === 'current_thread_latest' ? this.options.threadId : null,
         workspaceId: run.workspaceId,
-        datasetId: input.datasetId ?? null,
-        filename: input.filename ?? null,
+        datasetId: input.selector === 'explicit_dataset_id' ? input.datasetId : 'latest_upload',
+        filename: input.selector === 'current_thread_latest' ? input.filename ?? null : null,
+      }),
+      resolveMeteorologicalDatasets: datasetIds => this.options.store.meteorology.listMeteorologicalDatasets({
+        datasetIds,
+        workspaceId: run.workspaceId,
+        sessionId: run.workspaceId ? null : this.options.sessionId,
+        limit: Math.max(1, datasetIds.length),
       }),
       invokeStructuredModel: async (prompt, schema, options) => {
         if (!this.options.adapter) throw new Error('当前确定性工具链未配置结构化模型调用')

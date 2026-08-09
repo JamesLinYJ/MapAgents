@@ -90,7 +90,10 @@ describe('seed layer catalog', () => {
       sessionId: null,
       threadId: null,
       sourceFilename: 'boundary.geojson',
-      collection: expect.objectContaining({ type: 'FeatureCollection' }),
+      canonicalGeoJson: expect.objectContaining({
+        crs: 'OGC:CRS84',
+        entity: expect.objectContaining({ type: 'FeatureCollection' }),
+      }),
     }))
     expect(summaries).toEqual([{ layerKey: 'test_boundary', name: '测试边界', featureCount: 1, sourceType: 'system' }])
   })
@@ -103,6 +106,46 @@ describe('seed layer catalog', () => {
 
     await expect(seedLayersFromDirectory({ importGeoJsonLayer: vi.fn() }, seedDirectory))
       .rejects.toThrow('不允许引用目录外文件')
+  })
+
+  it('rejects seed coordinates outside the RFC 7946 CRS84 range', async () => {
+    const seedDirectory = await mkdtemp(path.join(tmpdir(), 'geo-agent-platform-seed-crs-'))
+    await writeFile(path.join(seedDirectory, 'catalog.json'), JSON.stringify({
+      layers: [{ layer_key: 'projected_without_crs', name: '非法投影图层', filename: 'projected.geojson' }],
+    }), 'utf8')
+    await writeFile(path.join(seedDirectory, 'projected.geojson'), JSON.stringify({
+      type: 'Feature',
+      properties: {},
+      geometry: { type: 'Point', coordinates: [13358338.895192828, 3503549.843504374] },
+    }), 'utf8')
+
+    await expect(seedLayersFromDirectory({ importGeoJsonLayer: vi.fn() }, seedDirectory))
+      .rejects.toThrow('投影坐标必须显式声明 CRS')
+  })
+
+  it('uses catalog srid to reproject a seed before managed-layer import', async () => {
+    const seedDirectory = await mkdtemp(path.join(tmpdir(), 'geo-agent-platform-seed-3857-'))
+    await writeFile(path.join(seedDirectory, 'catalog.json'), JSON.stringify({
+      layers: [{ layer_key: 'projected_seed', name: '投影 Seed', filename: 'projected.geojson', srid: 3857 }],
+    }), 'utf8')
+    await writeFile(path.join(seedDirectory, 'projected.geojson'), JSON.stringify({
+      type: 'Point',
+      coordinates: [13358338.895192828, 3503549.843504374],
+    }), 'utf8')
+    const importGeoJsonLayer = vi.fn(async (input: Record<string, unknown>) => layer('projected_seed', '投影 Seed'))
+
+    await seedLayersFromDirectory({ importGeoJsonLayer }, seedDirectory)
+
+    expect(importGeoJsonLayer).toHaveBeenCalledOnce()
+    const input = importGeoJsonLayer.mock.calls[0]?.[0]
+    expect(input?.canonicalGeoJson).toMatchObject({
+      crs: 'OGC:CRS84',
+      sourceCrs: 'EPSG:3857',
+      entity: {
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [expect.closeTo(120, 8), expect.closeTo(30, 8)] },
+      },
+    })
   })
 })
 

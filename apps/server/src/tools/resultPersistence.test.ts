@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -78,6 +78,105 @@ describe('tool result persistence', () => {
     }
   })
 
+  it('keeps a durable explicit artifact file when the same result is replayed', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-result-explicit-replay-'))
+    let store: PlatformPersistenceFacade | undefined
+    try {
+      store = createTestPersistenceFacade(path.join(root, 'sessions'))
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '显式 Artifact 重放')
+      const run = await store.createRun(session.id, '显式 Artifact 幂等提交', { threadId: thread.id })
+      const relativePath = path.posix.join('artifacts', run.id, 'stable.geojson')
+      const target = path.join(root, relativePath)
+      await mkdir(path.dirname(target), { recursive: true })
+      await writeFile(target, JSON.stringify(line()), 'utf8')
+      const result = {
+        message: '显式 Artifact',
+        payload: {},
+        warnings: [],
+        resultId: 'result_explicit_replay',
+        source: 'test',
+        artifacts: [{
+          artifactId: 'artifact_stable',
+          artifactType: 'geojson',
+          name: '稳定路线',
+          uri: '/api/v1/results/artifact_stable/geojson',
+          display: { surfaces: ['download'] as const, primarySurface: 'download' as const, map: null },
+          relativePath,
+        }],
+      }
+
+      await persistToolExecutionResult(store, run.id, 'map_export', '导出', {}, result)
+      await persistToolExecutionResult(store, run.id, 'map_export', '导出', {}, result)
+
+      expect(store.getRun(run.id).state.artifacts).toHaveLength(1)
+      await expect(readFile(target, 'utf8')).resolves.toContain('LineString')
+    } finally {
+      await store?.flushConversationStore()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects explicit artifacts outside the current run without deleting their files', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-result-artifact-ownership-'))
+    let store: PlatformPersistenceFacade | undefined
+    try {
+      store = createTestPersistenceFacade(path.join(root, 'sessions'))
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, 'Artifact 所有权')
+      const run = await store.createRun(session.id, '当前运行', { threadId: thread.id })
+      const sibling = await store.createRun(session.id, '其他运行', { threadId: thread.id })
+      const relativePaths = [
+        path.posix.join('files', 'shared-upload.geojson'),
+        path.posix.join('artifacts', sibling.id, 'owned.geojson'),
+      ]
+
+      for (const [index, relativePath] of relativePaths.entries()) {
+        const target = path.join(root, relativePath)
+        await mkdir(path.dirname(target), { recursive: true })
+        await writeFile(target, JSON.stringify(line()), 'utf8')
+        await expect(persistToolExecutionResult(store, run.id, 'map_export', '导出', {}, {
+          message: '非法跨目录 Artifact',
+          payload: {},
+          warnings: [],
+          resultId: `result_cross_run_${index}`,
+          source: 'test',
+          artifacts: [{
+            artifactId: `artifact_cross_run_${index}`,
+            artifactType: 'geojson',
+            name: '跨目录路线',
+            uri: `/api/v1/results/artifact_cross_run_${index}/geojson`,
+            display: { surfaces: ['download'], primarySurface: 'download', map: null },
+            relativePath,
+          }],
+        })).rejects.toThrow('必须位于当前运行目录')
+        await expect(readFile(target, 'utf8')).resolves.toContain('LineString')
+      }
+      const missingRelativePath = path.posix.join('artifacts', run.id, 'missing.geojson')
+      await expect(persistToolExecutionResult(store, run.id, 'map_export', '导出', {}, {
+        message: '不存在的 Artifact',
+        payload: {},
+        warnings: [],
+        resultId: 'result_missing_artifact',
+        source: 'test',
+        artifacts: [{
+          artifactId: 'artifact_missing',
+          artifactType: 'geojson',
+          name: '不存在的路线',
+          uri: '/api/v1/results/artifact_missing/geojson',
+          display: { surfaces: ['download'], primarySurface: 'download', map: null },
+          relativePath: missingRelativePath,
+        }],
+      })).rejects.toThrow('artifact 文件不存在')
+      expect(store.getRun(run.id).state.artifacts).toHaveLength(0)
+    } finally {
+      await store?.flushConversationStore()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('cleans generated files when the durable commit fails', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-result-commit-failure-'))
     let store: PlatformPersistenceFacade | undefined
@@ -88,6 +187,10 @@ describe('tool result persistence', () => {
       const thread = await store.createThread(session.id, '提交失败清理')
       const run = await store.createRun(session.id, '提交失败', { threadId: thread.id })
       vi.spyOn(store, 'commitToolResult').mockRejectedValueOnce(new Error('commit failed'))
+      const explicitRelativePath = path.posix.join('artifacts', run.id, 'explicit.geojson')
+      const explicitPath = path.join(root, explicitRelativePath)
+      await mkdir(path.dirname(explicitPath), { recursive: true })
+      await writeFile(explicitPath, JSON.stringify(line()), 'utf8')
 
       await expect(persistToolExecutionResult(store, run.id, 'route_planner', '路径规划', {}, {
         message: '路线生成',
@@ -95,6 +198,14 @@ describe('tool result persistence', () => {
         warnings: [],
         resultId: 'result_commit_failure',
         source: 'test',
+        artifacts: [{
+          artifactId: 'artifact_explicit',
+          artifactType: 'geojson',
+          name: '显式路线',
+          uri: '/api/v1/results/artifact_explicit/geojson',
+          display: { surfaces: ['download'], primarySurface: 'download', map: null },
+          relativePath: explicitRelativePath,
+        }],
       })).rejects.toThrow('commit failed')
 
       const artifactRoot = path.join(root, 'artifacts', run.id)
@@ -130,6 +241,96 @@ describe('tool result persistence', () => {
       expect(store.getThread(thread.id).latestArtifactId).toBe(latest.state.artifacts[0].artifactId)
       const relativePath = String(latest.state.artifacts[0].metadata.relativePath)
       expect(JSON.parse(await readFile(path.join(root, relativePath), 'utf8'))).toEqual(line())
+    } finally {
+      await store?.flushConversationStore()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('reprojects declared GeoJSON before deriving artifact CRS and bounds', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-result-crs-'))
+    let store: PlatformPersistenceFacade | undefined
+    try {
+      store = createTestPersistenceFacade(path.join(root, 'sessions'))
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, 'CRS Artifact 测试')
+      const run = await store.createRun(session.id, '转换投影结果', { threadId: thread.id })
+      const projectedRing = [
+        webMercator(120, 30), webMercator(120.01, 30),
+        webMercator(120.01, 30.01), webMercator(120, 30.01), webMercator(120, 30),
+      ]
+      const projected = {
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'Polygon', coordinates: [projectedRing] },
+      }
+      await persistToolExecutionResult(store, run.id, 'projected_analysis', '投影分析', {}, {
+        message: '投影结果',
+        // payload 和 valueRef 复用同一个几何事实；持久化边界只规范化一次。
+        payload: { projected },
+        warnings: [],
+        resultId: 'result_projected',
+        source: 'test',
+        valueRefs: [{
+          refId: 'ref_projected',
+          kind: 'geojson',
+          label: '投影面',
+          value: projected,
+          metadata: { crs: 'EPSG:3857' },
+        }],
+      })
+
+      const artifact = store.getRun(run.id).state.artifacts[0]
+      expect(artifact.display.map).toMatchObject({
+        crs: 'OGC:CRS84',
+        bounds: [expect.closeTo(120, 8), expect.closeTo(30, 8), expect.closeTo(120.01, 8), expect.closeTo(30.01, 8)],
+      })
+      expect(artifact.metadata).toMatchObject({
+        crs: 'OGC:CRS84',
+        sourceCrs: 'EPSG:3857',
+        reprojected: true,
+        bounds: artifact.display.map?.bounds,
+      })
+      const relativePath = String(artifact.metadata.relativePath)
+      const persisted = JSON.parse(await readFile(path.join(root, relativePath), 'utf8'))
+      expect(persisted).not.toHaveProperty('crs')
+      expect(persisted.geometry.coordinates[0][0]).toEqual([expect.closeTo(120, 8), expect.closeTo(30, 8)])
+    } finally {
+      await store?.flushConversationStore()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('validates every automatic GeoJSON artifact plan before writing the first file', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-result-crs-plan-'))
+    let store: PlatformPersistenceFacade | undefined
+    try {
+      store = createTestPersistenceFacade(path.join(root, 'sessions'))
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, 'Artifact 计划原子性')
+      const run = await store.createRun(session.id, '拒绝混合 CRS 结果', { threadId: thread.id })
+
+      await expect(persistToolExecutionResult(store, run.id, 'mixed_analysis', '混合结果', {}, {
+        message: '混合结果',
+        payload: {},
+        warnings: [],
+        resultId: 'result_mixed_crs',
+        source: 'test',
+        valueRefs: [
+          { refId: 'ref_valid', kind: 'route', label: '有效路线', value: line() },
+          {
+            refId: 'ref_missing_crs',
+            kind: 'geojson',
+            label: '缺少 CRS 的投影点',
+            value: { type: 'Point', coordinates: webMercator(120, 30) },
+          },
+        ],
+      })).rejects.toThrow('投影坐标必须显式声明 CRS')
+
+      expect(store.getRun(run.id).state.artifacts).toHaveLength(0)
+      await expect(readdir(path.join(root, 'artifacts', run.id))).rejects.toMatchObject({ code: 'ENOENT' })
     } finally {
       await store?.flushConversationStore()
       await rm(root, { recursive: true, force: true })
@@ -220,4 +421,12 @@ describe('tool result persistence', () => {
 
 function line() {
   return { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[120, 30], [121, 31]] } }
+}
+
+function webMercator(longitude: number, latitude: number): [number, number] {
+  const earthRadius = 6_378_137
+  return [
+    earthRadius * longitude * Math.PI / 180,
+    earthRadius * Math.log(Math.tan(Math.PI / 4 + latitude * Math.PI / 360)),
+  ]
 }

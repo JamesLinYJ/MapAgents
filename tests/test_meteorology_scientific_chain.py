@@ -13,17 +13,25 @@ from pathlib import Path
 import json
 from types import SimpleNamespace
 
+import h5netcdf
+import matplotlib as mpl
+import matplotlib.colors as mpl_colors
+import numpy as np
 import pytest
-
-xr = pytest.importorskip("xarray")
-np = pytest.importorskip("numpy")
-mpl = pytest.importorskip("matplotlib")
-mpl_colors = pytest.importorskip("matplotlib.colors")
-pytest.importorskip("h5netcdf")
+from pyproj import Geod
+import xarray as xr
 
 from gis_meteorology.service import MeteorologicalDataService
 from gis_meteorology import NowcastTextService
-from gis_meteorology.nowcast import build_analysis_scope
+from gis_meteorology.nowcast import (
+    MeteorologicalSequence,
+    NowcastAnalysisService,
+    NowcastDatasetItem,
+    NowcastProductProfile,
+    NowcastSequenceService,
+    build_analysis_scope,
+)
+from gis_meteorology.readers import GridSlice
 from gis_meteorology.third_party.radar_mosaic_agent import adapter as radar_adapter
 from gis_meteorology.third_party.rainfall_risk_map.adapter import render_rainfall_risk_map
 from gis_meteorology.third_party.short_term_forecast.adapter import generate_area_rainfall_table
@@ -37,6 +45,39 @@ def dispatch_worker_tool(runtime_root: Path, name: str, args: dict[str, object])
     registry = WorkerToolRegistry()
     register_builtin_tools(registry)
     return registry.dispatch(name, args, WorkerToolContext(WorkerPathSandbox(runtime_root)))
+
+
+class _NowcastFrameReader:
+    def __init__(self, frames: dict[str, tuple[np.ndarray, str | None]]):
+        self.frames = frames
+        self.read_count = 0
+
+    def read_slice(self, path: Path, query: object, *, filename: str | None = None) -> GridSlice:
+        self.read_count += 1
+        data, unit = self.frames[filename or path.name]
+        return GridSlice(data=data, variable="QPF", unit=unit)
+
+
+def _nowcast_sequence(frames: dict[str, tuple[np.ndarray, str | None]]) -> MeteorologicalSequence:
+    datasets = [
+        NowcastDatasetItem(
+            dataset_id=f"frame_{index}",
+            filename=filename,
+            path=Path(filename),
+            metadata={"variables": [{"name": "QPF", "unit": unit}]},
+            lead_minutes=(index + 1) * 5,
+            sequence_index=index,
+        )
+        for index, (filename, (_, unit)) in enumerate(frames.items())
+    ]
+    return MeteorologicalSequence(
+        sequence_id="unit_normalization",
+        datasets=datasets,
+        profile=NowcastProductProfile(),
+        variable="QPF",
+        bounds=None,
+        issue_time=None,
+    )
 
 
 def test_generated_netcdf_inspect_stats_threshold_render_and_report(tmp_path: Path) -> None:
@@ -151,6 +192,75 @@ def test_generated_netcdf_nowcast_reference_chain(tmp_path: Path) -> None:
     assert answer["answer"]
     assert forecast["answer"]
     assert raster["coordinates"]
+
+
+def test_nowcast_normalizes_compatible_sequence_units_to_millimeters() -> None:
+    frames = {
+        "frame_mm.nc": (np.full((2, 2), 3.0), "mm"),
+        "frame_mass.nc": (np.full((2, 2), 3.0), "kg m-2"),
+        "frame_m.nc": (np.full((2, 2), 0.003), "m"),
+    }
+    reader = _NowcastFrameReader(frames)
+    analysis = NowcastAnalysisService(reader=reader).analyze(_nowcast_sequence(frames))
+
+    timeline = analysis["regions"][0]["timeline"]
+    assert analysis["unit"] == "mm"
+    assert [frame["sourceUnit"] for frame in timeline] == ["mm", "kg m-2", "m"]
+    assert [frame["unit"] for frame in timeline] == ["mm", "mm", "mm"]
+    assert [frame["stats"]["p90"] for frame in timeline] == pytest.approx([3.0, 3.0, 3.0])
+    assert [frame["rainLevel"] for frame in timeline] == ["moderate", "moderate", "moderate"]
+    assert reader.read_count == len(frames)
+
+
+@pytest.mark.parametrize("unit", [None, "K", "mm h-1"])
+def test_nowcast_rejects_missing_or_incompatible_member_units(unit: str | None) -> None:
+    frames = {
+        "frame_mm.nc": (np.full((2, 2), 3.0), "mm"),
+        "frame_invalid.nc": (np.full((2, 2), 3.0), unit),
+    }
+
+    with pytest.raises(ValueError, match="缺少单位|降水深度维度不兼容"):
+        NowcastAnalysisService(reader=_NowcastFrameReader(frames)).analyze(_nowcast_sequence(frames))
+
+
+def test_nowcast_sequence_rejects_member_without_selected_precipitation_variable() -> None:
+    datasets = [
+        {
+            "dataset_id": "rain",
+            "filename": "202606080000_202606080005.nc",
+            "path": Path("rain.nc"),
+            "metadata": {"variables": [{"name": "QPF", "unit": "mm"}]},
+        },
+        {
+            "dataset_id": "temperature",
+            "filename": "202606080000_202606080010.nc",
+            "path": Path("temperature.nc"),
+            "metadata": {"variables": [{"name": "TMP", "unit": "K"}]},
+        },
+    ]
+
+    with pytest.raises(ValueError, match="缺少已选降水变量 QPF"):
+        NowcastSequenceService().create_sequence(sequence_id="mixed_variables", datasets=datasets)
+
+
+def test_nowcast_sequence_rejects_incompatible_declared_member_dimension() -> None:
+    datasets = [
+        {
+            "dataset_id": "rain",
+            "filename": "202606080000_202606080005.nc",
+            "path": Path("rain.nc"),
+            "metadata": {"variables": [{"name": "QPF", "unit": "mm"}]},
+        },
+        {
+            "dataset_id": "temperature_dimension",
+            "filename": "202606080000_202606080010.nc",
+            "path": Path("temperature_dimension.nc"),
+            "metadata": {"variables": [{"name": "QPF", "unit": "K"}]},
+        },
+    ]
+
+    with pytest.raises(ValueError, match="降水深度维度不兼容"):
+        NowcastSequenceService().create_sequence(sequence_id="mixed_dimensions", datasets=datasets)
 
 
 def test_nowcast_answer_standard_for_citywide_and_location_questions() -> None:
@@ -268,6 +378,36 @@ def test_nowcast_scope_exposes_render_bbox_for_map_crop() -> None:
 
     assert len(location["renderBbox"]) == 4
     assert districts["renderBbox"] == [119.5, 29.5, 120.5, 30.5]
+
+
+@pytest.mark.parametrize("latitude", [0.0, 30.0, 60.0])
+def test_nowcast_point_buffer_preserves_metric_radius_across_latitudes(latitude: float) -> None:
+    scope = build_analysis_scope(
+        area=None,
+        bbox=None,
+        coordinate={"lat": latitude, "lng": 120.0, "label": "测试点"},
+        point_buffer_meters=1000,
+        district_name_field=None,
+    )
+    coordinates = scope["regions"][0]["collection"]["features"][0]["geometry"]["coordinates"][0]
+    geod = Geod(ellps="WGS84")
+    distances = [geod.inv(120.0, latitude, float(lon), float(lat))[2] for lon, lat in coordinates[:-1]]
+
+    assert scope["pointBufferMeters"] == 1000.0
+    assert min(distances) == pytest.approx(1000.0, abs=0.01)
+    assert max(distances) == pytest.approx(1000.0, abs=0.01)
+
+
+@pytest.mark.parametrize("radius", [0, -1, float("nan")])
+def test_nowcast_point_buffer_rejects_invalid_metric_radius(radius: float) -> None:
+    with pytest.raises(ValueError, match="缓冲半径"):
+        build_analysis_scope(
+            area=None,
+            bbox=None,
+            coordinate={"lat": 30.0, "lng": 120.0},
+            point_buffer_meters=radius,
+            district_name_field=None,
+        )
 
 
 def test_radar_mosaic_adapter_exposes_original_products_and_rejects_unknown_product(

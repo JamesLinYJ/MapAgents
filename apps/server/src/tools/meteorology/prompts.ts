@@ -58,8 +58,8 @@ export const METEOROLOGY_TOOL_PROMPTS: Record<string, string> = {
   meteorological_inspect: `用于检查单个气象数据文件的变量、维度、时次、层级、单位和制图能力。
 
 使用规则：
-- 用户说“刚上传的 NetCDF/NC 文件/气象数据”时，优先直接调用本工具；未提供 dataset_ref 时会解析当前会话最新上传的数据集。
-- dataset_ref 可以来自 list_meteorological_files 返回的 meteorological_file，也可以传 latest_upload 表示当前会话最新上传。
+- 用户说“刚上传的 NetCDF/NC 文件/气象数据”时，优先直接调用本工具；未提供 dataset_ref 时只解析当前 thread 最新上传的数据集。
+- dataset_ref 只能使用 list_meteorological_files 返回的 meteorological_file 或 meteorological_inspect 返回的 meteorological_dataset refId；不接受 latest_upload 魔法字符串。最新上传必须使用 dataset_id=latest_upload，且严格限定当前 thread。
 - 在渲染栅格、统计、阈值区域、等值线、风险区划图或报告前，必须先检查数据集。
 - 后续工具应使用本工具返回的 meteorological_dataset、meteorological_variable、time_index、level_index 等 valueRef。
 - 不要凭文件名猜测变量名、单位、时次或层级。`,
@@ -124,6 +124,8 @@ export const METEOROLOGY_TOOL_PROMPTS: Record<string, string> = {
 
 使用规则：
 - 在 render_rainfall_risk_map 前调用，生成 rainfall_risk_thresholds valueRef。
+- dataset_ref 和 variable_ref 必须来自同一次 meteorological_inspect；生成的阈值引用会绑定该数据集、变量和单位，不能跨数据复用。
+- thresholds 数值契约固定以 mm 表达；平台只对兼容的降水深度单位做显式换算，其他单位稳定失败。
 - 阈值必须符合用户标准、业务标准或平台默认标准；不要临时发明无法解释的等级。
 - 本工具只定义阈值，不读取数据、不做制图。
 - 后续风险区划图必须传 thresholds_ref，而不是复制阈值 JSON。`,

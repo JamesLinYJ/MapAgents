@@ -16,6 +16,7 @@
 
 import { z } from 'zod'
 import type { ToolContext, ToolDef, ToolResult, ValueRef } from '../../framework/types.js'
+import { geoJsonSpatialMetadata } from '../../gis/geojsonCrs.js'
 import { makeId } from '../../utils/ids.js'
 import type { MeteorologyWorkerToolName } from './meteorologyWorkerClient.js'
 import {
@@ -28,19 +29,25 @@ import {
 import {
   artifactTarget,
   assertSuffix,
+  convertMeteorologicalUnitValue,
   datasetFileFromArgs,
-  datasetValue,
   geoJsonDisplay,
   isRecord,
   mergeArtifactMetadata,
+  meteorologicalLineageMetadata,
   miniAppDisplay,
   NETCDF_SUFFIXES,
-  optionalRefValue,
+  refObject,
+  requireMatchingMeteorologicalLineage,
+  requireMatchingMeteorologicalVariable,
   requiredRefKind,
   rasterTileDisplay,
   result,
   resultRefs,
+  valueRefUnit,
+  verifiedDatasetValue,
   writeJsonArtifact,
+  type MeteorologicalDatasetLineage,
 } from './toolRuntime.js'
 
 const meteorologicalInterpretationSchema = z.object({
@@ -113,15 +120,25 @@ function workerDatasetTool(
 ): ToolDef {
   return tool(name, label, description, properties, async (args, ctx) => {
     const file = await datasetFileFromArgs(ctx, args, 'dataset_ref', ['meteorological_dataset'])
+    const variableRef = requiredDatasetAffinityRef(ctx, args, 'variable_ref', ['meteorological_variable'], file.lineage)
+    const variable = refObject(variableRef.value)
+    const variableName = typeof variable.name === 'string' ? variable.name.trim() : ''
+    if (!variableName) throw new Error('variable_ref 不包含变量名')
+    const variableUnit = valueRefUnit(variableRef)
+    const timeRef = optionalDatasetAffinityRef(ctx, args, 'time_index_ref', ['meteorological_time_index'], file.lineage)
+    const levelRef = optionalDatasetAffinityRef(ctx, args, 'level_index_ref', ['meteorological_level_index'], file.lineage)
+    const bboxRef = optionalDatasetAffinityRef(ctx, args, 'bbox_ref', ['bbox'], file.lineage)
+    const thresholdRef = optionalDatasetAffinityRef(ctx, args, 'threshold_ref', ['meteorological_threshold'], file.lineage)
+    const levelsRef = optionalDatasetAffinityRef(ctx, args, 'levels_ref', ['meteorological_contour_levels'], file.lineage)
     const workerArgs: Record<string, unknown> = {
       file_relative_path: file.relativePath,
       file_name: file.name,
-      variable: optionalRefValue(ctx, args, 'variable_ref', 'name'),
-      time_index: optionalRefValue(ctx, args, 'time_index_ref'),
-      level_index: optionalRefValue(ctx, args, 'level_index_ref'),
-      bbox: optionalRefValue(ctx, args, 'bbox_ref'),
-      threshold: optionalRefValue(ctx, args, 'threshold_ref'),
-      levels: optionalRefValue(ctx, args, 'levels_ref'),
+      variable: variableName,
+      time_index: timeRef?.value,
+      level_index: levelRef?.value,
+      bbox: bboxRef?.value,
+      threshold: thresholdRef ? convertedScalarRefValue(thresholdRef, variableRef, 'threshold_ref') : undefined,
+      levels: levelsRef ? convertedLevelsRefValue(levelsRef, variableRef, 'levels_ref') : undefined,
       operator: typeof args.operator === 'string' ? args.operator : undefined,
     }
     let artifact = null
@@ -133,25 +150,39 @@ function workerDatasetTool(
       workerArgs.output_cog_relative_path = artifact.relativePath
     }
     const worker = await deps.callWorker(name, workerArgs, ctx.signal)
+    const workerVariable = typeof worker.payload.variable === 'string' ? worker.payload.variable.trim() : ''
+    if (workerVariable && workerVariable !== variableName) {
+      throw new Error(`气象 worker 返回变量 ${workerVariable}，与 variable_ref ${variableName} 不匹配`)
+    }
+    const workerUnit = typeof worker.payload.unit === 'string' ? worker.payload.unit.trim() : ''
+    if (workerUnit && variableUnit) {
+      convertMeteorologicalUnitValue(0, workerUnit, variableUnit, 'worker result')
+    }
     if (artifactType === 'raster' && artifact && previewArtifact) {
       mergeArtifactMetadata(previewArtifact, worker.payload, miniAppDisplay())
       mergeArtifactMetadata(artifact, worker.payload, rasterTileDisplay(artifact, worker.payload))
     }
     if (artifactType === 'geojson') {
       artifact = artifactTarget(ctx, 'geojson', `${file.name} ${label}`)
-      await writeJsonArtifact(deps, artifact.relativePath, worker.payload)
-      const features = Array.isArray(worker.payload.features) ? worker.payload.features : []
+      const canonical = await writeJsonArtifact(deps, artifact.relativePath, worker.payload)
+      const canonicalPayload = canonical.entity as unknown as Record<string, unknown>
+      const features = canonical.entity.type === 'FeatureCollection' ? canonical.entity.features : [canonical.entity]
       if (features.length > 0) {
         mergeArtifactMetadata(
           artifact,
-          worker.payload,
-          geoJsonDisplay(artifact, worker.payload, name === 'meteorological_contour' ? 'line' : 'polygon'),
+          { ...worker.payload, ...geoJsonSpatialMetadata(canonical) },
+          geoJsonDisplay(artifact, canonicalPayload, name === 'meteorological_contour' ? 'line' : 'polygon', {
+            bounds: canonical.bounds,
+            coordinateCrs: canonical.crs,
+            featureCount: canonical.featureCount,
+            sizeBytes: canonical.sizeBytes,
+          }),
         )
       } else {
-        mergeArtifactMetadata(artifact, worker.payload)
+        mergeArtifactMetadata(artifact, { ...worker.payload, ...geoJsonSpatialMetadata(canonical) })
       }
     }
-    const refs = resultRefs(name, label, worker.payload)
+    const refs = resultRefs(name, label, worker.payload, file.lineage, variableName)
     const artifacts = [previewArtifact, artifact].filter((item): item is NonNullable<typeof item> => item !== null)
     return result(name, worker.message, worker.payload, refs, artifacts)
   }, required)
@@ -165,34 +196,64 @@ async function inspectDataset(args: Record<string, unknown>, ctx: ToolContext, d
     ctx.signal,
   )
   const variables = Array.isArray(worker.payload.variables) ? worker.payload.variables.filter(isRecord) : []
+  const lineageMetadata = meteorologicalLineageMetadata(file.lineage)
   const refs: ValueRef[] = [{
     refId: makeId('ref'), kind: 'meteorological_dataset', label: file.name,
-    value: { ...file, metadata: worker.payload },
+    value: {
+      datasetId: file.lineage.datasetId,
+      contentHash: file.lineage.contentHash,
+      name: file.name,
+      relativePath: file.relativePath,
+      metadata: worker.payload,
+    },
+    metadata: lineageMetadata,
   }]
   for (const variable of variables) {
+    const variableName = String(variable.name ?? '').trim()
+    if (!variableName) continue
+    const unit = typeof variable.unit === 'string' && variable.unit.trim()
+      ? variable.unit.trim()
+      : typeof variable.units === 'string' && variable.units.trim() ? variable.units.trim() : null
     refs.push({
       refId: makeId('ref'), kind: 'meteorological_variable',
-      label: `${file.name} / ${String(variable.name ?? '')}`,
-      value: { name: String(variable.name ?? ''), datasetRelativePath: file.relativePath, metadata: variable },
+      label: `${file.name} / ${variableName}`,
+      value: {
+        datasetId: file.lineage.datasetId,
+        contentHash: file.lineage.contentHash,
+        name: variableName,
+        datasetRelativePath: file.relativePath,
+        metadata: variable,
+      },
+      unit,
+      metadata: meteorologicalLineageMetadata(file.lineage, variableName),
     })
   }
   if (Array.isArray(worker.payload.bounds)) {
-    refs.push({ refId: makeId('ref'), kind: 'bbox', label: `${file.name} 数据范围`, value: worker.payload.bounds })
+    refs.push({
+      refId: makeId('ref'), kind: 'bbox', label: `${file.name} 数据范围`, value: worker.payload.bounds,
+      metadata: lineageMetadata,
+    })
   }
   const times = Array.isArray(worker.payload.times) ? worker.payload.times : []
   times.forEach((time, index) => {
-    refs.push({ refId: makeId('ref'), kind: 'meteorological_time_index', label: `${file.name} / ${String(time)}`, value: index })
+    refs.push({
+      refId: makeId('ref'), kind: 'meteorological_time_index', label: `${file.name} / ${String(time)}`, value: index,
+      metadata: lineageMetadata,
+    })
   })
   const levels = Array.isArray(worker.payload.levels) ? worker.payload.levels : []
   levels.forEach((level, index) => {
-    refs.push({ refId: makeId('ref'), kind: 'meteorological_level_index', label: `${file.name} / ${String(level)}`, value: index })
+    refs.push({
+      refId: makeId('ref'), kind: 'meteorological_level_index', label: `${file.name} / ${String(level)}`, value: index,
+      metadata: lineageMetadata,
+    })
   })
   return result('meteorological_inspect', worker.message, worker.payload, refs)
 }
 
 async function interpretDataset(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
   const datasetRef = requiredRefKind(ctx, args, 'dataset_ref', ['meteorological_dataset'])
-  const dataset = datasetValue(ctx, datasetRef)
+  const dataset = await verifiedDatasetValue(ctx, datasetRef)
   const source = isRecord(datasetRef.value) ? datasetRef.value : {}
   const structured = await ctx.invokeStructuredModel(
     `仅根据以下气象数据 metadata 生成气象解读，不得补充 metadata 中不存在的观测事实：\n${JSON.stringify(source.metadata ?? {})}`,
@@ -202,15 +263,23 @@ async function interpretDataset(args: Record<string, unknown>, ctx: ToolContext)
   const text = structured.reportText.trim()
   const ref: ValueRef = {
     refId: makeId('ref'), kind: 'meteorological_interpretation', label: `${dataset.name} 模型解读`,
-    value: { datasetRelativePath: dataset.relativePath, text, structured },
+    value: {
+      datasetId: dataset.lineage.datasetId,
+      contentHash: dataset.lineage.contentHash,
+      datasetRelativePath: dataset.relativePath,
+      text,
+      structured,
+    },
+    metadata: meteorologicalLineageMetadata(dataset.lineage),
   }
   return result('interpret_meteorological_dataset', '模型气象解读已通过校验', structured, [ref])
 }
 
 async function generateReport(args: Record<string, unknown>, ctx: ToolContext, deps: MeteorologyToolDeps): Promise<ToolResult> {
-  const dataset = datasetValue(ctx, requiredRefKind(ctx, args, 'dataset_ref', ['meteorological_dataset']))
+  const dataset = await verifiedDatasetValue(ctx, requiredRefKind(ctx, args, 'dataset_ref', ['meteorological_dataset']))
   assertSuffix(dataset.name, NETCDF_SUFFIXES, '短时强降水风险图数据')
   const interpretation = requiredRefKind(ctx, args, 'interpretation_ref', ['meteorological_interpretation'])
+  requireMatchingMeteorologicalLineage(interpretation, dataset.lineage, 'interpretation_ref')
   const source = isRecord(interpretation.value) ? interpretation.value : {}
   const text = typeof source.text === 'string' ? source.text : ''
   if (!text) throw new Error('interpretation_ref 不包含模型解读正文')
@@ -225,4 +294,46 @@ async function generateReport(args: Record<string, unknown>, ctx: ToolContext, d
     ...worker.payload,
   })
   return result('meteorological_report', worker.message, worker.payload, [], [artifact])
+}
+
+function optionalDatasetAffinityRef(
+  ctx: ToolContext,
+  args: Record<string, unknown>,
+  key: string,
+  kinds: string[],
+  lineage: MeteorologicalDatasetLineage,
+): ValueRef | undefined {
+  const refId = args[key]
+  if (typeof refId !== 'string' || !refId.trim()) return undefined
+  return requireMatchingMeteorologicalLineage(requiredRefKind(ctx, args, key, kinds), lineage, key)
+}
+
+function requiredDatasetAffinityRef(
+  ctx: ToolContext,
+  args: Record<string, unknown>,
+  key: string,
+  kinds: string[],
+  lineage: MeteorologicalDatasetLineage,
+): ValueRef {
+  const ref = optionalDatasetAffinityRef(ctx, args, key, kinds, lineage)
+  if (!ref) throw new Error(`${key} 不能为空`)
+  return ref
+}
+
+function convertedScalarRefValue(ref: ValueRef, variableRef: ValueRef, key: string): number {
+  const variable = refObject(variableRef.value)
+  const variableName = typeof variable.name === 'string' ? variable.name.trim() : ''
+  requireMatchingMeteorologicalVariable(ref, variableName, key)
+  if (typeof ref.value !== 'number' || !Number.isFinite(ref.value)) throw new Error(`${key} 不包含有限数值`)
+  return convertMeteorologicalUnitValue(ref.value, valueRefUnit(ref), valueRefUnit(variableRef), key)
+}
+
+function convertedLevelsRefValue(ref: ValueRef, variableRef: ValueRef, key: string): number[] {
+  const variable = refObject(variableRef.value)
+  const variableName = typeof variable.name === 'string' ? variable.name.trim() : ''
+  requireMatchingMeteorologicalVariable(ref, variableName, key)
+  if (!Array.isArray(ref.value) || !ref.value.every(value => typeof value === 'number' && Number.isFinite(value))) {
+    throw new Error(`${key} 不包含有限数值数组`)
+  }
+  return ref.value.map(value => convertMeteorologicalUnitValue(value, valueRefUnit(ref), valueRefUnit(variableRef), key))
 }
