@@ -23,7 +23,7 @@ interface ToolCallRecoveryLedgerStore {
  * 不能用“某个结果已返回”推断整个 Run 已无未知副作用。
  */
 export class ToolCallRecoveryLedger {
-  private readonly pending: Set<string>
+  private pending: Set<string>
   private mutation: Promise<void> = Promise.resolve()
 
   constructor(
@@ -50,13 +50,15 @@ export class ToolCallRecoveryLedger {
     if (!callId) return Promise.reject(new Error('工具调用恢复账本缺少 callId'))
     const operation = this.mutation.then(async () => {
       if (this.pending.has(callId) === pending) return
-      if (pending) this.pending.add(callId)
-      else this.pending.delete(callId)
-      const pendingToolCallIds = [...this.pending]
+      const next = new Set(this.pending)
+      if (pending) next.add(callId)
+      else next.delete(callId)
+      const pendingToolCallIds = [...next]
       await this.store.saveRunCheckpoint(this.runId, {
         pendingToolCallIds,
         recoveryStatus: pendingToolCallIds.length ? 'requires_action' : 'clean',
       })
+      this.pending = next
     })
     this.mutation = operation.then(() => undefined, () => undefined)
     return operation

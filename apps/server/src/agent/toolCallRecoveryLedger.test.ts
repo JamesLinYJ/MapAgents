@@ -54,4 +54,69 @@ describe('ToolCallRecoveryLedger', () => {
 
     expect(writes).toEqual([['call_existing']])
   })
+
+  it('publishes a transition in memory only after the durable write succeeds', async () => {
+    let releaseWrite: (() => void) | undefined
+    const writeStarted = new Promise<void>((resolve) => {
+      releaseWrite = resolve
+    })
+    let finishWrite: (() => void) | undefined
+    const writeFinished = new Promise<void>((resolve) => {
+      finishWrite = resolve
+    })
+    const ledger = new ToolCallRecoveryLedger({
+      saveRunCheckpoint: async () => {
+        releaseWrite?.()
+        await writeFinished
+      },
+    }, 'run_atomic')
+
+    const transition = ledger.markPending('call_atomic')
+    await writeStarted
+
+    expect(ledger.snapshot()).toEqual([])
+
+    finishWrite?.()
+    await transition
+    expect(ledger.snapshot()).toEqual(['call_atomic'])
+  })
+
+  it('keeps failed transitions retryable without publishing them in memory', async () => {
+    const writes: string[][] = []
+    let attempt = 0
+    const ledger = new ToolCallRecoveryLedger({
+      saveRunCheckpoint: async (_runId, fields) => {
+        writes.push([...(fields.pendingToolCallIds ?? [])])
+        attempt += 1
+        if (attempt === 1) throw new Error('injected durable write failure')
+      },
+    }, 'run_retry')
+
+    await expect(ledger.markPending('call_retry')).rejects.toThrow(
+      'injected durable write failure',
+    )
+    expect(ledger.snapshot()).toEqual([])
+    await expect(ledger.markPending('call_retry')).resolves.toBeUndefined()
+
+    expect(writes).toEqual([['call_retry'], ['call_retry']])
+    expect(ledger.snapshot()).toEqual(['call_retry'])
+  })
+
+  it('does not forget a pending call when persisting its terminal state fails', async () => {
+    let attempt = 0
+    const ledger = new ToolCallRecoveryLedger({
+      saveRunCheckpoint: async () => {
+        attempt += 1
+        if (attempt === 1) throw new Error('injected terminal write failure')
+      },
+    }, 'run_terminal_retry', ['call_pending'])
+
+    await expect(ledger.markTerminal('call_pending')).rejects.toThrow(
+      'injected terminal write failure',
+    )
+    expect(ledger.snapshot()).toEqual(['call_pending'])
+
+    await expect(ledger.markTerminal('call_pending')).resolves.toBeUndefined()
+    expect(ledger.snapshot()).toEqual([])
+  })
 })
