@@ -192,6 +192,11 @@ export const platformRuns = pgTable('platform_runs', {
   sdkStateSchemaVersion: integer('sdk_state_schema_version'),
   sdkStateUpdatedAt: timestamp('sdk_state_updated_at', { withTimezone: true }),
   nextRecordSequence: integer('next_record_sequence').notNull().default(1),
+  nextInputSequence: integer('next_input_sequence').notNull().default(1),
+  checkpointInputCursor: integer('checkpoint_input_cursor').notNull().default(0),
+  activeInputLeaseId: text('active_input_lease_id'),
+  activeInputLeaseFrom: integer('active_input_lease_from'),
+  activeInputLeaseTo: integer('active_input_lease_to'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
@@ -303,11 +308,14 @@ export const platformRunInputs = pgTable('platform_run_inputs', {
   itemId: text('item_id').notNull(),
   kind: text('kind').notNull().default('steering'),
   content: text('content').notNull(),
+  inputSequence: integer('input_sequence').notNull(),
   status: text('status').notNull().default('queued'),
   queuedAt: timestamp('queued_at', { withTimezone: true }).notNull().defaultNow(),
-  consumedAt: timestamp('consumed_at', { withTimezone: true }),
+  leaseId: text('lease_id'),
+  leasedAt: timestamp('leased_at', { withTimezone: true }),
+  ackedAt: timestamp('acked_at', { withTimezone: true }),
 }, (table) => ({
-  runStatusQueuedIdx: index('idx_run_inputs_run_status_queued').on(table.runId, table.status, table.queuedAt),
+  runStatusQueuedIdx: index('idx_run_inputs_run_status_queued').on(table.runId, table.status, table.inputSequence),
   entryIdx: uniqueIndex('idx_run_inputs_entry_unique').on(table.entryId),
 }))
 

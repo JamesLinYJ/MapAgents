@@ -15,6 +15,7 @@ import type {
   ConversationItem,
   RunCheckpoint,
   RunEvent,
+  RunSteeringRecord,
   ToolValueRef,
 } from '../../schemas/types.js'
 import type { Database } from '../../db/connection.js'
@@ -27,6 +28,7 @@ import type {
   RunStateRepository,
 } from './conversationPersistencePorts.js'
 import { PostgresRunCheckpointRepository } from './runCheckpointRepository.js'
+import { RunInputDeliveryRecorder } from './runInputDeliveryRecorder.js'
 import type { RunRecordAppender } from './runRecordAppender.js'
 import { PostgresRunRecordRepository } from './runRecordRepository.js'
 import { PostgresRunStateRepository } from './runStateRepository.js'
@@ -39,9 +41,18 @@ export class PostgresRunRepository implements RunRepository {
   private readonly records: RunRecordRepository
   private readonly toolResults: PostgresToolResultCommitRepository
 
-  constructor(db: Database, runMutations: RunMutationQueue, runRecords: RunRecordAppender) {
+  constructor(
+    db: Database,
+    runMutations: RunMutationQueue,
+    runRecords: RunRecordAppender,
+    inputDelivery = new RunInputDeliveryRecorder(runRecords),
+  ) {
     this.state = new PostgresRunStateRepository(db, runMutations)
-    this.checkpoints = new PostgresRunCheckpointRepository(db, runMutations)
+    this.checkpoints = new PostgresRunCheckpointRepository(
+      db,
+      runMutations,
+      inputDelivery,
+    )
     this.records = new PostgresRunRecordRepository(db, runMutations, runRecords)
     this.toolResults = new PostgresToolResultCommitRepository(db)
   }
@@ -81,7 +92,9 @@ export class PostgresRunRepository implements RunRepository {
     agentsSdkVersion: string
     runtimeConfigDigest: string
     sdkStateSchemaVersion: RunCheckpoint['sdkStateSchemaVersion']
-  }): Promise<void> {
+    inputLeaseId?: string | null
+    terminalToolCallIds?: readonly string[]
+  }): Promise<RunSteeringRecord[]> {
     return this.checkpoints.saveAgentsSdkCheckpoint(runId, input)
   }
 

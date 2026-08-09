@@ -337,6 +337,7 @@ describe('platform architecture', () => {
       '009_file_object_lifecycle.sql',
       '010_file_ready_source_invariant.sql',
       '011_custom_model_providers.sql',
+      '012_run_input_delivery_ack.sql',
     ])
 
     const operationalSourceFiles = await collectProductionFiles([
@@ -757,7 +758,7 @@ describe('platform architecture', () => {
     expect(persistenceSource.includes('new PostgresConversationSnapshotRepository(db)')).toBe(true)
     expect(persistenceSource.includes('new PostgresSessionRepository(db)')).toBe(true)
     expect(persistenceSource.includes('new PostgresThreadRepository(db, this.runMutations)')).toBe(true)
-    expect(persistenceSource.includes('new PostgresRunRepository(db, this.runMutations, this.runRecords)')).toBe(true)
+    expect(persistenceSource.includes('new PostgresRunRepository(db, this.runMutations, this.runRecords, inputDelivery)')).toBe(true)
     expect(persistenceSource.includes('new PostgresObjectReferenceRepository(db)')).toBe(true)
     expect(persistenceSource.includes('return this.snapshots.loadSnapshot()')).toBe(true)
     expect(persistenceSource.includes('await this.sessions.saveSession(session)')).toBe(true)

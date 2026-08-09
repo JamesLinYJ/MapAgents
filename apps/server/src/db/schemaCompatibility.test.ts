@@ -26,6 +26,7 @@ const migrationIds = [
   '009_file_object_lifecycle',
   '010_file_ready_source_invariant',
   '011_custom_model_providers',
+  '012_run_input_delivery_ack',
 ] as const
 
 function currentMigrations() {
@@ -51,6 +52,7 @@ describe('verifyDatabaseSchemaCompatibility', () => {
         model_result_cache_table: 'platform_model_result_cache',
         file_objects_table: 'platform_file_objects',
         model_providers_table: 'platform_model_providers',
+        run_input_delivery_ack: true,
       }],
     )
 
@@ -77,7 +79,7 @@ describe('verifyDatabaseSchemaCompatibility', () => {
   it('拒绝让旧服务连接未来版本数据库', async () => {
     const db = databaseWithRows(
       [{ table_name: 'platform_schema_migrations' }],
-      [...currentMigrations(), { migration_id: '012_future_change', checksum: 'b'.repeat(64) }],
+      [...currentMigrations(), { migration_id: '013_future_change', checksum: 'b'.repeat(64) }],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
@@ -93,6 +95,7 @@ describe('verifyDatabaseSchemaCompatibility', () => {
         model_result_cache_table: 'platform_model_result_cache',
         file_objects_table: 'platform_file_objects',
         model_providers_table: 'platform_model_providers',
+        run_input_delivery_ack: true,
       }],
     )
 
@@ -121,6 +124,7 @@ describe('verifyDatabaseSchemaCompatibility', () => {
         model_result_cache_table: null,
         file_objects_table: 'platform_file_objects',
         model_providers_table: 'platform_model_providers',
+        run_input_delivery_ack: true,
       }],
     )
 
@@ -137,10 +141,28 @@ describe('verifyDatabaseSchemaCompatibility', () => {
         model_result_cache_table: 'platform_model_result_cache',
         file_objects_table: 'platform_file_objects',
         model_providers_table: null,
+        run_input_delivery_ack: true,
       }],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
       .rejects.toThrow(/platform_model_providers/u)
+  })
+
+  it('拒绝 run input delivery ack 列缺失的半升级数据库', async () => {
+    const db = databaseWithRows(
+      [{ table_name: 'platform_schema_migrations' }],
+      currentMigrations(),
+      [{
+        vector_tile_function: 'geo_agent_platform_layer_tiles(integer,integer,integer,json)',
+        model_result_cache_table: 'platform_model_result_cache',
+        file_objects_table: 'platform_file_objects',
+        model_providers_table: 'platform_model_providers',
+        run_input_delivery_ack: false,
+      }],
+    )
+
+    await expect(verifyDatabaseSchemaCompatibility(db as never))
+      .rejects.toThrow(/012_run_input_delivery_ack/u)
   })
 })

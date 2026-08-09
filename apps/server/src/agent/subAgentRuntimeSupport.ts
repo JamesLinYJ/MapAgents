@@ -32,6 +32,7 @@ import type { SubAgentState } from '../schemas/types.js'
 import type { AgentRuntimeStore } from '../store/runtimePorts.js'
 import { createAgentsTools, type AgentsExecutionContext } from './agentsToolBridge.js'
 import { errorMessage, modelSettings } from './runtimeSdkProjection.js'
+import { protectModelTransportFromRunInputMarkers } from './runtimeModelInput.js'
 import type { ToolExecutionCoordinator } from './toolExecutionCoordinator.js'
 import type { RunEventSink } from './turnRunner.js'
 import type { RunToolConcurrencyGate } from './runToolConcurrencyGate.js'
@@ -533,7 +534,9 @@ export function resolveSubAgentModel(config: RuntimeSubAgentConfig, dependencies
   if (!dependencies.adapter.createAgentModel) {
     throw new Error(`模型 provider '${dependencies.adapter.provider}' 不支持创建子智能体模型`)
   }
-  return dependencies.adapter.createAgentModel(modelName)
+  return protectModelTransportFromRunInputMarkers(
+    dependencies.adapter.createAgentModel(modelName),
+  )
 }
 
 export function resolveSubAgentModelCapabilities(

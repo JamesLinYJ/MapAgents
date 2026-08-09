@@ -14,9 +14,9 @@
 //     协助: OpenAI Codex:GPT-5.6 Sol
 //     说明: 上传改为线程作用域、流式暂存文件、独立幂等索引和原子元数据提交。
 
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { link, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { link, mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
 import PQueue from 'p-queue'
 import { z } from 'zod'
@@ -112,6 +112,7 @@ export class RuntimeFileStore {
   private readonly root: string
   private readonly objectRoot: string
   private readonly scopeQueues = new Map<string, PQueue>()
+  private readonly objectPublications = new Map<string, Promise<void>>()
 
   constructor(runtimeRoot: string) {
     this.root = path.resolve(runtimeRoot, 'uploads', 'files')
@@ -173,7 +174,7 @@ export class RuntimeFileStore {
       const objectName = `${file.contentHash}${safeObjectExtension(cleanName)}`
       const relativePath = path.posix.join('objects', 'sha256', file.contentHash.slice(0, 2), objectName)
       const objectPath = path.join(this.objectRoot, file.contentHash.slice(0, 2), objectName)
-      await publishContentObject(file.tempPath, objectPath)
+      await this.publishContentObject(file, objectPath)
       const metadata: StoredFileMetadata = {
         id,
         name: cleanName,
@@ -223,7 +224,7 @@ export class RuntimeFileStore {
       const objectName = `${file.contentHash}${safeObjectExtension(cleanName)}`
       const relativePath = path.posix.join('objects', 'sha256', file.contentHash.slice(0, 2), objectName)
       const objectPath = path.join(this.objectRoot, file.contentHash.slice(0, 2), objectName)
-      await publishContentObject(file.tempPath, objectPath)
+      await this.publishContentObject(file, objectPath)
       const metadata: StoredFileMetadata = {
         id: fileId,
         name: cleanName,
@@ -310,9 +311,11 @@ export class RuntimeFileStore {
   }
 
   async purgeThreadFiles(threadId: string): Promise<void> {
-    for (const file of await this.list(threadId)) {
-      await this.delete(file.id, threadId)
-    }
+    const scope = scopeName(threadId)
+    await this.scopeQueue(scope).add(() => rm(path.join(this.root, scope), {
+      recursive: true,
+      force: true,
+    }))
   }
 
   /** Read an immutable CAS object only after rechecking its size and digest. */
@@ -367,6 +370,20 @@ export class RuntimeFileStore {
     const queue = new PQueue({ concurrency: 1 })
     this.scopeQueues.set(scope, queue)
     return queue
+  }
+
+  private async publishContentObject(file: StagedFileInput, objectPath: string): Promise<void> {
+    const active = this.objectPublications.get(objectPath)
+    if (active) return active
+    const publication = publishStagedContentObject(file, objectPath)
+    this.objectPublications.set(objectPath, publication)
+    try {
+      await publication
+    } finally {
+      if (this.objectPublications.get(objectPath) === publication) {
+        this.objectPublications.delete(objectPath)
+      }
+    }
   }
 
   private async resolveIdempotentReplay(
@@ -525,12 +542,90 @@ function validateStagedFile(file: StagedFileInput): void {
   }
 }
 
-async function publishContentObject(tempPath: string, objectPath: string): Promise<void> {
-  await mkdir(path.dirname(objectPath), { recursive: true })
+async function publishStagedContentObject(file: StagedFileInput, objectPath: string): Promise<void> {
+  const directory = path.dirname(objectPath)
+  await mkdir(directory, { recursive: true })
+  if (await validateAndSyncFile(objectPath, directory, file.contentHash, file.sizeBytes)) return
+
+  // multipart staged inode 先校验并 fsync，再 hardlink 到目标目录的唯一
+  // temp 名。大文件全程流式 hash，不读入内存；同目录 rename 只发布
+  // 已同步 inode，随后再 fsync 目录项。
+  if (!await validateAndSyncFile(file.tempPath, path.dirname(file.tempPath), file.contentHash, file.sizeBytes, false)) {
+    throw new Error(`暂存文件 '${file.tempPath}' 的大小或内容哈希不匹配。`)
+  }
+  const temporary = path.join(
+    directory,
+    `.${path.basename(objectPath)}.${process.pid}.${randomUUID()}.tmp`,
+  )
+  let published = false
   try {
-    await link(tempPath, objectPath)
+    await link(file.tempPath, temporary)
+    if (process.platform === 'win32') {
+      try {
+        await rename(temporary, objectPath)
+      } catch (error) {
+        if (!['EEXIST', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error
+        if (await validateAndSyncFile(objectPath, directory, file.contentHash, file.sizeBytes)) {
+          await rm(temporary, { force: true })
+          published = true
+          return
+        }
+        const corrupt = path.join(directory, `.${path.basename(objectPath)}.${randomUUID()}.corrupt`)
+        await rename(objectPath, corrupt)
+        try {
+          await rename(temporary, objectPath)
+          await rm(corrupt, { force: true })
+        } catch (publishError) {
+          await rename(corrupt, objectPath).catch(() => undefined)
+          throw publishError
+        }
+      }
+    } else {
+      // POSIX rename 原子替换既有的损坏 target；并发发布的内容
+      // 由同一 hash+size 验证，因此替换仍是同一不变对象。
+      await rename(temporary, objectPath)
+    }
+    published = true
+    if (!await validateAndSyncFile(objectPath, directory, file.contentHash, file.sizeBytes)) {
+      throw new Error(`内容对象 '${file.contentHash}' 发布后校验失败。`)
+    }
+  } finally {
+    if (!published) await rm(temporary, { force: true }).catch(() => undefined)
+  }
+}
+
+async function validateAndSyncFile(
+  filePath: string,
+  directory: string,
+  expectedHash: string,
+  expectedSize: number,
+  syncDirectory = true,
+): Promise<boolean> {
+  let info
+  try {
+    info = await stat(filePath)
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+  if (!info.isFile() || info.size !== expectedSize) return false
+  if (await hashFile(filePath) !== expectedHash) return false
+  const handle = await open(filePath, 'r+')
+  try {
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+  if (syncDirectory && process.platform !== 'win32') await syncDirectoryEntry(directory)
+  return true
+}
+
+async function syncDirectoryEntry(directory: string): Promise<void> {
+  const handle = await open(directory, 'r')
+  try {
+    await handle.sync()
+  } finally {
+    await handle.close()
   }
 }
 

@@ -124,6 +124,10 @@ export class ToolExecutionCoordinator {
     this.modelInputObjectiveRevision = objectiveRevision
   }
 
+  acceptCheckpointedToolCalls(callIds: Iterable<string>): Promise<void> {
+    return this.recoveryLedger.acceptCheckpointTerminals(callIds)
+  }
+
   currentModelInputObjectiveRevision(): number {
     return this.modelInputObjectiveRevision
   }
@@ -137,7 +141,10 @@ export class ToolExecutionCoordinator {
   }
 
   markSdkToolCallTerminal(callId: string): Promise<void> {
-    return this.recoveryLedger.markTerminal(callId)
+    // stream/session 投影看到 result 并不等于恢复点已包含 result。
+    // 只有 AgentsCheckpointService 提交序列化 RunState 后才能清理账本。
+    void callId
+    return Promise.resolve()
   }
 
   formatToolFailureForModel(toolName: string, message: string): string {
@@ -338,7 +345,7 @@ export class ToolExecutionCoordinator {
   async executeDirect(toolName: string, args: Record<string, unknown>): Promise<ToolResult> {
     const callId = makeId('call')
     await this.prepare(toolName, args, callId)
-    return this.execute(toolName, args, callId)
+    return this.execute(toolName, args, callId, undefined, 'immediate')
   }
 
   async beginExternalAgentStep(
@@ -383,7 +390,6 @@ export class ToolExecutionCoordinator {
       await this.completeClaimedAgentWorkflowStep(callId, summary)
     } finally {
       this.externalAgentCalls.delete(callId)
-      await this.updatePendingToolCall(callId, false)
     }
   }
 
@@ -406,7 +412,6 @@ export class ToolExecutionCoordinator {
       await this.failClaimedAgentWorkflowStep(callId, message)
     } finally {
       this.externalAgentCalls.delete(callId)
-      await this.updatePendingToolCall(callId, false)
     }
   }
 
@@ -416,7 +421,10 @@ export class ToolExecutionCoordinator {
     args: Record<string, unknown>,
     callId: string,
   ): Promise<string> {
-    const result = await this.execute(toolName, args, callId, agentId)
+    // 子 Agent 内层工具不会进入父 RunState；其整个 Agent-as-tool
+    // 外层 callId 已保持 pending，直到父 SDK checkpoint 包含外层 result。
+    // 因此内层终态可立即收敛，崩溃时仍由外层 pending 禁止自动重放。
+    const result = await this.execute(toolName, args, callId, agentId, 'immediate')
     const tool = this.options.registry.get(toolName)
     if (!tool) throw new Error(`工具 '${toolName}' 未注册`)
     if (tool.agentResultMode === 'return_direct') {
@@ -437,6 +445,7 @@ export class ToolExecutionCoordinator {
     args: Record<string, unknown>,
     callId: string,
     ownerAgentId?: string,
+    recoveryTerminal: 'checkpoint' | 'immediate' = 'checkpoint',
   ): Promise<ToolResult> {
     this.options.signal.throwIfAborted()
     await this.prepare(toolName, args, callId)
@@ -522,7 +531,7 @@ export class ToolExecutionCoordinator {
             source: result.source,
           },
         }))
-        await this.updatePendingToolCall(callId, false)
+        if (recoveryTerminal === 'immediate') await this.updatePendingToolCall(callId, false)
       })
       return result
     } catch (error) {
@@ -556,8 +565,9 @@ export class ToolExecutionCoordinator {
           body: message,
           metadata: { toolLabel: this.toolLabel(toolName), objectiveRevision },
         })
-        // started 后失败是已知终态，可以清理 pending；进程直接崩溃时不会执行到这里。
-        await this.updatePendingToolCall(callId, false)
+        // 失败输出同样要先进入可恢复 SDK RunState；否则平台日志已失败
+        // 而 checkpoint 仍在调用前，崩溃恢复依然会重放工具。
+        if (recoveryTerminal === 'immediate') await this.updatePendingToolCall(callId, false)
       })
       throw error
     }
@@ -888,10 +898,8 @@ export class ToolExecutionCoordinator {
       payload: result.payload,
       valueRefs: (result.valueRefs ?? []).map(ref => ({ refId: ref.refId, kind: ref.kind, label: ref.label })),
     })
-    const contentRef = content.length > this.options.inlineToolResultMaxChars
-      ? await this.options.store.putConversationObject(content, 'application/json')
-      : null
-    await this.options.store.appendTranscript({
+    const appendResult = (contentRef: Awaited<ReturnType<ToolExecutionStore['putConversationObject']>> | null) => (
+      this.options.store.appendTranscript({
       threadId: this.options.threadId,
       runId: this.options.runId,
       turnId: this.options.turnId,
@@ -909,7 +917,17 @@ export class ToolExecutionCoordinator {
         valueRefIds: (result.valueRefs ?? []).map(reference => reference.refId),
         artifactIds: (result.artifacts ?? []).map(artifact => artifact.artifactId),
       },
-    })
+      })
+    )
+    if (content.length > this.options.inlineToolResultMaxChars) {
+      await this.options.store.publishConversationObject(
+        content,
+        'application/json',
+        reference => appendResult(reference),
+      )
+    } else {
+      await appendResult(null)
+    }
   }
 
   private async appendToolFailure(

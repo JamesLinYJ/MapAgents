@@ -48,6 +48,7 @@ import { decodeHistoryCursor, encodeHistoryCursor, estimateTokens } from '../src
 import { makeId, nowUtc } from '../src/utils/ids.js'
 import { summarizeAssistantText } from '../src/conversation/items.js'
 import { MemoryVersionConflictError } from '../src/store/storeErrors.js'
+import { runInputConversationItem } from '../src/store/runInputConversationItem.js'
 
 interface ThreadState {
   record: AgentThreadRecord
@@ -322,8 +323,63 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
     agentsSdkVersion: string
     runtimeConfigDigest: string
     sdkStateSchemaVersion: RunCheckpoint['sdkStateSchemaVersion']
-  }): Promise<void> {
+    inputLeaseId?: string | null
+    terminalToolCallIds?: readonly string[]
+  }): Promise<RunSteeringRecord[]> {
     const current = this.requireCheckpoint(runId)
+    const leaseId = input.inputLeaseId ?? null
+    const terminalToolCallIds = new Set(input.terminalToolCallIds ?? [])
+    const pendingToolCallIds = current.pendingToolCallIds
+      .filter(callId => !terminalToolCallIds.has(callId))
+    if (!leaseId && current.activeInputLeaseId) {
+      throw new Error(`运行 '${runId}' 存在未确认输入 lease '${current.activeInputLeaseId}'`)
+    }
+    let acked: RunSteeringRecord[] = []
+    if (leaseId) {
+      const leaseRows = (this.inputs.get(runId) ?? [])
+        .filter(record => record.leaseId === leaseId)
+        .sort((left, right) => left.inputSequence - right.inputSequence)
+      if (!leaseRows.length) throw new Error(`运行 '${runId}' 的输入 lease '${leaseId}' 不存在`)
+      const leaseTo = leaseRows.at(-1)!.inputSequence
+      if (
+        current.activeInputLeaseId === null
+        && leaseRows.every(record => record.status === 'acked')
+        && leaseTo <= current.checkpointInputCursor
+      ) {
+        if (current.sdkStateContentHash !== input.contentHash) {
+          throw new Error(`运行 '${runId}' 的旧输入 lease '${leaseId}' 不能覆盖更新的 SDK checkpoint`)
+        }
+        this.checkpoints.set(runId, {
+          ...current,
+          pendingToolCallIds,
+          recoveryStatus: pendingToolCallIds.length ? 'requires_action' : 'clean',
+        })
+        return clone(leaseRows)
+      }
+      if (
+        current.activeInputLeaseId !== leaseId
+        || current.activeInputLeaseFrom !== current.checkpointInputCursor + 1
+        || current.activeInputLeaseTo !== leaseTo
+      ) {
+        throw new Error(`运行 '${runId}' 的活动输入 lease 与 checkpoint 不一致`)
+      }
+      assertContiguousRecords(
+        leaseRows,
+        current.activeInputLeaseFrom,
+        current.activeInputLeaseTo - current.activeInputLeaseFrom + 1,
+        runId,
+      )
+      const ackedAt = nowUtc()
+      const byId = new Map(leaseRows.map(record => [record.steeringId, record]))
+      const next = (this.inputs.get(runId) ?? []).map(record => {
+        if (!byId.has(record.steeringId)) return record
+        if (record.status !== 'leased') throw new Error(`运行 '${runId}' 的 lease 包含非 leased 记录`)
+        return runSteeringRecordSchema.parse({ ...record, status: 'acked', ackedAt })
+      })
+      this.inputs.set(runId, next)
+      acked = next.filter(record => byId.has(record.steeringId))
+      this.persistRunInputItems(acked)
+    }
     const updatedAt = nowUtc()
     this.checkpoints.set(runId, {
       ...current,
@@ -334,7 +390,14 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
       runtimeConfigDigest: input.runtimeConfigDigest,
       sdkStateSchemaVersion: input.sdkStateSchemaVersion,
       sdkStateUpdatedAt: updatedAt,
+      pendingToolCallIds,
+      recoveryStatus: pendingToolCallIds.length ? 'requires_action' : 'clean',
+      checkpointInputCursor: acked.at(-1)?.inputSequence ?? current.checkpointInputCursor,
+      activeInputLeaseId: leaseId ? null : current.activeInputLeaseId,
+      activeInputLeaseFrom: leaseId ? null : current.activeInputLeaseFrom,
+      activeInputLeaseTo: leaseId ? null : current.activeInputLeaseTo,
     })
+    return clone(acked)
   }
 
   async appendConversationItem(item: ConversationItem): Promise<void> {
@@ -596,38 +659,135 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
       entryId: input.entryId,
     })
     const record = runSteeringRecordSchema.parse({
-      schemaVersion: 1,
+      schemaVersion: 2,
       steeringId: input.inputId,
       entryId: entry.entryId,
       itemId: input.itemId,
       runId: run.id,
       threadId: run.threadId,
       content,
+      inputSequence: this.requireCheckpoint(run.id).nextInputSequence,
       status: 'queued',
       queuedAt: entry.timestamp,
-      consumedAt: null,
+      leaseId: null,
+      leasedAt: null,
+      ackedAt: null,
     })
     this.inputs.set(run.id, [...(this.inputs.get(run.id) ?? []), record])
+    this.persistRunInputItems([record])
+    const checkpoint = this.requireCheckpoint(run.id)
+    this.checkpoints.set(run.id, { ...checkpoint, nextInputSequence: checkpoint.nextInputSequence + 1 })
     return clone(record)
   }
 
-  async consumeRunInputs(runId: string): Promise<RunSteeringRecord[]> {
+  async leaseRunInputs(runId: string, leaseId: string): Promise<RunSteeringRecord[]> {
     this.requireRun(runId)
-    const consumedAt = nowUtc()
-    const consumed: RunSteeringRecord[] = []
+    const checkpoint = this.requireCheckpoint(runId)
+    if (checkpoint.activeInputLeaseId) {
+      if (checkpoint.activeInputLeaseId === leaseId) {
+        const existing = (this.inputs.get(runId) ?? [])
+          .filter(record => record.status === 'leased' && record.leaseId === leaseId)
+          .sort((left, right) => left.inputSequence - right.inputSequence)
+        if (checkpoint.activeInputLeaseFrom === null || checkpoint.activeInputLeaseTo === null) {
+          throw new Error(`运行 '${runId}' 的活动输入 lease 范围不完整`)
+        }
+        assertContiguousRecords(
+          existing,
+          checkpoint.activeInputLeaseFrom,
+          checkpoint.activeInputLeaseTo - checkpoint.activeInputLeaseFrom + 1,
+          runId,
+        )
+        return clone(existing)
+      }
+      throw new Error(`运行 '${runId}' 已有活动输入 lease '${checkpoint.activeInputLeaseId}'`)
+    }
+    const queued = (this.inputs.get(runId) ?? [])
+      .filter(record => record.status === 'queued' && record.inputSequence > checkpoint.checkpointInputCursor)
+      .sort((left, right) => left.inputSequence - right.inputSequence)
+    const expectedCount = checkpoint.nextInputSequence - checkpoint.checkpointInputCursor - 1
+    if (!queued.length) {
+      if (expectedCount) throw new Error(`运行 '${runId}' 的 input cursor 与 queued 连续前缀不一致`)
+      return []
+    }
+    assertContiguousRecords(queued, checkpoint.checkpointInputCursor + 1, expectedCount, runId)
+    const leasedAt = nowUtc()
+    const queuedIds = new Set(queued.map(record => record.steeringId))
+    const leased: RunSteeringRecord[] = []
     const next = (this.inputs.get(runId) ?? []).map(record => {
-      if (record.status !== 'queued') return record
-      const updated = runSteeringRecordSchema.parse({ ...record, status: 'consumed', consumedAt })
-      consumed.push(updated)
+      if (!queuedIds.has(record.steeringId)) return record
+      const updated = runSteeringRecordSchema.parse({ ...record, status: 'leased', leaseId, leasedAt })
+      leased.push(updated)
       return updated
     })
     this.inputs.set(runId, next)
-    return clone(consumed)
+    this.persistRunInputItems(leased)
+    this.checkpoints.set(runId, {
+      ...checkpoint,
+      activeInputLeaseId: leaseId,
+      activeInputLeaseFrom: leased[0]!.inputSequence,
+      activeInputLeaseTo: leased.at(-1)!.inputSequence,
+    })
+    return clone(leased)
+  }
+
+  async getRunInput(runId: string, inputId: string): Promise<RunSteeringRecord | null> {
+    this.requireRun(runId)
+    const record = (this.inputs.get(runId) ?? []).find(candidate => candidate.steeringId === inputId)
+    return record ? clone(record) : null
+  }
+
+  async requeueLeasedRunInputs(runId: string): Promise<RunSteeringRecord[]> {
+    this.requireRun(runId)
+    const checkpoint = this.requireCheckpoint(runId)
+    const leaseId = checkpoint.activeInputLeaseId
+    if (!leaseId) return []
+    const leased = (this.inputs.get(runId) ?? [])
+      .filter(record => record.status === 'leased' && record.leaseId === leaseId)
+      .sort((left, right) => left.inputSequence - right.inputSequence)
+    if (checkpoint.activeInputLeaseFrom === null || checkpoint.activeInputLeaseTo === null) {
+      throw new Error(`运行 '${runId}' 的活动输入 lease 范围不完整`)
+    }
+    assertContiguousRecords(
+      leased,
+      checkpoint.activeInputLeaseFrom,
+      checkpoint.activeInputLeaseTo - checkpoint.activeInputLeaseFrom + 1,
+      runId,
+    )
+    const leasedIds = new Set(leased.map(record => record.steeringId))
+    const requeued: RunSteeringRecord[] = []
+    const next = (this.inputs.get(runId) ?? []).map(record => {
+      if (!leasedIds.has(record.steeringId)) return record
+      const updated = runSteeringRecordSchema.parse({
+        ...record,
+        status: 'queued',
+        leaseId: null,
+        leasedAt: null,
+        ackedAt: null,
+      })
+      requeued.push(updated)
+      return updated
+    })
+    this.inputs.set(runId, next)
+    this.persistRunInputItems(requeued)
+    this.checkpoints.set(runId, {
+      ...checkpoint,
+      activeInputLeaseId: null,
+      activeInputLeaseFrom: null,
+      activeInputLeaseTo: null,
+    })
+    return clone(requeued)
   }
 
   async listRunInputs(runId: string): Promise<RunSteeringRecord[]> {
     this.requireRun(runId)
     return clone(this.inputs.get(runId) ?? [])
+  }
+
+  private persistRunInputItems(records: readonly RunSteeringRecord[]): void {
+    for (const record of records) {
+      const item = runInputConversationItem(record)
+      this.items.set(record.runId, [...(this.items.get(record.runId) ?? []), clone(item)])
+    }
   }
 
   private requireThread(threadId: string): ThreadState {
@@ -704,7 +864,26 @@ function initialCheckpoint(updatedAt: string): CheckpointMetadata {
     runtimeConfigDigest: null,
     sdkStateSchemaVersion: null,
     sdkStateUpdatedAt: null,
+    nextInputSequence: 1,
+    checkpointInputCursor: 0,
+    activeInputLeaseId: null,
+    activeInputLeaseFrom: null,
+    activeInputLeaseTo: null,
   }
+}
+
+function assertContiguousRecords(
+  records: readonly RunSteeringRecord[],
+  firstSequence: number,
+  expectedCount: number,
+  runId: string,
+): void {
+  if (records.length !== expectedCount) throw new Error(`运行 '${runId}' 的 input sequence 存在空洞`)
+  records.forEach((record, index) => {
+    if (record.inputSequence !== firstSequence + index) {
+      throw new Error(`运行 '${runId}' 的 input sequence 存在空洞`)
+    }
+  })
 }
 
 function assertThreadOwnerMatchesSession(thread: AgentThreadRecord, session: SessionRecord): void {

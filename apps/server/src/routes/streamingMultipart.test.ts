@@ -30,6 +30,9 @@ describe('streaming multipart upload boundary', () => {
 
       expect(file.sizeBytes).toBe(4)
       await expect(readFile(file.tempPath)).resolves.toEqual(Buffer.from([1, 2, 3, 4]))
+      if (process.platform !== 'win32') {
+        expect((await stat(file.tempPath)).mode & 0o777).toBe(0o600)
+      }
       await form.dispose()
       await expect(stat(file.tempPath)).rejects.toMatchObject({ code: 'ENOENT' })
     } finally {

@@ -60,6 +60,8 @@ export interface RuntimeAssembly {
   handoffAgentNames: ReadonlySet<string>
   mcpToolNames: ReadonlySet<string>
   hostedToolNames: ReadonlySet<string>
+  sandboxToolNames: ReadonlySet<string>
+  isUnavailableSdkToolCall: (callId: string) => boolean
   completeHandoff: (agentId: string, summary: string) => Promise<void>
   failHandoff: (agentId: string, message: string) => Promise<void>
   flushPendingSessionAssistantMessage: () => Promise<void>

@@ -70,6 +70,7 @@ import { AutomationCompiler } from '../automations/automationCompiler.js'
 import { AutomationDefinitionService } from '../automations/automationDefinitionService.js'
 import { AutomationInvocationService } from '../automations/automationInvocationService.js'
 import { PlatformEventHub } from '../store/platformEventHub.js'
+import { ObjectPublicationCoordinator } from '../store/objectPublicationCoordinator.js'
 import { StartRunService } from '../conversation/startRunService.js'
 import { buildRuntimeCapabilities } from '../runtime/releaseCapabilities.js'
 import type { RuntimeCapabilities } from '@geo-agent-platform/shared-types/release'
@@ -121,12 +122,18 @@ export async function createAppContainer(input: {
   const instanceLock = new ApplicationInstanceLock(db)
   const runtimeRoot = path.resolve(env.RUNTIME_ROOT)
   const events = new PlatformEventHub()
+  const objectPublication = new ObjectPublicationCoordinator()
   const runtimeFiles = new RuntimeFileStore(runtimeRoot)
-  const fileLifecycle = new FileLifecycleService(new FileObjectRepository(db), runtimeFiles)
+  const fileLifecycle = new FileLifecycleService(
+    new FileObjectRepository(db),
+    runtimeFiles,
+    objectPublication,
+  )
   const store = new PlatformPersistenceFacade(db, path.join(runtimeRoot, 'conversations'), {
     events,
     runtimeFiles,
     fileLifecycle,
+    objectPublication,
   })
   const resultCommitService = new ToolResultCommitService(store)
   const managedLayers = new ManagedLayerService(db)

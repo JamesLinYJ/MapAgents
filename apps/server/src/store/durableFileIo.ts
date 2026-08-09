@@ -93,6 +93,21 @@ export async function atomicWriteText(filePath: string, value: string): Promise<
   }
   try {
     await renameWithRetry(temporary, filePath)
+    if (process.platform === 'win32') {
+      const target = await open(filePath, 'r+')
+      try {
+        await target.sync()
+      } finally {
+        await target.close()
+      }
+    } else {
+      const directory = await open(path.dirname(filePath), 'r')
+      try {
+        await directory.sync()
+      } finally {
+        await directory.close()
+      }
+    }
   } catch (error) {
     await rm(temporary, { force: true })
     throw error

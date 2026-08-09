@@ -12,6 +12,7 @@
 import { makeId } from '../utils/ids.js'
 import type { StagedFileInput, StoredFileEntry, RuntimeFileStore } from './fileStore.js'
 import { describeStagedFile } from './fileStore.js'
+import { ObjectPublicationCoordinator } from './objectPublicationCoordinator.js'
 import type {
   FileObjectOwner,
   FileObjectPromotionResult,
@@ -49,6 +50,7 @@ export class FileLifecycleService implements FileLifecyclePort {
     >,
     private readonly files: Pick<RuntimeFileStore, 'publish' | 'delete' | 'cloneFile' | 'purgeThreadFiles'>
       & Partial<Pick<RuntimeFileStore, 'readObject'>>,
+    private readonly objectPublication = new ObjectPublicationCoordinator(),
   ) {}
 
   async upload(input: FileUploadInput): Promise<StoredFileEntry> {
@@ -76,26 +78,18 @@ export class FileLifecycleService implements FileLifecyclePort {
       return toStoredFileEntry(promotion.ready)
     }
 
-    try {
-      // 文件 ID 来自 pending 记录，重试时再次写入同一 CAS 对象和 metadata。
-      await this.files.publish(input.file, input.threadId, { fileId: pending.fileId }, normalized.sourceRelativePath)
-    } catch (error) {
-      // pending 保留在账本中，下一次相同 requestId 可以继续发布；这里不吞掉
-      // 原始错误，也不返回“上传成功”的 fallback。
-      try {
-        await this.repository.markPendingError(pending.fileId, errorMessage(error))
-      } catch (stateError) {
-        throw new AggregateError(
-          [error, stateError],
-          `文件 '${pending.fileId}' 发布失败，且无法记录 pending 失败状态。`,
-        )
-      }
-      throw error
-    }
-
     let promotion: FileObjectPromotionResult
     try {
-      promotion = await this.repository.promoteReadyAndRetire(pending.fileId)
+      promotion = await this.objectPublication.publish(async () => {
+        // CAS 对象、metadata 与 ready 数据库引用必须对 GC 表现为一个发布区间。
+        await this.files.publish(
+          input.file,
+          input.threadId,
+          { fileId: pending.fileId },
+          normalized.sourceRelativePath,
+        )
+        return this.repository.promoteReadyAndRetire(pending.fileId)
+      })
     } catch (error) {
       try {
         await this.repository.markPendingError(pending.fileId, errorMessage(error))
@@ -158,8 +152,10 @@ export class FileLifecycleService implements FileLifecyclePort {
         requestId: null,
       })
       try {
-        await this.files.cloneFile(source.fileId, sourceThreadId, targetThreadId, pending.fileId)
-        const promotion = await this.repository.promoteReadyAndRetire(pending.fileId)
+        const promotion = await this.objectPublication.publish(async () => {
+          await this.files.cloneFile(source.fileId, sourceThreadId, targetThreadId, pending.fileId)
+          return this.repository.promoteReadyAndRetire(pending.fileId)
+        })
         await this.removeRetiredFiles(promotion.retired)
         copied.push(toStoredFileEntry(promotion.ready))
       } catch (error) {

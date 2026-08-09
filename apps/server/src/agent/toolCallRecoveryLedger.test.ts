@@ -14,6 +14,18 @@ import { describe, expect, it } from 'vitest'
 import { ToolCallRecoveryLedger } from './toolCallRecoveryLedger.js'
 
 describe('ToolCallRecoveryLedger', () => {
+  it('accepts checkpoint terminals in memory without a second durable write', async () => {
+    let writes = 0
+    const ledger = new ToolCallRecoveryLedger({
+      saveRunCheckpoint: async () => { writes += 1 },
+    }, 'run_checkpoint', ['call_done', 'call_pending'])
+
+    await ledger.acceptCheckpointTerminals(['call_done'])
+
+    expect(ledger.snapshot()).toEqual(['call_pending'])
+    expect(writes).toBe(0)
+  })
+
   it('removes only the call that reached a terminal state', async () => {
     const writes: Array<{ pendingToolCallIds?: string[]; recoveryStatus?: string }> = []
     const ledger = new ToolCallRecoveryLedger({

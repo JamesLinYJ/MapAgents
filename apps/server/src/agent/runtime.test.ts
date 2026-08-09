@@ -42,6 +42,7 @@ import planProvider from '../tools/plan/index.js'
 import { defaultRuntimeConfig } from './defaultRuntimeConfig.js'
 import type { GoalJudgePort } from './goalJudge.js'
 import { OpenAIAgentsRuntime } from './runtime.js'
+import { RunSteeringController } from './runSteeringController.js'
 import { testSandboxClientFactory } from '../../test-support/agentsSandboxClient.js'
 
 async function removeTempRoot(root: string): Promise<void> {
@@ -628,6 +629,10 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
 
   it('marks only the current candidate superseded when steering queues before the model stream ends', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-stream-steering-race-'))
+    const releaseTool = deferredSignal()
+    let releaseOldCandidate = (): void => {}
+    let releaseNewCandidate = (): void => {}
+    let releaseNewResponseDone = (): void => {}
     try {
       const store = createTestPersistenceFacade(root)
       await store.initialize()
@@ -639,17 +644,29 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         runtimeConfigSnapshot: testRuntimeConfig(),
       })
       const tools = new ToolRegistry()
+      const toolStarted = deferredSignal()
       tools.register(providerFromTools('stream-revision-tool', [{
         ...toolDefinition('query_layer', ['query']),
-        handler: async () => result('inspect_scope', [], { inspected: true }),
+        handler: async () => {
+          toolStarted.resolve()
+          await releaseTool.promise
+          return result('inspect_scope', [], { inspected: true })
+        },
       }]))
 
-      let releaseOldCandidate = (): void => {}
       const oldCandidateRelease = new Promise<void>(resolve => { releaseOldCandidate = resolve })
       let markOldCandidateStarted = (): void => {}
       const oldCandidateStarted = new Promise<void>(resolve => { markOldCandidateStarted = resolve })
+      let markNewCandidateStarted = (): void => {}
+      const newCandidateStarted = new Promise<void>(resolve => { markNewCandidateStarted = resolve })
+      const newCandidateRelease = new Promise<void>(resolve => { releaseNewCandidate = resolve })
+      let markNewResponseDone = (): void => {}
+      const newResponseDone = new Promise<void>(resolve => { markNewResponseDone = resolve })
+      const newResponseDoneRelease = new Promise<void>(resolve => { releaseNewResponseDone = resolve })
       let modelCalls = 0
-      let steeringObserved = false
+      let firstSteeringOccurrencesInToolTurn = 0
+      let firstSteeringOccurrencesAfterOuterContinue = 0
+      let secondSteeringOccurrencesAfterOuterContinue = 0
       const baseModel = scriptedModel(() => ({ text: '未使用' }))
       const model: Model = {
         ...baseModel,
@@ -662,14 +679,26 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
               toolCalls: [{ id: 'call_inspect_scope', name: 'query_layer', arguments: '{"query":"old"}' }],
             }
           } else if (modelCalls === 2) {
+            firstSteeringOccurrencesInToolTurn = requestTexts(request)
+              .filter(text => text.includes('先扩展到浙江范围')).length
             scripted = { text: '旧 revision 候选结论。' }
           } else {
-            steeringObserved = requestTexts(request).some(text => text.includes('扩展到新范围'))
+            const texts = requestTexts(request)
+            firstSteeringOccurrencesAfterOuterContinue = texts
+              .filter(text => text.includes('先扩展到浙江范围')).length
+            secondSteeringOccurrencesAfterOuterContinue = texts
+              .filter(text => text.includes('再扩展到新范围')).length
+            expect(JSON.stringify(request.input)).not.toContain('geoAgentRunInput')
+            expect(JSON.stringify(request.input)).not.toContain('geo_agent_run_input')
             scripted = { text: '新 revision 最终结论。' }
           }
           const response = structuredResponse(scripted, request)
           const responseId = makeIdForResponse()
           yield { type: 'response_started' }
+          if (modelCalls === 3) {
+            markNewCandidateStarted()
+            await newCandidateRelease
+          }
           // 首轮工具前文本形成 completedAssistantItems；第二轮故意
           // 不发 delta，模拟只在 message_output_created 产生 lastAssistantText 的 provider。
           if (modelCalls === 1 && response.text) {
@@ -687,33 +716,171 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
               output: outputItems(response, responseId),
             },
           }
+          if (modelCalls === 3) {
+            markNewResponseDone()
+            await newResponseDoneRelease
+          }
         },
       }
       const runtime = testRuntime(store, tools, registryWith(fakeAdapter(model)))
 
       const running = runtime.run(runOptions(run, thread.id))
+      await toolStarted.promise
+      const firstSteering = await runtime.steer(
+        run.id,
+        'steer_during_tool',
+        '先扩展到浙江范围。',
+      )
+      releaseTool.resolve()
       await oldCandidateStarted
-      await runtime.steer(run.id, 'steer_before_stream_end', '扩展到新范围。')
+      const secondSteering = await runtime.steer(
+        run.id,
+        'steer_before_stream_end',
+        '再扩展到新范围。',
+      )
+      expect(await store.listRunInputs(run.id)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ inputSequence: 1, status: 'leased' }),
+        expect.objectContaining({ inputSequence: 2, status: 'queued' }),
+      ]))
+      expect(await store.getRunCheckpoint(run.id)).toMatchObject({
+        checkpointInputCursor: 0,
+        activeInputLeaseFrom: 1,
+        activeInputLeaseTo: 1,
+      })
       releaseOldCandidate()
+      await newCandidateStarted
+      expect(await store.listRunInputs(run.id)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ inputSequence: 1, status: 'acked' }),
+        expect.objectContaining({ inputSequence: 2, status: 'leased' }),
+      ]))
+      expect(await store.getRunCheckpoint(run.id)).toMatchObject({
+        checkpointInputCursor: 1,
+        activeInputLeaseFrom: 2,
+        activeInputLeaseTo: 2,
+      })
+      releaseNewCandidate()
+      await newResponseDone
+      expect((await store.listRunInputs(run.id))[1]).toMatchObject({
+        inputSequence: 2,
+        status: 'leased',
+      })
+      expect((await store.getRunCheckpoint(run.id)).checkpointInputCursor).toBe(1)
+      releaseNewResponseDone()
       const completed = await running
 
       expect(completed.status).toBe('completed')
       expect(modelCalls).toBe(3)
-      expect(steeringObserved).toBe(true)
+      expect(firstSteeringOccurrencesInToolTurn).toBe(1)
+      expect(firstSteeringOccurrencesAfterOuterContinue).toBe(1)
+      expect(secondSteeringOccurrencesAfterOuterContinue).toBe(1)
+      expect(await store.listRunInputs(run.id)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ inputSequence: 1, status: 'acked' }),
+        expect.objectContaining({ inputSequence: 2, status: 'acked' }),
+      ]))
+      expect(await store.getRunCheckpoint(run.id)).toMatchObject({
+        checkpointInputCursor: 2,
+        activeInputLeaseId: null,
+      })
       const items = await store.listItems(run.id)
       const superseded = items.filter(item => item.metadata.supersededByNewObjectiveRevision === true)
       expect(superseded).toHaveLength(1)
       expect(superseded[0]).toMatchObject({
         role: 'assistant',
         body: '旧 revision 候选结论。',
-        metadata: { objectiveRevision: 1 },
+        metadata: { objectiveRevision: 2 },
       })
       const earlierPreamble = items.find(item => item.body?.includes('先核验旧范围'))
       expect(earlierPreamble?.metadata).not.toHaveProperty('supersededByNewObjectiveRevision')
       const freshAnswer = items.find(item => item.body === '新 revision 最终结论。')
-      expect(freshAnswer?.metadata).toMatchObject({ objectiveRevision: 2 })
+      expect(freshAnswer?.metadata).toMatchObject({ objectiveRevision: 3 })
       expect(freshAnswer?.metadata).not.toHaveProperty('supersededByNewObjectiveRevision')
+      const transcript = await store.activeTranscript(thread.id)
+      expect(transcript.filter(entry => entry.payload.content === firstSteering.content)).toHaveLength(1)
+      expect(transcript.filter(entry => entry.payload.content === secondSteering.content)).toHaveLength(1)
     } finally {
+      releaseTool.resolve()
+      releaseOldCandidate()
+      releaseNewCandidate()
+      releaseNewResponseDone()
+      await removeTempRoot(root)
+    }
+  })
+
+  it('keeps a model-visible input leased when atomic checkpoint acknowledgement fails and replays it on recovery', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-input-ack-failure-'))
+    const releaseTool = deferredSignal()
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '输入 checkpoint ack 失败')
+      const run = await store.createRun(session.id, '检查后结合新范围回答', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: testRuntimeConfig(),
+      })
+      const toolStarted = deferredSignal()
+      const tools = new ToolRegistry()
+      tools.register(providerFromTools('input-ack-failure', [{
+        ...toolDefinition('query_layer', ['query']),
+        handler: async () => {
+          toolStarted.resolve()
+          await releaseTool.promise
+          return result('scope', [], { inspected: true })
+        },
+      }]))
+      let steeringObserved = false
+      const model = scriptedModel(request => {
+        if (hasToolResultNamed(request, 'query_layer')) {
+          steeringObserved = requestTexts(request).some(text => text.includes('新范围'))
+          return { text: '已结合新范围完成。' }
+        }
+        return {
+          toolCalls: [{ id: 'call_ack_failure_query', name: 'query_layer', arguments: '{"query":"old"}' }],
+        }
+      })
+      const runtime = testRuntime(store, tools, registryWith(fakeAdapter(model)))
+      const originalSave = store.saveAgentsSdkState.bind(store)
+      store.saveAgentsSdkState = async (...args) => {
+        if (args[2].inputLeaseId) throw new Error('注入的 checkpoint/input ack 事务失败')
+        return originalSave(...args)
+      }
+
+      const running = runtime.run(runOptions(run, thread.id))
+      await toolStarted.promise
+      await runtime.steer(run.id, 'steer_ack_failure', '请同时检查新范围。')
+      releaseTool.resolve()
+      const failed = await running
+      expect(failed.status).toBe('failed')
+      expect(failed.state.errors).toContain('注入的 checkpoint/input ack 事务失败')
+      expect(steeringObserved).toBe(true)
+      expect((await store.listRunInputs(run.id))).toContainEqual(expect.objectContaining({
+        steeringId: 'steer_ack_failure',
+        status: 'leased',
+      }))
+      expect(await store.getRunCheckpoint(run.id)).toMatchObject({
+        checkpointInputCursor: 0,
+        activeInputLeaseFrom: 1,
+        activeInputLeaseTo: 1,
+      })
+
+      store.saveAgentsSdkState = originalSave
+      await store.updateRunStatus(run.id, 'running')
+      const recovery = new RunSteeringController(store)
+      await recovery.open(run.id, { recoverLeased: true })
+      expect((await store.listRunInputs(run.id))[0]).toMatchObject({ status: 'queued', inputSequence: 1 })
+      const replay = await recovery.consumePendingWithRevision(run.id)
+      const acked = await store.saveAgentsSdkState(run.id, '{"response":"recovered"}', {
+        agentsSdkVersion: 'test-sdk',
+        runtimeConfigDigest: 'test-runtime',
+        inputLeaseId: replay.leaseId,
+      })
+      await recovery.recordCheckpointAcknowledgements(run.id, acked)
+      expect((await store.listRunInputs(run.id))[0]).toMatchObject({ status: 'acked', inputSequence: 1 })
+      expect((await store.getRunCheckpoint(run.id)).checkpointInputCursor).toBe(1)
+      await recovery.close(run.id)
+    } finally {
+      releaseTool.resolve()
       await removeTempRoot(root)
     }
   })
@@ -1693,6 +1860,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         runtimeConfigSnapshot: config,
       })
       const collectionStarted = deferredSignal()
+      let collectionExecutions = 0
       let tableExecutions = 0
       const tools = new ToolRegistry()
       tools.register(planProvider)
@@ -1701,6 +1869,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         {
           ...toolDefinition('collect_guidance_data', []),
           handler: async () => {
+            collectionExecutions += 1
             collectionStarted.resolve()
             await releaseCollection.promise
             return result('guidance-data', [], { rows: 12 })
@@ -1742,6 +1911,9 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
           }
         }
         if (hasToolResultNamed(request, 'revise_agent_workflow')) {
+          if (collectionExecutions < 2) {
+            return { toolCalls: [{ id: 'call_guidance_collection_rev2', name: 'collect_guidance_data', arguments: '{}' }] }
+          }
           return { toolCalls: [{ id: 'call_guidance_table', name: 'build_guidance_table', arguments: '{}' }] }
         }
         if (hasToolResultNamed(request, 'collect_guidance_data')) {
@@ -1787,6 +1959,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
 
       expect(completed.id).toBe(run.id)
       expect(completed.status).toBe('completed')
+      expect(collectionExecutions).toBe(2)
       expect(tableExecutions).toBe(1)
       expect(steeringObserved).toBe(true)
       expect(completed.state.agentWorkflow).toMatchObject({
@@ -1803,7 +1976,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       expect((await store.listRunInputs(run.id))).toContainEqual(expect.objectContaining({
         steeringId: steering.steeringId,
         content: steering.content,
-        status: 'consumed',
+        status: 'acked',
       }))
     } finally {
       releaseCollection.resolve()

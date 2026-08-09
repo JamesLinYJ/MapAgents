@@ -117,10 +117,12 @@ function projectorAssembly(coordinator: {
       currentObjectiveRevision: () => 2,
     },
     coordinator,
+    isUnavailableSdkToolCall: () => false,
     subAgentToolNames: new Set<string>(),
     hostedToolNames: new Set<string>(),
     handoffToolNames: new Set<string>(),
     mcpToolNames: new Set<string>(),
+    sandboxToolNames: new Set<string>(['sdk_native']),
   } as unknown as RuntimeAssembly
 }
 

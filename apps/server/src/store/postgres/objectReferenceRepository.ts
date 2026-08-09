@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { eq } from 'drizzle-orm'
+import { eq, ne } from 'drizzle-orm'
 import type { Database } from '../../db/connection.js'
 import {
   platformConversationEntries,
@@ -32,7 +32,9 @@ export class PostgresObjectReferenceRepository implements ObjectReferenceReposit
       this.db.select({ payload: platformRunRecords.payloadJson }).from(platformRunRecords),
       this.db.select({ hash: platformFileObjects.contentHash })
         .from(platformFileObjects)
-        .where(eq(platformFileObjects.status, 'ready')),
+        // pending 记录在物理 publish 前已 durable reserve，是跨进程/崩溃
+        // GC pin；只有 deleted 明确放弃对象引用。
+        .where(ne(platformFileObjects.status, 'deleted')),
       this.db.select({ hash: platformMeteorologicalDatasets.contentHash })
         .from(platformMeteorologicalDatasets)
         .where(eq(platformMeteorologicalDatasets.status, 'ready')),

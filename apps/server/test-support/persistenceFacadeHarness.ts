@@ -14,6 +14,7 @@ import type { Database } from '../src/db/connection.js'
 import type { ArtifactRef } from '../src/schemas/types.js'
 import { FileLifecycleService } from '../src/store/fileLifecycleService.js'
 import { RuntimeFileStore } from '../src/store/fileStore.js'
+import { ObjectPublicationCoordinator } from '../src/store/objectPublicationCoordinator.js'
 import { PlatformPersistenceFacade } from '../src/store/platformPersistenceFacade.js'
 import { PlatformEventHub } from '../src/store/platformEventHub.js'
 import type {
@@ -92,12 +93,14 @@ export class PersistenceFacadeTestHarness {
       ? path.dirname(storageRoot)
       : storageRoot
     const runtimeFiles = new RuntimeFileStore(runtimeRoot)
+    const objectPublication = new ObjectPublicationCoordinator()
     const store = new PlatformPersistenceFacade(db, storageRoot, {
       conversationPersistence: this.conversationPersistence,
       artifactRepository: this.artifactRepository,
       events,
       runtimeFiles,
-      fileLifecycle: new FileLifecycleService(this.fileRepository, runtimeFiles),
+      fileLifecycle: new FileLifecycleService(this.fileRepository, runtimeFiles, objectPublication),
+      objectPublication,
     })
     eventHubs.set(store, events)
     return store

@@ -42,6 +42,20 @@ export class ToolCallRecoveryLedger {
     return this.transition(callId, false)
   }
 
+  // Durable SDK checkpoint 已在同一 PostgreSQL 事务中清理这些 callId。
+  // 这里只同步进程内快照，不得再发起第二次 DB 写入。
+  acceptCheckpointTerminals(callIds: Iterable<string>): Promise<void> {
+    const terminal = new Set(callIds)
+    if (!terminal.size) return Promise.resolve()
+    const operation = this.mutation.then(() => {
+      const next = new Set(this.pending)
+      for (const callId of terminal) next.delete(callId)
+      this.pending = next
+    })
+    this.mutation = operation.then(() => undefined, () => undefined)
+    return operation
+  }
+
   snapshot(): string[] {
     return [...this.pending]
   }

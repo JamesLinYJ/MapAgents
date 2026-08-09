@@ -46,6 +46,7 @@ import type {
 } from './conversationPersistencePorts.js'
 import { PostgresRunInputRepository } from './runInputRepository.js'
 import { RunRecordAppender } from './runRecordAppender.js'
+import { RunInputDeliveryRecorder } from './runInputDeliveryRecorder.js'
 import { PostgresConversationSnapshotRepository } from './conversationSnapshotRepository.js'
 import { PostgresSessionRepository } from './sessionRepository.js'
 import { PostgresThreadRepository } from './threadRepository.js'
@@ -65,11 +66,12 @@ export class PostgresConversationPersistence implements ConversationPersistence 
   private readonly objectReferences: ObjectReferenceRepository
 
   constructor(db: Database) {
-    this.runInputs = new PostgresRunInputRepository(db, this.runMutations, this.runRecords)
+    const inputDelivery = new RunInputDeliveryRecorder(this.runRecords)
+    this.runInputs = new PostgresRunInputRepository(db, this.runMutations, inputDelivery)
     this.snapshots = new PostgresConversationSnapshotRepository(db)
     this.sessions = new PostgresSessionRepository(db)
     this.threads = new PostgresThreadRepository(db, this.runMutations)
-    this.runs = new PostgresRunRepository(db, this.runMutations, this.runRecords)
+    this.runs = new PostgresRunRepository(db, this.runMutations, this.runRecords, inputDelivery)
     this.objectReferences = new PostgresObjectReferenceRepository(db)
   }
 
@@ -148,8 +150,10 @@ export class PostgresConversationPersistence implements ConversationPersistence 
     agentsSdkVersion: string
     runtimeConfigDigest: string
     sdkStateSchemaVersion: RunCheckpoint['sdkStateSchemaVersion']
-  }): Promise<void> {
-    await this.runs.saveAgentsSdkCheckpoint(runId, input)
+    inputLeaseId?: string | null
+    terminalToolCallIds?: readonly string[]
+  }): Promise<RunSteeringRecord[]> {
+    return this.runs.saveAgentsSdkCheckpoint(runId, input)
   }
 
   async appendConversationItem(item: ConversationItem): Promise<void> {
@@ -242,8 +246,16 @@ export class PostgresConversationPersistence implements ConversationPersistence 
     return this.runInputs.enqueueRunInput(input)
   }
 
-  async consumeRunInputs(runId: string): Promise<RunSteeringRecord[]> {
-    return this.runInputs.consumeRunInputs(runId)
+  async leaseRunInputs(runId: string, leaseId: string): Promise<RunSteeringRecord[]> {
+    return this.runInputs.leaseRunInputs(runId, leaseId)
+  }
+
+  async getRunInput(runId: string, inputId: string): Promise<RunSteeringRecord | null> {
+    return this.runInputs.getRunInput(runId, inputId)
+  }
+
+  async requeueLeasedRunInputs(runId: string): Promise<RunSteeringRecord[]> {
+    return this.runInputs.requeueLeasedRunInputs(runId)
   }
 
   async listRunInputs(runId: string): Promise<RunSteeringRecord[]> {

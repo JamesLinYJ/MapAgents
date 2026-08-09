@@ -20,6 +20,7 @@ import type { ConversationItemStoreUpdate } from '../conversation/itemUpdates.js
 import { ArtifactStore, type VisibleArtifactOptions } from './artifactStore.js'
 import { ConversationProjectionIndex } from './conversationProjectionIndex.js'
 import { ContentObjectGateway } from './contentObjectGateway.js'
+import { ObjectPublicationCoordinator } from './objectPublicationCoordinator.js'
 import { ConversationPayloadStore } from './conversationPayloadStore.js'
 import { RunStore } from './runStore.js'
 import { DEFAULT_SESSION_ID, SessionStore, type ResourceOwner } from './sessionStore.js'
@@ -72,6 +73,7 @@ export class PlatformPersistenceFacade {
   private readonly objectStore: ContentObjectGateway
   private readonly snapshotRepository: ConversationSnapshotRepository
   private readonly runInputRepository: RunInputRepository
+  private readonly objectPublication: ObjectPublicationCoordinator
 
   constructor(db: Database, storageRoot: string, options: {
     conversationPersistence?: ConversationPersistence
@@ -79,12 +81,14 @@ export class PlatformPersistenceFacade {
     events?: PlatformEventHub
     runtimeFiles?: RuntimeFileStore
     fileLifecycle: FileLifecyclePort
+    objectPublication?: ObjectPublicationCoordinator
   }) {
     const events = options.events ?? new PlatformEventHub()
     this.payloadStoreRoot = storageRoot
     this.runtimeRoot = ['sessions', 'conversations'].includes(path.basename(storageRoot))
       ? path.dirname(storageRoot)
       : storageRoot
+    this.objectPublication = options.objectPublication ?? new ObjectPublicationCoordinator()
     this.runtimeFiles = options.runtimeFiles ?? new RuntimeFileStore(this.runtimeRoot)
     this.fileLifecycle = options.fileLifecycle
     this.payloadStore = new ConversationPayloadStore(storageRoot)
@@ -111,6 +115,7 @@ export class PlatformPersistenceFacade {
         threadCompactionBus: events.threadCompactions,
         threadMemoryBus: events.threadMemories,
       },
+      this.objectPublication,
     )
     this.runStore = new RunStore(
       this.index,
@@ -125,6 +130,7 @@ export class PlatformPersistenceFacade {
         itemUpsertBus: events.conversationItemUpserts,
         itemDeltaBus: events.conversationItemDeltas,
       },
+      this.objectPublication,
     )
     this.artifactStore = new ArtifactStore(
       this.index,
@@ -301,9 +307,14 @@ export class PlatformPersistenceFacade {
   async saveAgentsSdkState(
     runId: string,
     serializedState: string,
-    metadata: { agentsSdkVersion: string; runtimeConfigDigest: string },
-  ): Promise<void> {
-    await this.runStore.saveAgentsSdkState(runId, serializedState, metadata)
+    metadata: {
+      agentsSdkVersion: string
+      runtimeConfigDigest: string
+      inputLeaseId?: string | null
+      terminalToolCallIds?: readonly string[]
+    },
+  ): Promise<RunSteeringRecord[]> {
+    return this.runStore.saveAgentsSdkState(runId, serializedState, metadata)
   }
 
   async readAgentsSdkState(runId: string): Promise<string> {
@@ -315,6 +326,17 @@ export class PlatformPersistenceFacade {
     mediaType = 'application/octet-stream',
   ): Promise<ContentRef> {
     return this.objectStore.put(content, mediaType)
+  }
+
+  async publishConversationObject<T>(
+    content: string | Uint8Array,
+    mediaType: string,
+    commitReference: (reference: ContentRef) => Promise<T>,
+  ): Promise<T> {
+    return this.objectPublication.publish(async () => {
+      const reference = await this.objectStore.put(content, mediaType)
+      return commitReference(reference)
+    })
   }
 
   async readConversationObject(reference: ContentRef): Promise<Uint8Array> {
@@ -351,6 +373,10 @@ export class PlatformPersistenceFacade {
     await this.runStore.appendItem(update)
   }
 
+  async projectPersistedItems(items: readonly ConversationItem[]): Promise<void> {
+    await this.runStore.projectPersistedItems(items)
+  }
+
   async enqueueRunInput(input: {
     inputId: string
     entryId: string
@@ -361,8 +387,16 @@ export class PlatformPersistenceFacade {
     return this.runInputRepository.enqueueRunInput(input)
   }
 
-  async consumeRunInputs(runId: string): Promise<RunSteeringRecord[]> {
-    return this.runInputRepository.consumeRunInputs(runId)
+  async leaseRunInputs(runId: string, leaseId: string): Promise<RunSteeringRecord[]> {
+    return this.runInputRepository.leaseRunInputs(runId, leaseId)
+  }
+
+  async getRunInput(runId: string, inputId: string): Promise<RunSteeringRecord | null> {
+    return this.runInputRepository.getRunInput(runId, inputId)
+  }
+
+  async requeueLeasedRunInputs(runId: string): Promise<RunSteeringRecord[]> {
+    return this.runInputRepository.requeueLeasedRunInputs(runId)
   }
 
   async listRunInputs(runId: string): Promise<RunSteeringRecord[]> {

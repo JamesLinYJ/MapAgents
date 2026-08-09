@@ -56,8 +56,9 @@ describe('durableFileIo atomic writes', () => {
     await atomicWriteText(testTarget, '{}')
 
     expect(handle.writeFile).toHaveBeenCalledWith('{}', 'utf8')
-    expect(handle.sync).toHaveBeenCalledTimes(1)
-    expect(handle.close).toHaveBeenCalledTimes(1)
+    // temp inode 与原子 rename 后的父目录都必须进入 durability 边界。
+    expect(handle.sync).toHaveBeenCalledTimes(2)
+    expect(handle.close).toHaveBeenCalledTimes(2)
     expect(renameMock).toHaveBeenCalledTimes(2)
     expect(rmMock).not.toHaveBeenCalled()
   })

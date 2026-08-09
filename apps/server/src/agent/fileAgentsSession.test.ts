@@ -43,4 +43,30 @@ describe('FileAgentsSession', () => {
     ]])
     expect(await session.getItems()).toEqual(projected[0])
   })
+
+  it('retains platform run inputs once across outer Runner sessions without reprojecting them', async () => {
+    const projected: AgentInputItem[][] = []
+    const session = new FileAgentsSession('test-session', [], async items => {
+      projected.push(items)
+    })
+    const runInput = {
+      type: 'message',
+      role: 'user',
+      content: '增加空间范围核验',
+      providerData: {
+        geoAgentRunInput: { runId: 'run_1', inputSequence: 2 },
+      },
+    } satisfies AgentInputItem
+
+    session.retainRunInputs([runInput])
+    session.retainRunInputs([structuredClone(runInput)])
+    await session.addItems([structuredClone(runInput)])
+
+    expect(projected).toEqual([])
+    expect(await session.getItems()).toEqual([runInput])
+    await expect(async () => session.retainRunInputs([{
+      ...runInput,
+      content: '同 sequence 的不同内容',
+    }])).rejects.toThrow('内容不一致')
+  })
 })

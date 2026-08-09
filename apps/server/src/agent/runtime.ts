@@ -148,7 +148,7 @@ export class OpenAIAgentsRuntime {
         eventSink.emit('intent.parsed', '开始分析...', {})
       }
 
-      await this.steering.open(options.runId)
+      await this.steering.open(options.runId, { recoverLeased: options.resume === true })
       const assembly = await this.assemblyFactory.create(options, threadId, turnId, eventSink, itemSink, abort.signal)
       const resumeState = options.resume
         ? await this.checkpoints.restore({
@@ -338,7 +338,7 @@ export class OpenAIAgentsRuntime {
     try {
       detachTracing = this.runtimeOptions.agentTracing?.attachRun(runId) ?? (() => {})
       await this.store.updateRunStatus(runId, 'running')
-      await this.steering.open(runId)
+      await this.steering.open(runId, { recoverLeased: true })
       const assembly = await this.assemblyFactory.create(
         options,
         run.threadId,

@@ -23,6 +23,7 @@ import type {
   ToolValueRef,
   TranscriptEntry,
   TranscriptEntryKind,
+  ConversationItem,
 } from '../schemas/types.js'
 import type { ConversationItemStoreUpdate } from '../conversation/itemUpdates.js'
 import type { VisibleArtifactResource } from './postgres/artifactRepository.js'
@@ -62,11 +63,18 @@ export interface AgentRuntimeStore {
   saveAgentsSdkState(
     runId: string,
     serializedState: string,
-    metadata: { agentsSdkVersion: string; runtimeConfigDigest: string },
-  ): Promise<void>
+    metadata: {
+      agentsSdkVersion: string
+      runtimeConfigDigest: string
+      inputLeaseId?: string | null
+      terminalToolCallIds?: readonly string[]
+    },
+  ): Promise<RunSteeringRecord[]>
   readAgentsSdkState(runId: string): Promise<string>
   appendEvent(runId: string, event: RunEvent): Promise<void>
   appendItem(update: ConversationItemStoreUpdate): Promise<void>
+  projectPersistedItems(items: readonly ConversationItem[]): Promise<void>
+  listItems(runId: string): Promise<ConversationItem[]>
   enqueueRunInput(input: {
     inputId: string
     entryId: string
@@ -74,7 +82,9 @@ export interface AgentRuntimeStore {
     runId: string
     content: string
   }): Promise<RunSteeringRecord>
-  consumeRunInputs(runId: string): Promise<RunSteeringRecord[]>
+  getRunInput(runId: string, inputId: string): Promise<RunSteeringRecord | null>
+  leaseRunInputs(runId: string, leaseId: string): Promise<RunSteeringRecord[]>
+  requeueLeasedRunInputs(runId: string): Promise<RunSteeringRecord[]>
   listRunInputs(runId: string): Promise<RunSteeringRecord[]>
   activeTranscript(threadId: string, leafEntryId?: string | null): Promise<TranscriptEntry[]>
   appendTranscript(input: AppendTranscriptInput): Promise<TranscriptEntry>
@@ -89,6 +99,11 @@ export interface AgentRuntimeStore {
   ): Promise<ThreadMemoryDocument>
   appendCompaction(record: CompactionRecord): Promise<void>
   putConversationObject(content: string | Uint8Array, mediaType?: string): Promise<ContentRef>
+  publishConversationObject<T>(
+    content: string | Uint8Array,
+    mediaType: string,
+    commitReference: (reference: ContentRef) => Promise<T>,
+  ): Promise<T>
   readConversationObject(reference: ContentRef): Promise<Uint8Array>
   appendToolValue(runId: string, value: ToolValueRef): Promise<void>
   persistArtifact(artifact: ArtifactRef): Promise<void>
@@ -137,6 +152,7 @@ export type ToolExecutionStore = Pick<AgentRuntimeStore,
   | 'meteorology'
   | 'persistArtifact'
   | 'putConversationObject'
+  | 'publishConversationObject'
   | 'runtimeRoot'
   | 'saveRunCheckpoint'
   | 'mutateRunState'

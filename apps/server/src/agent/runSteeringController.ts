@@ -12,22 +12,28 @@
 import PQueue from 'p-queue'
 import type { AgentInputItem } from '@openai/agents'
 
-import type { AgentState, ConversationItem, RunGoal, RunSteeringRecord } from '../schemas/types.js'
+import type { AgentState, RunCheckpoint, RunGoal, RunSteeringRecord } from '../schemas/types.js'
+import { runInputConversationItem } from '../store/runInputConversationItem.js'
 import type { AgentRuntimeStore } from '../store/runtimePorts.js'
 import { makeId } from '../utils/ids.js'
 import { advanceAgentWorkflowObjectiveRevision } from './agentWorkflowState.js'
 
 type RunSteeringStore = Pick<AgentRuntimeStore,
   | 'appendItem'
-  | 'consumeRunInputs'
   | 'enqueueRunInput'
   | 'getRun'
+  | 'getRunCheckpoint'
+  | 'getRunInput'
+  | 'leaseRunInputs'
+  | 'listItems'
   | 'listRunInputs'
   | 'mutateRunState'
+  | 'projectPersistedItems'
+  | 'requeueLeasedRunInputs'
 >
 
 interface ObjectiveRevisionSnapshot {
-  records: RunSteeringRecord[]
+  checkpoint: RunCheckpoint
   state: AgentState
 }
 
@@ -37,17 +43,30 @@ export interface ModelInputRevisionSnapshot {
 }
 
 // RunSteeringController 是运行中用户消息的唯一状态机。
-// PostgreSQL run_inputs 是排队/消费事实源；固定 entryId 和 itemId 让客户端重试与崩溃恢复幂等。
+// PostgreSQL input sequence/cursor 是交付事实源；固定 entryId 和 itemId
+// 让客户端重试与崩溃恢复幂等。
 export class RunSteeringController {
   private readonly acceptingRuns = new Set<string>()
   private readonly queues = new Map<string, PQueue>()
 
   constructor(private readonly store: RunSteeringStore) {}
 
-  async open(runId: string): Promise<void> {
+  async open(runId: string, options: { recoverLeased?: boolean } = {}): Promise<void> {
     await this.serialized(runId, async () => {
       const run = this.store.getRun(runId)
       if (run.status !== 'running') throw new Error(`运行 '${runId}' 当前不能接收引导消息`)
+      if (options.recoverLeased) {
+        await this.store.requeueLeasedRunInputs(runId)
+      } else {
+        const checkpoint = await this.store.getRunCheckpoint(runId)
+        if (checkpoint.activeInputLeaseId) {
+          throw new Error(
+            `运行 '${runId}' 存在未恢复的输入 lease '${checkpoint.activeInputLeaseId}'`
+            + '，普通 open 不得窃取恢复权。',
+          )
+        }
+      }
+      await this.reconcileInputItems(runId)
       await this.synchronizeObjectiveRevision(runId)
       this.acceptingRuns.add(runId)
     })
@@ -58,17 +77,16 @@ export class RunSteeringController {
       const normalized = content.trim()
       if (!normalized) throw new Error('引导消息不能为空')
 
-      const existing = (await this.store.listRunInputs(runId))
-        .find(record => record.steeringId === steeringId)
-      if (existing) {
-        if (existing.content !== normalized) throw new Error(`引导消息 '${steeringId}' 的内容与首次提交不一致`)
-        await this.synchronizeObjectiveRevision(runId)
-        await this.persistItem(existing)
-        return existing
-      }
-
       const run = this.store.getRun(runId)
       if (!this.acceptingRuns.has(runId) || run.status !== 'running') {
+        const existing = await this.store.getRunInput(runId, steeringId)
+        if (existing) {
+          if (existing.content !== normalized) {
+            throw new Error(`引导消息 '${steeringId}' 的内容与首次提交不一致`)
+          }
+          await this.projectItems([existing])
+          return existing
+        }
         throw new Error(`运行 '${runId}' 已结束接收引导消息`)
       }
       if (!run.threadId) throw new Error(`运行 '${runId}' 缺少 threadId`)
@@ -81,7 +99,7 @@ export class RunSteeringController {
         content: normalized,
       })
       await this.synchronizeObjectiveRevision(runId)
-      await this.persistItem(record)
+      await this.projectItems([record])
       return record
     })
   }
@@ -93,24 +111,54 @@ export class RunSteeringController {
   async consumePendingWithRevision(runId: string): Promise<{
     items: AgentInputItem[]
     objectiveRevision: number
+    leaseId: string | null
   }> {
     return this.serialized(runId, async () => {
-      const consumed = await this.store.consumeRunInputs(runId)
+      const leaseId = makeId('input_lease')
+      const leased = await this.store.leaseRunInputs(runId, leaseId)
       const snapshot = await this.synchronizeObjectiveRevision(runId)
-      for (const record of consumed) await this.persistItem(record)
+      await this.projectItems(leased)
       return {
-        items: consumed.map(record => ({ type: 'message', role: 'user', content: record.content })),
-        objectiveRevision: consumedObjectiveRevision(snapshot.records),
+        items: leased.map(record => ({
+          type: 'message',
+          role: 'user',
+          content: record.content,
+          providerData: {
+            geoAgentRunInput: {
+              runId,
+              inputId: record.steeringId,
+              inputSequence: record.inputSequence,
+            },
+          },
+        })),
+        objectiveRevision: leased.at(-1)?.inputSequence
+          ? leased.at(-1)!.inputSequence + 1
+          : snapshot.checkpoint.checkpointInputCursor + 1,
+        leaseId: leased.length ? leaseId : null,
       }
     })
   }
 
-  // 当前模型候选只覆盖已经消费的输入。queued 输入计入 objective revision，
-  // 但不能绑定到尚未看见该输入的模型输出。
+  // 当前候选只能绑定到已随 SDK checkpoint ack 的 input cursor。
   async consumedObjectiveRevision(runId: string): Promise<number> {
     return this.serialized(runId, async () => {
       const snapshot = await this.synchronizeObjectiveRevision(runId)
-      return consumedObjectiveRevision(snapshot.records)
+      return checkpointObjectiveRevision(snapshot.checkpoint)
+    })
+  }
+
+  async recordCheckpointAcknowledgements(
+    runId: string,
+    records: readonly RunSteeringRecord[],
+  ): Promise<void> {
+    if (!records.length) return
+    await this.serialized(runId, async () => {
+      for (const record of records) {
+        if (record.runId !== runId || record.status !== 'acked') {
+          throw new Error(`运行 '${runId}' 收到非当前 Run 的 input ack 投影`)
+        }
+      }
+      await this.projectItems(records)
     })
   }
 
@@ -119,7 +167,7 @@ export class RunSteeringController {
   async modelInputRevisionSnapshot(runId: string): Promise<ModelInputRevisionSnapshot> {
     return this.serialized(runId, async () => {
       const snapshot = await this.synchronizeObjectiveRevision(runId)
-      const objectiveRevision = consumedObjectiveRevision(snapshot.records)
+      const objectiveRevision = checkpointObjectiveRevision(snapshot.checkpoint)
       return {
         objectiveRevision,
         state: revisionMatches(snapshot, objectiveRevision)
@@ -175,41 +223,38 @@ export class RunSteeringController {
     if (this.queues.get(runId) === queue) this.queues.delete(runId)
   }
 
-  private async persistItem(record: RunSteeringRecord): Promise<void> {
-    const item: ConversationItem = {
-      itemId: record.itemId,
-      itemType: 'message',
-      runId: record.runId,
-      threadId: record.threadId,
-      turnId: null,
-      callId: null,
-      role: 'user',
-      body: record.content,
-      name: null,
-      arguments: null,
-      output: null,
-      isError: false,
-      phase: null,
-      status: record.status,
-      metadata: {
-        steeringId: record.steeringId,
-        transcriptEntryId: record.entryId,
-      },
-      timestamp: record.queuedAt,
+  private async projectItems(records: readonly RunSteeringRecord[]): Promise<void> {
+    if (!records.length) return
+    await this.store.projectPersistedItems(records.map(runInputConversationItem))
+  }
+
+  // input row/cursor 是事实源，ConversationItem 只是 UI 投影。checkpoint+ack
+  // 已提交而进程尚未来得及投影时，显式 open/recovery 在冷路径确定性对账；
+  // 热路径仍只使用 cursor，不扫描历史输入。
+  private async reconcileInputItems(runId: string): Promise<void> {
+    const [records, items] = await Promise.all([
+      this.store.listRunInputs(runId),
+      this.store.listItems(runId),
+    ])
+    const currentStatus = new Map(items.map(item => [item.itemId, item.status]))
+    for (const record of records) {
+      if (currentStatus.get(record.itemId) !== record.status) {
+        // 仅兼容升级前可能缺失的投影。新协议在 input 状态事务内原子追加 item。
+        await this.store.appendItem(runInputConversationItem(record))
+      }
     }
-    await this.store.appendItem(item)
   }
 
   private async synchronizeObjectiveRevision(runId: string): Promise<ObjectiveRevisionSnapshot> {
-    const records = await this.store.listRunInputs(runId)
-    const durableRevision = 1 + records.length
+    const checkpoint = await this.store.getRunCheckpoint(runId)
+    const durableRevision = checkpoint.nextInputSequence
     const current = this.store.getRun(runId).state
     if (current.objectiveRevision > durableRevision) {
       throw new Error(
         `运行 '${runId}' objective revision ${current.objectiveRevision} 超过 durable input revision ${durableRevision}`,
       )
     }
-    if (current.objectiveRevision === durableRevision) return { records, state: current }
+    if (current.objectiveRevision === durableRevision) return { checkpoint, state: current }
 
     const updated = await this.store.mutateRunState(runId, state => ({
       objectiveRevision: durableRevision,
@@ -218,7 +263,7 @@ export class RunSteeringController {
         ? advanceAgentWorkflowObjectiveRevision(state.agentWorkflow, durableRevision)
         : null,
     }))
-    return { records, state: updated.state }
+    return { checkpoint, state: updated.state }
   }
 
   private async serialized<T>(runId: string, work: () => Promise<T>): Promise<T> {
@@ -237,14 +282,15 @@ export class RunSteeringController {
   }
 }
 
-function consumedObjectiveRevision(records: RunSteeringRecord[]): number {
-  return 1 + records.filter(record => record.status === 'consumed').length
+function checkpointObjectiveRevision(checkpoint: RunCheckpoint): number {
+  return checkpoint.checkpointInputCursor + 1
 }
 
 function revisionMatches(snapshot: ObjectiveRevisionSnapshot, expected: number): boolean {
   return snapshot.state.objectiveRevision === expected
-    && 1 + snapshot.records.length === expected
-    && consumedObjectiveRevision(snapshot.records) === expected
+    && snapshot.checkpoint.nextInputSequence === expected
+    && snapshot.checkpoint.activeInputLeaseId === null
+    && checkpointObjectiveRevision(snapshot.checkpoint) === expected
 }
 
 function advanceGoalObjectiveRevision(goal: RunGoal | null, objectiveRevision: number): RunGoal | null {

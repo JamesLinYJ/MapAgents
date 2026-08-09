@@ -106,7 +106,7 @@ export async function parseStreamingMultipart(
         },
       })
       writes.push(
-        pipeline(stream, hashing, createWriteStream(destination, { flags: 'wx' }))
+        pipeline(stream, hashing, createWriteStream(destination, { flags: 'wx', mode: 0o600 }))
           .then(() => {
             if (fileLimitExceeded || stream.truncated || sizeBytes > maxFileBytes) {
               throw new HttpClientError(`上传文件过大，限制为 ${formatMegabytes(maxFileBytes)}。`, 413)

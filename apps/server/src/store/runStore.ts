@@ -23,6 +23,7 @@ import type {
   RunGoalInput,
   RunItemStreamSnapshot,
   RunItemUpsert,
+  RunSteeringRecord,
   RunSummary,
   ToolValueRef,
 } from '../schemas/types.js'
@@ -46,6 +47,7 @@ import {
   toRunSummary,
 } from './runProjection.js'
 import type { SessionStore } from './sessionStore.js'
+import { ObjectPublicationCoordinator } from './objectPublicationCoordinator.js'
 import type { RunRepository, ThreadLifecycleRepository, ToolResultCommitter } from './postgres/conversationPersistencePorts.js'
 
 export interface RunStoreEvents {
@@ -87,6 +89,7 @@ export class RunStore {
     private readonly repository: RunRepository & ToolResultCommitter,
     private readonly threadWriter: Pick<ThreadLifecycleRepository, 'saveThread'>,
     private readonly events: RunStoreEvents,
+    private readonly objectPublication = new ObjectPublicationCoordinator(),
   ) {}
 
   listForSession(sessionId: string): AnalysisRun[] {
@@ -383,18 +386,27 @@ export class RunStore {
   async saveAgentsSdkState(
     runId: string,
     serializedState: string,
-    metadata: { agentsSdkVersion: string; runtimeConfigDigest: string },
-  ): Promise<void> {
+    metadata: {
+      agentsSdkVersion: string
+      runtimeConfigDigest: string
+      inputLeaseId?: string | null
+      terminalToolCallIds?: readonly string[]
+    },
+  ): Promise<RunSteeringRecord[]> {
     this.get(runId)
-    const reference = await this.payloadStore.putObject(
-      serializedState,
-      'application/vnd.geo-agent-platform.agents-state+json',
-    )
-    await this.repository.saveAgentsSdkCheckpoint(runId, {
-      contentHash: reference.hash,
-      agentsSdkVersion: metadata.agentsSdkVersion,
-      runtimeConfigDigest: metadata.runtimeConfigDigest,
-      sdkStateSchemaVersion: AGENTS_SDK_STATE_SCHEMA_VERSION,
+    return this.objectPublication.publish(async () => {
+      const reference = await this.payloadStore.putObject(
+        serializedState,
+        'application/vnd.geo-agent-platform.agents-state+json',
+      )
+      return this.repository.saveAgentsSdkCheckpoint(runId, {
+        contentHash: reference.hash,
+        agentsSdkVersion: metadata.agentsSdkVersion,
+        runtimeConfigDigest: metadata.runtimeConfigDigest,
+        sdkStateSchemaVersion: AGENTS_SDK_STATE_SCHEMA_VERSION,
+        inputLeaseId: metadata.inputLeaseId ?? null,
+        terminalToolCallIds: metadata.terminalToolCallIds ?? [],
+      })
     })
   }
 
@@ -430,55 +442,22 @@ export class RunStore {
     if (this.closedItemRuns.has(runId)) {
       throw new Error(`Run '${runId}' 已封口，不能继续写入 ConversationItem`)
     }
-    return this.serializeItemMutation(runId, async () => {
-      if (isConversationItemWrite(update) && update.updateType === 'append_body') {
-        this.appendItemBody(update)
-        return
-      }
-      const item = isConversationItemWrite(update) ? update.item : update
-      this.get(item.runId)
-      const stream = this.getOrCreateActiveItemStream(item.runId)
-      const previous = stream.items.get(item.itemId)
-      if (previous && isTerminalItemStatus(previous.item.status)) {
-        if (item.status === 'running') {
-          throw new Error(`ConversationItem '${item.itemId}' 已结束，不能重新进入 running`)
-        }
-        const previousBody = materializeStreamedItem(previous).body
-        if (item.status !== previous.item.status || item.body !== previousBody) {
-          throw new Error(
-            `ConversationItem '${item.itemId}' 的终态正文和状态不可改写：`
-            + `${previous.item.status}/${JSON.stringify(previousBody)} -> `
-            + `${item.status}/${JSON.stringify(item.body)}`,
-          )
-        }
-      }
-      if (previous && previous.item.status === 'running' && previous.hasBodyDeltas) {
-        const streamedBody = materializeStreamedItem(previous).body
-        if (item.body !== streamedBody) {
-          throw new Error(`ConversationItem '${item.itemId}' terminal body 与已发布文本增量不一致`)
-        }
-      }
-      if (this.shouldPersistItem(item)) {
-        await this.repository.appendConversationItem(item)
-      }
-      const body = item.body ?? ''
-      const current: StreamedConversationItem = {
-        item,
-        textChunks: body ? [body] : [],
-        utf16Length: body.length,
-        sequence: previous ? previous.sequence + 1 : 0,
-        hasBodyDeltas: false,
-      }
-      stream.items.set(item.itemId, current)
-      this.events.itemBus.publish(item.runId, item)
-      this.events.itemUpsertBus.publish(item.runId, {
-        updateType: 'item_upsert',
-        schemaVersion: 1,
-        streamId: stream.streamId,
-        cursor: { sequence: current.sequence, utf16Offset: current.utf16Length },
-        item,
-      })
-      if (item.status !== 'running') this.updateThreadProjectionFromItem(item)
+    return this.serializeItemMutation(runId, () => this.applyItemUpdate(update, true))
+  }
+
+  // Repository 已在 run_input 状态事务内追加 item record/outbox；这里只更新
+  // 当前进程投影与事件总线，不能再次写 PostgreSQL。
+  async projectPersistedItems(items: readonly ConversationItem[]): Promise<void> {
+    if (!items.length) return
+    const runId = items[0]!.runId
+    if (items.some(item => item.runId !== runId)) {
+      throw new Error('批量 ConversationItem 投影必须属于同一 Run')
+    }
+    if (this.closedItemRuns.has(runId)) {
+      throw new Error(`Run '${runId}' 已封口，不能继续投影 ConversationItem`)
+    }
+    await this.serializeItemMutation(runId, async () => {
+      for (const item of items) await this.applyItemUpdate(item, false)
     })
   }
 
@@ -547,6 +526,61 @@ export class RunStore {
       text: update.text,
     }
     this.events.itemDeltaBus.publish(update.runId, delta)
+  }
+
+  private async applyItemUpdate(
+    update: ConversationItemStoreUpdate,
+    persist: boolean,
+  ): Promise<void> {
+    if (isConversationItemWrite(update) && update.updateType === 'append_body') {
+      if (!persist) throw new Error('已持久化 item 投影不接受正文增量')
+      this.appendItemBody(update)
+      return
+    }
+    const item = isConversationItemWrite(update) ? update.item : update
+    this.get(item.runId)
+    const stream = this.getOrCreateActiveItemStream(item.runId)
+    const previous = stream.items.get(item.itemId)
+    if (previous && isTerminalItemStatus(previous.item.status)) {
+      if (item.status === 'running') {
+        throw new Error(`ConversationItem '${item.itemId}' 已结束，不能重新进入 running`)
+      }
+      const previousBody = materializeStreamedItem(previous).body
+      if (item.status !== previous.item.status || item.body !== previousBody) {
+        throw new Error(
+          `ConversationItem '${item.itemId}' 的终态正文和状态不可改写：`
+          + `${previous.item.status}/${JSON.stringify(previousBody)} -> `
+          + `${item.status}/${JSON.stringify(item.body)}`,
+        )
+      }
+    }
+    if (previous && previous.item.status === 'running' && previous.hasBodyDeltas) {
+      const streamedBody = materializeStreamedItem(previous).body
+      if (item.body !== streamedBody) {
+        throw new Error(`ConversationItem '${item.itemId}' terminal body 与已发布文本增量不一致`)
+      }
+    }
+    if (persist && this.shouldPersistItem(item)) {
+      await this.repository.appendConversationItem(item)
+    }
+    const body = item.body ?? ''
+    const current: StreamedConversationItem = {
+      item,
+      textChunks: body ? [body] : [],
+      utf16Length: body.length,
+      sequence: previous ? previous.sequence + 1 : 0,
+      hasBodyDeltas: false,
+    }
+    stream.items.set(item.itemId, current)
+    this.events.itemBus.publish(item.runId, item)
+    this.events.itemUpsertBus.publish(item.runId, {
+      updateType: 'item_upsert',
+      schemaVersion: 1,
+      streamId: stream.streamId,
+      cursor: { sequence: current.sequence, utf16Offset: current.utf16Length },
+      item,
+    })
+    if (item.status !== 'running') this.updateThreadProjectionFromItem(item)
   }
 
   private async persistThreadRunStatus(run: AnalysisRun, status: AnalysisRun['status'], updatedAt: string): Promise<void> {

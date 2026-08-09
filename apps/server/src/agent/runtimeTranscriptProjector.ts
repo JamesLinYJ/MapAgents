@@ -106,6 +106,33 @@ export class RuntimeTranscriptProjector {
         projection.lastAssistantText = ''
       }
       const raw = event.item.rawItem
+      if (
+        raw.type === 'function_call'
+        && !this.isPlatformManagedTool(raw.name, assembly)
+        && isSdkRejectedToolCall(raw.name, raw.callId, assembly)
+      ) {
+        const transcript = await this.store.activeTranscript(assembly.threadId)
+        const existing = transcript.find(entry => (
+          entry.kind === 'tool_call' && entry.payload.callId === raw.callId
+        ))
+        if (!existing) {
+          await this.appendSdkRejectedToolCallTranscript(
+            assembly.context.runId,
+            assembly.threadId,
+            assembly.turnId,
+            raw,
+            itemSink,
+            this.toolRegistry.get(raw.name)?.label ?? raw.name,
+            assembly.context.currentObjectiveRevision(),
+          )
+        }
+        eventSink.emit('tool.completed', '未开放的工具调用已拒绝', {
+          sdkItemType: event.item.type,
+          callId: raw.callId,
+          status: 'rejected',
+        })
+        return
+      }
       if (raw.type === 'hosted_tool_call') {
         await this.appendSdkHostedToolCallCheckpoint(
           assembly.context.runId,
@@ -190,6 +217,40 @@ export class RuntimeTranscriptProjector {
     }
     if (event.name === 'tool_output') {
       const raw = event.item.rawItem
+      if (
+        raw.type === 'function_call_result'
+        && !this.isPlatformManagedTool(raw.name, assembly)
+        && isSdkRejectedToolCall(raw.name, raw.callId, assembly)
+      ) {
+        const transcript = await this.store.activeTranscript(assembly.threadId)
+        const objectiveRevision = objectiveRevisionForCall(transcript, raw.callId)
+        const exists = transcript.some(entry => (
+          entry.kind === 'tool_result' && entry.payload.callId === raw.callId
+        ))
+        if (!exists) {
+          const content = toolResultText(raw.output)
+          await this.store.appendTranscript({
+            threadId: assembly.threadId,
+            runId: assembly.context.runId,
+            turnId: assembly.turnId,
+            kind: 'tool_result',
+            payload: {
+              callId: raw.callId,
+              name: raw.name,
+              label: this.toolRegistry.get(raw.name)?.label ?? raw.name,
+              summary: content,
+              content,
+              contentRef: null,
+              ledgerStatus: 'rejected',
+              resultId: null,
+              source: 'openai_agents_sdk',
+              objectiveRevision,
+            },
+          })
+        }
+        await assembly.coordinator.markSdkToolCallTerminal(raw.callId)
+        return
+      }
       const metadata = event.item.type === 'tool_call_output_item'
         && raw.type === 'function_call_result'
         ? parseOutputMetadata(
@@ -620,4 +681,16 @@ function sdkToolPresentation(
     return { label: '子智能体任务', source: 'openai_agents_agent_as_tool' }
   }
   return { label: '沙箱工具调用', source: 'openai_agents_sandbox' }
+}
+
+function isSdkRejectedToolCall(
+  toolName: string,
+  callId: string,
+  assembly: RuntimeAssembly,
+): boolean {
+  if (assembly.isUnavailableSdkToolCall(callId)) return true
+  return !assembly.subAgentToolNames.has(toolName)
+    && !assembly.handoffToolNames.has(toolName)
+    && !assembly.mcpToolNames.has(toolName)
+    && !assembly.sandboxToolNames.has(toolName)
 }

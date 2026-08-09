@@ -166,7 +166,9 @@ export interface RunCheckpointRepository {
     agentsSdkVersion: string
     runtimeConfigDigest: string
     sdkStateSchemaVersion: RunCheckpoint['sdkStateSchemaVersion']
-  }): Promise<void>
+    inputLeaseId?: string | null
+    terminalToolCallIds?: readonly string[]
+  }): Promise<RunSteeringRecord[]>
 }
 
 export interface RunRecordRepository {
@@ -198,7 +200,9 @@ export interface ObjectReferenceRepository {
 
 export interface RunInputRepository {
   enqueueRunInput(input: EnqueueRunInput): Promise<RunSteeringRecord>
-  consumeRunInputs(runId: string): Promise<RunSteeringRecord[]>
+  getRunInput(runId: string, inputId: string): Promise<RunSteeringRecord | null>
+  leaseRunInputs(runId: string, leaseId: string): Promise<RunSteeringRecord[]>
+  requeueLeasedRunInputs(runId: string): Promise<RunSteeringRecord[]>
   listRunInputs(runId: string): Promise<RunSteeringRecord[]>
 }
 

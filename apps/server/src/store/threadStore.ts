@@ -36,6 +36,7 @@ import type {
   ThreadMemoryRepository,
 } from './postgres/conversationPersistencePorts.js'
 import { MemoryVersionConflictError } from './storeErrors.js'
+import type { ObjectPublicationCoordinator } from './objectPublicationCoordinator.js'
 
 export interface ThreadStoreEvents {
   threadUpdateBus: InMemoryEventBus<{ thread: AgentThreadRecord; manifest: ThreadManifest }>
@@ -63,6 +64,7 @@ export class ThreadStore {
     private readonly objectReferences: ObjectReferenceRepository,
     private readonly files: Pick<FileLifecyclePort, 'cloneThreadFiles' | 'purgeThreadFiles'>,
     private readonly events: ThreadStoreEvents,
+    private readonly objectPublication: ObjectPublicationCoordinator,
   ) {}
 
   listForSession(sessionId: string): AgentThreadRecord[] {
@@ -231,19 +233,21 @@ export class ThreadStore {
       estimatedTokens: estimateTokens(content),
       updatedAt: nowUtc(),
     })
-    const reference = await this.payloadStore.putObject(
-      JSON.stringify(document),
-      'application/vnd.geo-agent-platform.thread-memory+json',
-    )
-    await this.repositories.memory.saveThreadMemoryVersion({
-      threadId,
-      expectedVersion: manifest.memoryVersion,
-      version: document.version,
-      contentHash: reference.hash,
-      source: document.source,
-      basedOnEntryId: document.basedOnEntryId,
-      estimatedTokens: document.estimatedTokens,
-      createdAt: document.updatedAt,
+    await this.objectPublication.publish(async () => {
+      const reference = await this.payloadStore.putObject(
+        JSON.stringify(document),
+        'application/vnd.geo-agent-platform.thread-memory+json',
+      )
+      await this.repositories.memory.saveThreadMemoryVersion({
+        threadId,
+        expectedVersion: manifest.memoryVersion,
+        version: document.version,
+        contentHash: reference.hash,
+        source: document.source,
+        basedOnEntryId: document.basedOnEntryId,
+        estimatedTokens: document.estimatedTokens,
+        createdAt: document.updatedAt,
+      })
     })
     this.events.threadMemoryBus.publish(threadId, document)
     return document
@@ -291,14 +295,16 @@ export class ThreadStore {
     const session = await this.repositories.lifecycle.purgeThread(threadId, trashed.thread.sessionId)
     this.sessionStore.acceptPersisted(session)
     this.index.deleteRunsForThread(threadId)
-    // PostgreSQL 已经提交资源删除；物理投影随后幂等清理。清理失败不得把
-    // 尚未提交的数据库事实伪装成可恢复状态。
-    await Promise.all([
-      this.payloadStore.purgeThreadPayload(threadId),
-      this.files.purgeThreadFiles(threadId),
-    ])
-    const references = await this.objectReferences.listReferencedObjectHashes()
-    await this.payloadStore.garbageCollectObjects(references)
+    await this.objectPublication.collect(async () => {
+      // PostgreSQL 已经提交资源删除。物理 thread 投影清理、引用快照和
+      // CAS GC 必须同处一个独占区间，防止 publisher 在 purge 后又写回 metadata。
+      await Promise.all([
+        this.payloadStore.purgeThreadPayload(threadId),
+        this.files.purgeThreadFiles(threadId),
+      ])
+      const references = await this.objectReferences.listReferencedObjectHashes()
+      await this.payloadStore.garbageCollectObjects(references)
+    })
   }
 
   async recordAttachment(threadId: string, input: {

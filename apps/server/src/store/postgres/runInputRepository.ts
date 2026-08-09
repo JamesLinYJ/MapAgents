@@ -8,36 +8,33 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { and, asc, desc, eq, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, isNull, sql } from 'drizzle-orm'
 import type { Database } from '../../db/connection.js'
 import {
   platformConversationEntries,
-  platformEventOutbox,
   platformRunInputs,
   platformRuns,
   platformThreads,
 } from '../../db/schema.js'
 import { runSteeringRecordSchema, type RunSteeringRecord } from '../../schemas/types.js'
 import { currentLogContext } from '../../observability/logger.js'
-import { makeId } from '../../utils/ids.js'
 import { estimateTokens } from '../conversationEncoding.js'
 import type { RunMutationQueue } from '../runMutationQueue.js'
 import type { EnqueueRunInput, RunInputRepository } from './conversationPersistencePorts.js'
-import type { RunRecordAppender } from './runRecordAppender.js'
+import type { RunInputDeliveryRecorder } from './runInputDeliveryRecorder.js'
 
-/** 运行中用户引导消息的幂等入队、消费和审计事实源。 */
+/** 运行中用户引导消息的幂等入队、lease 和恢复事实源。 */
 export class PostgresRunInputRepository implements RunInputRepository {
   constructor(
     private readonly db: Database,
     private readonly mutations: RunMutationQueue,
-    private readonly runRecords: RunRecordAppender,
+    private readonly inputDelivery: RunInputDeliveryRecorder,
   ) {}
 
   async enqueueRunInput(input: EnqueueRunInput): Promise<RunSteeringRecord> {
     const normalized = input.content.trim()
     if (!normalized) throw new Error('引导消息不能为空')
     const traceId = stringContextValue('traceId')
-
     return this.mutations.run(input.runId, () => this.db.transaction(async tx => {
       const existingRows = await tx.select().from(platformRunInputs)
         .where(eq(platformRunInputs.inputId, input.inputId)).limit(1)
@@ -46,7 +43,7 @@ export class PostgresRunInputRepository implements RunInputRepository {
         if (existing.runId !== input.runId || existing.content !== normalized) {
           throw new Error(`引导消息 '${input.inputId}' 的幂等键已被其它内容使用`)
         }
-        return steeringRecord(existing)
+        return mapRunSteeringRow(existing)
       }
 
       const runRows = await tx.select().from(platformRuns)
@@ -55,6 +52,7 @@ export class PostgresRunInputRepository implements RunInputRepository {
       if (!run) throw new Error(`运行 '${input.runId}' 不存在`)
       if (run.status !== 'running') throw new Error(`运行 '${input.runId}' 已结束接收引导消息`)
       if (!run.threadId) throw new Error(`运行 '${input.runId}' 缺少 threadId`)
+      const inputSequence = run.nextInputSequence
 
       const sequenceRows = await tx.update(platformThreads)
         .set({
@@ -104,116 +102,258 @@ export class PostgresRunInputRepository implements RunInputRepository {
         itemId: input.itemId,
         kind: 'steering',
         content: normalized,
+        inputSequence,
         status: 'queued',
         queuedAt,
       })
-      await this.runRecords.append(tx, run.runId, run.threadId, [{
-        recordType: 'input.queued',
-        payloadJson: {
-          inputId: input.inputId,
-          entryId: input.entryId,
-          itemId: input.itemId,
-          content: normalized,
-        },
-      }], traceId)
-      await tx.insert(platformEventOutbox).values({
-        outboxId: makeId('outbox'),
-        aggregateType: 'run',
-        aggregateId: run.runId,
-        eventType: 'run.input.queued',
-        payloadJson: { inputId: input.inputId, entryId: input.entryId, itemId: input.itemId },
-        traceId,
-      })
-      return runSteeringRecordSchema.parse({
-        schemaVersion: 1,
+      const sequenceClaim = await tx.update(platformRuns).set({
+        nextInputSequence: inputSequence + 1,
+        updatedAt: queuedAt,
+      }).where(and(
+        eq(platformRuns.runId, run.runId),
+        eq(platformRuns.nextInputSequence, inputSequence),
+      )).returning({ runId: platformRuns.runId })
+      if (!sequenceClaim[0]) throw new Error(`运行 '${run.runId}' 的 input sequence CAS 失败`)
+      const record = runSteeringRecordSchema.parse({
+        schemaVersion: 2,
         steeringId: input.inputId,
         entryId: input.entryId,
         itemId: input.itemId,
         runId: run.runId,
         threadId: run.threadId,
         content: normalized,
+        inputSequence,
         status: 'queued',
         queuedAt: queuedAt.toISOString(),
-        consumedAt: null,
+        leaseId: null,
+        leasedAt: null,
+        ackedAt: null,
       })
+      await this.inputDelivery.recordTransition(tx, 'queued', run.runId, run.threadId, [record])
+      return record
     }))
   }
 
-  async consumeRunInputs(runId: string): Promise<RunSteeringRecord[]> {
-    const traceId = stringContextValue('traceId')
+  async leaseRunInputs(runId: string, leaseId: string): Promise<RunSteeringRecord[]> {
+    if (!leaseId.trim()) throw new Error('run input leaseId 不能为空')
     return this.mutations.run(runId, () => this.db.transaction(async tx => {
-      const runRows = await tx.select({ threadId: platformRuns.threadId }).from(platformRuns)
+      const runRows = await tx.select({
+        threadId: platformRuns.threadId,
+        checkpointInputCursor: platformRuns.checkpointInputCursor,
+        nextInputSequence: platformRuns.nextInputSequence,
+        activeInputLeaseId: platformRuns.activeInputLeaseId,
+        activeInputLeaseFrom: platformRuns.activeInputLeaseFrom,
+        activeInputLeaseTo: platformRuns.activeInputLeaseTo,
+      }).from(platformRuns)
         .where(eq(platformRuns.runId, runId)).for('update').limit(1)
       const run = runRows[0]
       if (!run) throw new Error(`运行 '${runId}' 不存在`)
+      if (run.activeInputLeaseId) {
+        if (run.activeInputLeaseId !== leaseId) {
+          throw new Error(`运行 '${runId}' 已有活动输入 lease '${run.activeInputLeaseId}'`)
+        }
+        if (run.activeInputLeaseFrom === null || run.activeInputLeaseTo === null) {
+          throw new Error(`运行 '${runId}' 的活动输入 lease 范围不完整`)
+        }
+        const existingLease = await tx.select().from(platformRunInputs)
+          .where(and(
+            eq(platformRunInputs.runId, runId),
+            eq(platformRunInputs.status, 'leased'),
+            eq(platformRunInputs.leaseId, leaseId),
+          ))
+          .orderBy(asc(platformRunInputs.inputSequence))
+          .for('update')
+        assertContiguousInputPrefix(
+          existingLease,
+          run.activeInputLeaseFrom,
+          run.activeInputLeaseTo - run.activeInputLeaseFrom + 1,
+          runId,
+        )
+        return existingLease.map(mapRunSteeringRow)
+      }
 
       const rows = await tx.select().from(platformRunInputs)
-        .where(and(eq(platformRunInputs.runId, runId), eq(platformRunInputs.status, 'queued')))
-        .orderBy(asc(platformRunInputs.queuedAt))
-        .for('update', { skipLocked: true })
-      if (!rows.length) return []
-
-      const consumedAt = new Date()
-      for (const row of rows) {
-        await tx.update(platformRunInputs)
-          .set({ status: 'consumed', consumedAt })
-          .where(and(
-            eq(platformRunInputs.inputId, row.inputId),
-            eq(platformRunInputs.status, 'queued'),
-          ))
+        .where(and(
+          eq(platformRunInputs.runId, runId),
+          gt(platformRunInputs.inputSequence, run.checkpointInputCursor),
+          eq(platformRunInputs.status, 'queued'),
+        ))
+        .orderBy(asc(platformRunInputs.inputSequence))
+        .for('update')
+      const expectedCount = run.nextInputSequence - run.checkpointInputCursor - 1
+      if (!rows.length) {
+        if (expectedCount !== 0) {
+          throw new Error(`运行 '${runId}' 的 input cursor 与 queued 连续前缀不一致`)
+        }
+        return []
       }
-      await this.runRecords.append(
+      assertContiguousInputPrefix(rows, run.checkpointInputCursor + 1, expectedCount, runId)
+
+      const leasedAt = new Date()
+      const leaseFrom = rows[0]!.inputSequence
+      const leaseTo = rows.at(-1)!.inputSequence
+      const claimed = await tx.update(platformRuns)
+        .set({
+          activeInputLeaseId: leaseId,
+          activeInputLeaseFrom: leaseFrom,
+          activeInputLeaseTo: leaseTo,
+          updatedAt: leasedAt,
+        })
+        .where(and(
+          eq(platformRuns.runId, runId),
+          eq(platformRuns.checkpointInputCursor, run.checkpointInputCursor),
+          isNull(platformRuns.activeInputLeaseId),
+        ))
+        .returning({ runId: platformRuns.runId })
+      if (!claimed[0]) throw new Error(`运行 '${runId}' 的输入 lease CAS 失败`)
+      const leasedRows = await tx.update(platformRunInputs)
+        .set({ status: 'leased', leaseId, leasedAt, ackedAt: null })
+        .where(and(
+          eq(platformRunInputs.runId, runId),
+          eq(platformRunInputs.status, 'queued'),
+          gt(platformRunInputs.inputSequence, run.checkpointInputCursor),
+        ))
+        .returning()
+      leasedRows.sort((left, right) => left.inputSequence - right.inputSequence)
+      assertContiguousInputPrefix(leasedRows, leaseFrom, expectedCount, runId)
+      const records = leasedRows.map(mapRunSteeringRow)
+      await this.inputDelivery.recordTransition(
         tx,
+        'leased',
         runId,
         run.threadId ?? rows[0]!.threadId,
-        rows.map(row => ({
-          recordType: 'input.consumed',
-          payloadJson: { inputId: row.inputId, entryId: row.entryId, itemId: row.itemId },
-        })),
-        traceId,
+        records,
       )
-      await tx.insert(platformEventOutbox).values(rows.map(row => ({
-        outboxId: makeId('outbox'),
-        aggregateType: 'run',
-        aggregateId: runId,
-        eventType: 'run.input.consumed',
-        payloadJson: { inputId: row.inputId, entryId: row.entryId, itemId: row.itemId },
-        traceId,
-      })))
-      return rows.map(row => steeringRecord({ ...row, status: 'consumed', consumedAt }))
+      return records
+    }))
+  }
+
+  async getRunInput(runId: string, inputId: string): Promise<RunSteeringRecord | null> {
+    const rows = await this.db.select().from(platformRunInputs)
+      .where(and(
+        eq(platformRunInputs.runId, runId),
+        eq(platformRunInputs.inputId, inputId),
+      ))
+      .limit(1)
+    return rows[0] ? mapRunSteeringRow(rows[0]) : null
+  }
+
+  async requeueLeasedRunInputs(runId: string): Promise<RunSteeringRecord[]> {
+    return this.mutations.run(runId, () => this.db.transaction(async tx => {
+      const runRows = await tx.select({
+        threadId: platformRuns.threadId,
+        checkpointInputCursor: platformRuns.checkpointInputCursor,
+        activeInputLeaseId: platformRuns.activeInputLeaseId,
+        activeInputLeaseFrom: platformRuns.activeInputLeaseFrom,
+        activeInputLeaseTo: platformRuns.activeInputLeaseTo,
+      }).from(platformRuns)
+        .where(eq(platformRuns.runId, runId)).for('update').limit(1)
+      const run = runRows[0]
+      if (!run) throw new Error(`运行 '${runId}' 不存在`)
+      const activeLeaseId = run.activeInputLeaseId
+      if (!activeLeaseId) return []
+      if (run.activeInputLeaseFrom !== run.checkpointInputCursor + 1 || run.activeInputLeaseTo === null) {
+        throw new Error(`运行 '${runId}' 的活动输入 lease 范围不合法`)
+      }
+
+      const rows = await tx.select().from(platformRunInputs)
+        .where(and(
+          eq(platformRunInputs.runId, runId),
+          eq(platformRunInputs.status, 'leased'),
+          eq(platformRunInputs.leaseId, activeLeaseId),
+        ))
+        .orderBy(asc(platformRunInputs.inputSequence))
+        .for('update')
+      if (!rows.length) throw new Error(`运行 '${runId}' 的活动输入 lease '${activeLeaseId}' 没有对应记录`)
+      const expectedCount = run.activeInputLeaseTo - run.activeInputLeaseFrom + 1
+      assertContiguousInputPrefix(rows, run.activeInputLeaseFrom, expectedCount, runId)
+      const requeuedRows = await tx.update(platformRunInputs)
+        .set({ status: 'queued', leaseId: null, leasedAt: null, ackedAt: null })
+        .where(and(
+          eq(platformRunInputs.runId, runId),
+          eq(platformRunInputs.status, 'leased'),
+          eq(platformRunInputs.leaseId, activeLeaseId),
+        ))
+        .returning()
+      requeuedRows.sort((left, right) => left.inputSequence - right.inputSequence)
+      assertContiguousInputPrefix(requeuedRows, run.activeInputLeaseFrom, expectedCount, runId)
+      const released = await tx.update(platformRuns)
+        .set({
+          activeInputLeaseId: null,
+          activeInputLeaseFrom: null,
+          activeInputLeaseTo: null,
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(platformRuns.runId, runId),
+          eq(platformRuns.activeInputLeaseId, activeLeaseId),
+        ))
+        .returning({ runId: platformRuns.runId })
+      if (!released[0]) throw new Error(`运行 '${runId}' 的输入 lease 恢复 CAS 失败`)
+      const records = requeuedRows.map(mapRunSteeringRow)
+      await this.inputDelivery.recordTransition(
+        tx,
+        'requeued',
+        runId,
+        run.threadId ?? rows[0]!.threadId,
+        records,
+      )
+      return records
     }))
   }
 
   async listRunInputs(runId: string): Promise<RunSteeringRecord[]> {
     const rows = await this.db.select().from(platformRunInputs)
       .where(eq(platformRunInputs.runId, runId))
-      .orderBy(asc(platformRunInputs.queuedAt))
-    return rows.map(steeringRecord)
+      .orderBy(asc(platformRunInputs.inputSequence))
+    return rows.map(mapRunSteeringRow)
   }
 }
 
-function steeringRecord(row: {
+export function mapRunSteeringRow(row: {
   inputId: string
   entryId: string
   itemId: string
   runId: string
   threadId: string
   content: string
+  inputSequence: number
   status: string
   queuedAt: Date
-  consumedAt: Date | null
+  leaseId: string | null
+  leasedAt: Date | null
+  ackedAt: Date | null
 }): RunSteeringRecord {
   return runSteeringRecordSchema.parse({
-    schemaVersion: 1,
+    schemaVersion: 2,
     steeringId: row.inputId,
     entryId: row.entryId,
     itemId: row.itemId,
     runId: row.runId,
     threadId: row.threadId,
     content: row.content,
+    inputSequence: row.inputSequence,
     status: row.status,
     queuedAt: row.queuedAt.toISOString(),
-    consumedAt: row.consumedAt?.toISOString() ?? null,
+    leaseId: row.leaseId,
+    leasedAt: row.leasedAt?.toISOString() ?? null,
+    ackedAt: row.ackedAt?.toISOString() ?? null,
+  })
+}
+
+function assertContiguousInputPrefix(
+  rows: readonly { inputSequence: number }[],
+  firstSequence: number,
+  expectedCount: number,
+  runId: string,
+): void {
+  if (rows.length !== expectedCount) {
+    throw new Error(`运行 '${runId}' 的 input sequence 存在空洞`)
+  }
+  rows.forEach((row, index) => {
+    if (row.inputSequence !== firstSequence + index) {
+      throw new Error(`运行 '${runId}' 的 input sequence 存在空洞`)
+    }
   })
 }
 

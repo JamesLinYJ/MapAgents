@@ -15,6 +15,7 @@ import {
   type AgentInputItem,
   type RunState,
 } from '@openai/agents'
+import PQueue from 'p-queue'
 
 import type { ItemSink } from '../conversation/itemSink.js'
 import { errorLogPayload, logger } from '../observability/logger.js'
@@ -87,6 +88,13 @@ export class RuntimeSdkExecutor {
     let activeModelTelemetry: ModelRequestTelemetry | null = null
     let terminalRepairAttempts = 0
     let terminalRepairObjectiveRevision: number | null = null
+    let pendingInputLeaseId: string | null = null
+    const inputCheckpointQueue = new PQueue({ concurrency: 1 })
+    const serializeInputCheckpoint = async <T>(work: () => Promise<T>): Promise<T> => {
+      const result = await inputCheckpointQueue.add(async () => ({ value: await work() }))
+      if (!result) throw new Error(`运行 '${options.runId}' 的输入 checkpoint 队列未返回结果`)
+      return result.value
+    }
 
     try {
       while (true) {
@@ -100,6 +108,23 @@ export class RuntimeSdkExecutor {
           threadId: assembly.threadId,
         })
         activeModelTelemetry = modelTelemetry
+        const streamStateReady = deferred<RunState<
+          AgentsExecutionContext,
+          Agent<AgentsExecutionContext>
+        >>()
+        const checkpointCurrentState = async (
+          state: RunState<AgentsExecutionContext, Agent<AgentsExecutionContext>>,
+        ): Promise<void> => {
+          const leaseId = pendingInputLeaseId
+          const commit = await checkpoints.persist(options.runId, state, assembly, leaseId)
+          // Durable checkpoint 事务已把 state 中的 function_call_result 与
+          // pending tool ledger 绑定提交；再同步进程内快照，不发起二次 DB 写。
+          await assembly.coordinator.acceptCheckpointedToolCalls(commit.terminalToolCallIds)
+          if (leaseId) {
+            pendingInputLeaseId = null
+            await steering.recordCheckpointAcknowledgements(options.runId, commit.acknowledgedInputs)
+          }
+        }
         const stream = await assembly.runner.run(
           assembly.agent,
           nextInput,
@@ -111,26 +136,42 @@ export class RuntimeSdkExecutor {
             ...(assembly.sandbox ? { sandbox: assembly.sandbox } : {}),
             maxTurns: options.runtimeConfig.maxTurns,
             signal,
-            callModelInputFilter: async ({ modelData }) => {
-              const consumed = await steering.consumePendingWithRevision(options.runId)
-              assembly.coordinator.bindModelInputObjectiveRevision(consumed.objectiveRevision)
-              return assembly.modelInput.filter(modelData, consumed.items)
-            },
+            callModelInputFilter: ({ modelData }) => serializeInputCheckpoint(async () => {
+              // 首次模型请求也必须先有一个可恢复 baseline。后续请求则用
+              // 当前完整 state 原子 ack 上一批输入；因此工具结果恢复不依赖
+              // 滞后的 stream event 消费，也不会出现 lease 已发出但无 hash。
+              await checkpointCurrentState(await streamStateReady.promise)
+              const delivery = await steering.consumePendingWithRevision(options.runId)
+              if (delivery.leaseId) {
+                appendRunInputsToSdkState(
+                  await streamStateReady.promise,
+                  options.runId,
+                  delivery.items,
+                )
+                assembly.session.retainRunInputs(delivery.items)
+                pendingInputLeaseId = delivery.leaseId
+              }
+              assembly.coordinator.bindModelInputObjectiveRevision(delivery.objectiveRevision)
+              return assembly.modelInput.filter(modelData, delivery.items)
+            }),
           },
         )
-        await checkpoints.persist(options.runId, stream.state, assembly)
+        streamStateReady.resolve(stream.state)
         for await (const event of stream) {
           modelTelemetry.observe(event)
           await transcriptProjector.projectStreamEvent(event, projection, assembly, eventSink, itemSink)
-          if (event.type === 'run_item_stream_event' && ['tool_output', 'tool_approval_requested'].includes(event.name)) {
-            await checkpoints.persist(options.runId, stream.state, assembly)
-          }
         }
         await stream.completed
         if (stream.error) {
           modelTelemetry.fail(stream.error)
           throw stream.error
         }
+        if (stream.cancelled || signal.aborted) {
+          throw signal.reason instanceof Error
+            ? signal.reason
+            : new Error(`运行 '${options.runId}' 的模型流在完整响应前被取消`)
+        }
+        await serializeInputCheckpoint(() => checkpointCurrentState(stream.state))
         await transcriptProjector.linkAssistantTranscriptEntries(options.runId, assembly, projection, itemSink)
         if (projection.reasoningItemId) {
           itemSink.completeItem(projection.reasoningItemId)
@@ -140,7 +181,6 @@ export class RuntimeSdkExecutor {
 
         const interruptions = stream.interruptions
         if (interruptions.length) {
-          await checkpoints.persist(options.runId, stream.state, assembly)
           await approvalPersistence.persist(options, interruptions, eventSink, itemSink)
           await eventSink.flush()
           await itemSink.flush()
@@ -224,11 +264,6 @@ export class RuntimeSdkExecutor {
             message: candidateState.clarification.question,
             objectiveRevision: candidateObjectiveRevision,
           })
-          await checkpoints.persist(options.runId, stream.state, assembly)
-          await store.saveRunCheckpoint(options.runId, {
-            pendingToolCallIds: [],
-            recoveryStatus: 'clean',
-          })
           await eventSink.flush()
           await itemSink.flush()
           await store.completeRun(options.runId, 'clarification_needed')
@@ -288,7 +323,6 @@ export class RuntimeSdkExecutor {
             code: terminalDecision.code,
             repairAttempt: terminalRepairAttempts,
           })
-          await checkpoints.persist(options.runId, stream.state, assembly)
           await eventSink.flush()
           await itemSink.flush()
           nextInput = [{
@@ -706,6 +740,75 @@ export class RuntimeSdkExecutor {
   }
 }
 
+// callModelInputFilter 新增的 item 只影响当次 HTTP 请求，Agents SDK 不会把它
+// 写入 RunState。lease 后必须同步纳入 _originalInput，下一工具回合与 v5
+// checkpoint 才都能证明模型看到过同一输入。platform marker 提供结构化幂等键，
+// 不按文本猜测，也不会误去重用户重复发送的相同内容。
+function appendRunInputsToSdkState(
+  state: RunState<AgentsExecutionContext, Agent<AgentsExecutionContext>>,
+  runId: string,
+  items: readonly AgentInputItem[],
+): void {
+  const original = typeof state._originalInput === 'string'
+    ? [{ type: 'message' as const, role: 'user' as const, content: state._originalInput }]
+    : [...state._originalInput]
+  const existing = new Map<number, AgentInputItem>()
+  for (const item of original) {
+    const marker = runInputMarker(item)
+    if (!marker) continue
+    if (marker.runId !== runId) {
+      throw new Error(`RunState 含有其它运行 '${marker.runId}' 的 input marker`)
+    }
+    existing.set(marker.inputSequence, item)
+  }
+  for (const item of items) {
+    const marker = runInputMarker(item)
+    if (!marker || marker.runId !== runId) {
+      throw new Error(`运行 '${runId}' 的 leased input 缺少可序列化 marker`)
+    }
+    const previous = existing.get(marker.inputSequence)
+    if (previous) {
+      if (JSON.stringify(previous) !== JSON.stringify(item)) {
+        throw new Error(`运行 '${runId}' 的 input sequence ${marker.inputSequence} 内容不一致`)
+      }
+      continue
+    }
+    original.push(structuredClone(item))
+    existing.set(marker.inputSequence, item)
+  }
+  state._originalInput = original
+}
+
+function deferred<T>(): {
+  promise: Promise<T>
+  resolve(value: T): void
+  reject(reason?: unknown): void
+} {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+function runInputMarker(item: AgentInputItem): {
+  runId: string
+  inputSequence: number
+} | null {
+  if (!('providerData' in item) || !item.providerData) return null
+  const marker = item.providerData.geoAgentRunInput
+  if (!marker || typeof marker !== 'object' || Array.isArray(marker)) return null
+  const runId = Reflect.get(marker, 'runId')
+  const inputSequence = Reflect.get(marker, 'inputSequence')
+  return typeof runId === 'string'
+    && Number.isInteger(inputSequence)
+    && (inputSequence as number) > 0
+    ? { runId, inputSequence: inputSequence as number }
+    : null
+}
+
 function goalBoundaryReason(
   goal: RunGoal,
   tokenUsage: number,
@@ -747,11 +850,19 @@ async function persistCleanCheckpoint(
   state: RunState<AgentsExecutionContext, Agent<AgentsExecutionContext>>,
   assembly: RuntimeAssembly,
 ): Promise<void> {
-  await checkpoints.persist(runId, state, assembly)
-  await store.saveRunCheckpoint(runId, {
-    pendingToolCallIds: [],
-    recoveryStatus: 'clean',
-  })
+  // stream.completed 后的统一 checkpoint 已落盘相同 RunState。这些
+  // terminal/supersede 分支只验证 ledger，不重写同一 blob/DB，也不得
+  // 用 pending=[] 覆盖尚未进入 SDK state 的未知副作用。
+  void checkpoints
+  void state
+  void assembly
+  const checkpoint = await store.getRunCheckpoint(runId)
+  if (checkpoint.pendingToolCallIds.length) {
+    throw new Error(
+      `运行 '${runId}' 的 SDK checkpoint 尚未包含工具结果：`
+      + checkpoint.pendingToolCallIds.join('、'),
+    )
+  }
 }
 
 async function supersedeAssistantCandidate(input: {

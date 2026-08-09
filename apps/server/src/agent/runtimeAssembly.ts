@@ -74,7 +74,11 @@ import {
 } from './runtimeSdkIntegrations.js'
 import type { RuntimeTranscriptProjector } from './runtimeTranscriptProjector.js'
 import type { RunOptions, RuntimeAssembly } from './runtimeTypes.js'
-import { RuntimeModelInputController, type ToolOutputReference } from './runtimeModelInput.js'
+import {
+  protectModelTransportFromRunInputMarkers,
+  RuntimeModelInputController,
+  type ToolOutputReference,
+} from './runtimeModelInput.js'
 import { createSubAgentTools } from './subAgentToolFactory.js'
 import { SubAgentStateController } from './subAgentRuntimeSupport.js'
 import type { SubAgentControlPlane } from './subAgentControlPlane.js'
@@ -139,7 +143,7 @@ export class RuntimeAssemblyFactory {
     if (!selectedModel) throw new Error(`模型 provider '${adapter.provider}' 未配置模型名称`)
     const modelCapabilities = resolveAdapterModelCapabilities(adapter, selectedModel)
     assertAgentRuntimeCapabilities(adapter, modelCapabilities, options.runtimeConfig)
-    const model = adapter.createAgentModel(selectedModel)
+    const model = protectModelTransportFromRunInputMarkers(adapter.createAgentModel(selectedModel))
     const developerToolsEnabled = developerToolsEnabledForRuntime(options.runtimeConfig)
     const registeredAgentTools = toolRegistry.list()
       .filter(tool => tool.executionSurfaces?.includes('agent') ?? true)
@@ -317,6 +321,12 @@ export class RuntimeAssemblyFactory {
       executionGate,
       query: options.query,
     })
+    const sandboxToolNames = new Set([
+      ...coreSandboxCapabilities,
+      ...sandboxIntegration.capabilities,
+    ].flatMap(capability => capability.tools()
+      .filter(tool => tool.type === 'function')
+      .map(tool => tool.name)))
     const sandboxManifest = sandboxEnabled
       ? buildSandboxManifest(
           options,
@@ -678,6 +688,8 @@ export class RuntimeAssemblyFactory {
       handoffAgentNames: handoffIntegration.agentIds,
       mcpToolNames: sdkIntegration.mcpToolNames,
       hostedToolNames: new Set(hostedTools.map(tool => tool.name)),
+      sandboxToolNames,
+      isUnavailableSdkToolCall: callId => unavailableSdkToolCallIds.has(callId),
       completeHandoff: handoffIntegration.complete,
       failHandoff: handoffIntegration.fail,
       flushPendingSessionAssistantMessage,

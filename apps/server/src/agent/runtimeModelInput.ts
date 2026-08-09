@@ -10,7 +10,7 @@
 // --------------------------------------------------------------------------
 
 import { createHash } from 'node:crypto'
-import type { AgentInputItem } from '@openai/agents'
+import type { AgentInputItem, Model, ModelRequest } from '@openai/agents'
 import type { RuntimeContextConfig } from '../schemas/types.js'
 import { estimateTextTokens } from './tokenEstimate.js'
 
@@ -90,10 +90,11 @@ export class RuntimeModelInputController {
     }
 
     const sourceItems = reduced.slice(leadingSystemCount, boundary)
-    const sourceDigest = digestItems(sourceItems)
+    const modelVisibleSourceItems = sourceItems.map(stripRunInputMarkerForModel)
+    const sourceDigest = digestItems(modelVisibleSourceItems)
     let summary = this.summaries.get(sourceDigest)
     if (!summary) {
-      summary = (await this.options.summarize(buildSummaryPrompt(sourceItems))).trim()
+      summary = (await this.options.summarize(buildSummaryPrompt(modelVisibleSourceItems))).trim()
       if (!summary) throw new Error('运行中上下文压缩失败：摘要模型返回空内容。')
       this.summaries.set(sourceDigest, summary)
     }
@@ -167,6 +168,45 @@ export class RuntimeModelInputController {
   }
 }
 
+const protectedModels = new WeakMap<Model, Model>()
+
+// filter 的返回值同时用于 SDK Session 持久化，不能在这里删除 delivery
+// marker；否则外层 Runner 会把无 marker 副本再次写入历史。模型边界仅对
+// 即将发给 provider 的请求副本脱敏，RunState/Session 继续保留幂等键。
+export function protectModelTransportFromRunInputMarkers(model: Model): Model {
+  const existing = protectedModels.get(model)
+  if (existing) return existing
+  const protectedModel: Model = {
+    getResponse: request => model.getResponse(stripRunInputMarkersFromRequest(request)),
+    getStreamedResponse: request => model.getStreamedResponse(stripRunInputMarkersFromRequest(request)),
+    getRetryAdvice: args => model.getRetryAdvice?.(args),
+  }
+  protectedModels.set(model, protectedModel)
+  protectedModels.set(protectedModel, protectedModel)
+  return protectedModel
+}
+
+function stripRunInputMarkersFromRequest(request: ModelRequest): ModelRequest {
+  if (typeof request.input === 'string') return request
+  return { ...request, input: request.input.map(stripRunInputMarkerForModel) }
+}
+
+function stripRunInputMarkerForModel(item: AgentInputItem): AgentInputItem {
+  if (!('providerData' in item) || !item.providerData) return item
+  if (!Object.prototype.hasOwnProperty.call(item.providerData, 'geoAgentRunInput')) return item
+
+  const copy = structuredClone(item)
+  if (!('providerData' in copy) || !copy.providerData) return copy
+  const providerData: Record<string, unknown> = { ...copy.providerData }
+  delete providerData.geoAgentRunInput
+  if (Object.keys(providerData).length === 0) {
+    delete copy.providerData
+  } else {
+    copy.providerData = providerData
+  }
+  return copy
+}
+
 function safeCompactionBoundary(items: AgentInputItem[], preserveRecentTurns: number): number {
   let boundary = recentTurnBoundary(items, preserveRecentTurns)
   const calls = new Map<string, number>()
@@ -215,7 +255,10 @@ function countLeadingSystemMessages(items: AgentInputItem[]): number {
 }
 
 function estimateInputTokens(items: AgentInputItem[], instructions: string): number {
-  return estimateTextTokens(JSON.stringify(items), instructions)
+  return estimateTextTokens(
+    JSON.stringify(items.map(stripRunInputMarkerForModel)),
+    instructions,
+  )
 }
 
 function serializedOutputLength(output: Extract<AgentInputItem, { type: 'function_call_result' }>['output']): number {

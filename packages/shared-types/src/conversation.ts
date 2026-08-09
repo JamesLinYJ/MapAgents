@@ -63,7 +63,7 @@ export const threadManifestSchema = z.object({
   updatedAt: z.string(),
 })
 
-export const AGENTS_SDK_STATE_SCHEMA_VERSION = 4 as const
+export const AGENTS_SDK_STATE_SCHEMA_VERSION = 5 as const
 
 export const runCheckpointSchema = z.object({
   schemaVersion: z.literal(2).default(2),
@@ -76,8 +76,14 @@ export const runCheckpointSchema = z.object({
   sdkStateContentHash: z.string().regex(/^[a-f0-9]{64}$/u).nullable().default(null),
   agentsSdkVersion: z.string().nullable().default(null),
   runtimeConfigDigest: z.string().nullable().default(null),
-  sdkStateSchemaVersion: z.literal(AGENTS_SDK_STATE_SCHEMA_VERSION).nullable().default(null),
+  // 历史终态 Run 仍需可读；restore 边界再严格校验当前版本。
+  sdkStateSchemaVersion: z.number().int().positive().nullable().default(null),
   sdkStateUpdatedAt: z.string().nullable().default(null),
+  nextInputSequence: z.number().int().positive().default(1),
+  checkpointInputCursor: z.number().int().nonnegative().default(0),
+  activeInputLeaseId: z.string().nullable().default(null),
+  activeInputLeaseFrom: z.number().int().positive().nullable().default(null),
+  activeInputLeaseTo: z.number().int().positive().nullable().default(null),
 })
 
 export const compactionRecordSchema = z.object({

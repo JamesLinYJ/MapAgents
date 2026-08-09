@@ -27,9 +27,10 @@ export const REQUIRED_MIGRATIONS = [
   '009_file_object_lifecycle',
   '010_file_ready_source_invariant',
   '011_custom_model_providers',
+  '012_run_input_delivery_ack',
 ] as const
 
-export const CURRENT_DATABASE_SCHEMA_VERSION = 11
+export const CURRENT_DATABASE_SCHEMA_VERSION = 12
 
 const migrationRowsSchema = z.array(z.object({
   migration_id: z.string().min(1),
@@ -50,7 +51,7 @@ export async function verifyDatabaseSchemaCompatibility(
   if (typeof tableName !== 'string') {
     throw new Error(
       '数据库尚未启用版本跟踪。请重建开发数据库并应用 '
-      + 'infra/migrations/000_schema_migrations.sql 至 011_custom_model_providers.sql '
+      + 'infra/migrations/000_schema_migrations.sql 至 012_run_input_delivery_ack.sql '
       + '后重新启动。',
     )
   }
@@ -98,7 +99,23 @@ export async function verifyDatabaseSchemaCompatibility(
     ) AS vector_tile_function,
     to_regclass('public.platform_model_result_cache') AS model_result_cache_table,
     to_regclass('public.platform_file_objects') AS file_objects_table,
-    to_regclass('public.platform_model_providers') AS model_providers_table
+    to_regclass('public.platform_model_providers') AS model_providers_table,
+    (
+      SELECT COUNT(*) = 4
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'platform_run_inputs'
+        AND column_name IN ('input_sequence', 'lease_id', 'leased_at', 'acked_at')
+    ) AND (
+      SELECT COUNT(*) = 5
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'platform_runs'
+        AND column_name IN (
+          'next_input_sequence', 'checkpoint_input_cursor', 'active_input_lease_id',
+          'active_input_lease_from', 'active_input_lease_to'
+        )
+    ) AS run_input_delivery_ack
   `)
   const vectorTileFunction = (
     capabilityResult.rows[0] as {
@@ -106,6 +123,7 @@ export async function verifyDatabaseSchemaCompatibility(
       model_result_cache_table?: unknown
       file_objects_table?: unknown
       model_providers_table?: unknown
+      run_input_delivery_ack?: unknown
     } | undefined
   )?.vector_tile_function
   if (typeof vectorTileFunction !== 'string') {
@@ -141,6 +159,15 @@ export async function verifyDatabaseSchemaCompatibility(
     throw new Error(
       '数据库迁移记录与实际能力不一致：缺少 platform_model_providers。'
       + '请执行 011_custom_model_providers.sql；禁止由应用启动时创建业务表。',
+    )
+  }
+  const runInputDeliveryAck = (
+    capabilityResult.rows[0] as { run_input_delivery_ack?: unknown } | undefined
+  )?.run_input_delivery_ack
+  if (runInputDeliveryAck !== true) {
+    throw new Error(
+      '数据库迁移记录与实际能力不一致：Run input sequence/cursor/lease 列不完整。'
+      + '请执行 012_run_input_delivery_ack.sql；禁止只补写迁移记录。',
     )
   }
 }
