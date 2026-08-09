@@ -12,7 +12,6 @@
 // 平台 Automation Studio、运行、审批、定时任务和后台任务传输边界。
 
 import {
-  automationRunRecordSchema,
   type BackgroundTaskInfo,
   type ScheduledTask,
   type AutomationDefinition,
@@ -20,8 +19,8 @@ import {
   type AutomationRunRecord,
   type AutomationValidationResult,
   type AutomationVersionRecord,
+  type WsCommandResponse,
 } from '@geo-agent-platform/shared-types'
-import { z } from 'zod'
 import { requestControl } from './transport'
 
 export interface AutomationDraftPayload {
@@ -63,15 +62,6 @@ export interface ScheduledTaskUpdatePayload extends Partial<ScheduledTaskCreateP
   taskId: string
 }
 
-const automationStartResponseSchema = z.object({
-  automationRun: automationRunRecordSchema,
-  jobId: z.string(),
-})
-const automationApprovalResponseSchema = z.object({
-  automationRun: automationRunRecordSchema,
-  jobId: z.string().nullable(),
-})
-
 export function listAutomations(): Promise<{
   definitions: AutomationDefinition[]
   diagnostics: Array<Record<string, unknown>>
@@ -104,7 +94,7 @@ export function getAutomationHistory(automationId: string): Promise<AutomationVe
   return requestControl('automation:history', { automationId })
 }
 
-export function startAutomation(payload: StartAutomationPayload): Promise<z.infer<typeof automationStartResponseSchema>> {
+export function startAutomation(payload: StartAutomationPayload): Promise<WsCommandResponse<'automation:start'>> {
   return requestControl('automation:start', { ...payload })
 }
 
@@ -120,7 +110,7 @@ export function respondAutomationApproval(
   automationRunId: string,
   approvalId: string,
   decision: 'approved' | 'rejected',
-): Promise<z.infer<typeof automationApprovalResponseSchema>> {
+): Promise<WsCommandResponse<'automation:respond-approval'>> {
   return requestControl('automation:respond-approval', { automationRunId, approvalId, decision })
 }
 

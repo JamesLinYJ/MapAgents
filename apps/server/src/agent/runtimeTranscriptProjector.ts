@@ -160,6 +160,9 @@ export class RuntimeTranscriptProjector {
           )
         }
       }
+      if (raw.type === 'function_call' && !this.isPlatformManagedTool(raw.name, assembly)) {
+        await assembly.coordinator.markSdkToolCallPending(raw.callId)
+      }
       const eventLabel = raw.type === 'function_call'
         ? assembly.subAgentToolNames.has(raw.name)
           ? '子智能体任务'
@@ -269,6 +272,9 @@ export class RuntimeTranscriptProjector {
           }
         }
       }
+      if (raw.type === 'function_call_result') {
+        await assembly.coordinator.markSdkToolCallTerminal(raw.callId)
+      }
       return
     }
     if (event.name === 'tool_approval_requested') {
@@ -359,7 +365,7 @@ export class RuntimeTranscriptProjector {
         name: item.name,
         label: presentation.label,
         arguments: args,
-        ledgerStatus: sdkNativeLedgerStatus(sdkStatus),
+        ledgerStatus: 'started',
         source: presentation.source,
       },
     })
@@ -372,7 +378,7 @@ export class RuntimeTranscriptProjector {
     itemSink.completeItem(callItem.itemId, {
       name: item.name,
       callId: item.callId,
-      body: sdkStatus === 'incomplete' ? `${presentation.label}未完成` : `${presentation.label}已执行`,
+      body: sdkStatus === 'incomplete' ? `${presentation.label}未完成` : `${presentation.label}已发起`,
       isError: item.status === 'incomplete',
       metadata: { toolLabel: presentation.label, source: presentation.source },
     })

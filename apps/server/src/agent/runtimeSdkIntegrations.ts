@@ -15,8 +15,6 @@
 // skills capability。这里是 SDK 外部能力接入的唯一边界：运行时状态机不直接拼装
 // MCP server、技能目录或宿主路径授权。
 
-import { lstatSync, readdirSync, readFileSync } from 'node:fs'
-import path from 'node:path'
 import {
   MCPServerSSE,
   MCPServerStdio,
@@ -35,20 +33,24 @@ import {
 import {
   agentToolOutputMetadataSchema,
 } from '@geo-agent-platform/shared-types/runtime'
+import type { SkillMatchResult } from '@geo-agent-platform/shared-types/resources'
 import {
   Capability,
   dir,
-  file,
   skills,
-  type Entry,
 } from '@openai/agents/sandbox'
 import type {
   AgentRuntimeConfig,
   RuntimeMcpServerConfig,
-  RuntimeSkillConfig,
 } from '../schemas/types.js'
 import type { AgentsExecutionContext } from './agentsToolBridge.js'
 import { RunToolConcurrencyGate } from './runToolConcurrencyGate.js'
+import {
+  buildSkillRegistry,
+  buildSkillSandboxEntry,
+  explicitSkillIds,
+  selectRuntimeSkills,
+} from './skillRegistry.js'
 
 interface ConnectedMcpServers {
   active: MCPServer[]
@@ -80,13 +82,7 @@ export interface RuntimeSdkSandboxIntegration {
   capabilities: Capability[]
   pathGrants: []
   activeSkills: string[]
-}
-
-interface SkillDirectory {
-  name: string
-  description: string
-  manifestKey: string
-  entry: Entry
+  skillMatches: SkillMatchResult[]
 }
 
 export function buildRuntimeSdkSandboxIntegration(
@@ -94,27 +90,38 @@ export function buildRuntimeSdkSandboxIntegration(
   options: {
     baseDir?: string
     executionGate?: RunToolConcurrencyGate
+    query?: string
   } = {},
 ): RuntimeSdkSandboxIntegration {
   const skillConfig = config.sdk.skills
   if (!skillConfig.enabled) {
-    return { capabilities: [], pathGrants: [], activeSkills: [] }
+    const explicitlyRequested = options.query ? explicitSkillIds(options.query) : []
+    if (explicitlyRequested.length) {
+      throw new Error(`用户显式指定了 Skill '/${explicitlyRequested[0]}'，但 Skill 总开关已关闭。`)
+    }
+    return { capabilities: [], pathGrants: [], activeSkills: [], skillMatches: [] }
   }
   if (config.sandbox.backend === 'disabled') {
     throw new Error('SDK Skill 依赖沙箱工作区；当前平台已禁用沙箱，不能启用 Skill。')
   }
-  const skillDirectories = discoverSkillDirectories(skillConfig, options.baseDir ?? process.cwd())
-  if (skillDirectories.length === 0) {
-    throw new Error('已启用 SDK Skill，但没有发现可用的 SKILL.md。')
+  const registry = buildSkillRegistry(skillConfig, options.baseDir ?? process.cwd())
+  const selection = options.query === undefined
+    ? {
+        selected: registry.skills.filter(skill => skill.catalog.active),
+        matches: [] as SkillMatchResult[],
+      }
+    : selectRuntimeSkills(options.query, registry)
+  if (selection.selected.length === 0) {
+    return { capabilities: [], pathGrants: [], activeSkills: [], skillMatches: selection.matches }
   }
-  const children = Object.fromEntries(skillDirectories.map(skill => [skill.manifestKey, skill.entry]))
+  const children = Object.fromEntries(selection.selected.map(skill => [skill.manifestKey, buildSkillSandboxEntry(skill)]))
   const createSkillsCapability = () => skills({
     skillsPath: skillConfig.skillsPath,
     lazyFrom: {
       source: dir({ children }),
-      index: skillDirectories.map(skill => ({
-        name: skill.name,
-        description: skill.description,
+      index: selection.selected.map(skill => ({
+        name: skill.catalog.skillId,
+        description: skill.catalog.description,
         path: skill.manifestKey,
       })),
     },
@@ -127,7 +134,8 @@ export function buildRuntimeSdkSandboxIntegration(
       ),
     ],
     pathGrants: [],
-    activeSkills: skillDirectories.map(skill => skill.name),
+    activeSkills: selection.selected.map(skill => skill.catalog.skillId),
+    skillMatches: selection.matches,
   }
 }
 
@@ -420,181 +428,4 @@ function requireNonEmpty(value: string | null | undefined, message: string): str
   const normalized = value?.trim()
   if (!normalized) throw new Error(message)
   return normalized
-}
-
-function discoverSkillDirectories(config: RuntimeSkillConfig, baseDir: string): SkillDirectory[] {
-  const entries: SkillDirectory[] = []
-  for (const root of config.skillRoots) {
-    const absoluteRoot = resolveConfiguredHostPath(root, baseDir, false)
-    if (!isDirectory(absoluteRoot)) {
-      throw new Error(`Skill 根目录不存在或不是目录：${root}`)
-    }
-    assertNoSymlinkAncestor(absoluteRoot)
-    const children = readdirSync(absoluteRoot, { withFileTypes: true })
-      .filter(entry => entry.isDirectory())
-      .sort((left, right) => left.name.localeCompare(right.name))
-    for (const child of children) {
-      entries.push(readSkillDirectory(path.join(absoluteRoot, child.name)))
-    }
-  }
-  for (const skillPath of config.skillPaths) {
-    entries.push(readSkillDirectory(resolveConfiguredHostPath(skillPath, baseDir, false)))
-  }
-  return dedupeSkills(entries)
-}
-
-function readSkillDirectory(absolutePath: string): SkillDirectory {
-  if (!isDirectory(absolutePath)) {
-    throw new Error(`Skill 路径不存在或不是目录：${absolutePath}`)
-  }
-  assertNoSymlinkAncestor(absolutePath)
-  const skillFileNames = readdirSync(absolutePath).filter(entry => entry.toLowerCase() === 'skill.md')
-  if (skillFileNames.length !== 1) {
-    throw new Error(`Skill 目录必须包含且只能包含一个 SKILL.md：${absolutePath}`)
-  }
-  if (skillFileNames[0] !== 'SKILL.md') {
-    throw new Error(`Skill 文件名大小写必须严格为 SKILL.md：${absolutePath}`)
-  }
-  const skillMarkdownPath = path.join(absolutePath, skillFileNames[0])
-  if (!lstatSync(skillMarkdownPath).isFile()) {
-    throw new Error(`Skill 目录中的 SKILL.md 必须是普通文件：${absolutePath}`)
-  }
-  const markdown = readFileSync(skillMarkdownPath, 'utf8')
-  const frontmatter = parseSkillFrontmatter(markdown)
-  const directoryName = path.basename(absolutePath)
-  const name = frontmatter.name?.trim() || directoryName
-  const manifestKey = normalizeSkillManifestKey(directoryName)
-  return {
-    name,
-    description: frontmatter.description?.trim() || '未提供技能说明。',
-    manifestKey,
-    entry: buildSkillEntry(markdown, absolutePath),
-  }
-}
-
-function buildSkillEntry(markdown: string, skillPath: string): Entry {
-  const children: Record<string, Entry> = {
-    'SKILL.md': file({ content: markdown }),
-  }
-  for (const childName of ['scripts', 'references', 'assets']) {
-    const childPath = path.join(skillPath, childName)
-    if (!pathExists(childPath)) continue
-    if (!isDirectory(childPath)) {
-      throw new Error(`Skill 的 ${childName}/ 必须是目录：${childPath}`)
-    }
-    assertNoSymlinkAncestor(childPath)
-    children[childName] = readSkillAssetDirectory(childPath)
-  }
-  return dir({ children })
-}
-
-function readSkillAssetDirectory(absolutePath: string): Entry {
-  const children: Record<string, Entry> = {}
-  for (const entry of readdirSync(absolutePath, { withFileTypes: true })) {
-    const childPath = path.join(absolutePath, entry.name)
-    if (entry.isSymbolicLink()) {
-      throw new Error(`Skill 资源目录不能包含符号链接：${childPath}`)
-    }
-    if (entry.isDirectory()) {
-      children[entry.name] = readSkillAssetDirectory(childPath)
-      continue
-    }
-    if (entry.isFile()) {
-      children[entry.name] = file({ content: readFileSync(childPath) })
-      continue
-    }
-    throw new Error(`Skill 资源目录只能包含普通文件和目录：${childPath}`)
-  }
-  return dir({ children })
-}
-
-function parseSkillFrontmatter(markdown: string): Record<string, string> {
-  const lines = markdown.split(/\r?\n/u)
-  if (lines[0]?.trim() !== '---') return {}
-  const endIndex = lines.findIndex((line, index) => index > 0 && line.trim() === '---')
-  if (endIndex < 0) return {}
-  const result: Record<string, string> = {}
-  for (const line of lines.slice(1, endIndex)) {
-    const separator = line.indexOf(':')
-    if (separator < 0) continue
-    const key = line.slice(0, separator).trim()
-    const value = line.slice(separator + 1).trim()
-    if (key) result[key] = stripQuotes(value)
-  }
-  return result
-}
-
-function stripQuotes(value: string): string {
-  if (value.length >= 2 && value[0] === value[value.length - 1] && (value[0] === '"' || value[0] === "'")) {
-    return value.slice(1, -1)
-  }
-  return value
-}
-
-function dedupeSkills(skillsList: SkillDirectory[]): SkillDirectory[] {
-  const byName = new Set<string>()
-  const byKey = new Set<string>()
-  const deduped: SkillDirectory[] = []
-  for (const skill of skillsList) {
-    if (byName.has(skill.name)) throw new Error(`Skill 名称重复：${skill.name}`)
-    if (byKey.has(skill.manifestKey)) throw new Error(`Skill 目录名重复：${skill.manifestKey}`)
-    byName.add(skill.name)
-    byKey.add(skill.manifestKey)
-    deduped.push(skill)
-  }
-  return deduped
-}
-
-function normalizeSkillManifestKey(value: string): string {
-  const normalized = value.trim()
-  if (!/^[a-zA-Z0-9._-]+$/u.test(normalized)) {
-    throw new Error(`Skill 目录名 '${value}' 只能包含字母、数字、点、下划线和连字符。`)
-  }
-  return normalized
-}
-
-function resolveConfiguredHostPath(input: string, baseDir: string, allowRelativeEscape: boolean): string {
-  if (input.includes('\0')) throw new Error('路径不能包含空字节。')
-  const resolvedBase = path.resolve(baseDir)
-  const resolved = path.isAbsolute(input)
-    ? path.resolve(input)
-    : path.resolve(resolvedBase, input)
-  if (!path.isAbsolute(input) && !allowRelativeEscape && !isPathWithinRoot(resolvedBase, resolved)) {
-    throw new Error(`相对路径不能逃逸项目根目录：${input}`)
-  }
-  return resolved
-}
-
-function isDirectory(value: string): boolean {
-  try {
-    return lstatSync(value).isDirectory()
-  } catch {
-    return false
-  }
-}
-
-function pathExists(value: string): boolean {
-  try {
-    lstatSync(value)
-    return true
-  } catch {
-    return false
-  }
-}
-
-function assertNoSymlinkAncestor(value: string): void {
-  let current = path.resolve(value)
-  while (true) {
-    if (lstatSync(current).isSymbolicLink()) {
-      throw new Error(`Skill 路径不能包含符号链接：${value}`)
-    }
-    const parent = path.dirname(current)
-    if (parent === current) return
-    current = parent
-  }
-}
-
-function isPathWithinRoot(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate)
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }

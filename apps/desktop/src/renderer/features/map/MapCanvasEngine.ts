@@ -14,13 +14,18 @@
 // 封装 MapLibre source/layer 同步、bounds 解析和图层语义判定。
 // MapCanvas 负责生命周期和状态所有权，本文件只处理地图渲染规则。
 
-import maplibregl, { LngLatBounds, Map, type StyleSpecification } from 'maplibre-gl/dist/maplibre-gl-csp'
+import type {
+  Map,
+  PointLike,
+  StyleSpecification,
+} from 'maplibre-gl/dist/maplibre-gl-csp'
 
 import type { BasemapDescriptor } from '@geo-agent-platform/shared-types'
 import type { SceneRenderLayer } from './useMapScene'
 import { formatDurationLabel, formatRouteDistance } from './MapCanvasFormatters'
 
 export type GeoJsonPayload = GeoJSON.FeatureCollection
+export type MapBounds = [west: number, south: number, east: number, north: number]
 
 export function isStaleMapLayerError(message: string, layers: SceneRenderLayer[]) {
   const layerIds = message.match(/map_layer_[A-Za-z0-9_]+/gu) ?? []
@@ -133,7 +138,7 @@ export function collectGeometryTypes(collection: GeoJSON.FeatureCollection) {
   return types
 }
 
-export function extendBounds(bounds: LngLatBounds, collection: GeoJSON.FeatureCollection) {
+export function extendBounds(bounds: MapBounds, collection: GeoJSON.FeatureCollection) {
   collection.features.forEach((feature) => {
     const geometry = feature.geometry
     if (!geometry) {
@@ -147,23 +152,20 @@ export function boundsFromCollection(collection?: GeoJSON.FeatureCollection) {
   if (!collection?.features.length) {
     return null
   }
-  const bounds = new LngLatBounds()
+  const bounds = emptyMapBounds()
   extendBounds(bounds, collection)
-  return bounds.isEmpty() ? null : bounds
+  return hasMapBounds(bounds) ? bounds : null
 }
 
 export function boundsFromLayer(layer?: SceneRenderLayer) {
   if (!layer) {
     return null
   }
-  const bounds = new LngLatBounds()
   const [west, south, east, north] = layer.manifest.bounds
-  bounds.extend([west, south])
-  bounds.extend([east, north])
-  return bounds.isEmpty() ? null : bounds
+  return [west, south, east, north] satisfies MapBounds
 }
 
-export function appendGeometry(bounds: LngLatBounds, geometry: GeoJSON.Geometry) {
+export function appendGeometry(bounds: MapBounds, geometry: GeoJSON.Geometry) {
   if (geometry.type === 'GeometryCollection') {
     geometry.geometries.forEach((child) => appendGeometry(bounds, child))
     return
@@ -171,18 +173,21 @@ export function appendGeometry(bounds: LngLatBounds, geometry: GeoJSON.Geometry)
   appendCoordinates(bounds, geometry.coordinates)
 }
 
-export function appendCoordinates(bounds: LngLatBounds, coordinates: unknown) {
+export function appendCoordinates(bounds: MapBounds, coordinates: unknown) {
   if (!Array.isArray(coordinates)) {
     return
   }
   if (typeof coordinates[0] === 'number' && typeof coordinates[1] === 'number') {
-    bounds.extend([coordinates[0], coordinates[1]])
+    bounds[0] = Math.min(bounds[0], coordinates[0])
+    bounds[1] = Math.min(bounds[1], coordinates[1])
+    bounds[2] = Math.max(bounds[2], coordinates[0])
+    bounds[3] = Math.max(bounds[3], coordinates[1])
     return
   }
   coordinates.forEach((child) => appendCoordinates(bounds, child))
 }
 
-export function queryRenderedArtifactFeatures(map: Map, point: maplibregl.PointLike) {
+export function queryRenderedArtifactFeatures(map: Map, point: PointLike) {
   // MapLibre 在样式初始化、切换和销毁边界会短暂返回空 style；鼠标移动属于高频 UI 事件，
   // 这里把未就绪状态视为“当前没有可悬停的结果图层”，避免非业务错误冒泡到页面级边界。
   const layerIds = (map.getStyle()?.layers ?? [])
@@ -196,4 +201,12 @@ export function queryRenderedArtifactFeatures(map: Map, point: maplibregl.PointL
   } catch {
     return []
   }
+}
+
+function emptyMapBounds(): MapBounds {
+  return [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY]
+}
+
+function hasMapBounds(bounds: MapBounds): boolean {
+  return bounds.every(Number.isFinite)
 }

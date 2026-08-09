@@ -23,7 +23,10 @@ import {
 } from '@geo-agent-platform/shared-types/runtime'
 
 import type { ToolRegistry } from '../framework/registry.js'
-import type { ModelAdapter } from '../model/registry.js'
+import {
+  resolveAdapterModelCapabilities,
+  type ModelAdapter,
+} from '../model/registry.js'
 import type { LocalAgentTracing } from '../observability/agentTracing.js'
 import type { SubAgentState } from '../schemas/types.js'
 import type { AgentRuntimeStore } from '../store/runtimePorts.js'
@@ -32,6 +35,8 @@ import { errorMessage, modelSettings } from './runtimeSdkProjection.js'
 import type { ToolExecutionCoordinator } from './toolExecutionCoordinator.js'
 import type { RunEventSink } from './turnRunner.js'
 import type { RunToolConcurrencyGate } from './runToolConcurrencyGate.js'
+import type { SubAgentControlPlane } from './subAgentControlPlane.js'
+import { nowUtc } from '../utils/ids.js'
 
 export interface SubAgentRuntimeDependencies {
   selectedModel: string
@@ -46,6 +51,7 @@ export interface SubAgentRuntimeDependencies {
   eventSink: RunEventSink
   coordinator: ToolExecutionCoordinator
   executionGate: RunToolConcurrencyGate
+  subAgentControls: SubAgentControlPlane
   agentTracing?: LocalAgentTracing
 }
 
@@ -54,12 +60,31 @@ export function createSubAgentDeliveryAgent(
   dependencies: SubAgentRuntimeDependencies,
   approvalTools: ReadonlySet<string> = dependencies.approvalTools,
 ): Agent<AgentsExecutionContext, typeof subAgentDeliverySchema> {
+  const modelCapabilities = resolveSubAgentModelCapabilities(config, dependencies)
+  if (!modelCapabilities.capabilities.structuredOutput) {
+    throw new Error(`子智能体模型 '${modelCapabilities.modelId}' 不支持结构化输出`)
+  }
+  if (config.tools.length && !modelCapabilities.capabilities.toolCalls) {
+    throw new Error(`子智能体模型 '${modelCapabilities.modelId}' 不支持工具调用`)
+  }
   return new Agent<AgentsExecutionContext, typeof subAgentDeliverySchema>({
     name: config.agentId,
-    instructions: config.systemPrompt ?? config.summary,
+    instructions: async () => {
+      await dependencies.subAgentControls.touch(
+        dependencies.runId,
+        config.agentId,
+        '子智能体正在准备模型调用',
+      )
+      return [
+        config.systemPrompt ?? config.summary,
+        ...await dependencies.subAgentControls.consumeInstructions(dependencies.runId, config.agentId),
+      ].join('\n\n')
+    },
     handoffDescription: config.summary,
     model: resolveSubAgentModel(config, dependencies),
-    modelSettings: modelSettings(dependencies.reasoning),
+    modelSettings: modelSettings(
+      dependencies.reasoning !== false && modelCapabilities.capabilities.reasoning,
+    ),
     outputType: subAgentDeliverySchema,
     tools: createAgentsTools(dependencies.toolRegistry, approvalTools, {
       schemaMode: dependencies.adapter.agentToolSchemaMode,
@@ -177,11 +202,24 @@ export class SubAgentStateController {
               status: 'pending' as const,
               stepIds: [],
               currentStepId: null,
+              currentStep: null,
+              activeCallId: null,
               latestMessage: null,
+              progressPercent: null,
+              activityCount: 0,
+              startedAt: null,
+              completedAt: null,
+              lastActivityAt: null,
+              stalled: false,
+              stalledSince: null,
+              resultRefs: [],
+              deliveryEvidence: [],
+              controls: [],
             }),
             agentId: config.agentId,
             name: config.name,
             role: config.role,
+            delegationMode: config.delegationMode,
             summary: config.summary,
             tools: config.tools,
           }
@@ -203,6 +241,15 @@ export class SubAgentStateController {
     const runningHandoff = runningHandoffs[0]
     if (runningHandoff) {
       this.dependencies.coordinator.restoreHandoffOwnership(runningHandoff.agentId)
+      const config = handoffConfigs.get(runningHandoff.agentId)
+      if (!config) throw new Error(`Handoff Agent '${runningHandoff.agentId}' 缺少运行配置`)
+      this.dependencies.subAgentControls.begin({
+        runId: this.dependencies.runId,
+        agentId: runningHandoff.agentId,
+        callId: runningHandoff.activeCallId ?? `handoff:${runningHandoff.agentId}`,
+        delegationMode: 'handoff',
+        timeoutMs: config.timeoutMs,
+      })
     }
   }
 
@@ -216,12 +263,24 @@ export class SubAgentStateController {
       invocation,
       callId,
     )
+    const startedAt = nowUtc()
     await this.update(config.agentId, current => ({
       ...current,
       status: 'running',
       stepIds: stepId && !current.stepIds.includes(stepId) ? [...current.stepIds, stepId] : current.stepIds,
       currentStepId: stepId,
+      currentStep: '正在启动子智能体',
+      activeCallId: callId,
       latestMessage: '子智能体正在执行',
+      progressPercent: 5,
+      activityCount: current.activityCount + 1,
+      startedAt,
+      completedAt: null,
+      lastActivityAt: startedAt,
+      stalled: false,
+      stalledSince: null,
+      resultRefs: [],
+      deliveryEvidence: [],
     }))
     this.dependencies.eventSink.emit('subagent.updated', `${config.name} 正在执行`, {
       agentId: config.agentId,
@@ -246,6 +305,14 @@ export class SubAgentStateController {
       callId,
       stepId,
     )
+    await this.update(config.agentId, current => ({
+      ...current,
+      activeCallId: callId,
+      currentStep: '正在恢复子智能体调用',
+      lastActivityAt: nowUtc(),
+      stalled: false,
+      stalledSince: null,
+    }))
     return stepId
   }
 
@@ -256,11 +323,24 @@ export class SubAgentStateController {
     delivery: SubAgentDelivery,
   ): Promise<void> {
     await this.dependencies.coordinator.completeExternalAgentStep(callId, delivery.summary)
+    const completedAt = nowUtc()
     await this.update(config.agentId, current => ({
       ...current,
-      status: 'completed',
+      status: current.status === 'cancelling' ? 'cancelled' : 'completed',
       currentStepId: null,
-      latestMessage: delivery.summary,
+      currentStep: null,
+      activeCallId: null,
+      latestMessage: current.status === 'cancelling' ? '子智能体已按用户请求取消' : delivery.summary,
+      progressPercent: current.status === 'cancelling' ? current.progressPercent : 100,
+      completedAt,
+      lastActivityAt: completedAt,
+      stalled: false,
+      stalledSince: null,
+      resultRefs: [...new Set([
+        ...delivery.evidence.map(evidence => evidence.source),
+        ...delivery.artifactIds,
+      ])],
+      deliveryEvidence: delivery.evidence,
     }))
     this.dependencies.eventSink.emit('subagent.updated', `${config.name} 已完成`, {
       agentId: config.agentId,
@@ -276,11 +356,18 @@ export class SubAgentStateController {
     message: string,
   ): Promise<void> {
     await this.dependencies.coordinator.failExternalAgentStep(callId, message)
+    const completedAt = nowUtc()
     await this.update(config.agentId, current => ({
       ...current,
       status: 'failed',
       currentStepId: null,
+      currentStep: null,
+      activeCallId: null,
       latestMessage: message,
+      completedAt,
+      lastActivityAt: completedAt,
+      stalled: false,
+      stalledSince: null,
     }))
     this.dependencies.eventSink.emit('subagent.updated', `${config.name} 执行失败`, {
       agentId: config.agentId,
@@ -290,11 +377,29 @@ export class SubAgentStateController {
   }
 
   async startHandoff(config: RuntimeSubAgentConfig): Promise<void> {
+    const callId = `handoff:${config.agentId}`
+    this.dependencies.subAgentControls.begin({
+      runId: this.dependencies.runId,
+      agentId: config.agentId,
+      callId,
+      delegationMode: 'handoff',
+      timeoutMs: config.timeoutMs,
+    })
     this.dependencies.coordinator.activateHandoff(config.agentId)
+    const startedAt = nowUtc()
     await this.update(config.agentId, current => ({
       ...current,
       status: 'running',
+      activeCallId: callId,
+      currentStep: 'Handoff 已接管对话',
       latestMessage: '已取得当前对话的处理权',
+      progressPercent: 10,
+      activityCount: current.activityCount + 1,
+      startedAt,
+      completedAt: null,
+      lastActivityAt: startedAt,
+      stalled: false,
+      stalledSince: null,
     }))
     this.dependencies.eventSink.emit('subagent.updated', `${config.name} 已接管当前对话`, {
       agentId: config.agentId,
@@ -305,12 +410,25 @@ export class SubAgentStateController {
 
   async completeHandoff(config: RuntimeSubAgentConfig, summary: string): Promise<void> {
     this.dependencies.coordinator.finishHandoff(config.agentId)
+    const completedAt = nowUtc()
     await this.update(config.agentId, current => ({
       ...current,
-      status: 'completed',
+      status: current.status === 'cancelling' ? 'cancelled' : 'completed',
       currentStepId: null,
-      latestMessage: summary,
+      currentStep: null,
+      activeCallId: null,
+      latestMessage: current.status === 'cancelling' ? 'Handoff 子智能体已按请求结束' : summary,
+      progressPercent: current.status === 'cancelling' ? current.progressPercent : 100,
+      completedAt,
+      lastActivityAt: completedAt,
+      stalled: false,
+      stalledSince: null,
     }))
+    this.dependencies.subAgentControls.finish(
+      this.dependencies.runId,
+      config.agentId,
+      `handoff:${config.agentId}`,
+    )
     this.dependencies.eventSink.emit('subagent.updated', `${config.name} 已完成接管任务`, {
       agentId: config.agentId,
       status: 'completed',
@@ -320,17 +438,64 @@ export class SubAgentStateController {
 
   async failHandoff(config: RuntimeSubAgentConfig, message: string): Promise<void> {
     this.dependencies.coordinator.finishHandoff(config.agentId)
+    const completedAt = nowUtc()
     await this.update(config.agentId, current => ({
       ...current,
       status: 'failed',
       currentStepId: null,
+      currentStep: null,
+      activeCallId: null,
       latestMessage: message,
+      completedAt,
+      lastActivityAt: completedAt,
+      stalled: false,
+      stalledSince: null,
     }))
+    this.dependencies.subAgentControls.finish(
+      this.dependencies.runId,
+      config.agentId,
+      `handoff:${config.agentId}`,
+    )
     this.dependencies.eventSink.emit('subagent.updated', `${config.name} 接管后失败`, {
       agentId: config.agentId,
       status: 'failed',
       delegationMode: 'handoff',
     })
+  }
+
+  async cancel(
+    config: RuntimeSubAgentConfig,
+    callId: string,
+    stepId: string | null,
+    message: string,
+  ): Promise<void> {
+    await this.dependencies.coordinator.failExternalAgentStep(callId, message)
+    const completedAt = nowUtc()
+    await this.update(config.agentId, current => ({
+      ...current,
+      status: 'cancelled',
+      currentStepId: null,
+      currentStep: null,
+      activeCallId: null,
+      latestMessage: message,
+      completedAt,
+      lastActivityAt: completedAt,
+      stalled: false,
+      stalledSince: null,
+    }))
+    this.dependencies.eventSink.emit('subagent.updated', `${config.name} 已取消`, {
+      agentId: config.agentId,
+      status: 'cancelled',
+      stepId,
+    })
+  }
+
+  activity(config: RuntimeSubAgentConfig, currentStep: string): Promise<void> {
+    return this.dependencies.subAgentControls.touch(
+      this.dependencies.runId,
+      config.agentId,
+      currentStep,
+    )
   }
 
   private update(agentId: string, operation: (state: SubAgentState) => SubAgentState): Promise<void> {
@@ -367,6 +532,16 @@ export function resolveSubAgentModel(config: RuntimeSubAgentConfig, dependencies
     throw new Error(`模型 provider '${dependencies.adapter.provider}' 不支持创建子智能体模型`)
   }
   return dependencies.adapter.createAgentModel(modelName)
+}
+
+export function resolveSubAgentModelCapabilities(
+  config: RuntimeSubAgentConfig,
+  dependencies: Pick<SubAgentRuntimeDependencies, 'adapter' | 'selectedModel'>,
+) {
+  return resolveAdapterModelCapabilities(
+    dependencies.adapter,
+    config.model ?? dependencies.selectedModel,
+  )
 }
 
 function subAgentMaxTurnsMessage(config: RuntimeSubAgentConfig): string {

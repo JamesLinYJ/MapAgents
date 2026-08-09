@@ -11,7 +11,7 @@
 
 import { Agent, Runner, type ModelResponse } from '@openai/agents'
 import { z } from 'zod'
-import type { ModelAdapter } from './registry.js'
+import { resolveAdapterModelCapabilities, type ModelAdapter } from './registry.js'
 import type { NormalizedModelUsage } from './modelResultCache.js'
 
 export type StructuredOutputSchema = z.ZodObject
@@ -32,8 +32,13 @@ export async function runSdkStructuredOutput<TSchema extends StructuredOutputSch
   schema: TSchema,
   signal?: AbortSignal,
 ): Promise<StructuredModelOutput<TSchema>> {
-  if (adapter.agentRuntimeCapabilities.structuredOutput !== 'json_schema' || !adapter.createAgentModel) {
-    throw new Error(`模型 provider '${adapter.provider}' 不支持 SDK 原生 JSON Schema 结构化输出`)
+  const modelCapabilities = resolveAdapterModelCapabilities(adapter, modelName)
+  if (
+    adapter.agentRuntimeCapabilities.structuredOutput !== 'json_schema'
+    || !modelCapabilities.capabilities.structuredOutput
+    || !adapter.createAgentModel
+  ) {
+    throw new Error(`模型 '${modelCapabilities.modelId}' 不支持 SDK 原生 JSON Schema 结构化输出`)
   }
   const model = adapter.createAgentModel(modelName)
   const agent = new Agent<undefined, TSchema>({

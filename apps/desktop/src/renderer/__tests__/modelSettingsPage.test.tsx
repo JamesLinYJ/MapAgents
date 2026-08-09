@@ -32,6 +32,7 @@ describe('ModelSettingsPage', () => {
 
     expect(html).toContain('本机身份由应用托管')
     expect(html).toContain('deepseek-v4-flash')
+    expect(html).toContain('128,000 词元')
     expect(html).not.toContain('deepseek-v4-pro')
     expect(html).toContain('DeepSeek Responses API')
     expect(html).toContain('打开账号中心')
@@ -45,9 +46,18 @@ function deepSeek(): ModelProviderDescriptor {
     provider: 'deepseek',
     displayName: 'DeepSeek',
     configured: true,
+    source: 'builtin',
     defaultModel: 'deepseek-v4-flash',
     availableModels: ['deepseek-v4-flash'],
+    models: [{
+      modelId: 'deepseek-v4-flash',
+      contextWindowTokens: 128_000,
+      capabilities: { reasoning: true, structuredOutput: true, toolCalls: true },
+      modalities: ['text'],
+    }],
     capabilities: ['agents_sdk_live_supervisor', 'responses', 'tool_calls'],
+    modalities: ['text'],
+    protocol: 'responses',
     contextWindowTokens: 128_000,
     agentRuntime: {
       transport: 'deepseek_responses',

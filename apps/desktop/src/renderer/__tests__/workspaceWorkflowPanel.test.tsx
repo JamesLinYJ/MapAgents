@@ -11,6 +11,7 @@
 
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { agentStateSchema } from '@geo-agent-platform/shared-types'
 
 import { WorkspaceWorkflowPanel } from '../app/layout/WorkspaceWorkflowPanel'
 
@@ -25,5 +26,29 @@ describe('WorkspaceWorkflowPanel', () => {
     expect(html).toContain('在右侧智能对话中说明要解决的问题和期望成果')
     expect(html).toContain('下一步：在右侧智能对话输入目标并发送')
     expect(html).not.toBe('')
+  })
+
+  it('直接展示无 workflow 的 handoff 协作状态和详情入口', () => {
+    const agentState = agentStateSchema.parse({
+      sessionId: 'session_1',
+      userQuery: '核验地图成果',
+      subAgents: [{
+        agentId: 'quality_reviewer',
+        name: '质量核验助手',
+        role: '成果核验',
+        delegationMode: 'handoff',
+        status: 'running',
+        currentStep: '核对元数据',
+        progressPercent: 45,
+        stalled: true,
+      }],
+    })
+    const html = renderToStaticMarkup(<WorkspaceWorkflowPanel agentState={agentState} runId="run_1" />)
+
+    expect(html).toContain('1 个协作智能体')
+    expect(html).toContain('质量核验助手')
+    expect(html).toContain('成果核验 · Handoff')
+    expect(html).toContain('疑似停滞')
+    expect(html).toContain('aria-expanded="false"')
   })
 })

@@ -16,14 +16,16 @@ import type { ToolHandler } from '../../../framework/types.js'
 import { resolveDeveloperPath } from '../shared/pathPolicy.js'
 import { developerResult } from '../shared/result.js'
 import { sensitiveRipgrepGlobs } from '../shared/secretPathPolicy.js'
+import { assertDeveloperMode } from '../shared/modePolicy.js'
 
 let cachedRipgrepCommand: string | null = null
 
 class RipgrepLaunchError extends Error {}
 
-export const grepFilesHandler: ToolHandler = async (args) => {
+export const grepFilesHandler: ToolHandler = async (args, context) => {
   if (typeof args.pattern !== 'string' || !args.pattern) throw new Error('pattern 不能为空')
-  const root = await resolveDeveloperPath(args.path ?? '.', { mustExist: true, expectDirectory: true })
+  const roots = assertDeveloperMode(context)
+  const root = await resolveDeveloperPath(args.path ?? '.', { mustExist: true, expectDirectory: true, roots })
   const headLimit = typeof args.head_limit === 'number' ? Math.max(1, Math.min(Math.floor(args.head_limit), 1000)) : 100
   const rgArgs = [
     '--line-number',

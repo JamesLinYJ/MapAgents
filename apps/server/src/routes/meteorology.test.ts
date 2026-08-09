@@ -108,6 +108,41 @@ describe('meteorology routes', () => {
     expect(response.status).toBe(400)
     expect(deleted).toEqual(['file-uploaded'])
   })
+
+  it('rejects malformed report JSON instead of creating an empty-payload job', async () => {
+    const createdJobs: unknown[] = []
+    const store = {
+      meteorology: {
+        getMeteorologicalDataset: async () => ({
+          datasetId: 'dataset-test',
+          workspaceId: 'workspace-test',
+          createdByUserId: 'user-test',
+          visibility: 'workspace',
+          sessionId: 'session-test',
+          threadId: 'thread-test',
+        }),
+        createMeteorologicalJob: async (job: unknown) => { createdJobs.push(job) },
+      },
+    } as unknown as PlatformPersistenceFacade
+    const app = new Hono()
+    app.use('*', async (c, next) => {
+      c.set('auth', TEST_AUTH)
+      await next()
+    })
+    app.route('/', meteorologyRoutes(os.tmpdir(), emptyFileLifecycle(), store, testSecurity(), {
+      MAX_METEOROLOGY_UPLOAD_BYTES: 500 * 1024 * 1024,
+    }))
+
+    const response = await app.request('/api/v1/meteorology/datasets/dataset-test/report', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{broken',
+    })
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ detail: '请求体必须是有效的 JSON 对象。' })
+    expect(createdJobs).toEqual([])
+  })
 })
 
 function emptyFileLifecycle(): FileLifecyclePort {

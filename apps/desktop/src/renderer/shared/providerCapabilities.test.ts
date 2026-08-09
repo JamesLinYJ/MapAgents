@@ -21,9 +21,18 @@ const deepSeekProvider: ModelProviderDescriptor = {
   provider: 'deepseek',
   displayName: 'DeepSeek',
   configured: true,
+  source: 'builtin',
   defaultModel: 'deepseek-v4-flash',
   availableModels: ['deepseek-v4-flash'],
+  models: [{
+    modelId: 'deepseek-v4-flash',
+    contextWindowTokens: 128_000,
+    capabilities: { reasoning: true, structuredOutput: true, toolCalls: true },
+    modalities: ['text'],
+  }],
   capabilities: ['agents_sdk_live_supervisor', 'responses', 'tool_calls'],
+  modalities: ['text'],
+  protocol: 'responses',
   contextWindowTokens: 128000,
   agentRuntime: {
     transport: 'deepseek_responses',

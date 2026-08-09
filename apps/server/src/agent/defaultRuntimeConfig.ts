@@ -37,6 +37,10 @@ export function defaultRuntimeConfig(options: DefaultRuntimeConfigOptions = {}):
     maxTurns: 50,
     maxFunctionToolConcurrency: 4,
     sandbox,
+    developer: {
+      enabled: false,
+      allowedRoots: [],
+    },
     sdk: {
       hostedTools: {
         webSearch: {
@@ -55,6 +59,9 @@ export function defaultRuntimeConfig(options: DefaultRuntimeConfigOptions = {}):
         skillsPath: '.agents',
         skillPaths: [],
         skillRoots: [],
+        registrations: [],
+        autoMatchThreshold: 0.72,
+        candidateThreshold: 0.12,
       },
     },
     supervisor: {

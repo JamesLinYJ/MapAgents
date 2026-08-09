@@ -177,6 +177,15 @@ describe('geo-platform-developer-tools', () => {
     ])
   })
 
+  it('keeps every developer tool disabled until the runtime explicitly enables the mode', async () => {
+    const context = runtime()
+    if (!context.runtimeConfig) throw new Error('test runtime config missing')
+    context.runtimeConfig.developer.enabled = false
+    await expect(todoWriteTool.handler({
+      todos: [{ title: '不应写入', status: 'pending' }],
+    }, context)).rejects.toThrow('未显式启用开发者模式')
+  })
+
   it('declares title as required in the todo_write boundary schema', () => {
     expect(todoWriteTool.jsonSchema.required).toEqual(['todos'])
     const properties = todoWriteTool.jsonSchema.properties as Record<string, Record<string, unknown>>
@@ -186,10 +195,17 @@ describe('geo-platform-developer-tools', () => {
 })
 
 function runtime(): ToolContext {
+  const allowedRoot = process.env.DEVELOPER_TOOL_ALLOWED_ROOTS ?? ''
   return {
     runId: 'run_1',
     sessionId: 'session_1',
     threadId: 'thread_1',
+    runtimeConfig: {
+      developer: {
+        enabled: true,
+        allowedRoots: [allowedRoot],
+      },
+    } as ToolContext['runtimeConfig'],
     state: new Map(),
     resolveValueRef: () => {
       throw new Error('未知 valueRef')

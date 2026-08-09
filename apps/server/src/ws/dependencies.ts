@@ -19,6 +19,7 @@ import type { Env } from '../framework/env.js'
 import type { ManagedLayerService } from '../gis/managedLayers/managedLayerService.js'
 import type { ModelAdapterRegistry } from '../model/registry.js'
 import type { ModelCompletionService } from '../model/modelResultCache.js'
+import type { CustomProviderService } from '../model/customProviderService.js'
 import type { ToolRegistry } from '../framework/registry.js'
 import type { SandboxClientFactory } from '../agent/runtime.js'
 import type { OpenAIAgentsRuntime } from '../agent/runtime.js'
@@ -43,6 +44,7 @@ export interface WsDependencies {
   events: PlatformEventHub
   toolRegistry: ToolRegistry
   modelRegistry: ModelAdapterRegistry
+  customProviderService?: CustomProviderService
   modelCompletions?: ModelCompletionService
   managedLayers: ManagedLayerService
   runtimeRoot: string

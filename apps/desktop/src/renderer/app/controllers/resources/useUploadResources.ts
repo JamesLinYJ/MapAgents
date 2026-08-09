@@ -9,7 +9,12 @@
 // --------------------------------------------------------------------------
 
 import { startTransition, useCallback, useEffect } from 'react'
-import type { SessionRecord } from '@geo-agent-platform/shared-types'
+import {
+  runAttachmentInputSchema,
+  type MapScreenshotContext,
+  type RunAttachmentInput,
+  type SessionRecord,
+} from '@geo-agent-platform/shared-types'
 import type { DesktopFileSelectionHandle } from '../../../../contracts/desktopIpc'
 import {
   deleteAnyFile,
@@ -257,6 +262,66 @@ export function useUploadResources({
     }
   }, [ensureActiveThread, refreshAllFiles, setIsFileSubmitting, setUiError])
 
+  const uploadComposerAttachment = useCallback(async (
+    file: DesktopFileSelectionHandle,
+    kind: RunAttachmentInput['kind'],
+    mapContext: MapScreenshotContext | null = null,
+  ): Promise<RunAttachmentInput> => {
+    if (!file.mediaType.startsWith('image/')) {
+      throw new Error(`对话图片附件不接受 ${file.mediaType || '未知类型'}。`)
+    }
+    const threadId = await ensureActiveThread(kind === 'map_screenshot' ? '地图截图' : '图片附件')
+    const referenceId = `attachment:${file.handleId}`
+    const reference: UploadReference = {
+      id: referenceId,
+      kind: 'file',
+      name: file.name,
+      relativePath: file.name,
+      status: 'uploading',
+      detail: `${formatFileSize(file.sizeBytes)} · 正在附加`,
+      totalCount: 1,
+      completedCount: 0,
+      failedCount: 0,
+      totalBytes: file.sizeBytes,
+      progress: 0,
+    }
+    setUploadReferences(current => upsertUploadReference(current, reference))
+    try {
+      const uploaded = await uploadAnyFile(
+        file,
+        threadId,
+        `attachment_${crypto.randomUUID().replaceAll('-', '')}`,
+        file.name,
+      )
+      const attachment = runAttachmentInputSchema.parse({
+        fileId: uploaded.id,
+        name: uploaded.name,
+        mediaType: file.mediaType,
+        kind,
+        mapContext,
+      })
+      setUploadReferences(current => upsertUploadReference(current, {
+        ...reference,
+        status: 'ready',
+        detail: `${formatFileSize(uploaded.sizeBytes)} · ${kind === 'map_screenshot' ? '地图截图' : '图片附件'}`,
+        completedCount: 1,
+        progress: 1,
+      }))
+      await refreshAllFiles(threadId)
+      return attachment
+    } catch (error) {
+      setUploadReferences(current => upsertUploadReference(current, {
+        ...reference,
+        status: 'failed',
+        detail: formatUiError(error, '图片附件上传失败'),
+        completedCount: 1,
+        failedCount: 1,
+        progress: 1,
+      }))
+      throw error
+    }
+  }, [ensureActiveThread, refreshAllFiles, setUploadReferences])
+
   const removeFile = useCallback(async (fileId: string) => {
     try {
       setUiError(undefined)
@@ -279,6 +344,7 @@ export function useUploadResources({
     removeFile,
     uploadedLayerName,
     uploadFile,
+    uploadComposerAttachment,
     uploadFiles,
     uploadReferences,
   }

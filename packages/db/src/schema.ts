@@ -377,6 +377,35 @@ export const platformRuntimeConfig = pgTable('platform_runtime_config', {
   payloadJson: jsonb('payload_json').notNull().$type<Record<string, unknown>>(),
 })
 
+export const platformModelProviders = pgTable('platform_model_providers', {
+  providerId: text('provider_id').primaryKey(),
+  displayName: text('display_name').notNull(),
+  baseUrl: text('base_url').notNull(),
+  protocol: text('protocol').notNull(),
+  modelsJson: jsonb('models_json').notNull().$type<unknown[]>(),
+  defaultModel: text('default_model').notNull(),
+  toolSchemaMode: text('tool_schema_mode').notNull(),
+  networkAccess: text('network_access').notNull(),
+  apiKeyCiphertext: text('api_key_ciphertext'),
+  apiKeyIv: text('api_key_iv'),
+  apiKeyAuthTag: text('api_key_auth_tag'),
+  credentialKeyVersion: text('credential_key_version'),
+  createdByUserId: text('created_by_user_id').notNull().references(() => platformUsers.userId, { onDelete: 'restrict' }),
+  lastValidatedAt: timestamp('last_validated_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  createdByIdx: index('idx_platform_model_providers_created_by').on(table.createdByUserId),
+  credentialCompletenessCheck: check(
+    'platform_model_providers_credential_completeness_check',
+    sql`(
+      (${table.apiKeyCiphertext} IS NULL AND ${table.apiKeyIv} IS NULL AND ${table.apiKeyAuthTag} IS NULL AND ${table.credentialKeyVersion} IS NULL)
+      OR
+      (${table.apiKeyCiphertext} IS NOT NULL AND ${table.apiKeyIv} IS NOT NULL AND ${table.apiKeyAuthTag} IS NOT NULL AND ${table.credentialKeyVersion} IS NOT NULL)
+    )`,
+  ),
+}))
+
 export const toolCatalogEntries = pgTable('tool_catalog_entries', {
   toolName: text('tool_name').notNull(),
   toolKind: text('tool_kind').notNull(),

@@ -14,6 +14,8 @@ import {
   type AgentRuntimeConfig,
   type DirectToolRunResponse,
   type ModelProviderDescriptor,
+  type SkillCatalogSnapshot,
+  type SkillSearchResponse,
   type SpeechAuthorization,
   type SystemComponentsStatus,
   type TokenUsageSummary,
@@ -44,6 +46,14 @@ export function listTools(): Promise<ToolDescriptor[]> {
 
 export function listToolCatalogEntries(): Promise<Array<Record<string, unknown>>> {
   return requestControl('tool-catalog:list')
+}
+
+export function listSkills(): Promise<SkillCatalogSnapshot> {
+  return requestControl('skill:list')
+}
+
+export function searchSkills(query: string): Promise<SkillSearchResponse> {
+  return requestControl('skill:search', { query })
 }
 
 export function getRuntimeConfig(): Promise<AgentRuntimeConfig> {

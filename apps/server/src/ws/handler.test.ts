@@ -106,6 +106,7 @@ function createWsHandler(server: Parameters<typeof createWsHandlerBase>[0], depe
       usageStats,
       modelRegistry: dependencies.modelRegistry,
       runTasks,
+      fileLifecycle,
     }),
     resultCommitService: dependencies.resultCommitService ?? new ToolResultCommitService(dependencies.store),
     scheduledTaskService: dependencies.scheduledTaskService ?? ({} as WsDependencies['scheduledTaskService']),

@@ -11,9 +11,9 @@
 
 import type { Database } from '../db/connection.js'
 import type {
-  SessionRecord, AgentThreadRecord, AnalysisRun, RunSummary, AgentState,
-  RunEvent, ConversationItem, AgentRuntimeConfig, ArtifactRef, ContentRef,
-  RunCheckpoint, RunSteeringRecord, TranscriptEntry, TranscriptEntryKind, ThreadManifest,
+  SessionRecord, AgentThreadRecord, AnalysisRun, RunSummary, AgentState, AgentRunProfile,
+  RunEvent, ConversationItem, AgentRuntimeConfig, ArtifactRef, ContentRef, ContextReference,
+  RunCheckpoint, RunGoalInput, RunSteeringRecord, TranscriptEntry, TranscriptEntryKind, ThreadManifest,
   ThreadMemoryDocument, CompactionRecord, ToolValueRef, MeteorologicalDatasetRecord,
 } from '../schemas/types.js'
 import type { ConversationItemStoreUpdate } from '../conversation/itemUpdates.js'
@@ -36,6 +36,7 @@ import { MeteorologicalStore } from './postgres/meteorologicalStore.js'
 import { RuntimeConfigStore } from './postgres/runtimeConfigStore.js'
 import { ToolCatalogStore } from './postgres/toolCatalogStore.js'
 import { AutomationStore } from './postgres/automationStore.js'
+import { CustomProviderStore } from './postgres/customProviderStore.js'
 import { PlatformEventHub } from './platformEventHub.js'
 import {
   PostgresConversationPersistence,
@@ -60,6 +61,7 @@ export class PlatformPersistenceFacade {
   readonly runtimeConfiguration: RuntimeConfigStore
   readonly toolCatalog: ToolCatalogStore
   readonly automations: AutomationStore
+  readonly customProviders: CustomProviderStore
 
   private readonly index = new ConversationProjectionIndex()
   private readonly payloadStore: ConversationPayloadStore
@@ -134,6 +136,7 @@ export class PlatformPersistenceFacade {
     this.runtimeConfiguration = new RuntimeConfigStore(db)
     this.toolCatalog = new ToolCatalogStore(db)
     this.automations = new AutomationStore(db)
+    this.customProviders = new CustomProviderStore(db)
   }
 
   // --- Sessions ---
@@ -243,7 +246,10 @@ export class PlatformPersistenceFacade {
 
   async createRun(sessionId: string, query: string, opts?: {
     threadId?: string | null; modelProvider?: string | null; modelName?: string | null
+    runProfile?: AgentRunProfile
+    goal?: RunGoalInput | null
     runtimeConfigSnapshot?: AgentRuntimeConfig | null
+    contextReferences?: ContextReference[]
   }): Promise<AnalysisRun> {
     return this.runStore.create(sessionId, query, opts)
   }
@@ -449,4 +455,3 @@ export class PlatformPersistenceFacade {
     await this.threadStore.recordAttachment(threadId, input, action)
   }
 }
-

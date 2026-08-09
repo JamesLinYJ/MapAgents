@@ -23,6 +23,7 @@ import { createAgentsTools, type AgentsExecutionContext, type AgentsToolExecutio
 import { modelSettings } from './runtimeSdkProjection.js'
 import {
   resolveSubAgentModel,
+  resolveSubAgentModelCapabilities,
   SubAgentStateController,
   type SubAgentRuntimeDependencies,
 } from './subAgentRuntimeSupport.js'
@@ -48,6 +49,10 @@ export function createHandoffAgents(options: HandoffAgentFactoryOptions): Handof
     if (!AGENT_NAME.test(config.agentId)) throw new Error(`Handoff Agent id '${config.agentId}' 不是合法工具名`)
     const toolName = `handoff_to_${config.agentId}`
     if (options.toolRegistry.get(toolName)) throw new Error(`Handoff 工具名 '${toolName}' 与现有工具重名`)
+    const modelCapabilities = resolveSubAgentModelCapabilities(config, options)
+    if (config.tools.length && !modelCapabilities.capabilities.toolCalls) {
+      throw new Error(`Handoff 模型 '${modelCapabilities.modelId}' 不支持工具调用`)
+    }
     const executionScope: AgentsToolExecutionScope = {
       isToolEnabled: name => options.coordinator.isToolEnabledForHandoff(config.agentId, name),
       validateToolCall: (name, args) => options.coordinator.validateToolCall(name, args),
@@ -65,14 +70,24 @@ export function createHandoffAgents(options: HandoffAgentFactoryOptions): Handof
     }
     const agent = new Agent<AgentsExecutionContext>({
       name: config.agentId,
-      instructions: [
-        config.systemPrompt ?? config.summary,
-        '你已经通过 handoff 接管当前对话。请完成任务并直接返回可展示给用户的中文 Markdown 正文；不要再把任务退回给主智能体。',
-        'Artifact、警告和运行证据由平台根据真实工具账本附加，不要在正文中伪造 ID 或结构化包装。',
-      ].join('\n\n'),
+      instructions: async () => {
+        await options.subAgentControls.touch(
+          options.runId,
+          config.agentId,
+          'Handoff 子智能体正在准备模型调用',
+        )
+        return [
+          config.systemPrompt ?? config.summary,
+          ...await options.subAgentControls.consumeInstructions(options.runId, config.agentId),
+          '你已经通过 handoff 接管当前对话。请完成任务并直接返回可展示给用户的中文 Markdown 正文；不要再把任务退回给主智能体。',
+          'Artifact、警告和运行证据由平台根据真实工具账本附加，不要在正文中伪造 ID 或结构化包装。',
+        ].join('\n\n')
+      },
       handoffDescription: config.summary,
       model: resolveSubAgentModel(config, options),
-      modelSettings: modelSettings(options.reasoning),
+      modelSettings: modelSettings(
+        options.reasoning !== false && modelCapabilities.capabilities.reasoning,
+      ),
       tools: createAgentsTools(options.toolRegistry, options.approvalTools, {
         schemaMode: options.adapter.agentToolSchemaMode,
         allowedToolNames: new Set(config.tools),

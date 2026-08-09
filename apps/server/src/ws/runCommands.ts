@@ -10,6 +10,11 @@
 // --------------------------------------------------------------------------
 
 import { z } from 'zod'
+import {
+  agentRunProfileSchema,
+  runAttachmentsSchema,
+  runGoalInputSchema,
+} from '../schemas/types.js'
 
 import { optionalPositiveInteger, requiredRunProvider } from './payload.js'
 import { respondDecision } from './decisionCommand.js'
@@ -37,7 +42,10 @@ const runStartPayloadSchema = z.object({
   modelProvider: z.string().min(1).nullable().optional(),
   modelName: z.string().min(1).nullable().optional(),
   executionMode: z.enum(['auto', 'plan']).optional(),
+  runProfile: agentRunProfileSchema.optional(),
+  goal: runGoalInputSchema.nullable().optional(),
   reasoning: z.boolean().optional(),
+  attachments: runAttachmentsSchema.default([]),
 }).passthrough()
 const respondDecisionPayloadSchema = z.object({
   runId: z.string().min(1),
@@ -79,7 +87,10 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
         modelProvider: payload.modelProvider ?? null,
         modelName: payload.modelName ?? null,
         executionMode: payload.executionMode === 'plan' ? 'plan' : 'auto',
+        runProfile: payload.runProfile ?? 'standard',
+        goal: payload.goal ?? null,
         reasoning: payload.reasoning !== false,
+        attachments: payload.attachments,
         beforeLaunch: run => subscribeToRun(
           context.ws,
           run.id,
@@ -149,6 +160,7 @@ export function registerRunCommands(registry: WsCommandRegistry): void {
         provider: requiredRunProvider(run.modelProvider),
         modelName: run.modelName,
         runtimeConfig: run.runtimeConfigSnapshot,
+        runProfile: run.state.runProfile,
         resume: true,
         auth,
       }, { onComplete: runId => sendRunSnapshot(context.ws, runId, context.dependencies.store) })

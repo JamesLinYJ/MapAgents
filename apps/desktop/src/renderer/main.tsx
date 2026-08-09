@@ -25,6 +25,8 @@ import './index.css'
 import { BootScreen } from './app/AppLoader'
 import { ErrorBoundary } from './shared/components/ErrorBoundary'
 
+// Renderer 入口只挂载一次且没有可热刷新的导出；异步运行壳本身位于独立模块。
+// eslint-disable-next-line react-refresh/only-export-components
 const DesktopApplicationRuntime = lazy(() => import('./app/DesktopApplicationRuntime'))
 
 const rootElement = document.getElementById('root')

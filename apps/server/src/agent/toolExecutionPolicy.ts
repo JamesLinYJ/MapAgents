@@ -10,13 +10,21 @@
 // --------------------------------------------------------------------------
 
 import type { AgentState } from '@geo-agent-platform/shared-types'
+import type { AgentRuntimeConfig } from '@geo-agent-platform/shared-types/runtime'
 import type { ToolRegistry } from '../framework/registry.js'
+
+export const DEVELOPER_TOOL_PROVIDER_ID = 'geo-platform-developer-tools'
+
+export function developerToolsEnabledForRuntime(config: AgentRuntimeConfig): boolean {
+  return config.developer.enabled && config.developer.allowedRoots.length > 0
+}
 
 export interface ToolExecutionPolicyDependencies {
   registry: ToolRegistry
   state: () => AgentState
   claimedWorkflowSteps: () => ReadonlySet<string>
   externalAgentCalls: () => ReadonlyMap<string, string>
+  developerModeEnabled?: () => boolean
 }
 
 /**
@@ -41,6 +49,7 @@ export class ToolExecutionPolicy {
   isToolEnabled(toolName: string): boolean {
     const tool = this.dependencies.registry.get(toolName)
     if (!tool) return false
+    if (!this.isDeveloperToolAllowed(tool.providerId)) return false
     const state = this.dependencies.state()
     if (state.planMode) return tool.isReadOnly && !tool.isDestructive
     if (!state.agentWorkflow) return true
@@ -93,13 +102,17 @@ export class ToolExecutionPolicy {
   }
 
   isToolEnabledForHandoff(agentId: string, toolName: string): boolean {
+    const tool = this.dependencies.registry.get(toolName)
     return this.activeHandoffAgentId === agentId
-      && Boolean(this.dependencies.registry.get(toolName))
+      && Boolean(tool)
+      && this.isDeveloperToolAllowed(tool?.providerId)
       && this.isHandoffEnabled(agentId)
   }
 
   isToolEnabledForSubAgent(agentId: string, toolName: string): boolean {
-    return Boolean(this.dependencies.registry.get(toolName))
+    const tool = this.dependencies.registry.get(toolName)
+    return Boolean(tool)
+      && this.isDeveloperToolAllowed(tool?.providerId)
       && this.isExecutionEnabled()
       && [...this.dependencies.externalAgentCalls().values()].some(candidate => candidate === agentId)
   }
@@ -156,6 +169,11 @@ export class ToolExecutionPolicy {
       && step.toolName === agentId
       && step.ownerAgentId === agentId
     ))
+  }
+
+  private isDeveloperToolAllowed(providerId?: string): boolean {
+    return providerId !== DEVELOPER_TOOL_PROVIDER_ID
+      || this.dependencies.developerModeEnabled?.() === true
   }
 }
 

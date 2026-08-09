@@ -18,6 +18,7 @@ import {
   type LayerDescriptor,
   type MeteorologicalDatasetRecord,
   type MeteorologicalJobRecord,
+  type WsCommandResponse,
 } from '@geo-agent-platform/shared-types'
 import { z } from 'zod'
 
@@ -56,23 +57,6 @@ const meteorologicalUploadResponseSchema = z.object({
   job: meteorologicalJobRecordSchema.nullable(),
 })
 
-const fileEntrySchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  size: z.string(),
-  sizeBytes: z.number().nonnegative(),
-  uploadedAt: z.string(),
-  status: z.string(),
-  threadId: z.string().nullable().optional(),
-  relativePath: z.string().optional(),
-  sourceRelativePath: z.string().nullable().optional(),
-})
-
-const fileListResponseSchema = z.object({
-  files: z.array(fileEntrySchema),
-  total: z.number().int().nonnegative(),
-})
-
 const uploadedFileSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -80,9 +64,6 @@ const uploadedFileSchema = z.object({
   sizeBytes: z.number().nonnegative(),
   sourceRelativePath: z.string().nullable().optional(),
 })
-
-const deletedFileSchema = z.object({ deleted: z.boolean(), id: z.string() })
-const deletedLayerSchema = z.object({ deleted: z.boolean(), layerKey: z.string() })
 
 export function listLayers(sessionId?: string | null, threadId?: string | null): Promise<LayerDescriptor[]> {
   return requestControl('layer:list', { sessionId, threadId })
@@ -92,7 +73,7 @@ export function updateLayer(layerKey: string, payload: Record<string, unknown>):
   return requestControl('layer:update', { layerKey, update: payload })
 }
 
-export function deleteLayer(layerKey: string): Promise<z.infer<typeof deletedLayerSchema>> {
+export function deleteLayer(layerKey: string): Promise<WsCommandResponse<'layer:delete'>> {
   return requestControl('layer:delete', { layerKey })
 }
 
@@ -251,7 +232,10 @@ export async function uploadAnyFile(
   )
 }
 
-export function deleteAnyFile(fileId: string, threadId: string): Promise<z.infer<typeof deletedFileSchema>> {
+export function deleteAnyFile(
+  fileId: string,
+  threadId: string,
+): Promise<WsCommandResponse<'file:delete'>> {
   return requestControl('file:delete', { fileId, threadId })
 }
 

@@ -10,12 +10,11 @@
 // --------------------------------------------------------------------------
 
 import {
-  memoryFileRecordSchema,
   type MemoryFileRecord,
   type MemorySearchResult,
   type ThreadMemoryDocument,
+  type WsCommandResponse,
 } from '@geo-agent-platform/shared-types'
-import { z } from 'zod'
 
 import { requestControl } from './transport'
 
@@ -30,20 +29,6 @@ export interface WriteMemoryPayload {
   relativePath?: string | null
 }
 
-const deletedMemorySchema = z.object({ deleted: z.boolean(), relativePath: z.string() })
-const dreamMemoryResponseSchema = z.object({
-  changed: z.boolean(),
-  message: z.string(),
-  records: z.array(memoryFileRecordSchema),
-  summary: z.string().optional(),
-  warnings: z.array(z.string()).optional(),
-})
-const instructionMemoryResponseSchema = z.object({
-  enabled: z.boolean(),
-  entrypointName: z.string(),
-  records: z.array(memoryFileRecordSchema),
-})
-
 export function listMemories(scope?: EditableMemoryScope): Promise<{ records: MemoryFileRecord[]; total: number }> {
   return requestControl('memory:list', { scope })
 }
@@ -56,7 +41,10 @@ export function writeMemory(payload: WriteMemoryPayload): Promise<MemoryFileReco
   return requestControl('memory:write', { ...payload })
 }
 
-export function deleteMemory(scope: EditableMemoryScope, relativePath: string): Promise<z.infer<typeof deletedMemorySchema>> {
+export function deleteMemory(
+  scope: EditableMemoryScope,
+  relativePath: string,
+): Promise<WsCommandResponse<'memory:delete'>> {
   return requestControl('memory:delete', { scope, relativePath })
 }
 
@@ -68,7 +56,7 @@ export function extractMemories(threadId: string, runId?: string | null): Promis
   return requestControl('memory:extract', { threadId, runId })
 }
 
-export function dreamMemories(force = false): Promise<z.infer<typeof dreamMemoryResponseSchema>> {
+export function dreamMemories(force = false): Promise<WsCommandResponse<'memory:dream'>> {
   return requestControl('memory:dream', { force })
 }
 
@@ -80,6 +68,6 @@ export function rebuildSessionMemory(threadId: string): Promise<ThreadMemoryDocu
   return requestControl('memory:session:rebuild', { threadId })
 }
 
-export function listInstructionMemories(): Promise<z.infer<typeof instructionMemoryResponseSchema>> {
+export function listInstructionMemories(): Promise<WsCommandResponse<'memory:instructions:list'>> {
   return requestControl('memory:instructions:list')
 }

@@ -22,8 +22,10 @@ import type {
   DesktopEvent,
   DesktopExportRequest,
   DesktopExportResult,
+  DesktopFileHandleReleaseRequest,
   DesktopFileSelectionHandle,
   DesktopFileSelectionRequest,
+  DesktopImageBlobStageRequest,
   DesktopTextFileReadRequest,
   DesktopTextFileReadResult,
   DesktopMicrophonePermissionResult,
@@ -32,7 +34,6 @@ import type {
 } from './desktopIpc.js'
 import type {
   OperationsOperationResult,
-  OperationsLogEntry,
   OperationsLogFilter,
   OperationsLogPage,
   OperationsLogQuery,
@@ -63,6 +64,8 @@ export interface DesktopBridge {
   }
   readonly files: {
     select(request: DesktopFileSelectionRequest): Promise<DesktopFileSelectionHandle[]>
+    stageImage(request: DesktopImageBlobStageRequest): Promise<DesktopFileSelectionHandle>
+    release(request: DesktopFileHandleReleaseRequest): Promise<void>
     readText(request: DesktopTextFileReadRequest): Promise<DesktopTextFileReadResult>
   }
   readonly permissions: {

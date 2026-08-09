@@ -27,13 +27,15 @@ import { resolveRuntimeValueRef, type ToolResultCommitService } from '../tools/r
 import { makeId } from '../utils/ids.js'
 import { ItemSink } from '../conversation/itemSink.js'
 import { RunEventSink } from './turnRunner.js'
-import { ToolExecutionPolicy } from './toolExecutionPolicy.js'
+import { developerToolsEnabledForRuntime, ToolExecutionPolicy } from './toolExecutionPolicy.js'
 import {
   completeAgentWorkflowStep,
   failAgentWorkflowStep,
   findRunnableAgentWorkflowStep,
   startAgentWorkflowStep,
 } from './agentWorkflowState.js'
+import { validateGeospatialComposeWorkflowDraft } from './geospatialCompose.js'
+import { ToolCallRecoveryLedger } from './toolCallRecoveryLedger.js'
 
 interface CoordinatorOptions {
   store: ToolExecutionStore
@@ -49,12 +51,14 @@ interface CoordinatorOptions {
   modelName?: string | null
   inlineToolResultMaxChars: number
   runtimeConfig?: import('../schemas/types.js').AgentRuntimeConfig
+  subAgentConfigs?: import('../schemas/types.js').AgentRuntimeConfig['subAgents']
   auth?: AuthContext | null
   eventSink: RunEventSink
   itemSink: ItemSink
   valueState: Map<string, unknown>
   signal: AbortSignal
   onPlanModeChanged?: (enabled: boolean) => void
+  initialPendingToolCallIds?: readonly string[]
 }
 
 // ToolExecutionCoordinator
@@ -66,24 +70,39 @@ export class ToolExecutionCoordinator {
   private readonly callItems = new Map<string, string>()
   private readonly claimedWorkflowSteps = new Map<string, string>()
   private readonly externalAgentCalls = new Map<string, string>()
-  private readonly pendingToolCallIds = new Set<string>()
   private readonly outputMetadata = new Map<string, AgentToolOutputMetadata>()
   private workflowMutation: Promise<void> = Promise.resolve()
   private resultMutation: Promise<void> = Promise.resolve()
-  private checkpointMutation: Promise<void> = Promise.resolve()
   private readonly policy: ToolExecutionPolicy
+  private readonly recoveryLedger: ToolCallRecoveryLedger
 
   constructor(private readonly options: CoordinatorOptions) {
+    this.recoveryLedger = new ToolCallRecoveryLedger(
+      options.store,
+      options.runId,
+      options.initialPendingToolCallIds,
+    )
     this.policy = new ToolExecutionPolicy({
       registry: options.registry,
       state: () => this.options.store.getRun(this.options.runId).state,
       claimedWorkflowSteps: () => new Set(this.claimedWorkflowSteps.values()),
       externalAgentCalls: () => this.externalAgentCalls,
+      developerModeEnabled: () => this.options.runtimeConfig
+        ? developerToolsEnabledForRuntime(this.options.runtimeConfig)
+        : false,
     })
   }
 
   isExecutionEnabled(): boolean {
     return this.policy.isExecutionEnabled()
+  }
+
+  markSdkToolCallPending(callId: string): Promise<void> {
+    return this.recoveryLedger.markPending(callId)
+  }
+
+  markSdkToolCallTerminal(callId: string): Promise<void> {
+    return this.recoveryLedger.markTerminal(callId)
   }
 
   formatToolFailureForModel(toolName: string, message: string): string {
@@ -154,11 +173,20 @@ export class ToolExecutionCoordinator {
 
   validateToolCall(toolName: string, args: Record<string, unknown>): string | null {
     if (!AGENT_WORKFLOW_DEFINITION_TOOLS.has(toolName)) return null
-    return validateAgentWorkflowDraft(
+    const genericError = validateAgentWorkflowDraft(
       args,
       this.options.registry,
-      this.options.runtimeConfig?.subAgents ?? [],
+      this.options.subAgentConfigs ?? this.options.runtimeConfig?.subAgents ?? [],
     )
+    if (genericError) return genericError
+    const state = this.options.store.getRun(this.options.runId).state
+    return state.runProfile === 'geospatial_compose'
+      ? validateGeospatialComposeWorkflowDraft(
+          args,
+          this.options.registry,
+          this.options.subAgentConfigs ?? this.options.runtimeConfig?.subAgents ?? [],
+        )
+      : null
   }
 
   async rejectPreparedToolCall(toolName: string, callId: string, message: string): Promise<void> {
@@ -200,7 +228,6 @@ export class ToolExecutionCoordinator {
         ledgerStatus: 'prepared',
       },
     })
-    await this.updatePendingToolCall(callId, true)
     const item = this.options.itemSink.startItem('function_call', {
       name: toolName,
       callId,
@@ -239,7 +266,6 @@ export class ToolExecutionCoordinator {
         ledgerStatus: 'prepared',
       },
     })
-    await this.updatePendingToolCall(callId, true)
     this.preparedCalls.add(callId)
   }
 
@@ -275,6 +301,7 @@ export class ToolExecutionCoordinator {
     const { workflowStepId } = splitWorkflowStepIdentity(args)
     const stepId = await this.claimAgentWorkflowStep(agentId, callId, agentId, workflowStepId)
     this.externalAgentCalls.set(callId, agentId)
+    await this.updatePendingToolCall(callId, true)
     return stepId
   }
 
@@ -360,6 +387,7 @@ export class ToolExecutionCoordinator {
       this.policy.assertPlanModeAllows(toolName)
       if (ownerAgentId) this.policy.assertExternalAgentIsRunning(ownerAgentId)
       else await this.claimAgentWorkflowStep(toolName, callId, undefined, invocation.workflowStepId)
+      await this.updatePendingToolCall(callId, true)
       await this.appendLedger(callId, toolName, 'started')
       const toolLabel = this.toolLabel(toolName)
       this.options.eventSink.emit('tool.started', toolLabel, { tool: toolName, toolLabel, callId })
@@ -665,25 +693,9 @@ export class ToolExecutionCoordinator {
   }
 
   private updatePendingToolCall(callId: string, pending: boolean): Promise<void> {
-    const operation = this.checkpointMutation.then(async () => {
-      if (pending) this.pendingToolCallIds.add(callId)
-      else this.pendingToolCallIds.delete(callId)
-      const pendingToolCallIds = [...this.pendingToolCallIds]
-      await this.options.store.saveRunCheckpoint(this.options.runId, {
-        pendingToolCallIds,
-        recoveryStatus: pendingToolCallIds.length ? 'requires_action' : 'clean',
-      })
-    }, async () => {
-      if (pending) this.pendingToolCallIds.add(callId)
-      else this.pendingToolCallIds.delete(callId)
-      const pendingToolCallIds = [...this.pendingToolCallIds]
-      await this.options.store.saveRunCheckpoint(this.options.runId, {
-        pendingToolCallIds,
-        recoveryStatus: pendingToolCallIds.length ? 'requires_action' : 'clean',
-      })
-    })
-    this.checkpointMutation = operation.then(() => undefined, () => undefined)
-    return operation
+    return pending
+      ? this.recoveryLedger.markPending(callId)
+      : this.recoveryLedger.markTerminal(callId)
   }
 
   private emitAgentWorkflowControlEvent(toolName: string): void {

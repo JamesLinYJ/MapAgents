@@ -23,13 +23,14 @@ import type {
   RunEvent,
   UserIntent,
 } from '@geo-agent-platform/shared-types'
+import { METEOROLOGICAL_UPLOAD_SUFFIXES } from '@geo-agent-platform/shared-types/meteorology'
 import type { DesktopFileSelectionHandle } from '../../contracts/desktopIpc'
 import type { FileEntry } from '../api/client'
 import type { DataReferenceSummary } from '../shared/constants'
 import type { PanelMode, PrimaryNav, UploadReference } from './types'
 
 const LAYER_FILE_SUFFIXES = new Set(['.geojson', '.json', '.gpkg', '.zip'])
-const METEOROLOGICAL_FILE_SUFFIXES = new Set(['.nc', '.nc4', '.grib', '.grb', '.grb2', '.tif', '.tiff', '.h5', '.hdf5', '.bz2'])
+const METEOROLOGICAL_FILE_SUFFIXES = new Set<string>(METEOROLOGICAL_UPLOAD_SUFFIXES)
 
 export function formatModelRunStatus(status?: AnalysisRun['status']) {
   if (status === 'running' || status === 'queued') return '调用中'

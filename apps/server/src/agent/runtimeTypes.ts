@@ -12,8 +12,10 @@
 import type { Agent, Runner } from '@openai/agents'
 import type { SandboxRunConfig } from '@openai/agents/sandbox'
 
+import type { AgentRunProfile } from '@geo-agent-platform/shared-types/core'
 import type { AgentRuntimeConfig } from '@geo-agent-platform/shared-types/runtime'
 import type { ModelAdapter } from '../model/registry.js'
+import type { ModelCapabilitySnapshot } from '../schemas/types.js'
 import type { AuthContext } from '../security/types.js'
 import type { FileAgentsSession } from './fileAgentsSession.js'
 import type { AgentsExecutionContext } from './agentsToolBridge.js'
@@ -30,6 +32,7 @@ export interface RunOptions {
   modelName?: string | null
   runtimeConfig: AgentRuntimeConfig
   executionMode?: 'plan' | 'auto'
+  runProfile?: AgentRunProfile
   reasoning?: boolean
   resume?: boolean
   auth?: AuthContext | null
@@ -44,6 +47,7 @@ export interface RuntimeAssembly {
   coordinator: ToolExecutionCoordinator
   adapter: ModelAdapter
   modelName: string
+  modelCapabilities: ModelCapabilitySnapshot
   sandbox?: SandboxRunConfig
   sdkIntegration: RuntimeSdkIntegration
   modelInput: RuntimeModelInputController

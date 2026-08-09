@@ -11,7 +11,10 @@
 
 import {
   type AgentExecutionMode,
+  type AgentRunProfile,
   type AnalysisRun,
+  type RunGoalInput,
+  type RunAttachmentInput,
   type RunSnapshot,
   type RunSteeringRecord,
 } from '@geo-agent-platform/shared-types'
@@ -24,6 +27,9 @@ export function startAnalysis(
   provider?: string,
   model?: string,
   executionMode: AgentExecutionMode = 'auto',
+  runProfile: AgentRunProfile = 'standard',
+  goal: RunGoalInput | null = null,
+  attachments: RunAttachmentInput[] = [],
 ): Promise<AnalysisRun> {
   return requestControl('run:start', {
     sessionId,
@@ -31,6 +37,9 @@ export function startAnalysis(
     provider,
     modelName: model,
     executionMode,
+    runProfile,
+    goal,
+    attachments,
   })
 }
 
@@ -40,6 +49,9 @@ export function startThreadRun(
   provider?: string,
   model?: string,
   executionMode: AgentExecutionMode = 'auto',
+  runProfile: AgentRunProfile = 'standard',
+  goal: RunGoalInput | null = null,
+  attachments: RunAttachmentInput[] = [],
 ): Promise<AnalysisRun> {
   return requestControl('run:start', {
     threadId,
@@ -47,6 +59,9 @@ export function startThreadRun(
     provider,
     modelName: model,
     executionMode,
+    runProfile,
+    goal,
+    attachments,
   })
 }
 

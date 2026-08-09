@@ -25,6 +25,7 @@ import {
 import { agentRuntimeConfigSchema } from '@geo-agent-platform/shared-types/runtime'
 import type { AgentsExecutionContext } from './agentsToolBridge.js'
 import { RunToolConcurrencyGate } from './runToolConcurrencyGate.js'
+import { buildSkillRegistry } from './skillRegistry.js'
 
 describe('runtime SDK integrations', () => {
   it('keeps the default runtime SDK config schema-valid with native web search enabled', () => {
@@ -39,6 +40,7 @@ describe('runtime SDK integrations', () => {
     expect(parsed.sdk.skills.enabled).toBe(false)
     expect(parsed.sdk.skills.skillPaths).toHaveLength(0)
     expect(parsed.sdk.skills.skillRoots).toHaveLength(0)
+    expect(parsed.sdk.skills.registrations).toHaveLength(0)
   })
 
   it('rejects enabled HTTP MCP server config without a URL', () => {
@@ -78,6 +80,38 @@ describe('runtime SDK integrations', () => {
     }
   })
 
+  it('routes only a trusted high-confidence built-in Skill into the run sandbox', () => {
+    const config = defaultRuntimeConfig({ sandbox: { backend: 'unix_local' } })
+    config.sdk.skills.enabled = true
+
+    const matched = buildRuntimeSdkSandboxIntegration(config, { query: '请先做坐标系审计' })
+    expect(matched.activeSkills).toEqual(['crs-audit'])
+    expect(matched.skillMatches[0]).toMatchObject({
+      skillId: 'crs-audit',
+      matchKind: 'exact',
+      autoLoad: true,
+    })
+
+    const unmatched = buildRuntimeSdkSandboxIntegration(config, { query: '问候你好' })
+    expect(unmatched.activeSkills).toEqual([])
+    expect(unmatched.capabilities).toEqual([])
+  })
+
+  it('never enables Skill instructions without a sandbox backend', () => {
+    const config = defaultRuntimeConfig()
+    config.sdk.skills.enabled = true
+
+    expect(() => buildRuntimeSdkSandboxIntegration(config, { query: '/crs-audit' }))
+      .toThrow('SDK Skill 依赖沙箱工作区')
+  })
+
+  it('reports an explicit Skill request when the global switch is disabled', () => {
+    const config = defaultRuntimeConfig({ sandbox: { backend: 'unix_local' } })
+
+    expect(() => buildRuntimeSdkSandboxIntegration(config, { query: '/crs-audit' }))
+      .toThrow('Skill 总开关已关闭')
+  })
+
   it('materializes configured SDK skills through the Sandbox skills capability', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-sdk-skills-'))
     try {
@@ -99,9 +133,20 @@ describe('runtime SDK integrations', () => {
         skillsPath: '.agents',
         skillPaths: [],
         skillRoots: [skillRoot],
+        registrations: [],
+        autoMatchThreshold: 0.72,
+        candidateThreshold: 0.12,
       }
+      const discovered = buildSkillRegistry(config.sdk.skills, process.cwd()).skills
+        .find(skill => skill.catalog.skillId === 'geo-skill')
+      if (!discovered) throw new Error('geo-skill missing from registry')
+      config.sdk.skills.registrations = [{
+        skillId: 'geo-skill',
+        enabled: true,
+        trustedDigest: discovered.catalog.contentDigest,
+      }]
 
-      const integration = buildRuntimeSdkSandboxIntegration(config)
+      const integration = buildRuntimeSdkSandboxIntegration(config, { query: '/geo-skill' })
       expect(integration.activeSkills).toEqual(['geo-skill'])
       expect(integration.pathGrants).toHaveLength(0)
 
@@ -183,9 +228,12 @@ describe('runtime SDK integrations', () => {
         skillsPath: '.agents',
         skillPaths: [],
         skillRoots: [root],
+        registrations: [],
+        autoMatchThreshold: 0.72,
+        candidateThreshold: 0.12,
       }
 
-      expect(() => buildRuntimeSdkSandboxIntegration(config)).toThrow('没有发现可用的 SKILL.md')
+      expect(() => buildRuntimeSdkSandboxIntegration(config)).toThrow('没有可扫描的子目录')
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -204,6 +252,9 @@ describe('runtime SDK integrations', () => {
         skillsPath: '.agents',
         skillPaths: [skillDir],
         skillRoots: [],
+        registrations: [],
+        autoMatchThreshold: 0.72,
+        candidateThreshold: 0.12,
       }
 
       expect(() => buildRuntimeSdkSandboxIntegration(config)).toThrow('大小写必须严格为 SKILL.md')

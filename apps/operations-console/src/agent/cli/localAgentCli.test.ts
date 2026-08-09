@@ -180,6 +180,12 @@ function snapshot(
     configured: true,
     defaultModel: 'deepseek-v4-flash',
     availableModels: ['deepseek-v4-flash'],
+    models: [{
+      modelId: 'deepseek-v4-flash',
+      contextWindowTokens: 1_000_000,
+      capabilities: { reasoning: true, structuredOutput: true, toolCalls: true },
+      modalities: ['text'],
+    }],
     capabilities: ['agents_sdk_live_supervisor'],
     agentRuntime: {
       transport: 'deepseek_responses',

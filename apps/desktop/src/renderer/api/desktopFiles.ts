@@ -12,6 +12,8 @@
 import type { DesktopFileSelectionHandle } from '../../contracts/desktopIpc'
 import { requireDesktopBridge } from './transport'
 
+const STAGEABLE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+
 const LAYER_FILTERS = [{
   name: 'GeoJSON 图层',
   extensions: ['geojson', 'json'],
@@ -43,6 +45,30 @@ export async function selectDesktopUploadFile(): Promise<DesktopFileSelectionHan
     filters: [],
   })
   return file ?? null
+}
+
+/**
+ * 粘贴图片和地图截图只把二进制交给 Main。Main 校验内容、创建临时文件并
+ * 返回一次性句柄；Renderer 从不接触宿主绝对路径，也不生成 Base64。
+ */
+export async function stageDesktopImageBlob(
+  blob: Blob,
+  suggestedName = `pasted-image-${Date.now()}.png`,
+): Promise<DesktopFileSelectionHandle> {
+  const mediaType = blob.type.toLowerCase()
+  if (!STAGEABLE_IMAGE_TYPES.has(mediaType)) {
+    throw new Error(`暂不支持粘贴 ${blob.type || '未知类型'} 图片。`)
+  }
+  const bytes = await blob.arrayBuffer()
+  return requireDesktopBridge().files.stageImage({
+    name: suggestedName,
+    mediaType: mediaType as 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif',
+    bytes,
+  })
+}
+
+export async function releaseDesktopFileHandle(handleId: string): Promise<void> {
+  await requireDesktopBridge().files.release({ handleId })
 }
 
 export async function selectDesktopLayerFile(): Promise<DesktopFileSelectionHandle | null> {

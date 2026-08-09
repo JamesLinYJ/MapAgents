@@ -108,4 +108,42 @@ describe('deriveWorkspaceWorkflowView', () => {
       agents: [{ name: '空间分析助手', statusLabel: '已返回' }],
     })
   })
+
+  it('没有显式 workflow 时仍投影正在运行的 handoff 子智能体', () => {
+    const state = agentStateSchema.parse({
+      sessionId: 'session_1',
+      userQuery: '接管并核验当前地图成果',
+      subAgents: [{
+        agentId: 'quality_reviewer',
+        name: '质量核验助手',
+        role: '成果核验',
+        delegationMode: 'handoff',
+        status: 'running',
+        summary: '检查坐标系和数据年份',
+        currentStep: '核对元数据',
+        progressPercent: 45,
+        activityCount: 3,
+        lastActivityAt: '2026-08-08T04:00:00.000Z',
+        stalled: true,
+        resultRefs: ['artifact://map_1'],
+        deliveryEvidence: [{ claim: '已读取图层元数据', source: 'artifact://map_1' }],
+      }],
+    })
+
+    expect(deriveWorkspaceWorkflowView(state)).toMatchObject({
+      goal: '接管并核验当前地图成果',
+      status: 'running',
+      statusLabel: '执行中',
+      revision: 0,
+      steps: [],
+      agents: [{
+        agentId: 'quality_reviewer',
+        delegationMode: 'handoff',
+        statusLabel: '疑似停滞',
+        currentStep: '核对元数据',
+        progressPercent: 45,
+        resultRefs: ['artifact://map_1'],
+      }],
+    })
+  })
 })

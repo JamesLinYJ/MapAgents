@@ -156,7 +156,10 @@ function buildToolEntry(
   output: ConversationItem | undefined,
   toolLabels: ReadonlyMap<string, string>,
 ): ConversationEntry {
-  const callId = output?.callId ?? call?.callId ?? 'unknown'
+  const sourceItem = output ?? call
+  if (!sourceItem) throw new Error('工具展示投影缺少调用或输出事实。')
+  const callId = output?.callId ?? call?.callId
+  if (!callId) throw new Error('工具展示投影缺少 callId。')
   const toolName = call?.name ?? output?.name ?? 'unknown_tool'
   const persistedLabel = toolDisplayLabel(call?.metadata) ?? toolDisplayLabel(output?.metadata)
   const registeredLabel = toolLabels.get(toolName)
@@ -181,7 +184,7 @@ function buildToolEntry(
   return {
     id: `tool:${callId}`,
     kind: 'command_batch',
-    timestamp: output?.timestamp ?? call?.timestamp ?? new Date().toISOString(),
+    timestamp: sourceItem.timestamp,
     title,
     body,
     status,

@@ -16,7 +16,7 @@
 
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { link, mkdir, readdir, rm, stat } from 'node:fs/promises'
+import { link, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
 import PQueue from 'p-queue'
 import { z } from 'zod'
@@ -313,6 +313,22 @@ export class RuntimeFileStore {
     for (const file of await this.list(threadId)) {
       await this.delete(file.id, threadId)
     }
+  }
+
+  /** Read an immutable CAS object only after rechecking its size and digest. */
+  async readObject(entry: StoredFileEntry, maxBytes: number): Promise<Uint8Array> {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error('文件读取上限无效。')
+    if (entry.sizeBytes > maxBytes) throw new Error(`文件 '${entry.name}' 超过 ${maxBytes} 字节读取上限。`)
+    const objectPath = resolveRuntimeRelativePath(this.objectRoot, entry.relativePath)
+    const bytes = await readFile(objectPath)
+    if (bytes.byteLength !== entry.sizeBytes || bytes.byteLength > maxBytes) {
+      throw new Error(`文件 '${entry.name}' 的内容大小与授权记录不一致。`)
+    }
+    const digest = createHash('sha256').update(bytes).digest('hex')
+    if (digest !== entry.contentHash) {
+      throw new Error(`文件 '${entry.name}' 的内容哈希与授权记录不一致。`)
+    }
+    return new Uint8Array(bytes)
   }
 
   async verifyIntegrity(): Promise<{ files: number; projections: RuntimeFileProjection[] }> {

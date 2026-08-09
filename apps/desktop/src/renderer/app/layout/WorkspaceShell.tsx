@@ -122,7 +122,7 @@ export function WorkspaceShell({
           : <WorkspaceRestrictedConversation reason={access.unavailableReason} onRetry={onAuthenticated} />}
         mapSlot={<WorkspaceMapPanel {...panels.map} />}
         workflowSlot={access.backendActionsEnabled
-          ? <WorkspaceWorkflowPanel {...panels.workflow} />
+          ? <WorkspaceWorkflowPanel key={panels.workflow.runId ?? 'no-run'} {...panels.workflow} />
           : <WorkspaceRestrictedDocument title="智能体工作流" reason={access.unavailableReason} />}
         contentsSlot={access.backendActionsEnabled
           ? <WorkspaceInspectorPanel detail={contentsDetails} />

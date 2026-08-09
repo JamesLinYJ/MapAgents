@@ -17,18 +17,32 @@
 import type {
   AgentRuntimeConfig,
   AgentExecutionMode,
+  AgentRunProfile,
   AgentWorkflow,
   AgentThreadRecord,
   ConversationItem,
   DecisionRequest,
+  RunGoal,
+  RunGoalInput,
+  MapScreenshotContext,
+  RunAttachmentInput,
   ToolDescriptor,
 } from '@geo-agent-platform/shared-types'
 import type { DesktopFileSelectionHandle } from '../../../contracts/desktopIpc'
 import type { DataReferenceSummary } from '../../shared/constants'
 import type { UploadReference } from '../../app/types'
 
-export type ComposerMode = 'approval' | 'plan' | 'auto'
+export type ComposerMode = 'approval' | 'plan' | 'auto' | 'compose'
 export type TaskView = 'chat' | 'history'
+
+export interface GoalComposerDraft {
+  enabled: boolean
+  condition: string
+  acceptanceCriteriaText: string
+  maxRechecks: string
+  deadlineLocal: string
+  maxTokenBudget: string
+}
 
 export type ActiveDecision = DecisionRequest & {
   source: 'server' | 'local'
@@ -54,13 +68,23 @@ export interface ChatPanelProps {
   runtimeConfig?: AgentRuntimeConfig
   availableTools?: ToolDescriptor[]
   onQueryChange: (value: string) => void
-  onSubmit: (mode: AgentExecutionMode) => Promise<void>
+  onSubmit: (
+    mode: AgentExecutionMode,
+    runProfile?: AgentRunProfile,
+    goal?: RunGoalInput | null,
+    attachments?: RunAttachmentInput[],
+  ) => Promise<boolean>
   onInterrupt?: () => void
   onNewConversation: () => void
   onFillSample: (value: string) => void
   onRespondDecision: (decisionId: string, optionId?: string | null, text?: string | null) => void
   onUseTemplate: () => void
   onUploadFiles: (files: DesktopFileSelectionHandle[]) => void
+  onAttachImage: (
+    file: DesktopFileSelectionHandle,
+    kind: RunAttachmentInput['kind'],
+    mapContext: MapScreenshotContext | null,
+  ) => Promise<RunAttachmentInput>
   onSelectArtifact: (id: string) => void
   onSelectTask: (id: string) => void
   onRenameTask: (id: string, title: string) => void
@@ -80,6 +104,7 @@ export interface ChatPanelProps {
   compactionLevel?: string | null
   runStats?: { toolAttempts: number; toolSuccesses: number; toolFailures: number; tokensUsed: number }
   denialCounts?: Record<string, number>
+  goal?: RunGoal | null
 
   agentWorkflow?: AgentWorkflow | null
 

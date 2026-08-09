@@ -272,7 +272,7 @@ export interface OpenAIProviderTransportOptions {
   dnsStrategy?: OpenAIDnsStrategy
 }
 
-export type OpenAIDnsStrategy = 'system' | 'bounded-ipv4'
+export type OpenAIDnsStrategy = 'system' | 'bounded-ipv4' | 'guarded'
 
 export interface OpenAIClientTransport {
   readonly fetch: typeof globalThis.fetch
@@ -297,9 +297,12 @@ export class OpenAIProviderTransport implements OpenAIClientTransport {
       throw new Error(`OpenAI 兼容 transport 不支持协议 '${origin.protocol}'。`)
     }
     const dnsStrategy = selectOpenAIDnsStrategy(origin.hostname, options.dnsStrategy)
-    this.dnsCache = dnsStrategy === 'bounded-ipv4'
-      ? options.dnsCache ?? new BoundedDnsLookupCache()
-      : null
+    if (dnsStrategy === 'guarded' && !options.dnsCache) {
+      throw new Error('guarded OpenAI transport 必须提供受保护的 DNS resolver。')
+    }
+    this.dnsCache = dnsStrategy === 'system'
+      ? null
+      : options.dnsCache ?? new BoundedDnsLookupCache()
     this.ownsDispatcher = !options.dispatcher
     this.dispatcher = options.dispatcher ?? new Agent({
       maxOrigins: 4,
@@ -307,7 +310,10 @@ export class OpenAIProviderTransport implements OpenAIClientTransport {
       pipelining: 1,
       clientTtl: 300_000,
       connect: {
-        ...(this.dnsCache ? { lookup: this.dnsCache.lookup, family: 4 } : {}),
+        ...(this.dnsCache ? {
+          lookup: this.dnsCache.lookup,
+          ...(dnsStrategy === 'bounded-ipv4' ? { family: 4 as const } : {}),
+        } : {}),
         timeout: 15_000,
         keepAlive: true,
         keepAliveInitialDelay: 1_000,
@@ -318,7 +324,7 @@ export class OpenAIProviderTransport implements OpenAIClientTransport {
 
     const requestFetch = options.fetchImplementation ?? dispatchingFetch(this.dispatcher)
     if (this.dnsCache) {
-      const prime = this.dnsCache.prime(origin.hostname, 4)
+      const prime = this.dnsCache.prime(origin.hostname, dnsStrategy === 'bounded-ipv4' ? 4 : 0)
       // The rejected promise remains intact for the first provider request. This
       // observer only prevents an unhandled-rejection race before that request.
       void prime.catch(() => undefined)

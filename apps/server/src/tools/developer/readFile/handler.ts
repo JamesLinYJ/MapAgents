@@ -13,9 +13,11 @@ import type { ToolHandler } from '../../../framework/types.js'
 import { resolveDeveloperPath } from '../shared/pathPolicy.js'
 import { developerResult } from '../shared/result.js'
 import { lineSlice, readUtf8TextFile, recordFileRead, textFileStats } from '../shared/textFileState.js'
+import { assertDeveloperMode } from '../shared/modePolicy.js'
 
 export const readFileHandler: ToolHandler = async (args, context) => {
-  const target = await resolveDeveloperPath(args.file_path, { mustExist: true, expectDirectory: false })
+  const roots = assertDeveloperMode(context)
+  const target = await resolveDeveloperPath(args.file_path, { mustExist: true, expectDirectory: false, roots })
   const content = await readUtf8TextFile(target.absolutePath)
   const offset = typeof args.offset === 'number' ? Math.floor(args.offset) : 1
   const limit = typeof args.limit === 'number' ? Math.floor(args.limit) : undefined

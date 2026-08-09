@@ -42,7 +42,7 @@ export interface AppendTranscriptInput {
 
 export interface AgentRuntimeStore {
   readonly runtimeRoot: string
-  readonly fileLifecycle: Pick<FileLifecyclePort, 'list'>
+  readonly fileLifecycle: Pick<FileLifecyclePort, 'list' | 'readAuthorized'>
   readonly meteorology: Pick<MeteorologicalStore,
     | 'listMeteorologicalDatasets'
     | 'resolveMeteorologicalDataset'

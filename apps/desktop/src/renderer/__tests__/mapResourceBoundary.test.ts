@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { buildBasemapStyle } from '../features/map/MapCanvasEngine'
+import { boundsFromCollection, buildBasemapStyle } from '../features/map/MapCanvasEngine'
 import { desktopMapResourceUrl } from '../features/map/renderers/desktopMapResourceUrl'
 import { DEFAULT_BASEMAP } from '../shared/constants'
 
@@ -35,5 +35,24 @@ describe('desktop map resource boundary', () => {
     expect(() => desktopMapResourceUrl('https://example.com/tilejson')).toThrow(
       '地图资源地址不在桌面受控范围内',
     )
+  })
+
+  it('computes fit bounds without loading the MapLibre runtime', () => {
+    expect(boundsFromCollection({
+      type: 'FeatureCollection',
+      features: [{
+        type: 'Feature',
+        properties: {},
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[
+            [110, 30],
+            [100, 20],
+            [105, 28],
+            [110, 30],
+          ]],
+        },
+      }],
+    })).toEqual([100, 20, 110, 30])
   })
 })

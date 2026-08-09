@@ -29,7 +29,6 @@ import type { DesktopFileSelectionHandle } from '../../../contracts/desktopIpc'
 
 import { apiBaseUrl } from '../../api/client'
 import type { FileEntry } from '../../api/client'
-import type { LayerPanelView, LayerTreeNode, LayerVisibilityFilter } from '../layers/useLayerManager'
 import { LayerPanel } from '../layers/LayerManagerPanel'
 import { pickConversationHeadline } from '@geo-agent-platform/conversation-presentation'
 import { buildDetailSummaryFacts } from './detailSummaryModel'
@@ -361,4 +360,3 @@ function buildLayerSummary(layers: LayerDescriptor[]) {
     { total: 0, active: 0, inactive: 0, managed: 0, session: 0, features: 0 },
   )
 }
-

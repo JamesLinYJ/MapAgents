@@ -9,7 +9,11 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
-import type { AgentRuntimeCapabilities, ModelProviderDescriptor } from '../schemas/types.js'
+import type {
+  AgentRuntimeCapabilities,
+  ModelCapabilitySnapshot,
+  ModelProviderDescriptor,
+} from '../schemas/types.js'
 import type { Env } from '../framework/env.js'
 import type { Model } from '@openai/agents'
 import { createDeepSeekAdapter } from './providers/deepseek.js'
@@ -26,16 +30,21 @@ export type ModelProviderId = typeof MODEL_PROVIDER_IDS[number]
 export interface ModelAdapter {
   readonly provider: string
   readonly displayName: string
+  readonly source?: 'builtin' | 'custom'
   readonly defaultModel: string | null
   readonly subagentModel?: string
   readonly availableModels?: readonly string[]
+  readonly modelCapabilitySnapshots?: readonly ModelCapabilitySnapshot[]
   readonly contextWindowTokens?: number
+  readonly modalities?: readonly ('text' | 'image' | 'audio' | 'pdf')[]
+  readonly protocol?: 'responses' | 'chat_completions' | null
   readonly agentToolSchemaMode: AgentToolSchemaMode
   readonly agentRuntimeCapabilities: AgentRuntimeCapabilities
   readonly cacheNamespace?: string
 
   isConfigured(): boolean
   capabilities(): string[]
+  resolveModelCapabilities?(modelName: string): ModelCapabilitySnapshot
   warmup?(): Promise<void>
   createAgentModel?(modelName?: string | null): Model
   chat(prompt: string, kwargs?: Record<string, unknown>): Promise<Record<string, unknown>>
@@ -46,6 +55,7 @@ export interface ModelAdapter {
 
 export class ModelAdapterRegistry {
   private adapters = new Map<string, ModelAdapter>()
+  private readonly customProviderIds = new Set<string>()
   readonly defaultProvider: string
   readonly defaultModelName: string | null
 
@@ -82,6 +92,28 @@ export class ModelAdapterRegistry {
     this.adapters.set(adapter.provider, adapter)
   }
 
+  async installCustom(adapter: ModelAdapter): Promise<void> {
+    if (MODEL_PROVIDER_IDS.includes(adapter.provider as ModelProviderId)) {
+      throw new Error(`自定义 Provider ID '${adapter.provider}' 与内置 Provider 冲突。`)
+    }
+    if (adapter.source !== 'custom') {
+      throw new Error(`动态 Provider '${adapter.provider}' 必须声明 source=custom。`)
+    }
+    const previous = this.adapters.get(adapter.provider)
+    this.adapters.set(adapter.provider, adapter)
+    this.customProviderIds.add(adapter.provider)
+    if (previous && previous !== adapter) await previous.close?.().catch(() => undefined)
+  }
+
+  async removeCustom(providerId: string): Promise<boolean> {
+    if (!this.customProviderIds.has(providerId)) return false
+    const adapter = this.adapters.get(providerId)
+    this.adapters.delete(providerId)
+    this.customProviderIds.delete(providerId)
+    await adapter?.close?.()
+    return true
+  }
+
   get(provider: string): ModelAdapter {
     const a = this.adapters.get(provider)
     if (!a) throw new Error(`未注册的 provider: ${provider}`)
@@ -103,6 +135,10 @@ export class ModelAdapterRegistry {
 
   descriptors(): ModelProviderDescriptor[] {
     return [...this.adapters.values()].map(a => {
+      const models = adapterModelCapabilitySnapshots(a)
+      const defaultModelCapabilities = a.defaultModel
+        ? models.find(model => model.modelId === a.defaultModel) ?? null
+        : null
       const labels = a.createAgentModel
         ? [
             'agents_sdk_live_supervisor',
@@ -115,15 +151,17 @@ export class ModelAdapterRegistry {
         provider: a.provider,
         displayName: a.displayName,
         configured: a.isConfigured(),
+        source: a.source ?? 'builtin',
         defaultModel: a.defaultModel,
-        availableModels: [...new Set([
-          ...(a.availableModels ?? []),
-          ...(a.defaultModel ? [a.defaultModel] : []),
-          ...(a.subagentModel ? [a.subagentModel] : []),
-        ])],
+        availableModels: models.map(model => model.modelId),
+        models,
         capabilities: [...a.capabilities(), ...labels],
+        modalities: [...(defaultModelCapabilities?.modalities ?? a.modalities ?? ['text'])],
+        protocol: a.protocol ?? null,
         agentRuntime: a.agentRuntimeCapabilities,
-        contextWindowTokens: a.contextWindowTokens ?? inferContextWindow(a.defaultModel),
+        contextWindowTokens: defaultModelCapabilities?.contextWindowTokens
+          ?? a.contextWindowTokens
+          ?? inferContextWindow(a.defaultModel),
       }
     })
   }
@@ -143,7 +181,48 @@ export class ModelAdapterRegistry {
 
   async close(): Promise<void> {
     await Promise.all([...this.adapters.values()].map(adapter => adapter.close?.()))
+    this.customProviderIds.clear()
   }
+}
+
+export function resolveAdapterModelCapabilities(
+  adapter: ModelAdapter,
+  requestedModel: string | null | undefined,
+): ModelCapabilitySnapshot {
+  const modelId = requestedModel?.trim() || adapter.defaultModel?.trim()
+  if (!modelId) throw new Error(`模型 provider '${adapter.provider}' 未配置模型名称`)
+  const resolved = adapter.resolveModelCapabilities?.(modelId)
+    ?? adapter.modelCapabilitySnapshots?.find(model => model.modelId === modelId)
+  if (resolved) return resolved
+
+  const declaredModels = [...new Set([
+    ...(adapter.availableModels ?? []),
+    ...(adapter.defaultModel ? [adapter.defaultModel] : []),
+    ...(adapter.subagentModel ? [adapter.subagentModel] : []),
+  ])]
+  if (declaredModels.length && !declaredModels.includes(modelId)) {
+    throw new Error(`模型 '${modelId}' 不在 Provider '${adapter.provider}' 的允许清单中。`)
+  }
+  return {
+    modelId,
+    contextWindowTokens: adapter.contextWindowTokens ?? inferContextWindow(modelId),
+    capabilities: {
+      reasoning: adapter.capabilities().includes('reasoning'),
+      structuredOutput: adapter.agentRuntimeCapabilities.structuredOutput !== 'none',
+      toolCalls: adapter.agentRuntimeCapabilities.functionTools,
+    },
+    modalities: [...(adapter.modalities ?? ['text'])],
+  }
+}
+
+function adapterModelCapabilitySnapshots(adapter: ModelAdapter): ModelCapabilitySnapshot[] {
+  if (adapter.modelCapabilitySnapshots?.length) return [...adapter.modelCapabilitySnapshots]
+  const modelIds = [...new Set([
+    ...(adapter.availableModels ?? []),
+    ...(adapter.defaultModel ? [adapter.defaultModel] : []),
+    ...(adapter.subagentModel ? [adapter.subagentModel] : []),
+  ])]
+  return modelIds.map(modelId => resolveAdapterModelCapabilities(adapter, modelId))
 }
 
 function inferContextWindow(model: string | null): number {

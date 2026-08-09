@@ -209,6 +209,19 @@ export const runtimeSandboxConfigSchema = z.object({
   backend: z.enum(['disabled', 'unix_local']).default('disabled'),
 })
 
+export const runtimeDeveloperConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  allowedRoots: z.array(z.string().trim().min(1).max(4096)).max(32).default([]),
+}).strict().superRefine((config, context) => {
+  if (config.enabled && config.allowedRoots.length === 0) {
+    context.addIssue({ code: 'custom', path: ['allowedRoots'], message: '开发者模式启用时必须显式配置允许根目录' })
+  }
+  const rootSet = new Set(config.allowedRoots)
+  if (rootSet.size !== config.allowedRoots.length) {
+    context.addIssue({ code: 'custom', path: ['allowedRoots'], message: '开发者允许根目录不能重复' })
+  }
+})
+
 export const runtimeMcpTransportSchema = z.enum(['streamable_http', 'sse', 'stdio'])
 export const runtimeMcpExecutionModeSchema = z.literal('function_tools')
 export const runtimeMcpApprovalSchema = z.enum(['always', 'never'])
@@ -259,11 +272,39 @@ export const runtimeMcpConfigSchema = z.object({
   servers: z.array(runtimeMcpServerConfigSchema).default([]),
 })
 
+export const runtimeSkillRegistrationSchema = z.object({
+  skillId: z.string().trim().min(1),
+  enabled: z.boolean().default(true),
+  trustedDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/u).nullable().default(null),
+})
+
 export const runtimeSkillConfigSchema = z.object({
   enabled: z.boolean().default(false),
   skillsPath: z.string().default('.agents'),
   skillPaths: z.array(z.string()).default([]),
   skillRoots: z.array(z.string()).default([]),
+  registrations: z.array(runtimeSkillRegistrationSchema).default([]),
+  autoMatchThreshold: z.number().min(0).max(1).default(0.72),
+  candidateThreshold: z.number().min(0).max(1).default(0.12),
+}).superRefine((config, context) => {
+  if (config.candidateThreshold > config.autoMatchThreshold) {
+    context.addIssue({
+      code: 'custom',
+      path: ['candidateThreshold'],
+      message: 'Skill 候选阈值不能高于自动匹配阈值。',
+    })
+  }
+  const skillIds = new Set<string>()
+  for (const [index, registration] of config.registrations.entries()) {
+    if (skillIds.has(registration.skillId)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['registrations', index, 'skillId'],
+        message: `Skill 注册项 '${registration.skillId}' 重复。`,
+      })
+    }
+    skillIds.add(registration.skillId)
+  }
 })
 
 export const runtimeHostedWebSearchConfigSchema = z.object({
@@ -296,6 +337,9 @@ export const runtimeSdkConfigSchema = z.object({
     skillsPath: '.agents',
     skillPaths: [],
     skillRoots: [],
+    registrations: [],
+    autoMatchThreshold: 0.72,
+    candidateThreshold: 0.12,
   }),
 })
 
@@ -304,6 +348,10 @@ export const agentRuntimeConfigSchema = z.object({
   maxTurns: z.number().default(50),
   maxFunctionToolConcurrency: z.number().int().min(1).max(16).default(4),
   sandbox: runtimeSandboxConfigSchema.default({ backend: 'disabled' }),
+  developer: runtimeDeveloperConfigSchema.default({
+    enabled: false,
+    allowedRoots: [],
+  }),
   sdk: runtimeSdkConfigSchema.default({
     hostedTools: {
       webSearch: {
@@ -312,7 +360,15 @@ export const agentRuntimeConfigSchema = z.object({
       },
     },
     mcp: { enabled: false, connectTimeoutMs: 10_000, closeTimeoutMs: 2_000, servers: [] },
-    skills: { enabled: false, skillsPath: '.agents', skillPaths: [], skillRoots: [] },
+    skills: {
+      enabled: false,
+      skillsPath: '.agents',
+      skillPaths: [],
+      skillRoots: [],
+      registrations: [],
+      autoMatchThreshold: 0.72,
+      candidateThreshold: 0.12,
+    },
   }),
   supervisor: supervisorRuntimeConfigSchema.default({
     name: 'geo_agent_supervisor',
@@ -420,8 +476,10 @@ export type RuntimePoiConfig = z.infer<typeof runtimePoiConfigSchema>
 export type RuntimeNowcastConfig = z.infer<typeof runtimeNowcastConfigSchema>
 export type RuntimePlanningConfig = z.infer<typeof runtimePlanningConfigSchema>
 export type RuntimeSandboxConfig = z.infer<typeof runtimeSandboxConfigSchema>
+export type RuntimeDeveloperConfig = z.infer<typeof runtimeDeveloperConfigSchema>
 export type RuntimeMcpServerConfig = z.infer<typeof runtimeMcpServerConfigSchema>
 export type RuntimeMcpConfig = z.infer<typeof runtimeMcpConfigSchema>
+export type RuntimeSkillRegistration = z.infer<typeof runtimeSkillRegistrationSchema>
 export type RuntimeSkillConfig = z.infer<typeof runtimeSkillConfigSchema>
 export type RuntimeSdkConfig = z.infer<typeof runtimeSdkConfigSchema>
 export type AgentRuntimeConfig = z.infer<typeof agentRuntimeConfigSchema>

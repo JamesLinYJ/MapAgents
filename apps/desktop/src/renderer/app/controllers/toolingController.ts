@@ -14,6 +14,8 @@ import type {
   AgentRuntimeConfig,
   BackgroundTaskInfo,
   ScheduledTask,
+  SkillCatalogSnapshot,
+  SkillMatchResult,
   SystemComponentsStatus,
   TokenUsageSummary,
   ToolDescriptor,
@@ -33,11 +35,13 @@ import {
   getTokenUsageSummary,
   listBackgroundTasks,
   listScheduledTasks,
+  listSkills,
   listToolCatalogEntries,
   listTools,
   listAutomations,
   promoteBackgroundTask,
   runTool,
+  searchSkills,
   startAutomation,
   type StartAutomationPayload,
   updateScheduledTask,
@@ -83,12 +87,15 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskInfo[]>([])
   const [tokenUsageSummary, setTokenUsageSummary] = useState<TokenUsageSummary>()
   const [runtimeConfig, setRuntimeConfig] = useState<AgentRuntimeConfig>()
+  const [skillCatalog, setSkillCatalog] = useState<SkillCatalogSnapshot>()
+  const [skillSearchResults, setSkillSearchResults] = useState<SkillMatchResult[]>([])
   const [systemComponents, setSystemComponents] = useState<SystemComponentsStatus>()
   const [toolRunResult, setToolRunResult] = useState<Record<string, unknown> | null>(null)
   const [isToolSubmitting, setIsToolSubmitting] = useState(false)
   const [isAutomationSubmitting, setIsAutomationSubmitting] = useState(false)
   const [isToolCatalogSubmitting, setIsToolCatalogSubmitting] = useState(false)
   const [isRuntimeConfigSubmitting, setIsRuntimeConfigSubmitting] = useState(false)
+  const [isSkillSearching, setIsSkillSearching] = useState(false)
 
   const refreshAutomationState = useCallback(async () => {
     const [automations, scheduled, background] = await Promise.all([
@@ -113,10 +120,11 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
   }, [])
 
   const refresh = useCallback(async () => {
-    const [components, catalogEntries, loadedRuntimeConfig, automations, scheduled, background, usage] = await Promise.allSettled([
+    const [components, catalogEntries, loadedRuntimeConfig, loadedSkills, automations, scheduled, background, usage] = await Promise.allSettled([
       getSystemComponents(),
       listToolCatalogEntries(),
       getRuntimeConfig(),
+      listSkills(),
       listAutomations(),
       listScheduledTasks(),
       listBackgroundTasks(),
@@ -126,6 +134,7 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
       if (components.status === 'fulfilled') setSystemComponents(components.value)
       if (catalogEntries.status === 'fulfilled') setToolCatalogEntries(catalogEntries.value ?? [])
       if (loadedRuntimeConfig.status === 'fulfilled') setRuntimeConfig(loadedRuntimeConfig.value)
+      if (loadedSkills.status === 'fulfilled') setSkillCatalog(loadedSkills.value)
       if (automations.status === 'fulfilled') {
         setAutomationDefinitions(automations.value.definitions)
         setAutomationDiagnostics(automations.value.diagnostics)
@@ -138,7 +147,7 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
       if (background.status === 'fulfilled') setBackgroundTasks(background.value.tasks)
       if (usage.status === 'fulfilled') setTokenUsageSummary(usage.value)
     })
-    const rejected = [components, catalogEntries, loadedRuntimeConfig, automations, scheduled, background, usage].find(result => result.status === 'rejected')
+    const rejected = [components, catalogEntries, loadedRuntimeConfig, loadedSkills, automations, scheduled, background, usage].find(result => result.status === 'rejected')
     if (rejected?.status === 'rejected') throw rejected.reason
   }, [])
 
@@ -162,10 +171,31 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
       setIsRuntimeConfigSubmitting(true)
       const saved = await updateRuntimeConfig(nextConfig)
       setRuntimeConfig(saved)
+      setSkillCatalog(await listSkills())
     } catch (error) {
       setUiError(formatUiError(error, '运行时配置保存失败。'))
     } finally {
       setIsRuntimeConfigSubmitting(false)
+    }
+  }, [setUiError])
+
+  const searchSkillCatalog = useCallback(async (query: string) => {
+    const normalized = query.trim()
+    if (!normalized) {
+      setSkillSearchResults([])
+      return []
+    }
+    try {
+      setUiError(undefined)
+      setIsSkillSearching(true)
+      const response = await searchSkills(normalized)
+      setSkillSearchResults(response.matches)
+      return response.matches
+    } catch (error) {
+      setUiError(formatUiError(error, 'Skill 搜索失败。'))
+      return []
+    } finally {
+      setIsSkillSearching(false)
     }
   }, [setUiError])
 
@@ -366,11 +396,15 @@ export function useToolingController({ loadDiagnostics, setUiError }: ToolingCon
     backgroundTasks,
     isToolCatalogSubmitting,
     isRuntimeConfigSubmitting,
+    isSkillSearching,
     isToolSubmitting,
     isAutomationSubmitting,
     removeCatalogEntry,
     removeScheduledTask,
     runtimeConfig,
+    skillCatalog,
+    skillSearchResults,
+    searchSkillCatalog,
     runTool,
     runAutomation,
     saveCatalogEntry,

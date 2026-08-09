@@ -12,9 +12,12 @@
 import { startTransition, useCallback } from 'react'
 import type {
   AgentExecutionMode,
+  AgentRunProfile,
   AnalysisRun,
   ConversationItem,
   ModelProviderDescriptor,
+  RunGoalInput,
+  RunAttachmentInput,
   SessionRecord,
 } from '@geo-agent-platform/shared-types'
 
@@ -68,6 +71,9 @@ export interface RunLifecycleOptions extends RunHydrationCapability {
     provider?: string,
     model?: string,
     executionMode?: AgentExecutionMode,
+    runProfile?: AgentRunProfile,
+    goal?: RunGoalInput | null,
+    attachments?: RunAttachmentInput[],
   ) => Promise<AnalysisRun>
   startRun: (selection: RunSelectionToken) => boolean
   startThreadRun: (
@@ -76,6 +82,9 @@ export interface RunLifecycleOptions extends RunHydrationCapability {
     provider?: string,
     model?: string,
     executionMode?: AgentExecutionMode,
+    runProfile?: AgentRunProfile,
+    goal?: RunGoalInput | null,
+    attachments?: RunAttachmentInput[],
   ) => Promise<AnalysisRun>
   stopSubmitting: (selection: RunSelectionToken) => boolean
   syncUrl: (sessionId: string, runId?: string, threadId?: string) => void
@@ -126,28 +135,35 @@ export function useRunLifecycleActions(options: RunLifecycleOptions) {
     text,
     forceNewThread = false,
     executionMode = 'auto',
+    runProfile = 'standard',
+    goal = null,
+    attachments = [],
   }: {
     text?: string
     forceNewThread?: boolean
     executionMode?: AgentExecutionMode
+    runProfile?: AgentRunProfile
+    goal?: RunGoalInput | null
+    attachments?: RunAttachmentInput[]
   } = {}) => {
-    if (!session) return
+    if (!session) return false
     const submittedQuery = (text ?? query).trim()
-    if (!submittedQuery) return
+    if (!submittedQuery) return false
 
     if (!forceNewThread && run?.status === 'running') {
       const selection = captureRunSelection(run.id)
-      if (!selection) return
+      if (!selection) return false
       try {
         setUiError(undefined)
         await steerRun(run.id, submittedQuery, `steer_${crypto.randomUUID()}`)
-        if (!isRunSelectionCurrent(selection)) return
+        if (!isRunSelectionCurrent(selection)) return false
         setQuery('')
+        return true
       } catch (error) {
-        if (!isRunSelectionCurrent(selection)) return
+        if (!isRunSelectionCurrent(selection)) return false
         setUiError(formatUiError(error, '引导消息提交失败，请重试。'))
+        return false
       }
-      return
     }
 
     const targetThreadId = forceNewThread ? undefined : currentThreadId
@@ -156,11 +172,11 @@ export function useRunLifecycleActions(options: RunLifecycleOptions) {
       const selectedProvider = providers.find(item => item.provider === provider)
       if (selectedProvider && !selectedProvider.configured) {
         setUiError(`${selectedProvider.displayName} 还没配置好，暂时没法提交分析。`)
-        return
+        return false
       }
       if (selectedProvider && !supportsAgentSdkLiveSupervisor(selectedProvider)) {
         setUiError(`${selectedProvider.displayName} 当前不是 Agent SDK 主路径，不能提交分析。`)
-        return
+        return false
       }
 
       selection = beginRunSelection()
@@ -183,9 +199,9 @@ export function useRunLifecycleActions(options: RunLifecycleOptions) {
       }
 
       const createdRun = targetThreadId
-        ? await startThreadRun(targetThreadId, submittedQuery, provider, model || undefined, executionMode)
-        : await startAnalysis(session.id, submittedQuery, provider, model || undefined, executionMode)
-      if (!isRunSelectionCurrent(selection)) return
+        ? await startThreadRun(targetThreadId, submittedQuery, provider, model || undefined, executionMode, runProfile, goal, attachments)
+        : await startAnalysis(session.id, submittedQuery, provider, model || undefined, executionMode, runProfile, goal, attachments)
+      if (!isRunSelectionCurrent(selection)) return true
       const acceptedSelection = selection
       setQuery('')
       const nextThreadId = createdRun.threadId ?? targetThreadId
@@ -202,11 +218,13 @@ export function useRunLifecycleActions(options: RunLifecycleOptions) {
         reportNonBlockingError('refreshSessionHistory:submitMessage', error)
       })
       syncUrl(session.id, createdRun.id, nextThreadId ?? undefined)
+      return true
     } catch (error) {
-      if (selection && !isRunSelectionCurrent(selection)) return
+      if (selection && !isRunSelectionCurrent(selection)) return false
       if (selection) abortRunSelection(selection)
       setUiError(formatUiError(error, '任务提交失败，请重试。'))
       if (selection) stopSubmitting(selection)
+      return false
     }
   }, [
     acceptRun,
@@ -245,9 +263,14 @@ export function useRunLifecycleActions(options: RunLifecycleOptions) {
     syncUrl,
   ])
 
-  const handleSubmit = useCallback(async (executionMode: AgentExecutionMode = 'auto') => {
-    if (!query.trim()) return
-    await submitMessage({ executionMode })
+  const handleSubmit = useCallback(async (
+    executionMode: AgentExecutionMode = 'auto',
+    runProfile: AgentRunProfile = 'standard',
+    goal: RunGoalInput | null = null,
+    attachments: RunAttachmentInput[] = [],
+  ) => {
+    if (!query.trim()) return false
+    return submitMessage({ executionMode, runProfile, goal, attachments })
   }, [query, submitMessage])
 
   const handleInterruptRun = useCallback(async () => {

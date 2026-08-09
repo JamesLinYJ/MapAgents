@@ -21,6 +21,8 @@ import { registerThreadContextCommands } from './threadContextCommands.js'
 import { registerToolCommands } from './toolCommand.js'
 import { registerUsageCommands } from './usageCommands.js'
 import { registerAutomationCommands } from './automationCommands.js'
+import { registerSubAgentCommands } from './subAgentCommands.js'
+import { registerCustomProviderCommands } from './customProviderCommands.js'
 import { registerWorkspaceCommands } from './workspaceCommands.js'
 
 // 所有 WS 控制命令必须从这里注册。handler 只持有这个注册表，不再知道
@@ -33,6 +35,8 @@ export function createDefaultCommandRegistry(): WsCommandRegistry {
   registerThreadContextCommands(registry)
   registerControlCommands(registry)
   registerRunCommands(registry)
+  registerSubAgentCommands(registry)
+  registerCustomProviderCommands(registry)
   registerMemoryCommands(registry)
   registerMapCommands(registry)
   registerToolCommands(registry)

@@ -14,12 +14,14 @@ import type { ToolHandler } from '../../../framework/types.js'
 import { resolveDeveloperPath } from '../shared/pathPolicy.js'
 import { developerResult } from '../shared/result.js'
 import { recordFileRead, requireFreshCompleteRead, textFileStats } from '../shared/textFileState.js'
+import { assertDeveloperMode } from '../shared/modePolicy.js'
 
 export const editFileHandler: ToolHandler = async (args, context) => {
   if (typeof args.old_string !== 'string' || !args.old_string) throw new Error('old_string 不能为空')
   if (typeof args.new_string !== 'string') throw new Error('new_string 必须是字符串')
   if (args.old_string === args.new_string) throw new Error('old_string 与 new_string 不能相同')
-  const target = await resolveDeveloperPath(args.file_path, { mustExist: true, expectDirectory: false })
+  const roots = assertDeveloperMode(context)
+  const target = await resolveDeveloperPath(args.file_path, { mustExist: true, expectDirectory: false, roots })
   const snapshot = await requireFreshCompleteRead(context, target.absolutePath)
   const matches = countOccurrences(snapshot.content, args.old_string)
   if (matches === 0) throw new Error(`未找到 old_string，文件未修改：${target.absolutePath}`)

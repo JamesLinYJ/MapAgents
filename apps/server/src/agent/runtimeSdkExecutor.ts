@@ -19,7 +19,7 @@ import {
 import type { ItemSink } from '../conversation/itemSink.js'
 import { errorLogPayload, logger } from '../observability/logger.js'
 import { ModelRequestTelemetry } from '../observability/modelRequestTelemetry.js'
-import type { AgentState, SupervisorDelivery } from '../schemas/types.js'
+import type { AgentState, RunGoal, RunGoalVerdict, SupervisorDelivery } from '../schemas/types.js'
 import type { AgentRuntimeStore } from '../store/runtimePorts.js'
 import type { AgentsCheckpointService } from './agentsCheckpointService.js'
 import type { AgentsExecutionContext } from './agentsToolBridge.js'
@@ -35,6 +35,8 @@ import type { RunOptions, RuntimeAssembly, StreamProjectionState } from './runti
 import type { RunSteeringController } from './runSteeringController.js'
 import { evaluateTerminalDelivery } from './terminalDeliveryPolicy.js'
 import type { RunEventSink } from './turnRunner.js'
+import { goalTokenUsage, type GoalJudgePort } from './goalJudge.js'
+import { buildInitialAgentInput } from './multimodalInput.js'
 
 export type RuntimeSdkOutcome = 'completed' | 'waiting_approval' | 'clarification_needed'
 
@@ -44,6 +46,7 @@ interface RuntimeSdkExecutorDependencies {
   transcriptProjector: RuntimeTranscriptProjector
   approvalPersistence: RuntimeApprovalPersistence
   steering: RunSteeringController
+  goalJudge: GoalJudgePort
 }
 
 // 只负责驱动一次 SDK Runner，并把 SDK 中断和终态交给平台投影边界。
@@ -65,6 +68,7 @@ export class RuntimeSdkExecutor {
     const {
       approvalPersistence,
       checkpoints,
+      goalJudge,
       steering,
       store,
       transcriptProjector,
@@ -73,7 +77,12 @@ export class RuntimeSdkExecutor {
     let nextInput: RunState<
       AgentsExecutionContext,
       Agent<AgentsExecutionContext>
-    > | AgentInputItem[] | string = resumeState ?? options.query
+    > | AgentInputItem[] | string = resumeState ?? await buildInitialAgentInput(
+      store,
+      options.runId,
+      options.query,
+      assembly.modelCapabilities,
+    )
     let activeProjection: StreamProjectionState | null = null
     let activeModelTelemetry: ModelRequestTelemetry | null = null
     let terminalRepairAttempts = 0
@@ -140,6 +149,18 @@ export class RuntimeSdkExecutor {
         assembly.discardPendingSessionAssistantMessage()
         const runAfterTools = store.getRun(options.runId)
         if (runAfterTools.state.clarification && !runAfterTools.state.clarification.selectedOptionId) {
+          if (runAfterTools.state.goal && ['active', 'evaluating'].includes(runAfterTools.state.goal.status)) {
+            const transferredAt = new Date().toISOString()
+            await store.updateRunState(options.runId, {
+              goal: {
+                ...runAfterTools.state.goal,
+                status: 'cancelled',
+                failureReason: '等待用户澄清，Goal 将由后续运行继承。',
+                updatedAt: transferredAt,
+                completedAt: transferredAt,
+              },
+            })
+          }
           eventSink.emit('clarification.required', runAfterTools.state.clarification.question, {
             clarification: runAfterTools.state.clarification,
           })
@@ -161,6 +182,9 @@ export class RuntimeSdkExecutor {
         }
 
         const agentWorkflow = store.getRun(options.runId).state.agentWorkflow
+        if (runAfterTools.state.runProfile === 'geospatial_compose' && !agentWorkflow) {
+          throw new Error('地理分析 Compose 运行必须提交并完成 discover、validate、analyze、verify 阶段工作流后才能交付。')
+        }
         if (agentWorkflow && agentWorkflow.status !== 'completed') {
           throw new Error(`智能体工作流尚未完成，当前状态为 ${agentWorkflow.status}。必须完成或显式调整剩余步骤后再交付最终回答。`)
         }
@@ -198,10 +222,6 @@ export class RuntimeSdkExecutor {
         }
 
         await assertArtifactDeliveryIsVisible(store, runAfterTools.id, delivery.artifactIds)
-        const lastAgentName = stream.lastAgent?.name
-        if (lastAgentName && assembly.handoffAgentNames.has(lastAgentName)) {
-          await assembly.completeHandoff(lastAgentName, delivery.summary)
-        }
         const itemId = projection.assistantItemId
           ?? itemSink.startItem('message', { role: 'assistant' }).itemId
         const persisted = await transcriptProjector.appendAssistantMessageTranscript(
@@ -209,6 +229,219 @@ export class RuntimeSdkExecutor {
           finalOutput,
           itemId,
         )
+        projection.assistantItemId = null
+
+        let goalMetadata: Record<string, unknown> = {}
+        const persistedGoal = store.getRun(options.runId).state.goal
+        if (persistedGoal && (persistedGoal.status === 'active' || persistedGoal.status === 'evaluating')) {
+          const tokenUsageBeforeJudge = goalTokenUsage(store.getRun(options.runId).state.runtimeStats)
+          const beforeJudgeBoundary = goalBoundaryReason(persistedGoal, tokenUsageBeforeJudge, 'before_judge')
+          if (beforeJudgeBoundary) {
+            const completedAt = new Date().toISOString()
+            await store.updateRunState(options.runId, {
+              goal: {
+                ...persistedGoal,
+                status: 'exhausted',
+                failureReason: beforeJudgeBoundary,
+                updatedAt: completedAt,
+                completedAt,
+              },
+            })
+            eventSink.emit('goal.updated', beforeJudgeBoundary, {
+              goalId: persistedGoal.goalId,
+              status: 'exhausted',
+              tokenUsage: tokenUsageBeforeJudge,
+            })
+            itemSink.completeItem(itemId, {
+              body: finalOutput,
+              metadata: { transcriptEntryId: persisted.entryId, goalStatus: 'exhausted' },
+            })
+            await persistCleanCheckpoint(store, checkpoints, options.runId, stream.state, assembly)
+            await eventSink.flush()
+            await itemSink.flush()
+            throw new Error(beforeJudgeBoundary)
+          }
+
+          const evaluatingAt = new Date().toISOString()
+          const evaluatingGoal: RunGoal = {
+            ...persistedGoal,
+            status: 'evaluating',
+            failureReason: null,
+            updatedAt: evaluatingAt,
+          }
+          await store.updateRunState(options.runId, { goal: evaluatingGoal })
+          eventSink.emit('goal.updated', `正在执行 Goal 第 ${evaluatingGoal.recheckCount + 1} 次独立验收。`, {
+            goalId: evaluatingGoal.goalId,
+            status: 'evaluating',
+            attempt: evaluatingGoal.recheckCount + 1,
+          })
+          await eventSink.flush()
+          await itemSink.flush()
+
+          const verdict = await goalJudge.evaluate({
+            runId: options.runId,
+            threadId: assembly.threadId,
+            provider: options.provider,
+            ...(options.modelName !== undefined ? { model: options.modelName } : {}),
+            goal: evaluatingGoal,
+            signal,
+          })
+          const latestGoal = store.getRun(options.runId).state.goal
+          if (!latestGoal || latestGoal.goalId !== evaluatingGoal.goalId) {
+            throw new Error('Goal 验收期间持久化状态发生了不一致变化。')
+          }
+          const afterJudgeBoundary = goalBoundaryReason(latestGoal, verdict.tokenUsage, 'after_judge')
+          if (afterJudgeBoundary) {
+            const completedAt = new Date().toISOString()
+            await store.updateRunState(options.runId, {
+              goal: {
+                ...latestGoal,
+                status: 'exhausted',
+                lastVerdict: verdict,
+                failureReason: afterJudgeBoundary,
+                updatedAt: completedAt,
+                completedAt,
+              },
+            })
+            eventSink.emit('goal.updated', afterJudgeBoundary, {
+              goalId: latestGoal.goalId,
+              status: 'exhausted',
+              verdict,
+            })
+            itemSink.completeItem(itemId, {
+              body: finalOutput,
+              metadata: { transcriptEntryId: persisted.entryId, goalStatus: 'exhausted', goalVerdict: verdict },
+            })
+            await persistCleanCheckpoint(store, checkpoints, options.runId, stream.state, assembly)
+            await eventSink.flush()
+            await itemSink.flush()
+            throw new Error(afterJudgeBoundary)
+          }
+
+          if (verdict.status === 'impossible') {
+            const completedAt = new Date().toISOString()
+            await store.updateRunState(options.runId, {
+              goal: {
+                ...latestGoal,
+                status: 'impossible',
+                lastVerdict: verdict,
+                failureReason: verdict.reason,
+                updatedAt: completedAt,
+                completedAt,
+              },
+            })
+            eventSink.emit('goal.updated', `Goal 被独立验收器判定为不可达：${verdict.reason}`, {
+              goalId: latestGoal.goalId,
+              status: 'impossible',
+              verdict,
+            })
+            itemSink.completeItem(itemId, {
+              body: finalOutput,
+              metadata: { transcriptEntryId: persisted.entryId, goalStatus: 'impossible', goalVerdict: verdict },
+            })
+            await persistCleanCheckpoint(store, checkpoints, options.runId, stream.state, assembly)
+            await eventSink.flush()
+            await itemSink.flush()
+            throw new Error(`Goal 不可达：${verdict.reason}`)
+          }
+
+          if (verdict.status === 'incomplete') {
+            const recheckBoundary = goalRecheckBoundaryReason(latestGoal, verdict.tokenUsage)
+            if (recheckBoundary) {
+              const completedAt = new Date().toISOString()
+              await store.updateRunState(options.runId, {
+                goal: {
+                  ...latestGoal,
+                  status: 'exhausted',
+                  lastVerdict: verdict,
+                  failureReason: recheckBoundary,
+                  updatedAt: completedAt,
+                  completedAt,
+                },
+              })
+              eventSink.emit('goal.updated', recheckBoundary, {
+                goalId: latestGoal.goalId,
+                status: 'exhausted',
+                verdict,
+              })
+              itemSink.completeItem(itemId, {
+                body: finalOutput,
+                metadata: { transcriptEntryId: persisted.entryId, goalStatus: 'exhausted', goalVerdict: verdict },
+              })
+              await persistCleanCheckpoint(store, checkpoints, options.runId, stream.state, assembly)
+              await eventSink.flush()
+              await itemSink.flush()
+              throw new Error(recheckBoundary)
+            }
+
+            const recheckAt = new Date().toISOString()
+            const recheckCount = latestGoal.recheckCount + 1
+            await store.updateRunState(options.runId, {
+              goal: {
+                ...latestGoal,
+                status: 'active',
+                recheckCount,
+                lastVerdict: verdict,
+                failureReason: null,
+                updatedAt: recheckAt,
+              },
+            })
+            await store.appendTranscript({
+              threadId: assembly.threadId,
+              runId: options.runId,
+              turnId: assembly.turnId,
+              kind: 'checkpoint',
+              payload: {
+                type: 'goal_recheck',
+                goalId: latestGoal.goalId,
+                recheckCount,
+                verdict,
+              },
+            })
+            eventSink.emit('goal.updated', `Goal 尚未满足，正在边界内继续执行：${verdict.reason}`, {
+              goalId: latestGoal.goalId,
+              status: 'active',
+              recheckCount,
+              verdict,
+            })
+            itemSink.completeItem(itemId, {
+              body: finalOutput,
+              metadata: { transcriptEntryId: persisted.entryId, goalStatus: 'incomplete', goalVerdict: verdict },
+            })
+            await persistCleanCheckpoint(store, checkpoints, options.runId, stream.state, assembly)
+            await eventSink.flush()
+            await itemSink.flush()
+            nextInput = [{
+              type: 'message',
+              role: 'user',
+              content: goalRecheckInstruction(latestGoal, verdict),
+            }]
+            continue
+          }
+
+          const completedAt = new Date().toISOString()
+          await store.updateRunState(options.runId, {
+            goal: {
+              ...latestGoal,
+              status: 'satisfied',
+              lastVerdict: verdict,
+              failureReason: null,
+              updatedAt: completedAt,
+              completedAt,
+            },
+          })
+          eventSink.emit('goal.updated', `Goal 已通过第 ${verdict.attempt} 次独立验收。`, {
+            goalId: latestGoal.goalId,
+            status: 'satisfied',
+            verdict,
+          })
+          goalMetadata = { goalStatus: 'satisfied', goalVerdict: verdict }
+        }
+
+        const lastAgentName = stream.lastAgent?.name
+        if (lastAgentName && assembly.handoffAgentNames.has(lastAgentName)) {
+          await assembly.completeHandoff(lastAgentName, delivery.summary)
+        }
         itemSink.completeItem(itemId, {
           body: finalOutput,
           metadata: {
@@ -216,14 +449,10 @@ export class RuntimeSdkExecutor {
             deliverySummary: delivery.summary,
             artifactIds: delivery.artifactIds,
             warnings: delivery.warnings,
+            ...goalMetadata,
           },
         })
-        projection.assistantItemId = null
-        await checkpoints.persist(options.runId, stream.state, assembly)
-        await store.saveRunCheckpoint(options.runId, {
-          pendingToolCallIds: [],
-          recoveryStatus: 'clean',
-        })
+        await persistCleanCheckpoint(store, checkpoints, options.runId, stream.state, assembly)
         await eventSink.flush()
         await itemSink.flush()
 
@@ -265,6 +494,54 @@ export class RuntimeSdkExecutor {
       runtimeStats: mergeModelUsageStats(run.state.runtimeStats, usage),
     })
   }
+}
+
+function goalBoundaryReason(
+  goal: RunGoal,
+  tokenUsage: number,
+  stage: 'before_judge' | 'after_judge',
+): string | null {
+  if (goal.deadlineAt && Date.now() >= Date.parse(goal.deadlineAt)) {
+    return `Goal 已超过截止时间 ${goal.deadlineAt}，停止验收与续跑。`
+  }
+  if (goal.maxTokenBudget === null) return null
+  const exceeded = stage === 'before_judge'
+    ? tokenUsage >= goal.maxTokenBudget
+    : tokenUsage > goal.maxTokenBudget
+  return exceeded
+    ? `Goal 词元预算已用尽：${tokenUsage}/${goal.maxTokenBudget}。`
+    : null
+}
+
+function goalRecheckBoundaryReason(goal: RunGoal, tokenUsage: number): string | null {
+  if (goal.recheckCount >= goal.maxRechecks) {
+    return `Goal 在 ${goal.maxRechecks} 次最大复验续跑后仍未满足。`
+  }
+  return goalBoundaryReason(goal, tokenUsage, 'before_judge')
+}
+
+function goalRecheckInstruction(goal: RunGoal, verdict: RunGoalVerdict): string {
+  return [
+    '独立 Goal 验收器判定当前证据不完整，必须继续真实执行，不得只改写最终结论。',
+    `Goal：${goal.condition}`,
+    `判定原因：${verdict.reason}`,
+    `缺失验收项：${verdict.missingCriteria.join('；')}`,
+    '请在现有 SDK Session 中使用已授权工具、valueRef 与工作流证据补齐缺失项；如果工具或数据真实阻断，保留失败证据并如实说明。',
+  ].join('\n')
+}
+
+async function persistCleanCheckpoint(
+  store: AgentRuntimeStore,
+  checkpoints: AgentsCheckpointService,
+  runId: string,
+  state: RunState<AgentsExecutionContext, Agent<AgentsExecutionContext>>,
+  assembly: RuntimeAssembly,
+): Promise<void> {
+  await checkpoints.persist(runId, state, assembly)
+  await store.saveRunCheckpoint(runId, {
+    pendingToolCallIds: [],
+    recoveryStatus: 'clean',
+  })
 }
 
 function requireFinalText(finalOutput: unknown): string {

@@ -31,6 +31,10 @@ export interface FileLifecyclePort {
   delete(fileId: string, threadId: string): Promise<boolean>
   cloneThreadFiles(sourceThreadId: string, targetThreadId: string): Promise<StoredFileEntry[]>
   purgeThreadFiles(threadId: string): Promise<void>
+  readAuthorized(fileId: string, threadId: string, maxBytes: number): Promise<{
+    entry: StoredFileEntry
+    bytes: Uint8Array
+  }>
 }
 
 /**
@@ -43,7 +47,8 @@ export class FileLifecycleService implements FileLifecyclePort {
       FileObjectRepository,
       'reservePending' | 'promoteReadyAndRetire' | 'markPendingError' | 'markDeleted' | 'get' | 'listReady'
     >,
-    private readonly files: Pick<RuntimeFileStore, 'publish' | 'delete' | 'cloneFile' | 'purgeThreadFiles'>,
+    private readonly files: Pick<RuntimeFileStore, 'publish' | 'delete' | 'cloneFile' | 'purgeThreadFiles'>
+      & Partial<Pick<RuntimeFileStore, 'readObject'>>,
   ) {}
 
   async upload(input: FileUploadInput): Promise<StoredFileEntry> {
@@ -168,6 +173,20 @@ export class FileLifecycleService implements FileLifecyclePort {
   async purgeThreadFiles(threadId: string): Promise<void> {
     // 调用方必须先提交线程的数据库 purge；这里仅幂等清理物理投影。
     await this.files.purgeThreadFiles(threadId)
+  }
+
+  async readAuthorized(fileId: string, threadId: string, maxBytes: number): Promise<{
+    entry: StoredFileEntry
+    bytes: Uint8Array
+  }> {
+    const record = await this.repository.get(fileId)
+    if (record.threadId !== threadId || record.status !== 'ready') {
+      throw new Error(`文件 '${fileId}' 不属于当前线程或不是 ready 状态。`)
+    }
+    if (!this.files.readObject) throw new Error('运行时文件读取边界未配置。')
+    const entry = toStoredFileEntry(record)
+    const bytes = await this.files.readObject(entry, maxBytes)
+    return { entry, bytes }
   }
 
   private async removeRetiredFiles(retired: readonly FileObjectRecord[]): Promise<void> {

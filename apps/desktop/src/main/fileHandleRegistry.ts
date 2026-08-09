@@ -16,12 +16,14 @@
 
 import { randomUUID } from 'node:crypto'
 import type { ReadStream, Stats } from 'node:fs'
-import { lstat, open, readdir, realpath, stat } from 'node:fs/promises'
+import { lstat, mkdtemp, open, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { dialog, type BrowserWindow } from 'electron'
 
 import {
   DESKTOP_TEXT_FILE_MAX_BYTES,
+  desktopImageBlobStageRequestSchema,
   desktopFileSelectionHandleSchema,
   desktopFileSelectionHandlesSchema,
   desktopFileSelectionRequestSchema,
@@ -29,6 +31,7 @@ import {
   desktopTextFileReadResultSchema,
   type DesktopFileSelectionHandle,
   type DesktopFileSelectionRequest,
+  type DesktopImageBlobStageRequest,
   type DesktopTextFileReadRequest,
   type DesktopTextFileReadResult,
 } from '../contracts/desktopIpc.js'
@@ -39,6 +42,7 @@ interface RegisteredFile {
   descriptor: DesktopFileSelectionHandle
   expiresAt: number
   fingerprint: FileFingerprint
+  ownedTempDirectory: string | null
 }
 
 interface FileFingerprint {
@@ -54,6 +58,7 @@ interface PreparedFile {
   absolutePath: string
   descriptor: Omit<DesktopFileSelectionHandle, 'handleId'>
   fingerprint: FileFingerprint
+  ownedTempDirectory?: string | null
 }
 
 export interface OpenedDesktopFile {
@@ -109,6 +114,39 @@ export class FileHandleRegistry {
     return this.registerPrepared(window.webContents.id, prepared)
   }
 
+  /**
+   * 把 Renderer 生成的图片二进制收敛为 Main 持有的一次性文件句柄。
+   * 临时文件在上传流关闭、句柄过期或窗口销毁后回收；绝对路径永不返回。
+   */
+  async stageImage(
+    ownerWebContentsId: number,
+    input: DesktopImageBlobStageRequest,
+  ): Promise<DesktopFileSelectionHandle> {
+    const request = desktopImageBlobStageRequestSchema.parse(input)
+    const bytes = new Uint8Array(request.bytes)
+    assertImageSignature(bytes, request.mediaType)
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-image-'))
+    const cleanName = normalizeGeneratedImageName(request.name, request.mediaType)
+    const target = path.join(directory, cleanName)
+    try {
+      await writeFile(target, bytes, { flag: 'wx', mode: 0o600 })
+      const prepared = await prepareFile(
+        target,
+        cleanName,
+        bytes.byteLength,
+        request.mediaType,
+        cleanName,
+      )
+      prepared.ownedTempDirectory = directory
+      const [handle] = this.registerPrepared(ownerWebContentsId, [prepared])
+      if (!handle) throw new Error('图片句柄注册失败。')
+      return handle
+    } catch (error) {
+      await rm(directory, { recursive: true, force: true }).catch(() => undefined)
+      throw error
+    }
+  }
+
   async readText(
     ownerWebContentsId: number,
     input: DesktopTextFileReadRequest,
@@ -116,14 +154,17 @@ export class FileHandleRegistry {
     const request = desktopTextFileReadRequestSchema.parse(input)
     const file = this.consume(ownerWebContentsId, request.handleId, request.expectedName)
     if (request.purpose === 'automation-draft-import' && !file.descriptor.name.toLowerCase().endsWith('.json')) {
+      await cleanupRegisteredFile(file)
       throw new Error('自动化流程只允许导入 JSON 文件。')
     }
     if (file.descriptor.sizeBytes > DESKTOP_TEXT_FILE_MAX_BYTES) {
+      await cleanupRegisteredFile(file)
       throw new Error(`自动化流程 JSON 不得超过 ${DESKTOP_TEXT_FILE_MAX_BYTES} 字节。`)
     }
 
-    const handle = await open(file.absolutePath, 'r')
+    let handle: Awaited<ReturnType<typeof open>> | null = null
     try {
+      handle = await open(file.absolutePath, 'r')
       const details = await handle.stat()
       if (!details.isFile() || !sameFingerprint(file.fingerprint, details)) {
         throw new Error(`文件 '${file.descriptor.name}' 在读取前已发生变化。`)
@@ -140,7 +181,8 @@ export class FileHandleRegistry {
         text,
       })
     } finally {
-      await handle.close()
+      await handle?.close()
+      await cleanupRegisteredFile(file)
     }
   }
 
@@ -151,25 +193,42 @@ export class FileHandleRegistry {
   ): Promise<OpenedDesktopFile> {
     const file = this.consume(ownerWebContentsId, handleId, expectedName)
 
-    const handle = await open(file.absolutePath, 'r')
+    let handle: Awaited<ReturnType<typeof open>> | null = null
     try {
+      handle = await open(file.absolutePath, 'r')
       const details = await handle.stat()
       if (!details.isFile() || !sameFingerprint(file.fingerprint, details)) {
         throw new Error(`文件 '${file.descriptor.name}' 在上传前已发生变化。`)
       }
+      const stream = handle.createReadStream({ autoClose: true })
+      if (file.ownedTempDirectory) {
+        stream.once('close', () => { void cleanupRegisteredFile(file) })
+      }
       return {
         sizeBytes: details.size,
-        stream: handle.createReadStream({ autoClose: true }),
+        stream,
       }
     } catch (error) {
-      await handle.close()
+      await handle?.close()
+      await cleanupRegisteredFile(file)
       throw error
     }
   }
 
+  /** 主动放弃未消费的一次性句柄；重复释放按幂等成功处理。 */
+  async release(ownerWebContentsId: number, handleId: string): Promise<void> {
+    const file = this.handles.get(handleId)
+    if (!file || file.ownerWebContentsId !== ownerWebContentsId) return
+    this.handles.delete(handleId)
+    await cleanupRegisteredFile(file)
+  }
+
   releaseForWebContents(ownerWebContentsId: number): void {
     for (const [handleId, file] of this.handles) {
-      if (file.ownerWebContentsId === ownerWebContentsId) this.handles.delete(handleId)
+      if (file.ownerWebContentsId === ownerWebContentsId) {
+        this.handles.delete(handleId)
+        void cleanupRegisteredFile(file)
+      }
     }
   }
 
@@ -188,6 +247,7 @@ export class FileHandleRegistry {
       descriptor,
       expiresAt: this.now() + HANDLE_TTL_MS,
       fingerprint: input.fingerprint,
+      ownedTempDirectory: input.ownedTempDirectory ?? null,
     })
     return descriptor
   }
@@ -215,6 +275,7 @@ export class FileHandleRegistry {
     for (const [handleId, file] of this.handles) {
       if (file.ownerWebContentsId === ownerWebContentsId && file.expiresAt <= now) {
         this.handles.delete(handleId)
+        void cleanupRegisteredFile(file)
       }
     }
   }
@@ -229,8 +290,12 @@ export class FileHandleRegistry {
       throw new Error('文件句柄不存在、已失效或不属于当前工作区窗口。')
     }
     this.handles.delete(handleId)
-    if (file.expiresAt <= this.now()) throw new Error('文件句柄已过期，请重新选择文件。')
+    if (file.expiresAt <= this.now()) {
+      void cleanupRegisteredFile(file)
+      throw new Error('文件句柄已过期，请重新选择文件。')
+    }
     if (file.descriptor.name.normalize('NFC') !== expectedName.normalize('NFC')) {
+      void cleanupRegisteredFile(file)
       throw new Error('文件名与不透明句柄登记的信息不一致。')
     }
     return file
@@ -365,4 +430,43 @@ function sameFingerprint(expected: FileFingerprint, actual: Stats): boolean {
   return Object.entries(expected).every(([key, value]) => (
     current[key as keyof FileFingerprint] === value
   ))
+}
+
+async function cleanupRegisteredFile(file: RegisteredFile): Promise<void> {
+  if (!file.ownedTempDirectory) return
+  const directory = file.ownedTempDirectory
+  file.ownedTempDirectory = null
+  await rm(directory, { recursive: true, force: true }).catch(() => undefined)
+}
+
+function normalizeGeneratedImageName(name: string, mediaType: DesktopImageBlobStageRequest['mediaType']): string {
+  const extension = {
+    'image/png': '.png',
+    'image/jpeg': '.jpg',
+    'image/webp': '.webp',
+    'image/gif': '.gif',
+  }[mediaType]
+  const requested = path.basename(name).replace(/[^\p{L}\p{N}._-]+/gu, '_').replace(/^\.+/u, '')
+  const stem = path.basename(requested || 'pasted-image', path.extname(requested || '')) || 'pasted-image'
+  return `${stem.slice(0, 220)}${extension}`
+}
+
+function assertImageSignature(
+  bytes: Uint8Array,
+  mediaType: DesktopImageBlobStageRequest['mediaType'],
+): void {
+  const matches = mediaType === 'image/png'
+    ? startsWith(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    : mediaType === 'image/jpeg'
+      ? startsWith(bytes, [0xff, 0xd8, 0xff])
+      : mediaType === 'image/gif'
+        ? startsWith(bytes, [0x47, 0x49, 0x46, 0x38])
+        : startsWith(bytes, [0x52, 0x49, 0x46, 0x46])
+          && bytes.length >= 12
+          && startsWith(bytes.subarray(8), [0x57, 0x45, 0x42, 0x50])
+  if (!matches) throw new Error(`图片内容与声明的媒体类型 '${mediaType}' 不一致。`)
+}
+
+function startsWith(bytes: Uint8Array, expected: readonly number[]): boolean {
+  return expected.every((value, index) => bytes[index] === value)
 }

@@ -33,7 +33,12 @@ import './styles/layout.css'
 import './styles/tools-debug.css'
 import './styles/settings.css'
 import './styles/desktop.css'
-import { listAdminWorkspaces } from '../api/client'
+import {
+  cancelSubAgent,
+  followUpSubAgent,
+  getSubAgent,
+  listAdminWorkspaces,
+} from '../api/client'
 import {
   WorkspaceRestrictedDocument,
 } from './layout/WorkspaceRestrictedPanels'
@@ -49,6 +54,7 @@ import {
   formatUiError,
 } from './bootstrap'
 import { useConversationTimelineProjection } from '../features/runs/useConversationTimelineProjection'
+import type { RunSelectionToken } from '../features/runs/useRunState'
 import {
   useConnectionController,
   useNavigationController,
@@ -127,6 +133,7 @@ function AppShell() {
     beginRunSelection: beginRawRunSelection,
     captureRunSelection: captureRawRunSelection,
     hydrateRun,
+    refreshActiveRun,
     isRunSelectionCurrent: isRawRunSelectionCurrent,
     acceptRun,
     startRun,
@@ -205,6 +212,7 @@ function AppShell() {
     availableTools,
     backgroundTasks,
     isRuntimeConfigSubmitting,
+    isSkillSearching,
     isToolCatalogSubmitting,
     isToolSubmitting,
     isAutomationSubmitting,
@@ -212,6 +220,9 @@ function AppShell() {
     removeCatalogEntry: handleDeleteToolCatalogEntry,
     removeScheduledTask: handleDeleteScheduledTask,
     runtimeConfig,
+    skillCatalog,
+    skillSearchResults,
+    searchSkillCatalog: handleSearchSkillCatalog,
     runTool,
     runAutomation: handleStartAutomation,
     saveCatalogEntry: handleUpsertToolCatalogEntry,
@@ -272,6 +283,7 @@ function AppShell() {
     toggleLayerStatus: handleToggleLayerStatus,
     uploadedLayerName,
     uploadFile: handleUploadAnyFile,
+    uploadComposerAttachment: handleUploadComposerAttachment,
     uploadFiles: handleUploadFiles,
     uploadReferences,
   } = useWorkspaceResources({
@@ -345,6 +357,45 @@ function AppShell() {
     setToolRunResult,
     syncUrl,
   })
+
+  const refreshAfterSubAgentControl = useCallback(async (
+    runId: string,
+    selection: RunSelectionToken | null,
+  ): Promise<void> => {
+    if (!selection || !isRunSelectionCurrent(selection)) return
+    try {
+      const hydration = await refreshActiveRun(runId, selection)
+      if (hydration.status === 'superseded') return
+    } catch (error) {
+      if (!isRunSelectionCurrent(selection)) return
+      setUiError(formatUiError(error, '协作智能体状态刷新失败，请稍后重试。'))
+    }
+  }, [isRunSelectionCurrent, refreshActiveRun, setUiError])
+
+  const handleGetSubAgent = useCallback(
+    (runId: string, agentId: string) => getSubAgent(runId, agentId),
+    [],
+  )
+  const handleFollowUpSubAgent = useCallback(async (
+    runId: string,
+    agentId: string,
+    content: string,
+  ) => {
+    const selection = captureRunSelection(runId)
+    const agent = await followUpSubAgent(runId, agentId, content, crypto.randomUUID())
+    await refreshAfterSubAgentControl(runId, selection)
+    return agent
+  }, [captureRunSelection, refreshAfterSubAgentControl])
+  const handleCancelSubAgent = useCallback(async (
+    runId: string,
+    agentId: string,
+    reason?: string,
+  ) => {
+    const selection = captureRunSelection(runId)
+    const agent = await cancelSubAgent(runId, agentId, crypto.randomUUID(), reason)
+    await refreshAfterSubAgentControl(runId, selection)
+    return agent
+  }, [captureRunSelection, refreshAfterSubAgentControl])
 
   const { authMe, authStatus, authMode, clearAuth, retryAuth } = useWorkspaceBootstrap({
     abortRunSelection,
@@ -646,6 +697,8 @@ function AppShell() {
                 onProviderChange={handleProviderChange}
                 onModelChange={setModel}
                 onOpenAccount={() => setActiveDesktopDocument('account')}
+                canManageProviders={workspaceAccess.canAccessSecurity}
+                onProviderCatalogChanged={applyProviders}
               />
             )}
             account={authMe && workspaceAccess.canAccessAccount
@@ -712,6 +765,9 @@ function AppShell() {
                     layers,
                     valueRefs: agentState?.toolValueRefs ?? [],
                     runtimeConfig,
+                    skillCatalog,
+                    skillSearchResults,
+                    isSkillSearching,
                     memories: memoryEntries,
                     activeSkills,
                     activeMcpServers,
@@ -741,6 +797,7 @@ function AppShell() {
                     onSaveRuntimeConfig: nextConfig => {
                       void handleSaveRuntimeConfig(nextConfig)
                     },
+                    onSearchSkills: handleSearchSkillCatalog,
                     onStartAutomation: payload => {
                       void handleStartAutomation(payload)
                     },
@@ -817,6 +874,7 @@ function AppShell() {
                     onUploadFiles: files => {
                       void handleUploadFiles(files)
                     },
+                    onAttachImage: handleUploadComposerAttachment,
                     onSelectArtifact: setSelectedArtifactId,
                     onSelectTask: onSelectTaskAction,
                     onRenameTask: onRenameTaskAction,
@@ -834,6 +892,7 @@ function AppShell() {
                     compactionLevel,
                     runStats,
                     denialCounts,
+                    goal: agentState?.goal ?? null,
                     agentWorkflow,
                     tasks: progressTasks,
                   },
@@ -854,6 +913,10 @@ function AppShell() {
                   },
                   workflow: {
                     agentState,
+                    runId: run?.id,
+                    onGetSubAgent: handleGetSubAgent,
+                    onFollowUpSubAgent: handleFollowUpSubAgent,
+                    onCancelSubAgent: handleCancelSubAgent,
                   },
                   inspector: {
                     details: inspectorDetails,

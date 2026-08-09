@@ -9,15 +9,15 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
-import { Check, ChevronDown, ClipboardList, FolderUp, Hand, LoaderCircle, Mic, MicOff, ShieldOff, Sparkles, Square, Upload, X, Zap } from 'lucide-react'
-import type { SpeechLanguageOption } from '@geo-agent-platform/shared-types'
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
+import { Check, ChevronDown, ClipboardList, FolderUp, Hand, LoaderCircle, Mic, MicOff, ShieldOff, Sparkles, Square, Target, Upload, X, Zap } from 'lucide-react'
+import type { RunAttachmentInput, SpeechLanguageOption } from '@geo-agent-platform/shared-types'
 import type { DesktopFileSelectionHandle } from '../../../contracts/desktopIpc'
 import { AppIcon } from '../../shared/components/AppIcon'
-import { selectDesktopUploadFiles } from '../../api/desktopFiles'
+import { releaseDesktopFileHandle, selectDesktopUploadFiles, stageDesktopImageBlob } from '../../api/desktopFiles'
 import type { UploadReference } from '../../app/types'
 import { COMPOSER_MODES, composerModeOption, isSelectableComposerMode } from './composerModes'
-import type { ChatPanelProps, ComposerMode } from './types'
+import type { ChatPanelProps, ComposerMode, GoalComposerDraft } from './types'
 import type { SpeechRecognitionStatus } from './useSpeechRecognition'
 
 interface ComposerProps {
@@ -33,12 +33,19 @@ interface ComposerProps {
   compactionLevel?: string | null
   runStats?: ChatPanelProps['runStats']
   denialCounts?: Record<string, number>
+  goal?: ChatPanelProps['goal']
+  goalDraft: GoalComposerDraft
+  goalError?: string | null
+  onGoalDraftChange: (updates: Partial<GoalComposerDraft>) => void
   composerInputRef: RefObject<HTMLTextAreaElement | null>
   onQueryChange: (value: string) => void
   onSubmit: (event?: FormEvent) => void
   onInterrupt?: () => void
   onUseTemplate: () => void
   onUploadFiles: (files: DesktopFileSelectionHandle[]) => void
+  pendingAttachments?: RunAttachmentInput[]
+  onAttachPastedImage?: (file: DesktopFileSelectionHandle) => Promise<void>
+  onRemoveAttachment?: (fileId: string) => void
   uploadReferences?: UploadReference[]
   onDismissUploadReference?: (id: string) => void
   speechStatus?: SpeechRecognitionStatus
@@ -74,12 +81,19 @@ export function Composer({
   compactionLevel,
   runStats,
   denialCounts,
+  goal,
+  goalDraft,
+  goalError,
+  onGoalDraftChange,
   composerInputRef,
   onQueryChange,
   onSubmit,
   onInterrupt,
   onUseTemplate,
   onUploadFiles,
+  pendingAttachments = [],
+  onAttachPastedImage,
+  onRemoveAttachment,
   uploadReferences = [],
   onDismissUploadReference,
   speechStatus = 'idle',
@@ -100,11 +114,14 @@ export function Composer({
 }: ComposerProps) {
   const mode = composerModeOption(composerMode)
   const modeShortLabel = mode.shortLabel
-  const canSubmit = conversationReady && Boolean(query.trim()) && (!isSubmitting || canSteerActiveRun)
+  const [pasteBusy, setPasteBusy] = useState(false)
+  const [pasteError, setPasteError] = useState<string | null>(null)
+  const canSubmit = conversationReady && !pasteBusy && Boolean(query.trim()) && (!isSubmitting || canSteerActiveRun)
   const speechEnabled = Boolean(onStartSpeechRecognition && onStopSpeechRecognition)
   const speechBusy = speechStatus === 'authorizing' || speechStatus === 'stopping'
   const speechActive = speechStatus === 'recognizing' || speechBusy
   const modePickerRef = useRef<HTMLDivElement | null>(null)
+  const [goalPanelOpen, setGoalPanelOpen] = useState(false)
   const uploadCards = useMemo(() => visibleUploadCards(uploadReferences), [uploadReferences])
 
   useEffect(() => {
@@ -137,11 +154,46 @@ export function Composer({
     }
   }, [modeMenuOpen, onModeMenuOpenChange])
 
+  const handlePaste = async (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    if (!onAttachPastedImage) return
+    const images = Array.from(event.clipboardData.items)
+      .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
+      .map(item => item.getAsFile())
+      .filter((file): file is File => Boolean(file))
+    if (!images.length) return
+    event.preventDefault()
+    setPasteBusy(true)
+    setPasteError(null)
+    try {
+      for (const [index, image] of images.slice(0, 12).entries()) {
+        const extension = image.type === 'image/jpeg' ? 'jpg' : image.type.split('/')[1] || 'png'
+        const handle = await stageDesktopImageBlob(
+          image,
+          image.name || `clipboard-${Date.now()}-${index + 1}.${extension}`,
+        )
+        try {
+          await onAttachPastedImage(handle)
+        } finally {
+          await releaseDesktopFileHandle(handle.handleId).catch(() => undefined)
+        }
+      }
+    } catch (error) {
+      setPasteError(error instanceof Error ? error.message : '粘贴图片失败，请重试。')
+    } finally {
+      setPasteBusy(false)
+    }
+  }
+
   return (
     <form className="cc-composer" onSubmit={onSubmit}>
       <UploadProgressTray
         references={uploadCards}
         onDismiss={onDismissUploadReference}
+      />
+      <AttachmentTray
+        attachments={pendingAttachments}
+        busy={pasteBusy}
+        onRemove={onRemoveAttachment}
       />
       <textarea
         id="analysis-query-input"
@@ -149,21 +201,34 @@ export function Composer({
         className="cc-composer-input"
         value={query}
         aria-label="输入空间分析需求"
-        aria-busy={!conversationReady}
+        aria-busy={!conversationReady || pasteBusy}
         placeholder={conversationReady ? '输入消息...' : '正在初始化会话...'}
         rows={1}
         wrap="soft"
         onChange={(event) => onQueryChange(event.target.value)}
+        onPaste={(event) => { void handlePaste(event) }}
         onKeyDown={onInputKeyDown}
         onCompositionStart={onCompositionStart}
         onCompositionEnd={onCompositionEnd}
         disabled={!conversationReady || (isSubmitting && !canSteerActiveRun)}
       />
+      {pasteError ? <p className="cc-attachment-error" role="alert">{pasteError}</p> : null}
 
       <div className={`cc-composer-mode-note cc-composer-mode-note--${composerMode}`}>
         <span><Zap size={14} /> {mode.label}</span>
         <small>{mode.badge}</small>
       </div>
+
+      {goalPanelOpen ? (
+        <GoalEditor
+          draft={goalDraft}
+          currentGoal={goal}
+          error={goalError}
+          disabled={isSubmitting}
+          onChange={onGoalDraftChange}
+          onClose={() => setGoalPanelOpen(false)}
+        />
+      ) : null}
 
       <div className="cc-composer-toolbar">
         <div className="cc-composer-toolbar__primary" aria-label="输入附件与辅助工具">
@@ -189,6 +254,17 @@ export function Composer({
             aria-label="填入示例问题"
           >
             <Sparkles size={16} />
+          </button>
+          <button
+            className={`cc-composer-tool cc-composer-tool--goal${goalDraft.enabled ? ' cc-composer-tool--goal-active' : ''}`}
+            type="button"
+            onClick={() => setGoalPanelOpen(open => !open)}
+            disabled={isSubmitting}
+            title={goalDraft.enabled ? '编辑 Goal 验收边界' : '配置 Goal 验收与续跑边界'}
+            aria-label={goalDraft.enabled ? '编辑 Goal 验收边界' : '配置 Goal 验收与续跑边界'}
+            aria-expanded={goalPanelOpen}
+          >
+            <Target size={16} />
           </button>
           {onInterrupt && isSubmitting ? (
             <button className="cc-composer-tool cc-composer-tool--interrupt" type="button" onClick={onInterrupt} title="中断运行" aria-label="中断运行">
@@ -295,9 +371,130 @@ export function Composer({
         compactionLevel={compactionLevel}
         runStats={runStats}
         denialCounts={denialCounts}
+        goal={goal}
       />
     </form>
   )
+}
+
+function GoalEditor({
+  draft,
+  currentGoal,
+  error,
+  disabled,
+  onChange,
+  onClose,
+}: {
+  draft: GoalComposerDraft
+  currentGoal?: ChatPanelProps['goal']
+  error?: string | null
+  disabled: boolean
+  onChange: (updates: Partial<GoalComposerDraft>) => void
+  onClose: () => void
+}) {
+  return (
+    <section className="cc-goal-editor" aria-label="Goal 验收配置">
+      <div className="cc-goal-editor__head">
+        <label className="cc-goal-toggle">
+          <input
+            type="checkbox"
+            checked={draft.enabled}
+            disabled={disabled}
+            onChange={(event) => onChange({ enabled: event.target.checked })}
+          />
+          <span><Target size={15} /> Goal 独立验收</span>
+        </label>
+        <button type="button" onClick={onClose} aria-label="收起 Goal 配置" title="收起 Goal 配置">
+          <X size={14} />
+        </button>
+      </div>
+
+      {currentGoal ? (
+        <div className={`cc-goal-current cc-goal-current--${currentGoal.status}`}>
+          <strong>{goalStatusLabel(currentGoal.status)}</strong>
+          <span>{currentGoal.condition}</span>
+          <small>独立验收 {currentGoal.recheckCount + (currentGoal.lastVerdict ? 1 : 0)} 次 · 允许续跑 {currentGoal.recheckCount}/{currentGoal.maxRechecks}</small>
+        </div>
+      ) : null}
+
+      {draft.enabled ? (
+        <div className="cc-goal-editor__body">
+          <label className="cc-goal-field cc-goal-field--wide">
+            <span>目标条件</span>
+            <textarea
+              value={draft.condition}
+              disabled={disabled}
+              rows={2}
+              maxLength={2000}
+              placeholder="留空时使用当前消息作为 Goal"
+              onChange={(event) => onChange({ condition: event.target.value })}
+            />
+          </label>
+          <label className="cc-goal-field cc-goal-field--wide">
+            <span>验收标准（每行一条）</span>
+            <textarea
+              value={draft.acceptanceCriteriaText}
+              disabled={disabled}
+              rows={2}
+              placeholder={'例如：\n分析步骤完成\n结论有工具或 Artifact 证据'}
+              onChange={(event) => onChange({ acceptanceCriteriaText: event.target.value })}
+            />
+          </label>
+          <label className="cc-goal-field">
+            <span>最大续跑次数</span>
+            <input
+              type="number"
+              min={0}
+              max={10}
+              step={1}
+              value={draft.maxRechecks}
+              disabled={disabled}
+              onChange={(event) => onChange({ maxRechecks: event.target.value })}
+            />
+          </label>
+          <label className="cc-goal-field">
+            <span>词元预算</span>
+            <input
+              type="number"
+              min={1}
+              max={10_000_000}
+              step={1}
+              value={draft.maxTokenBudget}
+              disabled={disabled}
+              placeholder="不限制"
+              onChange={(event) => onChange({ maxTokenBudget: event.target.value })}
+            />
+          </label>
+          <label className="cc-goal-field cc-goal-field--wide">
+            <span>截止时间</span>
+            <input
+              type="datetime-local"
+              value={draft.deadlineLocal}
+              disabled={disabled}
+              onChange={(event) => onChange({ deadlineLocal: event.target.value })}
+            />
+          </label>
+          <p className="cc-goal-editor__note">最终回答会先持久化，再由无工具权限的独立模型根据真实账本验收；未满足时只在上述边界内续跑。</p>
+        </div>
+      ) : (
+        <p className="cc-goal-editor__note">启用后，运行不会仅凭工作 Agent 自称完成而结束。</p>
+      )}
+      {error ? <p className="cc-goal-editor__error" role="alert">{error}</p> : null}
+    </section>
+  )
+}
+
+function goalStatusLabel(status: NonNullable<ChatPanelProps['goal']>['status']): string {
+  const labels: Record<NonNullable<ChatPanelProps['goal']>['status'], string> = {
+    active: 'Goal 执行中',
+    evaluating: 'Goal 验收中',
+    satisfied: 'Goal 已满足',
+    impossible: 'Goal 不可达',
+    exhausted: 'Goal 边界耗尽',
+    cancelled: 'Goal 已取消',
+    failed: 'Goal 验收失败',
+  }
+  return labels[status]
 }
 
 function ComposerModeIcon({
@@ -374,6 +571,42 @@ function formatSpeechStatus(status: SpeechRecognitionStatus, interimText?: strin
   if (status === 'recognizing') return '正在听写，识别结果会填入输入框。'
   if (status === 'stopping') return '正在停止语音输入...'
   return ''
+}
+
+function AttachmentTray({
+  attachments,
+  busy,
+  onRemove,
+}: {
+  attachments: RunAttachmentInput[]
+  busy: boolean
+  onRemove?: (fileId: string) => void
+}) {
+  if (!attachments.length && !busy) return null
+  return (
+    <div className="cc-attachment-tray" aria-label="待发送图片附件">
+      {attachments.map(attachment => (
+        <span key={attachment.fileId} className="cc-attachment-chip">
+          <span aria-hidden="true">{attachment.kind === 'map_screenshot' ? '🗺️' : '🖼️'}</span>
+          <strong title={attachment.name}>{attachment.name}</strong>
+          {onRemove ? (
+            <button
+              type="button"
+              aria-label={`移除附件 ${attachment.name}`}
+              onClick={() => onRemove(attachment.fileId)}
+            >
+              <X size={12} />
+            </button>
+          ) : null}
+        </span>
+      ))}
+      {busy ? (
+        <span className="cc-attachment-chip cc-attachment-chip--busy" role="status">
+          <LoaderCircle className="cc-spin" size={13} /> 正在安全附加图片
+        </span>
+      ) : null}
+    </div>
+  )
 }
 
 function UploadProgressTray({
@@ -505,6 +738,7 @@ function ComposerDiagnostics({
   compactionLevel,
   runStats,
   denialCounts,
+  goal,
 }: {
   tokenBudget?: ChatPanelProps['tokenBudget']
   activeSkills?: string[]
@@ -512,9 +746,10 @@ function ComposerDiagnostics({
   compactionLevel?: string | null
   runStats?: ChatPanelProps['runStats']
   denialCounts?: Record<string, number>
+  goal?: ChatPanelProps['goal']
 }) {
   const denialTotal = Object.values(denialCounts ?? {}).reduce((sum, value) => sum + value, 0)
-  if (!tokenBudget && !activeSkills?.length && !activeMcpServers?.length && !compactionLevel && !runStats && !denialTotal) return null
+  if (!tokenBudget && !activeSkills?.length && !activeMcpServers?.length && !compactionLevel && !runStats && !denialTotal && !goal) return null
 
   return (
     <div className="cc-composer-diagnostics" aria-label="运行诊断摘要">
@@ -524,6 +759,7 @@ function ComposerDiagnostics({
       {compactionLevel ? <span>压缩 {compactionLevel}</span> : null}
       {runStats ? <span>工具 {runStats.toolSuccesses}/{runStats.toolAttempts}</span> : null}
       {denialTotal ? <span>拒绝 {denialTotal}</span> : null}
+      {goal ? <span title={goal.lastVerdict?.reason ?? goal.failureReason ?? goal.condition}>{goalStatusLabel(goal.status)} {goal.recheckCount}/{goal.maxRechecks}</span> : null}
     </div>
   )
 }

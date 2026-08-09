@@ -15,6 +15,7 @@
 // Agent 工具通过 datasetId / latest_upload 解析到同一条 fileRelativePath。
 
 import { Hono } from 'hono'
+import { METEOROLOGICAL_UPLOAD_SUFFIXES } from '@geo-agent-platform/shared-types/meteorology'
 import type { Database } from '../db/connection.js'
 import type {
   MeteorologicalDatasetRecord,
@@ -31,19 +32,6 @@ import type { Env } from '../framework/env.js'
 import { verifySchema } from '../security/database.js'
 import { routeErrorResponse } from './errors.js'
 import { parseStreamingMultipart, type StreamingMultipartForm } from './streamingMultipart.js'
-
-const METEOROLOGICAL_SUFFIXES = [
-  '.nc',
-  '.nc4',
-  '.grib',
-  '.grb',
-  '.grb2',
-  '.tif',
-  '.tiff',
-  '.h5',
-  '.hdf5',
-  '.bz2',
-] as const
 
 const METEOROLOGICAL_TABLES: Record<string, string[]> = {
   platform_meteorological_datasets: [
@@ -195,7 +183,9 @@ export function meteorologyRoutes(
       resourceId: dataset.datasetId,
     })
     const now = nowUtc()
-    const payload = await safeJson(c.req.raw)
+    const payloadResult = await parseJsonObject(c.req.raw)
+    if (!payloadResult.ok) return c.json({ detail: payloadResult.detail }, 400)
+    const payload = payloadResult.value
     const job: MeteorologicalJobRecord = {
       jobId: makeId('meteorological_job'),
       datasetId: dataset.datasetId,
@@ -237,7 +227,7 @@ export async function resolveLatestMeteorologicalDataset(
 
 function isSupportedMeteorologicalFilename(name: string): boolean {
   const lower = name.toLowerCase()
-  return METEOROLOGICAL_SUFFIXES.some(suffix => lower.endsWith(suffix))
+  return METEOROLOGICAL_UPLOAD_SUFFIXES.some(suffix => lower.endsWith(suffix))
 }
 
 function inputKind(name: string): string {
@@ -251,13 +241,19 @@ function queryString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
-async function safeJson(request: Request): Promise<Record<string, unknown>> {
+async function parseJsonObject(request: Request): Promise<
+  { ok: true; value: Record<string, unknown> }
+  | { ok: false; detail: string }
+> {
+  let parsed: unknown
   try {
-    const parsed = await request.json()
-    return isRecord(parsed) ? parsed : {}
+    parsed = await request.json()
   } catch {
-    return {}
+    return { ok: false, detail: '请求体必须是有效的 JSON 对象。' }
   }
+  return isRecord(parsed)
+    ? { ok: true, value: parsed }
+    : { ok: false, detail: '请求体 JSON 顶层必须是对象。' }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

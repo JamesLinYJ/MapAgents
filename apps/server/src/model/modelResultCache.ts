@@ -23,6 +23,7 @@ export const MODEL_COMPLETION_PURPOSES = [
   'memory_selection',
   'memory_dream',
   'tool_structured_analysis',
+  'goal_judgement',
 ] as const
 
 export type ModelCompletionPurpose = typeof MODEL_COMPLETION_PURPOSES[number]

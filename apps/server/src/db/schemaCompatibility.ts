@@ -26,9 +26,10 @@ export const REQUIRED_MIGRATIONS = [
   '008_tool_result_commit_idempotency',
   '009_file_object_lifecycle',
   '010_file_ready_source_invariant',
+  '011_custom_model_providers',
 ] as const
 
-export const CURRENT_DATABASE_SCHEMA_VERSION = 10
+export const CURRENT_DATABASE_SCHEMA_VERSION = 11
 
 const migrationRowsSchema = z.array(z.object({
   migration_id: z.string().min(1),
@@ -49,7 +50,7 @@ export async function verifyDatabaseSchemaCompatibility(
   if (typeof tableName !== 'string') {
     throw new Error(
       '数据库尚未启用版本跟踪。请重建开发数据库并应用 '
-      + 'infra/migrations/000_schema_migrations.sql 至 010_file_ready_source_invariant.sql '
+      + 'infra/migrations/000_schema_migrations.sql 至 011_custom_model_providers.sql '
       + '后重新启动。',
     )
   }
@@ -96,13 +97,15 @@ export async function verifyDatabaseSchemaCompatibility(
       'public.geo_agent_platform_layer_tiles(integer,integer,integer,json)'
     ) AS vector_tile_function,
     to_regclass('public.platform_model_result_cache') AS model_result_cache_table,
-    to_regclass('public.platform_file_objects') AS file_objects_table
+    to_regclass('public.platform_file_objects') AS file_objects_table,
+    to_regclass('public.platform_model_providers') AS model_providers_table
   `)
   const vectorTileFunction = (
     capabilityResult.rows[0] as {
       vector_tile_function?: unknown
       model_result_cache_table?: unknown
       file_objects_table?: unknown
+      model_providers_table?: unknown
     } | undefined
   )?.vector_tile_function
   if (typeof vectorTileFunction !== 'string') {
@@ -129,6 +132,15 @@ export async function verifyDatabaseSchemaCompatibility(
     throw new Error(
       '数据库迁移记录与实际能力不一致：缺少 platform_file_objects。'
       + '请执行 009_file_object_lifecycle.sql；禁止由应用启动时创建业务表。',
+    )
+  }
+  const modelProvidersTable = (
+    capabilityResult.rows[0] as { model_providers_table?: unknown } | undefined
+  )?.model_providers_table
+  if (typeof modelProvidersTable !== 'string') {
+    throw new Error(
+      '数据库迁移记录与实际能力不一致：缺少 platform_model_providers。'
+      + '请执行 011_custom_model_providers.sql；禁止由应用启动时创建业务表。',
     )
   }
 }

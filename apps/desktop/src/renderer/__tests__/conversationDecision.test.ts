@@ -69,6 +69,7 @@ describe('conversation decision projection', () => {
         stepId: 'step_query',
         title: '查询行政区划图层',
         kind: '',
+        phase: null,
         toolName: 'query_layer',
         ownerAgentId: 'supervisor',
         args: {},

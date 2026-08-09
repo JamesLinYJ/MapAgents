@@ -31,7 +31,6 @@ import {
   workspaceBootstrapSnapshotSchema,
 } from '@geo-agent-platform/shared-types'
 import {
-  operationsLogEntrySchema,
   operationsLogFilterSchema,
   operationsLogPageSchema,
   operationsLogQuerySchema,
@@ -43,6 +42,7 @@ export const DESKTOP_CONTROL_DECOMPRESSED_MAX_BYTES = 4 * 1024 * 1024
 export const DESKTOP_API_RESPONSE_MAX_BYTES = 16 * 1024 * 1024
 export const DESKTOP_CLIPBOARD_TEXT_MAX_BYTES = 4 * 1024 * 1024
 export const DESKTOP_TEXT_FILE_MAX_BYTES = 48 * 1024
+export const DESKTOP_STAGED_IMAGE_MAX_BYTES = 20 * 1024 * 1024
 
 export const desktopWorkspaceWindowDescriptorSchema = z.object({
   workspaceId: z.string().trim().min(1).max(160),
@@ -254,6 +254,26 @@ export const desktopFileSelectionHandleSchema = z.object({
 export const desktopFileSelectionHandlesSchema = z.array(
   desktopFileSelectionHandleSchema,
 ).max(200)
+
+// Renderer 生成的粘贴图片与地图截图走独立的二进制数据 IPC；它不是
+// 64 KiB 控制帧，也不允许以 Base64、data URL 或宿主路径的形式进入契约。
+// Main 校验魔数并落入一次性临时文件后，只把标准不透明句柄返回 Renderer。
+const desktopImageArrayBufferSchema = z.custom<ArrayBuffer>(value => (
+  Object.prototype.toString.call(value) === '[object ArrayBuffer]'
+  && Number.isInteger((value as ArrayBuffer).byteLength)
+  && (value as ArrayBuffer).byteLength > 0
+  && (value as ArrayBuffer).byteLength <= DESKTOP_STAGED_IMAGE_MAX_BYTES
+), `图片二进制不得为空或超过 ${DESKTOP_STAGED_IMAGE_MAX_BYTES} 字节。`)
+
+export const desktopImageBlobStageRequestSchema = z.object({
+  name: z.string().trim().min(1).max(255),
+  mediaType: z.enum(['image/png', 'image/jpeg', 'image/webp', 'image/gif']),
+  bytes: desktopImageArrayBufferSchema,
+}).strict()
+
+export const desktopFileHandleReleaseRequestSchema = z.object({
+  handleId: z.string().uuid(),
+}).strict().superRefine(enforceDesktopControlFrameSize)
 
 export const desktopFileSelectionRequestSchema = z.object({
   kind: z.enum(['files', 'folder']),
@@ -473,6 +493,8 @@ export const DESKTOP_IPC_CHANNELS = {
   dialogConfirm: `${PLATFORM_IPC_CHANNEL_PREFIX}:dialog:confirm`,
   exportRequest: `${PLATFORM_IPC_CHANNEL_PREFIX}:export:request`,
   fileSelect: `${PLATFORM_IPC_CHANNEL_PREFIX}:file:select`,
+  fileStageImage: `${PLATFORM_IPC_CHANNEL_PREFIX}:file:stage-image`,
+  fileRelease: `${PLATFORM_IPC_CHANNEL_PREFIX}:file:release`,
   fileReadText: `${PLATFORM_IPC_CHANNEL_PREFIX}:file:read-text`,
   microphonePermission: `${PLATFORM_IPC_CHANNEL_PREFIX}:microphone:permission`,
   supervisorLogs: `${PLATFORM_IPC_CHANNEL_PREFIX}:supervisor:logs`,
@@ -513,6 +535,8 @@ export type DesktopExportResult = z.infer<typeof desktopExportResultSchema>
 export type DesktopDiagnosticExportResult = z.infer<typeof desktopDiagnosticExportResultSchema>
 export type DesktopFileSelectionHandle = z.infer<typeof desktopFileSelectionHandleSchema>
 export type DesktopFileSelectionRequest = z.infer<typeof desktopFileSelectionRequestSchema>
+export type DesktopFileHandleReleaseRequest = z.infer<typeof desktopFileHandleReleaseRequestSchema>
+export type DesktopImageBlobStageRequest = z.infer<typeof desktopImageBlobStageRequestSchema>
 export type DesktopTextFileReadRequest = z.infer<typeof desktopTextFileReadRequestSchema>
 export type DesktopTextFileReadResult = z.infer<typeof desktopTextFileReadResultSchema>
 export type DesktopWindowCommand = z.infer<typeof desktopWindowCommandSchema>

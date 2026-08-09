@@ -45,6 +45,9 @@ import type { RunOptions } from './runtimeTypes.js'
 import { runtimeFailure } from './runtimeErrors.js'
 import { RuntimeSdkExecutor } from './runtimeSdkExecutor.js'
 import { RuntimeAssemblyFactory } from './runtimeAssembly.js'
+import { GoalJudge, type GoalJudgePort } from './goalJudge.js'
+import { SubAgentControlPlane, type SubAgentControlInput } from './subAgentControlPlane.js'
+import { authorizedAttachmentSummaries } from './multimodalInput.js'
 
 export type { SandboxClientFactory } from './runtimeSandbox.js'
 export type { RunOptions } from './runtimeTypes.js'
@@ -52,6 +55,7 @@ export type { RunOptions } from './runtimeTypes.js'
 export interface OpenAIAgentsRuntimeOptions {
   createSandboxClient?: SandboxClientFactory
   agentTracing?: LocalAgentTracing
+  goalJudge?: GoalJudgePort
 }
 
 // OpenAIAgentsRuntime
@@ -66,6 +70,7 @@ export class OpenAIAgentsRuntime {
   private readonly steering: RunSteeringController
   private readonly sdkExecutor: RuntimeSdkExecutor
   private readonly assemblyFactory: RuntimeAssemblyFactory
+  private readonly subAgentControls: SubAgentControlPlane
 
   constructor(
     private readonly store: AgentRuntimeStore,
@@ -74,6 +79,7 @@ export class OpenAIAgentsRuntime {
     private readonly runtimeOptions: OpenAIAgentsRuntimeOptions = {},
     modelCompletions?: ModelCompletionService,
   ) {
+    this.subAgentControls = new SubAgentControlPlane(store)
     this.checkpoints = new AgentsCheckpointService(store)
     this.transcriptProjector = new RuntimeTranscriptProjector(store, toolRegistry)
     this.approvalPersistence = new RuntimeApprovalPersistence(store, toolRegistry, this.checkpoints)
@@ -84,6 +90,7 @@ export class OpenAIAgentsRuntime {
       modelRegistry,
       transcriptProjector: this.transcriptProjector,
       runtimeOptions,
+      subAgentControls: this.subAgentControls,
       ...(modelCompletions ? { modelCompletions } : {}),
       recordWarning: (runId, message, eventSink) => this.recordWarning(runId, message, eventSink),
     })
@@ -93,6 +100,7 @@ export class OpenAIAgentsRuntime {
       transcriptProjector: this.transcriptProjector,
       approvalPersistence: this.approvalPersistence,
       steering: this.steering,
+      goalJudge: runtimeOptions.goalJudge ?? new GoalJudge(store, modelCompletions),
     })
   }
 
@@ -112,8 +120,9 @@ export class OpenAIAgentsRuntime {
     try {
       detachTracing = this.runtimeOptions.agentTracing?.attachRun(options.runId) ?? (() => {})
       await this.store.updateRunStatus(options.runId, 'running')
-      if (!options.resume && options.executionMode === 'plan') {
+      if (!options.resume && (options.executionMode === 'plan' || options.runProfile === 'geospatial_compose')) {
         await this.store.updateRunState(options.runId, {
+          runProfile: options.runProfile ?? 'standard',
           planMode: true,
           agentWorkflow: null,
         })
@@ -123,12 +132,17 @@ export class OpenAIAgentsRuntime {
         ? await this.checkpoints.requireTurnId(threadId, options.runId)
         : makeId('turn')
       if (!options.resume) {
+        const attachmentSummaries = authorizedAttachmentSummaries(this.store.getRun(options.runId))
         const userEntry = await this.store.appendTranscript({
           threadId,
           runId: options.runId,
           turnId,
           kind: 'message',
-          payload: { role: 'user', content: options.query },
+          payload: {
+            role: 'user',
+            content: options.query,
+            ...(attachmentSummaries.length ? { attachments: attachmentSummaries } : {}),
+          },
         })
         itemSink.appendUserMessage(options.query, { transcriptEntryId: userEntry.entryId })
         eventSink.emit('intent.parsed', '开始分析...', {})
@@ -168,11 +182,33 @@ export class OpenAIAgentsRuntime {
         failureCode: failure.code,
       }, 'run failed')
       if (abort.signal.aborted) {
+        if (current.state.goal && ['active', 'evaluating'].includes(current.state.goal.status)) {
+          const cancelledAt = nowUtc()
+          await this.store.updateRunState(options.runId, {
+            goal: {
+              ...current.state.goal,
+              status: 'cancelled',
+              failureReason: '运行已取消。',
+              updatedAt: cancelledAt,
+              completedAt: cancelledAt,
+            },
+          })
+        }
         await finalizer.cancel()
       } else {
+        const failedAt = nowUtc()
         await this.store.updateRunState(options.runId, {
           errors: [...current.state.errors, message],
           failure,
+          goal: current.state.goal && ['active', 'evaluating'].includes(current.state.goal.status)
+            ? {
+                ...current.state.goal,
+                status: 'failed',
+                failureReason: message,
+                updatedAt: failedAt,
+                completedAt: failedAt,
+              }
+            : current.state.goal,
         })
         await finalizer.fail(message, [], failure)
       }
@@ -186,6 +222,7 @@ export class OpenAIAgentsRuntime {
           await this.steering.close(options.runId)
         } finally {
           unlinkExternalAbort()
+          this.subAgentControls.finishRun(options.runId)
           this.abortControllers.delete(options.runId)
         }
       }
@@ -196,11 +233,30 @@ export class OpenAIAgentsRuntime {
     const controller = this.abortControllers.get(runId)
     if (!controller) throw new Error(`运行 '${runId}' 不可取消`)
     controller.abort()
-    return this.store.updateRunStatus(runId, 'cancelled')
+    const run = await this.store.updateRunStatus(runId, 'cancelled')
+    if (!run.state.goal || !['active', 'evaluating'].includes(run.state.goal.status)) return run
+    const cancelledAt = nowUtc()
+    return this.store.updateRunState(runId, {
+      goal: {
+        ...run.state.goal,
+        status: 'cancelled',
+        failureReason: '运行已取消。',
+        updatedAt: cancelledAt,
+        completedAt: cancelledAt,
+      },
+    })
   }
 
   steer(runId: string, steeringId: string, content: string) {
     return this.steering.enqueue(runId, steeringId, content)
+  }
+
+  followUpSubAgent(input: SubAgentControlInput) {
+    return this.subAgentControls.followUp(input)
+  }
+
+  cancelSubAgent(input: SubAgentControlInput) {
+    return this.subAgentControls.cancel(input)
   }
 
   async acceptApprovalDecision(
@@ -265,6 +321,7 @@ export class OpenAIAgentsRuntime {
       provider: requireString(run.modelProvider, '运行 modelProvider'),
       modelName: run.modelName,
       runtimeConfig: run.runtimeConfigSnapshot,
+      runProfile: run.state.runProfile,
       reasoning: true,
       resume: true,
       auth: auth ?? null,

@@ -91,6 +91,7 @@ export async function createSubAgentTools(
       },
       onStream: async ({ event }) => {
         await options.store.appendAgentTranscript(options.runId, config.agentId, serializeAgentEvent(event))
+        await stateController.activity(config, subAgentActivityLabel(event.type))
       },
     })
     const invoke = agentTool.invoke.bind(agentTool)
@@ -119,7 +120,7 @@ export async function createSubAgentTools(
             },
           })
         }
-        const delivery = parseSubAgentDelivery(config.agentId, output)
+        const delivery = parseSubAgentToolPresentation(config.agentId, output)
         return agentToolOutputMetadataSchema.parse({
           schemaVersion: 1,
           callId: toolCall.callId,
@@ -144,37 +145,133 @@ export async function createSubAgentTools(
         const callId = details?.toolCall?.callId
         if (!callId) throw new Error(`子 Agent '${config.agentId}' 缺少 callId`)
         const invocation = parseSubAgentInvocation(config.agentId, input)
-        return options.executionGate.run(
-          config.parallelSafe ? 'shared' : 'exclusive',
-          async () => {
-            const workflowStepId = details.resumeState
-              ? await stateController.resume(config, callId)
-              : await stateController.start(config, invocation, callId)
-            try {
-              const output = await invokeFunctionTool({
-                tool: timedAgentTool,
-                runContext,
-                input,
-                details,
-              })
-              if (output === '') return output
-              if (typeof output !== 'string') {
-                throw new Error(`子 Agent '${config.agentId}' 返回了非文本工具结果`)
+        const isolatedSignal = options.subAgentControls.begin({
+          runId: options.runId,
+          agentId: config.agentId,
+          callId,
+          delegationMode: 'as_tool',
+          timeoutMs: config.timeoutMs,
+        })
+        let terminalClaimed = false
+        try {
+          return await options.executionGate.run(
+            config.parallelSafe ? 'shared' : 'exclusive',
+            async () => {
+              const workflowStepId = details.resumeState
+                ? await stateController.resume(config, callId)
+                : await stateController.start(config, invocation, callId)
+              try {
+                const invocationDetails = isolatedSignal
+                  ? {
+                      ...details,
+                      signal: details.signal
+                        ? AbortSignal.any([details.signal, isolatedSignal])
+                        : isolatedSignal,
+                    }
+                  : details
+                const output = await invokeFunctionTool({
+                  tool: timedAgentTool,
+                  runContext,
+                  input,
+                  details: invocationDetails,
+                })
+                if (options.subAgentControls.isCancellationRequested(options.runId, config.agentId, callId)) {
+                  const outcome = options.subAgentControls.claimTerminalOutcome(
+                    options.runId,
+                    config.agentId,
+                    callId,
+                  )
+                  terminalClaimed = true
+                  if (outcome.status !== 'cancelled') throw new Error('子智能体取消终态不一致。')
+                  await stateController.cancel(config, callId, workflowStepId, outcome.reason)
+                  return cancelledSubAgentToolOutput(outcome.reason)
+                }
+                if (output === '') return output
+                if (typeof output !== 'string') {
+                  throw new Error(`子 Agent '${config.agentId}' 返回了非文本工具结果`)
+                }
+                const delivery = parseSubAgentDelivery(config.agentId, output)
+                assertSubAgentDeliveryArtifacts(delivery, options)
+                const outcome = options.subAgentControls.claimTerminalOutcome(
+                  options.runId,
+                  config.agentId,
+                  callId,
+                )
+                terminalClaimed = true
+                if (outcome.status === 'cancelled') {
+                  await stateController.cancel(config, callId, workflowStepId, outcome.reason)
+                  return cancelledSubAgentToolOutput(outcome.reason)
+                }
+                await stateController.complete(config, callId, workflowStepId, delivery)
+                return JSON.stringify(delivery)
+              } catch (error) {
+                if (terminalClaimed) throw error
+                const outcome = options.subAgentControls.claimTerminalOutcome(
+                  options.runId,
+                  config.agentId,
+                  callId,
+                )
+                terminalClaimed = true
+                if (outcome.status === 'cancelled') {
+                  await stateController.cancel(config, callId, workflowStepId, outcome.reason)
+                  return cancelledSubAgentToolOutput(outcome.reason)
+                }
+                const message = subAgentFailureMessage(error, config)
+                await stateController.fail(config, callId, workflowStepId, message)
+                throw new Error(message, { cause: error })
               }
-              const delivery = parseSubAgentDelivery(config.agentId, output)
-              assertSubAgentDeliveryArtifacts(delivery, options)
-              await stateController.complete(config, callId, workflowStepId, delivery)
-              return JSON.stringify(delivery)
-            } catch (error) {
-              const message = subAgentFailureMessage(error, config)
-              await stateController.fail(config, callId, workflowStepId, message)
-              throw new Error(message, { cause: error })
-            }
-          },
-        )
+            },
+          )
+        } finally {
+          options.subAgentControls.finish(options.runId, config.agentId, callId)
+        }
       },
     })
   })
+}
+
+function cancelledSubAgentToolOutput(message: string): string {
+  return JSON.stringify({
+    status: 'cancelled',
+    summary: message,
+    evidence: [],
+    artifactIds: [],
+    warnings: [message],
+    error: null,
+  })
+}
+
+function parseSubAgentToolPresentation(
+  agentId: string,
+  output: unknown,
+): { summary: string; artifactIds: string[] } {
+  if (typeof output === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(output)
+      if (
+        typeof parsed === 'object'
+        && parsed !== null
+        && 'status' in parsed
+        && parsed.status === 'cancelled'
+        && 'summary' in parsed
+        && typeof parsed.summary === 'string'
+        && 'artifactIds' in parsed
+        && Array.isArray(parsed.artifactIds)
+        && parsed.artifactIds.every(value => typeof value === 'string')
+      ) {
+        return { summary: parsed.summary, artifactIds: parsed.artifactIds }
+      }
+    } catch {
+      // 继续使用正式 delivery 解析器生成稳定错误。
+    }
+  }
+  return parseSubAgentDelivery(agentId, output)
+}
+
+function subAgentActivityLabel(eventType: string): string {
+  if (eventType === 'agent_updated_stream_event') return '子智能体已切换执行阶段'
+  if (eventType === 'run_item_stream_event') return '子智能体产生了新的运行项'
+  return '子智能体模型正在响应'
 }
 
 function assertParallelSafeConfiguration(

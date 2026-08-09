@@ -12,10 +12,12 @@
 import type { ToolHandler } from '../../../framework/types.js'
 import { makeId } from '../../../utils/ids.js'
 import { developerResult } from '../shared/result.js'
+import { assertDeveloperMode } from '../shared/modePolicy.js'
 
 const TODO_STATUSES = new Set(['pending', 'running', 'completed', 'failed', 'blocked'])
 
 export const todoWriteHandler: ToolHandler = async (args, context) => {
+  assertDeveloperMode(context)
   if (!Array.isArray(args.todos)) throw new Error('todos 必须是数组')
   const todos = args.todos.map((todo, index) => normalizeTodo(todo, index))
   const runningCount = todos.filter(todo => todo.status === 'running').length

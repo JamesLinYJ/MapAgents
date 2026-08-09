@@ -14,10 +14,12 @@ import path from 'node:path'
 import type { ToolHandler } from '../../../framework/types.js'
 import { resolveDeveloperPath } from '../shared/pathPolicy.js'
 import { developerResult } from '../shared/result.js'
+import { assertDeveloperMode } from '../shared/modePolicy.js'
 
-export const writeFileHandler: ToolHandler = async (args) => {
+export const writeFileHandler: ToolHandler = async (args, context) => {
   if (typeof args.content !== 'string') throw new Error('content 必须是字符串')
-  const target = await resolveDeveloperPath(args.file_path, { forWrite: true, createParentDirs: args.create_parent_dirs === true })
+  const roots = assertDeveloperMode(context)
+  const target = await resolveDeveloperPath(args.file_path, { forWrite: true, createParentDirs: args.create_parent_dirs === true, roots })
   let existed = false
   try {
     const stats = await stat(target.absolutePath)

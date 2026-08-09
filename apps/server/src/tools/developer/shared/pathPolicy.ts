@@ -49,6 +49,15 @@ export function parseAllowedRoots(config: PathPolicyConfig = process.env): strin
   return [...new Map(rawRoots.map(root => [caseKey(root), root])).values()]
 }
 
+export function parseExplicitAllowedRoots(config: PathPolicyConfig = process.env): string[] {
+  return [...new Map((config.DEVELOPER_TOOL_ALLOWED_ROOTS ?? '')
+    .split(';')
+    .map(value => value.trim())
+    .filter(Boolean)
+    .map(value => path.resolve(value))
+    .map(root => [caseKey(root), root])).values()]
+}
+
 export function assertDeveloperRootsConfigured(config: PathPolicyConfig): string[] {
   if (!config.DEVELOPER_TOOL_ALLOWED_ROOTS?.trim()) {
     throw new Error('缺少 DEVELOPER_TOOL_ALLOWED_ROOTS，开发工具 Provider 不可用')

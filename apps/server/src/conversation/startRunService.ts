@@ -6,7 +6,15 @@
 //   WS 只负责授权、DTO 映射和订阅投影。
 // --------------------------------------------------------------------------
 
-import type { AgentRuntimeConfig, AnalysisRun } from '../schemas/types.js'
+import {
+  runAttachmentsSchema,
+  type AgentRunProfile,
+  type AgentRuntimeConfig,
+  type AnalysisRun,
+  type ContextReference,
+  type RunAttachmentInput,
+  type RunGoalInput,
+} from '../schemas/types.js'
 import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import type { AuthContext } from '../security/types.js'
 import type { UsageStatsService } from '../usage/usageStatsService.js'
@@ -14,6 +22,7 @@ import type { ModelAdapterRegistry } from '../model/registry.js'
 import type { RunTaskCompletionTarget, RunTaskManager } from '../agent/runTaskManager.js'
 import type { RunOptions } from '../agent/runtime.js'
 import { resolveRuntimeConfig } from '../runtime/runtimeConfig.js'
+import type { FileLifecyclePort } from '../store/fileLifecycleService.js'
 
 export interface StartRunInput {
   auth: AuthContext
@@ -24,7 +33,10 @@ export interface StartRunInput {
   modelProvider?: string | null
   modelName?: string | null
   executionMode?: 'auto' | 'plan'
+  runProfile?: AgentRunProfile
+  goal?: RunGoalInput | null
   reasoning?: boolean
+  attachments?: RunAttachmentInput[]
   completion?: RunTaskCompletionTarget
   /**
    * 在后台任务真正启动前建立调用方所需的观察关系。
@@ -44,6 +56,7 @@ export class StartRunService {
     usageStats: Pick<UsageStatsService, 'assertWorkspaceCanStartModelRun'>
     modelRegistry: Pick<ModelAdapterRegistry, 'defaultProvider'>
     runTasks: Pick<RunTaskManager, 'startDetached'>
+    fileLifecycle: Pick<FileLifecyclePort, 'list'>
     defaultRuntimeConfig?: AgentRuntimeConfig
   }) {}
 
@@ -51,6 +64,9 @@ export class StartRunService {
     const sessionId = input.sessionId
       ?? (input.threadId ? this.dependencies.store.getThread(input.threadId).sessionId : null)
     if (!sessionId) throw new Error('sessionId 不能为空')
+    if (input.goal?.deadlineAt && Date.parse(input.goal.deadlineAt) <= Date.now()) {
+      throw new Error('Goal 截止时间必须晚于当前时间。')
+    }
 
     this.dependencies.usageStats.assertWorkspaceCanStartModelRun(input.auth)
     const runtimeConfig = await resolveRuntimeConfig(
@@ -64,11 +80,16 @@ export class StartRunService {
 
     const threadId = input.threadId
       ?? (await this.dependencies.store.createThread(sessionId, input.query.slice(0, 32))).id
+    const attachments = runAttachmentsSchema.parse(input.attachments ?? [])
+    const contextReferences = await this.authorizeAttachments(threadId, attachments)
     const run = await this.dependencies.store.createRun(sessionId, input.query, {
       threadId,
       modelProvider: selectedProvider,
       modelName: input.modelName ?? null,
+      runProfile: input.runProfile ?? 'standard',
+      goal: input.goal ?? null,
       runtimeConfigSnapshot: runtimeConfig,
+      contextReferences,
     })
 
     const options: RunOptions = {
@@ -80,11 +101,61 @@ export class StartRunService {
       modelName: run.modelName,
       runtimeConfig,
       executionMode: input.executionMode === 'plan' ? 'plan' : 'auto',
+      runProfile: input.runProfile ?? 'standard',
       reasoning: input.reasoning !== false,
       auth: input.auth,
     }
     input.beforeLaunch(run)
     this.dependencies.runTasks.startDetached(options, input.completion)
     return run
+  }
+
+  private async authorizeAttachments(
+    threadId: string,
+    attachments: RunAttachmentInput[],
+  ): Promise<ContextReference[]> {
+    if (!attachments.length) return []
+    const files = await this.dependencies.fileLifecycle.list(threadId)
+    const byId = new Map(files.map(file => [file.id, file]))
+    let totalBytes = 0
+    return attachments.map(attachment => {
+      const file = byId.get(attachment.fileId)
+      if (!file || file.threadId !== threadId || file.status !== 'ready') {
+        throw new Error(`附件 '${attachment.fileId}' 不属于当前线程或不是 ready 状态。`)
+      }
+      if (file.name.normalize('NFC') !== attachment.name.normalize('NFC')) {
+        throw new Error(`附件 '${attachment.fileId}' 的文件名与上传账本不一致。`)
+      }
+      if (file.mediaType !== attachment.mediaType) {
+        throw new Error(`附件 '${attachment.fileId}' 的媒体类型与上传账本不一致。`)
+      }
+      if (file.sizeBytes > 20 * 1024 * 1024) {
+        throw new Error(`附件 '${attachment.fileId}' 超过 20 MiB 上限。`)
+      }
+      totalBytes += file.sizeBytes
+      if (totalBytes > 40 * 1024 * 1024) throw new Error('单次运行的图片附件总量不得超过 40 MiB。')
+      return {
+        referenceId: `attachment:${attachment.fileId}`,
+        kind: attachment.kind === 'map_screenshot' ? 'map_screenshot' : 'image_attachment',
+        label: attachment.name,
+        description: attachment.kind === 'map_screenshot'
+          ? '当前地图渲染截图及其结构化空间上下文'
+          : '用户附加的图片',
+        sourceRunId: null,
+        artifactId: null,
+        collectionRef: null,
+        layerKey: null,
+        confidence: 1,
+        usableAs: ['authorized_attachment'],
+        metadata: {
+          fileId: attachment.fileId,
+          mediaType: attachment.mediaType,
+          attachmentKind: attachment.kind,
+          mapContext: attachment.mapContext,
+          authorizedThreadId: threadId,
+          trust: 'untrusted_user_content',
+        },
+      }
+    })
   }
 }

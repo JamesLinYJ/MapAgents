@@ -145,6 +145,7 @@ const wsServer = createWsHandler(server, {
   events: container.events,
   toolRegistry: container.toolRegistry,
   modelRegistry: container.modelRegistry,
+  customProviderService: container.customProviderService,
   modelCompletions: container.modelCompletions,
   managedLayers: container.managedLayers,
   runtimeRoot: container.runtimeRoot,

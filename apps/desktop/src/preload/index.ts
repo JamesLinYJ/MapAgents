@@ -44,8 +44,11 @@ import {
   desktopDiagnosticExportResultSchema,
   desktopExportRequestSchema,
   desktopExportResultSchema,
+  desktopFileHandleReleaseRequestSchema,
   desktopFileSelectionHandlesSchema,
   desktopFileSelectionRequestSchema,
+  desktopFileSelectionHandleSchema,
+  desktopImageBlobStageRequestSchema,
   desktopTextFileReadRequestSchema,
   desktopTextFileReadResultSchema,
   desktopMicrophonePermissionRequestSchema,
@@ -151,6 +154,20 @@ const bridge: DesktopBridge = {
           DESKTOP_IPC_CHANNELS.fileSelect,
           desktopFileSelectionRequestSchema.parse(input),
         ),
+      )
+    },
+    async stageImage(input) {
+      return desktopFileSelectionHandleSchema.parse(
+        await ipcRenderer.invoke(
+          DESKTOP_IPC_CHANNELS.fileStageImage,
+          desktopImageBlobStageRequestSchema.parse(input),
+        ),
+      )
+    },
+    async release(input) {
+      await ipcRenderer.invoke(
+        DESKTOP_IPC_CHANNELS.fileRelease,
+        desktopFileHandleReleaseRequestSchema.parse(input),
       )
     },
     async readText(input) {

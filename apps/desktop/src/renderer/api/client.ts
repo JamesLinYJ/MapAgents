@@ -18,6 +18,8 @@ export * from './memoryApi'
 export * from './mapApi'
 export * from './resourceApi'
 export * from './runApi'
+export * from './subAgentApi'
+export * from './customProviderApi'
 export * from './toolApi'
 export * from './automationApi'
 

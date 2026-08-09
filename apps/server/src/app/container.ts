@@ -28,6 +28,11 @@ import { PostgisVectorTileSource } from '../map/postgisVectorTileSource.js'
 import { seedLayersFromDirectory } from '../gis/seedLayers.js'
 import { ModelAdapterRegistry } from '../model/registry.js'
 import { ModelCompletionService, ModelResultCacheStore } from '../model/modelResultCache.js'
+import {
+  ProviderCredentialCipher,
+  ProviderCredentialStagingService,
+} from '../model/customProviderCredentials.js'
+import { CustomProviderService } from '../model/customProviderService.js'
 import { errorLogPayload, logger } from '../observability/logger.js'
 import type { LocalAgentTracing } from '../observability/agentTracing.js'
 import { ensureMeteorologicalTables } from '../routes/meteorology.js'
@@ -86,6 +91,7 @@ export interface AppContainer {
   auditStore: AuditStore
   toolRegistry: ToolRegistry
   modelRegistry: ModelAdapterRegistry
+  customProviderService: CustomProviderService
   modelCompletions: ModelCompletionService
   runtime: OpenAIAgentsRuntime
   runTasks: RunTaskManager
@@ -154,6 +160,12 @@ export async function createAppContainer(input: {
   })
   const toolRegistry = new ToolRegistry()
   const modelRegistry = new ModelAdapterRegistry(env)
+  const customProviderService = new CustomProviderService(
+    store.customProviders,
+    modelRegistry,
+    new ProviderCredentialCipher(env.BETTER_AUTH_SECRET),
+    new ProviderCredentialStagingService(),
+  )
   const security: SecurityServices = {
     auth: new BetterAuthService({ db, env, identity: identityService }),
     authorization: new AuthorizationService(db, auditStore),
@@ -176,6 +188,7 @@ export async function createAppContainer(input: {
     await ensureMeteorologicalTables(db)
     await ensureSecurityTables(db)
     await store.initialize()
+    await customProviderService.loadPersistedProviders()
     await new RuntimeIntegrityChecker(
       new PostgresRuntimeIntegrityCatalog(db),
       runtimeFiles,
@@ -208,6 +221,7 @@ export async function createAppContainer(input: {
     usageStats,
     modelRegistry,
     runTasks,
+    fileLifecycle,
     defaultRuntimeConfig: runtimeConfigDefaults,
   })
   const automationRegistry = await createAutomationRegistryFromDirectory(path.join(projectRoot, 'apps', 'server', 'config', 'automations'))
@@ -295,6 +309,7 @@ export async function createAppContainer(input: {
     auditStore,
     toolRegistry,
     modelRegistry,
+    customProviderService,
     modelCompletions,
     runtime,
     runTasks,

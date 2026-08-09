@@ -11,6 +11,7 @@
 
 import { z } from 'zod'
 import { runStatusSchema } from './core.js'
+import { mapCoordinateSchema } from './map.js'
 import { resourceVisibilitySchema } from './platform.js'
 
 // --- Resources ---
@@ -61,7 +62,7 @@ export const basemapDescriptorSchema = z.object({
 })
 
 export const agentRuntimeCapabilitiesSchema = z.object({
-  transport: z.enum(['deepseek_responses', 'none']),
+  transport: z.enum(['deepseek_responses', 'openai_responses', 'openai_chat_completions', 'none']),
   structuredOutput: z.enum(['json_object', 'json_schema', 'none']),
   functionTools: z.boolean(),
   localMcp: z.boolean(),
@@ -73,16 +74,183 @@ export const agentRuntimeCapabilitiesSchema = z.object({
   serverCompaction: z.boolean(),
 })
 
+export const modelInputModalitySchema = z.enum(['text', 'image', 'audio', 'pdf'])
+
+export const modelCapabilityFlagsSchema = z.object({
+  reasoning: z.boolean(),
+  structuredOutput: z.boolean(),
+  toolCalls: z.boolean(),
+}).strict()
+
+export const modelCapabilitySnapshotSchema = z.object({
+  modelId: z.string().trim().min(1).max(200),
+  contextWindowTokens: z.number().int().min(1_024).max(10_000_000),
+  capabilities: modelCapabilityFlagsSchema,
+  modalities: z.array(modelInputModalitySchema).min(1).max(4),
+}).strict().superRefine((model, context) => {
+  if (new Set(model.modalities).size !== model.modalities.length) {
+    context.addIssue({ code: 'custom', path: ['modalities'], message: '模态声明不能重复' })
+  }
+  if (!model.modalities.includes('text')) {
+    context.addIssue({ code: 'custom', path: ['modalities'], message: '模型必须支持文本输入' })
+  }
+})
+
 export const modelProviderDescriptorSchema = z.object({
   provider: z.string(),
   displayName: z.string(),
   configured: z.boolean(),
+  source: z.enum(['builtin', 'custom']).default('builtin'),
   defaultModel: z.string().nullable().default(null),
   availableModels: z.array(z.string()).default([]),
+  models: z.array(modelCapabilitySnapshotSchema).default([]),
   capabilities: z.array(z.string()).default([]),
+  modalities: z.array(modelInputModalitySchema).default(['text']),
+  protocol: z.enum(['responses', 'chat_completions']).nullable().default(null),
   agentRuntime: agentRuntimeCapabilitiesSchema,
   contextWindowTokens: z.number().int().positive().default(128000),
 })
+
+// Renderer 可附加普通图片或地图截图。地图截图的空间/时间上下文是结构化数据，
+// 不由图片文字或模型反向推断，服务端会把它作为不可信用户内容处理。
+const mapScreenshotBoundsSchema = z.tuple([
+  z.number().finite().min(-180).max(180),
+  z.number().finite().min(-90).max(90),
+  z.number().finite().min(-180).max(180),
+  z.number().finite().min(-90).max(90),
+]).refine(([west, south, east, north]) => west !== east && south < north, {
+  // west > east 是跨日期变更线视口的标准包装表示，不能强行扩成全球范围。
+  message: '地图截图范围必须满足 west != east 且 south < north',
+})
+
+export const mapScreenshotContextSchema = z.object({
+  capturedAt: z.string().datetime({ offset: true }),
+  viewport: z.object({
+    bounds: mapScreenshotBoundsSchema,
+    center: mapCoordinateSchema,
+    zoom: z.number().finite().min(0).max(24),
+    bearing: z.number().finite().min(-360).max(360),
+    pitch: z.number().finite().min(0).max(85),
+  }).strict(),
+  // viewport 数值是 MapLibre 对外暴露的 [longitude, latitude]；
+  // 画布内部的 Web Mercator 投影单独记录，避免把经纬度误标为 EPSG:3857。
+  crs: z.literal('OGC:CRS84'),
+  renderProjection: z.literal('EPSG:3857'),
+  renderState: z.object({
+    status: z.literal('idle'),
+    tilesLoaded: z.literal(true),
+  }).strict(),
+  renderedLayers: z.array(z.object({
+    mapLayerId: z.string().trim().min(1).max(200),
+    title: z.string().trim().min(1).max(300),
+    currentFrameId: z.string().trim().min(1).max(200).nullable(),
+    validTime: z.string().datetime({ offset: true }).nullable(),
+  }).strict()).max(100),
+  timeRange: z.object({
+    start: z.string().datetime({ offset: true }),
+    end: z.string().datetime({ offset: true }),
+  }).strict().refine(value => Date.parse(value.start) <= Date.parse(value.end), {
+    message: '地图截图时间范围必须满足 start <= end',
+  }).nullable(),
+}).strict()
+
+const runAttachmentBaseShape = {
+  fileId: z.string().trim().min(1).max(200),
+  name: z.string().trim().min(1).max(255),
+  mediaType: z.enum(['image/png', 'image/jpeg', 'image/webp', 'image/gif']),
+}
+
+export const runAttachmentInputSchema = z.discriminatedUnion('kind', [
+  z.object({
+    ...runAttachmentBaseShape,
+    kind: z.literal('image'),
+    mapContext: z.null().default(null),
+  }).strict(),
+  z.object({
+    ...runAttachmentBaseShape,
+    kind: z.literal('map_screenshot'),
+    mapContext: mapScreenshotContextSchema,
+  }).strict(),
+])
+
+export const runAttachmentsSchema = z.array(runAttachmentInputSchema).max(12).superRefine(
+  (attachments, context) => {
+    const seen = new Set<string>()
+    attachments.forEach((attachment, index) => {
+      if (seen.has(attachment.fileId)) {
+        context.addIssue({
+          code: 'custom',
+          path: [index, 'fileId'],
+          message: '同一次运行不能重复附加同一文件',
+        })
+      }
+      seen.add(attachment.fileId)
+    })
+  },
+)
+
+export const customProviderIdSchema = z.string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9][a-z0-9_-]*$/u, 'Provider ID 只能包含小写字母、数字、连字符和下划线')
+
+export const customProviderProtocolSchema = z.enum(['responses', 'chat_completions'])
+export const customProviderNetworkAccessSchema = z.enum(['public', 'loopback'])
+export const customProviderModalitySchema = modelInputModalitySchema
+
+export const customProviderConfigSchema = z.object({
+  providerId: customProviderIdSchema,
+  displayName: z.string().trim().min(1).max(120),
+  baseUrl: z.string().trim().url().max(2048),
+  protocol: customProviderProtocolSchema,
+  models: z.array(modelCapabilitySnapshotSchema).min(1).max(100),
+  defaultModel: z.string().trim().min(1).max(200),
+  toolSchemaMode: z.enum(['strict', 'compatible']),
+  networkAccess: customProviderNetworkAccessSchema,
+}).strict().superRefine((config, context) => {
+  const modelIds = config.models.map(model => model.modelId)
+  if (new Set(modelIds).size !== modelIds.length) {
+    context.addIssue({ code: 'custom', path: ['models'], message: '模型 ID 不能重复' })
+  }
+  const defaultModel = config.models.find(model => model.modelId === config.defaultModel)
+  if (!defaultModel) {
+    context.addIssue({ code: 'custom', path: ['defaultModel'], message: '默认模型必须在模型清单中' })
+  } else if (!defaultModel.capabilities.toolCalls || !defaultModel.capabilities.structuredOutput) {
+    context.addIssue({
+      code: 'custom',
+      path: ['defaultModel'],
+      message: '默认模型必须支持工具调用和结构化输出',
+    })
+  }
+})
+
+export const customProviderRecordSchema = customProviderConfigSchema.extend({
+  hasApiKey: z.boolean(),
+  createdByUserId: z.string().min(1),
+  lastValidatedAt: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+
+export const providerCredentialStageSchema = z.object({
+  credentialHandle: z.string().min(1),
+  expiresAt: z.string(),
+}).strict()
+
+export const customProviderValidationSchema = z.object({
+  connectivityOk: z.literal(true),
+  modelCallOk: z.literal(true),
+  testedModel: z.string().min(1),
+  latencyMs: z.number().nonnegative(),
+  testedAt: z.string(),
+}).strict()
+
+export const customProviderSaveResultSchema = z.object({
+  provider: customProviderRecordSchema,
+  descriptor: modelProviderDescriptorSchema,
+  validation: customProviderValidationSchema,
+}).strict()
 
 export const speechLanguageOptionSchema = z.object({
   locale: z.string(),
@@ -114,6 +282,59 @@ export const systemComponentsStatusSchema = z.object({
     available: z.boolean(),
     error: z.string().nullable(),
   })).default([]),
+})
+
+export const skillSourceKindSchema = z.enum(['builtin', 'direct', 'root'])
+export const skillTrustStatusSchema = z.enum(['builtin', 'trusted', 'untrusted', 'content_changed'])
+
+export const skillCatalogEntrySchema = z.object({
+  skillId: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+  version: z.string().trim().min(1),
+  description: z.string(),
+  aliases: z.array(z.string()).default([]),
+  tags: z.array(z.string()).default([]),
+  capabilityRequirements: z.array(z.string()).default([]),
+  source: z.object({
+    kind: skillSourceKindSchema,
+    label: z.string().trim().min(1),
+  }).strict(),
+  contentDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
+  enabled: z.boolean(),
+  trustStatus: skillTrustStatusSchema,
+  active: z.boolean(),
+  diagnostic: z.string().nullable().default(null),
+})
+
+export const skillCatalogDiagnosticSchema = z.object({
+  code: z.string().trim().min(1),
+  message: z.string().trim().min(1),
+  sourceLabel: z.string().nullable().default(null),
+  skillId: z.string().nullable().default(null),
+})
+
+export const skillCatalogSnapshotSchema = z.object({
+  globalEnabled: z.boolean(),
+  autoMatchThreshold: z.number().min(0).max(1),
+  candidateThreshold: z.number().min(0).max(1),
+  entries: z.array(skillCatalogEntrySchema),
+  diagnostics: z.array(skillCatalogDiagnosticSchema),
+})
+
+export const skillMatchResultSchema = z.object({
+  skillId: z.string(),
+  name: z.string(),
+  score: z.number().min(0).max(1),
+  matchKind: z.enum(['explicit', 'exact', 'relevance']),
+  reason: z.string(),
+  autoLoad: z.boolean(),
+  trustStatus: skillTrustStatusSchema,
+  enabled: z.boolean(),
+})
+
+export const skillSearchResponseSchema = z.object({
+  query: z.string(),
+  matches: z.array(skillMatchResultSchema),
 })
 
 export const toolParameterOptionSchema = z.object({
@@ -502,11 +723,27 @@ export const tokenUsageSummarySchema = z.object({
 export type LayerPropertyDescriptor = z.infer<typeof layerPropertyDescriptorSchema>
 export type LayerDescriptor = z.infer<typeof layerDescriptorSchema>
 export type BasemapDescriptor = z.infer<typeof basemapDescriptorSchema>
+export type ModelInputModality = z.infer<typeof modelInputModalitySchema>
+export type ModelCapabilityFlags = z.infer<typeof modelCapabilityFlagsSchema>
+export type ModelCapabilitySnapshot = z.infer<typeof modelCapabilitySnapshotSchema>
 export type ModelProviderDescriptor = z.infer<typeof modelProviderDescriptorSchema>
+export type MapScreenshotContext = z.infer<typeof mapScreenshotContextSchema>
+export type RunAttachmentInput = z.infer<typeof runAttachmentInputSchema>
+export type CustomProviderConfig = z.infer<typeof customProviderConfigSchema>
+export type CustomProviderRecord = z.infer<typeof customProviderRecordSchema>
+export type CustomProviderValidation = z.infer<typeof customProviderValidationSchema>
+export type CustomProviderSaveResult = z.infer<typeof customProviderSaveResultSchema>
 export type AgentRuntimeCapabilities = z.infer<typeof agentRuntimeCapabilitiesSchema>
 export type SpeechLanguageOption = z.infer<typeof speechLanguageOptionSchema>
 export type SpeechAuthorization = z.infer<typeof speechAuthorizationSchema>
 export type SystemComponentsStatus = z.infer<typeof systemComponentsStatusSchema>
+export type SkillSourceKind = z.infer<typeof skillSourceKindSchema>
+export type SkillTrustStatus = z.infer<typeof skillTrustStatusSchema>
+export type SkillCatalogEntry = z.infer<typeof skillCatalogEntrySchema>
+export type SkillCatalogDiagnostic = z.infer<typeof skillCatalogDiagnosticSchema>
+export type SkillCatalogSnapshot = z.infer<typeof skillCatalogSnapshotSchema>
+export type SkillMatchResult = z.infer<typeof skillMatchResultSchema>
+export type SkillSearchResponse = z.infer<typeof skillSearchResponseSchema>
 export type ToolParameterOption = z.infer<typeof toolParameterOptionSchema>
 export type ToolParameterDescriptor = z.infer<typeof toolParameterDescriptorSchema>
 export type ToolDescriptor = z.infer<typeof toolDescriptorSchema>

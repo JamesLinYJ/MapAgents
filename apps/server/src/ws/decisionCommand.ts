@@ -68,6 +68,14 @@ export async function respondDecision(
       threadId: run.threadId,
       modelProvider: provider,
       modelName: run.modelName,
+      runProfile: run.state.runProfile,
+      goal: run.state.goal ? {
+        condition: run.state.goal.condition,
+        acceptanceCriteria: run.state.goal.acceptanceCriteria,
+        maxRechecks: run.state.goal.maxRechecks,
+        deadlineAt: run.state.goal.deadlineAt,
+        maxTokenBudget: run.state.goal.maxTokenBudget,
+      } : null,
       runtimeConfigSnapshot: config,
     })
     subscribeToRun(ws, nextRun.id, store, dependencies.events, subscriptions)
@@ -80,6 +88,7 @@ export async function respondDecision(
       modelName: nextRun.modelName,
       runtimeConfig: config,
       executionMode: run.state.planMode ? 'plan' : 'auto',
+      runProfile: run.state.runProfile,
       reasoning: true,
       auth,
     }, { onComplete: nextRunId => sendRunSnapshot(ws, nextRunId, store) })

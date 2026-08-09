@@ -16,14 +16,16 @@
 // useConversation / ConversationTimeline。
 
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import type { MapScreenshotContext, RunAttachmentInput } from '@geo-agent-platform/shared-types'
 import { createPortal } from 'react-dom'
 import { AnimatePresence, LayoutGroup, m, useReducedMotion } from 'framer-motion'
 import { SAMPLES } from '../../shared/constants'
 import { buildFadeUpMotion, buildListItemVariants, buildListVariants, motionSpring } from '../../shared/motion'
-import { executionModeForComposerMode } from './composerModes'
+import { executionModeForComposerMode, runProfileForComposerMode } from './composerModes'
 import { Composer } from './Composer'
 import { DecisionSheet } from './DecisionSheet'
-import type { ChatPanelProps, ComposerMode, TaskView } from './types'
+import { buildRunGoalInput, DEFAULT_GOAL_DRAFT } from './goalDraft'
+import type { ChatPanelProps, ComposerMode, GoalComposerDraft, TaskView } from './types'
 import {
   errorCardTitle,
   formatSessionDate,
@@ -38,6 +40,7 @@ import { HistoryPanel } from './HistoryPanel'
 import { ChatPanelHeader } from './ChatPanelHeader'
 import { GlassDialog, GlassDialogActions } from '../../shared/components/GlassDialog'
 import { rectToMotion, surfaceStyleToMotion, usePanelExpansionMotion } from '../../shared/usePanelExpansionMotion'
+import { subscribeMapScreenshotAttachment } from '../map/composerAttachmentBridge'
 
 const ConversationTimeline = lazy(() => import('./ConversationTimeline').then(module => ({
   default: module.ConversationTimeline,
@@ -70,6 +73,7 @@ export function ChatPanel(props: ChatPanelProps) {
     onRespondDecision,
     onUseTemplate,
     onUploadFiles,
+    onAttachImage,
     onSelectArtifact,
     onSelectTask,
     onRenameTask,
@@ -87,6 +91,7 @@ export function ChatPanel(props: ChatPanelProps) {
     compactionLevel,
     runStats,
     denialCounts,
+    goal,
     agentWorkflow,
     tasks: progressTasks,
   } = props
@@ -99,10 +104,14 @@ export function ChatPanel(props: ChatPanelProps) {
   const { dialog, titleDraft, setTitleDraft, openRename, openDelete, closeDialog, submitRename, submitDelete } = useDialogState()
   const [composing, setComposing] = useState(false)
   const [composerMode, setComposerMode] = useState<ComposerMode>('auto')
+  const [goalDraft, setGoalDraft] = useState<GoalComposerDraft>(DEFAULT_GOAL_DRAFT)
+  const [goalError, setGoalError] = useState<string | null>(null)
   const [modeDecisionOpen, setModeDecisionOpen] = useState(false)
   const [dismissedDecisionId, setDismissedDecisionId] = useState<string | null>(null)
   const [showTrash, setShowTrash] = useState(false)
   const [dismissedUploadIds, setDismissedUploadIds] = useState<Set<string>>(() => new Set())
+  const [pendingAttachments, setPendingAttachments] = useState<RunAttachmentInput[]>([])
+  const [mapAttachmentError, setMapAttachmentError] = useState<string | null>(null)
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null)
   const submittingRef = useRef(false)
   const previousThreadRef = useRef<string | undefined>(currentThreadId)
@@ -164,6 +173,7 @@ export function ChatPanel(props: ChatPanelProps) {
   useEffect(() => {
     if (previousThreadRef.current !== currentThreadId) {
       stopSpeechRecognition()
+      setPendingAttachments([])
       previousThreadRef.current = currentThreadId
     }
   }, [currentThreadId, stopSpeechRecognition])
@@ -192,15 +202,54 @@ export function ChatPanel(props: ChatPanelProps) {
     ) {
       return
     }
+    let submittedGoal = null
+    try {
+      submittedGoal = canSteerActiveRun ? null : buildRunGoalInput(goalDraft, query)
+      setGoalError(null)
+    } catch (error) {
+      setGoalError(error instanceof Error ? error.message : 'Goal 配置无效。')
+      return
+    }
     submittingRef.current = true
     setModeDecisionOpen(false)
     stopSpeechRecognition()
     try {
-      await onSubmit(executionModeForComposerMode(composerMode))
+      const accepted = await onSubmit(
+        executionModeForComposerMode(composerMode),
+        runProfileForComposerMode(composerMode),
+        submittedGoal,
+        pendingAttachments,
+      )
+      if (accepted) setPendingAttachments([])
     } finally {
       submittingRef.current = false
     }
   }
+  const handleAttachImage = async (
+    file: Parameters<ChatPanelProps['onAttachImage']>[0],
+    kind: RunAttachmentInput['kind'] = 'image',
+    mapContext: MapScreenshotContext | null = null,
+  ) => {
+    const attachment = await onAttachImage(file, kind, mapContext)
+    setPendingAttachments(current => (
+      current.some(item => item.fileId === attachment.fileId)
+        ? current
+        : [...current, attachment].slice(-12)
+    ))
+  }
+  useEffect(() => subscribeMapScreenshotAttachment(({ file, context }) => {
+    setMapAttachmentError(null)
+    return onAttachImage(file, 'map_screenshot', context).then(attachment => {
+      setPendingAttachments(current => (
+        current.some(item => item.fileId === attachment.fileId)
+          ? current
+          : [...current, attachment].slice(-12)
+      ))
+    }).catch(error => {
+      setMapAttachmentError(error instanceof Error ? error.message : '地图截图附加失败，请重试。')
+      throw error
+    })
+  }), [onAttachImage])
   const handleKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Tab' && event.shiftKey) {
       event.preventDefault()
@@ -311,7 +360,10 @@ export function ChatPanel(props: ChatPanelProps) {
                     onSelectArtifact={onSelectArtifact}
                     onForkMessage={onForkMessage}
                     onOpenWorkflow={onOpenWorkflow}
-                    onRetry={() => onSubmit(executionModeForComposerMode(composerMode))}
+                    onRetry={() => onSubmit(
+                      executionModeForComposerMode(composerMode),
+                      runProfileForComposerMode(composerMode),
+                    )}
                     onFocusDecision={openServerDecision}
                     feedVariants={feedVariants}
                     entryVariants={entryVariants}
@@ -349,6 +401,10 @@ export function ChatPanel(props: ChatPanelProps) {
           </AnimatePresence>
 
           {!isTaskMode ? (
+            <>
+            {mapAttachmentError ? (
+              <p className="cc-attachment-error" role="alert">{mapAttachmentError}</p>
+            ) : null}
             <Composer
               query={query}
               providerLabel={providerLabel}
@@ -362,12 +418,24 @@ export function ChatPanel(props: ChatPanelProps) {
               compactionLevel={compactionLevel}
               runStats={runStats}
               denialCounts={denialCounts}
+              goal={goal}
+              goalDraft={goalDraft}
+              goalError={goalError}
+              onGoalDraftChange={(updates) => {
+                setGoalError(null)
+                setGoalDraft(current => ({ ...current, ...updates }))
+              }}
               composerInputRef={composerInputRef}
               onQueryChange={onQueryChange}
               onSubmit={handleSubmit}
               onInterrupt={handleInterrupt}
               onUseTemplate={onUseTemplate}
               onUploadFiles={onUploadFiles}
+              pendingAttachments={pendingAttachments}
+              onAttachPastedImage={handleAttachImage}
+              onRemoveAttachment={(fileId) => {
+                setPendingAttachments(current => current.filter(item => item.fileId !== fileId))
+              }}
               uploadReferences={visibleUploadReferences}
               onDismissUploadReference={(id) => {
                 setDismissedUploadIds(current => new Set(current).add(id))
@@ -394,6 +462,7 @@ export function ChatPanel(props: ChatPanelProps) {
               onCompositionEnd={() => setComposing(false)}
               onInputKeyDown={handleKey}
             />
+            </>
           ) : null}
         </m.section>
       </LayoutGroup>

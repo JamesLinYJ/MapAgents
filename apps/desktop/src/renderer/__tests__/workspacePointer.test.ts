@@ -57,6 +57,18 @@ describe('workspace pointer ownership', () => {
       sessionSource: 'route',
     })
   })
+
+  it('无效的 route URL 编码会明确失败，不会静默切换会话', () => {
+    window.history.replaceState(null, '', '/session/%E0%A4%A')
+
+    expect(() => readWorkspacePointer()).toThrow('会话链接包含无效的 URL 编码。')
+  })
+
+  it('空白 route 会话 ID 会明确失败', () => {
+    window.history.replaceState(null, '', '/session/%20')
+
+    expect(() => readWorkspacePointer()).toThrow('会话链接缺少有效的会话 ID。')
+  })
 })
 
 function createWindowStub(): Window {

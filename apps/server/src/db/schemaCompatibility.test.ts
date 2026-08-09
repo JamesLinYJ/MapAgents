@@ -25,6 +25,7 @@ const migrationIds = [
   '008_tool_result_commit_idempotency',
   '009_file_object_lifecycle',
   '010_file_ready_source_invariant',
+  '011_custom_model_providers',
 ] as const
 
 function currentMigrations() {
@@ -49,6 +50,7 @@ describe('verifyDatabaseSchemaCompatibility', () => {
         vector_tile_function: 'geo_agent_platform_layer_tiles(integer,integer,integer,json)',
         model_result_cache_table: 'platform_model_result_cache',
         file_objects_table: 'platform_file_objects',
+        model_providers_table: 'platform_model_providers',
       }],
     )
 
@@ -75,7 +77,7 @@ describe('verifyDatabaseSchemaCompatibility', () => {
   it('拒绝让旧服务连接未来版本数据库', async () => {
     const db = databaseWithRows(
       [{ table_name: 'platform_schema_migrations' }],
-      [...currentMigrations(), { migration_id: '011_future_change', checksum: 'b'.repeat(64) }],
+      [...currentMigrations(), { migration_id: '012_future_change', checksum: 'b'.repeat(64) }],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
@@ -86,7 +88,12 @@ describe('verifyDatabaseSchemaCompatibility', () => {
     const db = databaseWithRows(
       [{ table_name: 'platform_schema_migrations' }],
       currentMigrations(),
-      [{ vector_tile_function: null, model_result_cache_table: 'platform_model_result_cache', file_objects_table: 'platform_file_objects' }],
+      [{
+        vector_tile_function: null,
+        model_result_cache_table: 'platform_model_result_cache',
+        file_objects_table: 'platform_file_objects',
+        model_providers_table: 'platform_model_providers',
+      }],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
@@ -113,10 +120,27 @@ describe('verifyDatabaseSchemaCompatibility', () => {
         vector_tile_function: 'geo_agent_platform_layer_tiles(integer,integer,integer,json)',
         model_result_cache_table: null,
         file_objects_table: 'platform_file_objects',
+        model_providers_table: 'platform_model_providers',
       }],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
       .rejects.toThrow(/platform_model_result_cache/u)
+  })
+
+  it('拒绝自定义 Provider 表缺失的半升级数据库', async () => {
+    const db = databaseWithRows(
+      [{ table_name: 'platform_schema_migrations' }],
+      currentMigrations(),
+      [{
+        vector_tile_function: 'geo_agent_platform_layer_tiles(integer,integer,integer,json)',
+        model_result_cache_table: 'platform_model_result_cache',
+        file_objects_table: 'platform_file_objects',
+        model_providers_table: null,
+      }],
+    )
+
+    await expect(verifyDatabaseSchemaCompatibility(db as never))
+      .rejects.toThrow(/platform_model_providers/u)
   })
 })

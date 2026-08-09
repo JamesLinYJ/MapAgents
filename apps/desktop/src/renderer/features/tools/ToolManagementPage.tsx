@@ -35,6 +35,8 @@ import type {
   BackgroundTaskInfo,
   LayerDescriptor,
   ScheduledTask,
+  SkillCatalogSnapshot,
+  SkillMatchResult,
   SystemComponentsStatus,
   ToolDescriptor,
   ToolValueRef,
@@ -83,6 +85,8 @@ export interface ToolManagementPageProps {
   layers: LayerDescriptor[]
   valueRefs: ToolValueRef[]
   runtimeConfig?: AgentRuntimeConfig
+  skillCatalog?: SkillCatalogSnapshot
+  skillSearchResults?: SkillMatchResult[]
   memories?: MemoryEntry[]
   activeSkills?: string[]
   activeMcpServers?: string[]
@@ -100,10 +104,12 @@ export interface ToolManagementPageProps {
   isAutomationSubmitting: boolean
   isToolCatalogSubmitting?: boolean
   isRuntimeConfigSubmitting?: boolean
+  isSkillSearching?: boolean
   onRunTool: (tool: ToolDescriptor, args: Record<string, unknown>) => void
   onUpsertToolCatalogEntry: (tool: ToolDescriptor, payload: Record<string, unknown>, sortOrder?: number) => void
   onDeleteToolCatalogEntry: (tool: ToolDescriptor) => void
   onSaveRuntimeConfig?: (config: AgentRuntimeConfig) => void | Promise<void>
+  onSearchSkills?: (query: string) => Promise<SkillMatchResult[]>
   onStartAutomation: (payload: StartAutomationPayload) => void
   onValidateAutomation: (payload: AutomationDraftPayload) => Promise<AutomationValidationResult>
   onCreateAutomation: (payload: AutomationDraftPayload) => Promise<AutomationDefinition>
@@ -130,6 +136,8 @@ export function ToolManagementPage({
   layers,
   valueRefs,
   runtimeConfig,
+  skillCatalog,
+  skillSearchResults = [],
   memories = [],
   activeSkills = [],
   activeMcpServers = [],
@@ -147,10 +155,12 @@ export function ToolManagementPage({
   isAutomationSubmitting,
   isToolCatalogSubmitting,
   isRuntimeConfigSubmitting,
+  isSkillSearching,
   onRunTool,
   onUpsertToolCatalogEntry,
   onDeleteToolCatalogEntry,
   onSaveRuntimeConfig,
+  onSearchSkills,
   onStartAutomation,
   onValidateAutomation,
   onCreateAutomation,
@@ -186,7 +196,7 @@ export function ToolManagementPage({
   const schemaPreview = selectedTool ? buildSchemaPreview(selectedTool) : null
   const providers = systemComponents?.toolProviders ?? []
   const mcpServerCount = runtimeConfig?.sdk.mcp.servers.length ?? 0
-  const skillCount = (runtimeConfig?.sdk.skills.skillPaths.length ?? 0) + (runtimeConfig?.sdk.skills.skillRoots.length ?? 0)
+  const skillCount = skillCatalog?.entries.length ?? 0
   const viewTabs: Array<{ id: ToolManagementView; label: string; count: number; description: string }> = [
     { id: 'tools', label: '内置工具', count: tools.length, description: 'Provider 工具与目录治理' },
     { id: 'automations', label: '自动化流程编排', count: automationDefinitions.length, description: '可视化工具流、版本与运行审批' },
@@ -493,12 +503,16 @@ export function ToolManagementPage({
         <SdkExtensionManagement
           view={activeView}
           runtimeConfig={runtimeConfig}
+          skillCatalog={skillCatalog}
+          skillSearchResults={skillSearchResults}
           memories={memories}
           activeSkills={activeSkills}
           activeMcpServers={activeMcpServers}
           isSaving={isRuntimeConfigSubmitting}
+          isSkillSearching={isSkillSearching}
           onRefreshMemories={onRefreshMemories}
           onSaveRuntimeConfig={onSaveRuntimeConfig}
+          onSearchSkills={onSearchSkills}
         />
       )}
     </section>
@@ -625,4 +639,3 @@ function buildSchemaPreview(tool: ToolDescriptor) {
     properties,
   }
 }
-

@@ -27,9 +27,11 @@ import {
   desktopControlResponseSchema,
   desktopDownloadRequestSchema,
   desktopExportRequestSchema,
+  desktopFileHandleReleaseRequestSchema,
   desktopFileSelectionHandleSchema,
   desktopFileSelectionHandlesSchema,
   desktopFileSelectionRequestSchema,
+  desktopImageBlobStageRequestSchema,
   desktopMicrophonePermissionRequestSchema,
   desktopMicrophonePermissionResultSchema,
   desktopRendererDiagnosticSchema,
@@ -233,6 +235,32 @@ describe('desktop IPC contracts', () => {
       name: 'automation.json',
       text: escapedText,
     }).success).toBe(true)
+  })
+
+  it('accepts bounded image ArrayBuffers but rejects Base64 strings and oversized blobs', () => {
+    const bytes = new Uint8Array(70 * 1024).buffer
+    expect(desktopImageBlobStageRequestSchema.safeParse({
+      name: 'map.png',
+      mediaType: 'image/png',
+      bytes,
+    }).success).toBe(true)
+    expect(desktopImageBlobStageRequestSchema.safeParse({
+      name: 'map.png',
+      mediaType: 'image/png',
+      bytes: 'data:image/png;base64,iVBORw0KGgo=',
+    }).success).toBe(false)
+    expect(desktopImageBlobStageRequestSchema.safeParse({
+      name: 'map.png',
+      mediaType: 'image/png',
+      bytes: new ArrayBuffer(20 * 1024 * 1024 + 1),
+    }).success).toBe(false)
+    expect(desktopFileHandleReleaseRequestSchema.safeParse({
+      handleId: crypto.randomUUID(),
+    }).success).toBe(true)
+    expect(desktopFileHandleReleaseRequestSchema.safeParse({
+      handleId: crypto.randomUUID(),
+      path: '/tmp/map.png',
+    }).success).toBe(false)
   })
 
   it('caps UTF-8 API response bodies before they cross back into Renderer', () => {

@@ -17,6 +17,7 @@
 import { OpenAIResponsesModel } from '@openai/agents'
 import OpenAI from 'openai'
 import type { EasyInputMessage } from 'openai/resources/responses/responses'
+import type { ModelCapabilitySnapshot } from '@geo-agent-platform/shared-types'
 import type { AgentToolSchemaMode, ModelAdapter } from '../registry.js'
 import { abortSignalWithTimeout } from '../../utils/abort.js'
 import {
@@ -50,13 +51,23 @@ export function createDeepSeekAdapter(opts: DeepSeekOptions): ModelAdapter {
     maxRetries: 0,
   }) : null
   const availableModels = [DEEPSEEK_RESPONSES_MODEL]
+  const modelCapabilitySnapshots = [{
+    modelId: DEEPSEEK_RESPONSES_MODEL,
+    contextWindowTokens: inferContextWindow(DEEPSEEK_RESPONSES_MODEL),
+    capabilities: { reasoning: true, structuredOutput: true, toolCalls: true },
+    modalities: ['text'],
+  }] satisfies ModelCapabilitySnapshot[]
+  const defaultModelCapabilities = modelCapabilitySnapshots[0]
+  if (!defaultModelCapabilities) throw new Error('DeepSeek 模型能力目录为空')
 
   return {
     provider: 'deepseek',
     displayName: opts.displayName ?? 'DeepSeek',
     defaultModel: opts.defaultModel,
     availableModels,
-    contextWindowTokens: inferContextWindow(opts.defaultModel),
+    modelCapabilitySnapshots,
+    contextWindowTokens: defaultModelCapabilities.contextWindowTokens,
+    modalities: defaultModelCapabilities.modalities,
     agentToolSchemaMode: opts.toolSchemaMode,
     agentRuntimeCapabilities: {
       transport: 'deepseek_responses',
@@ -90,6 +101,7 @@ export function createDeepSeekAdapter(opts: DeepSeekOptions): ModelAdapter {
       'chat',
       'structured',
       'stream',
+      'reasoning',
       'responses',
       'tool_calls',
       'hosted_web_search',

@@ -30,6 +30,7 @@ import {
   supervisorDeliverySchema,
   type ConversationItem,
   type ConversationItemTextDelta,
+  type RunGoalInput,
 } from '../schemas/types.js'
 import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import {
@@ -39,6 +40,7 @@ import {
 } from '../../test-support/persistenceFacadeHarness.js'
 import planProvider from '../tools/plan/index.js'
 import { defaultRuntimeConfig } from './defaultRuntimeConfig.js'
+import type { GoalJudgePort } from './goalJudge.js'
 import { OpenAIAgentsRuntime } from './runtime.js'
 import { testSandboxClientFactory } from '../../test-support/agentsSandboxClient.js'
 
@@ -50,9 +52,11 @@ function testRuntime(
   store: PlatformPersistenceFacade,
   tools: ToolRegistry,
   models: ModelAdapterRegistry,
+  goalJudge?: GoalJudgePort,
 ): OpenAIAgentsRuntime {
   return new OpenAIAgentsRuntime(store, tools, models, {
     createSandboxClient: testSandboxClientFactory,
+    ...(goalJudge ? { goalJudge } : {}),
   })
 }
 
@@ -330,6 +334,286 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       expect(visibleTools).toContain('lookup_context')
       expect(visibleTools).toContain('query_layer')
       expect(visibleTools).not.toContain('write_layer')
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
+  it('keeps a geospatial Compose run in planning until a phased workflow is completed', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-compose-contract-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '地理分析 Compose')
+      const config = testRuntimeConfig()
+      const run = await store.createRun(session.id, '完成区域风险分析并验证结果', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runProfile: 'geospatial_compose',
+        runtimeConfigSnapshot: config,
+      })
+      const model = scriptedModel(() => ({ text: '我已经整理了一份分析计划。' }))
+
+      const completed = await testRuntime(
+        store,
+        new ToolRegistry(),
+        registryWith(fakeAdapter(model)),
+      ).run({
+        ...runOptions(run, thread.id),
+        runtimeConfig: config,
+        runProfile: 'geospatial_compose',
+      })
+
+      expect(completed.status).toBe('failed')
+      expect(completed.state.runProfile).toBe('geospatial_compose')
+      expect(completed.state.planMode).toBe(true)
+      expect(completed.state.errors.at(-1)).toContain('必须提交并完成 discover、validate、analyze、verify')
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
+  it('executes and delivers a valid geospatial Compose phase chain in one SDK run', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-compose-success-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '地理分析 Compose 完整链路')
+      const config = testRuntimeConfig()
+      const run = await store.createRun(session.id, '分析区域风险并复核结果', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runProfile: 'geospatial_compose',
+        runtimeConfigSnapshot: config,
+      })
+      const executed: string[] = []
+      const tools = new ToolRegistry()
+      tools.register(planProvider)
+      tools.register(providerFromTools('compose-phase-tools', [
+        phaseTool('query_layer', executed),
+        phaseTool('lookup_context', executed),
+        phaseTool('parallel_a', executed),
+        phaseTool('parallel_b', executed),
+      ]))
+      const workflow = {
+        goal: '完成区域风险分析并复核关键结论',
+        steps: [
+          { ...workflowStep('discover', '发现数据', 'query_layer'), phase: 'discover' },
+          { ...workflowStep('validate', '核验数据', 'lookup_context', ['discover']), phase: 'validate' },
+          { ...workflowStep('analyze', '执行分析', 'parallel_a', ['validate']), phase: 'analyze' },
+          { ...workflowStep('verify', '复核结果', 'parallel_b', ['analyze']), phase: 'verify' },
+        ],
+      }
+      const model = scriptedModel(request => {
+        if (hasToolResultNamed(request, 'parallel_b')) return { text: '区域风险分析已完成，并由只读步骤复核。' }
+        if (hasToolResultNamed(request, 'parallel_a')) {
+          return { toolCalls: [{ id: 'call_verify', name: 'parallel_b', arguments: '{}' }] }
+        }
+        if (hasToolResultNamed(request, 'lookup_context')) {
+          return { toolCalls: [{ id: 'call_analyze', name: 'parallel_a', arguments: '{}' }] }
+        }
+        if (hasToolResultNamed(request, 'query_layer')) {
+          return { toolCalls: [{ id: 'call_validate', name: 'lookup_context', arguments: '{}' }] }
+        }
+        if (hasToolResultNamed(request, 'submit_agent_workflow')) {
+          return { toolCalls: [{ id: 'call_discover', name: 'query_layer', arguments: '{}' }] }
+        }
+        return {
+          toolCalls: [{
+            id: 'call_compose_plan',
+            name: 'submit_agent_workflow',
+            arguments: JSON.stringify({ workflow }),
+          }],
+        }
+      })
+
+      const completed = await testRuntime(store, tools, registryWith(fakeAdapter(model))).run({
+        ...runOptions(run, thread.id),
+        runtimeConfig: config,
+        runProfile: 'geospatial_compose',
+      })
+
+      expect(completed.status).toBe('completed')
+      expect(executed).toEqual(['query_layer', 'lookup_context', 'parallel_a', 'parallel_b'])
+      expect(completed.state.agentWorkflow).toMatchObject({
+        status: 'completed',
+        steps: [
+          expect.objectContaining({ phase: 'discover', status: 'completed' }),
+          expect.objectContaining({ phase: 'validate', status: 'completed' }),
+          expect.objectContaining({ phase: 'analyze', status: 'completed' }),
+          expect.objectContaining({ phase: 'verify', status: 'completed' }),
+        ],
+      })
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
+  it('continues the same SDK run after an incomplete Goal verdict and completes only after independent satisfaction', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-goal-recheck-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, 'Goal 独立验收续跑')
+      const run = await store.createRun(session.id, '核验目标图层并给出结论', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        goal: testGoalInput({ maxRechecks: 2, maxTokenBudget: 100 }),
+        runtimeConfigSnapshot: testRuntimeConfig(),
+      })
+      let executions = 0
+      let modelTurns = 0
+      const tools = new ToolRegistry()
+      tools.register(providerFromTools('goal-evidence-tools', [{
+        ...toolDefinition('query_layer', ['query']),
+        handler: async () => {
+          executions += 1
+          return result('query', [], { verified: true })
+        },
+      }]))
+      const model = scriptedModel(() => {
+        modelTurns += 1
+        if (modelTurns === 1) {
+          return { toolCalls: [{ id: 'call_goal_query', name: 'query_layer', arguments: '{"query":"目标图层"}' }] }
+        }
+        return { text: modelTurns === 2 ? '目标图层已完成初步核验。' : '已补充独立复核结论。' }
+      })
+      let judgement = 0
+      const goalJudge: GoalJudgePort = {
+        evaluate: async input => {
+          judgement += 1
+          if (judgement === 1) {
+            return {
+              status: 'incomplete',
+              reason: '缺少复核结论。',
+              evidence: [],
+              missingCriteria: ['补充独立复核结论'],
+              attempt: input.goal.recheckCount + 1,
+              evaluatedAt: new Date().toISOString(),
+              tokenUsage: 4,
+            }
+          }
+          return {
+            status: 'satisfied',
+            reason: '工具结果与复核结论共同满足目标。',
+            evidence: [{ source: 'tool_result', referenceId: 'result_query', statement: '目标图层查询成功。' }],
+            missingCriteria: [],
+            attempt: input.goal.recheckCount + 1,
+            evaluatedAt: new Date().toISOString(),
+            tokenUsage: 6,
+          }
+        },
+      }
+
+      const completed = await testRuntime(
+        store,
+        tools,
+        registryWith(fakeAdapter(model)),
+        goalJudge,
+      ).run(runOptions(run, thread.id))
+
+      expect(completed.status).toBe('completed')
+      expect(executions).toBe(1)
+      expect(judgement).toBe(2)
+      expect(completed.state.goal).toMatchObject({
+        status: 'satisfied',
+        recheckCount: 1,
+        lastVerdict: { status: 'satisfied', attempt: 2 },
+      })
+      const transcript = await store.activeTranscript(thread.id)
+      expect(transcript).toContainEqual(expect.objectContaining({
+        kind: 'checkpoint',
+        payload: expect.objectContaining({ type: 'goal_recheck', recheckCount: 1 }),
+      }))
+      expect(transcript.filter(entry => entry.kind === 'message' && entry.payload.role === 'assistant')).toHaveLength(2)
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
+  it('fails hard with an exhausted Goal when the configured recheck limit is reached', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-goal-exhausted-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, 'Goal 复验次数边界')
+      const run = await store.createRun(session.id, '验证一次后结束', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        goal: testGoalInput({ maxRechecks: 0, maxTokenBudget: 100 }),
+        runtimeConfigSnapshot: testRuntimeConfig(),
+      })
+      const goalJudge: GoalJudgePort = {
+        evaluate: async input => ({
+          status: 'incomplete',
+          reason: '证据仍不完整。',
+          evidence: [],
+          missingCriteria: ['缺少可复核证据'],
+          attempt: input.goal.recheckCount + 1,
+          evaluatedAt: new Date().toISOString(),
+          tokenUsage: 2,
+        }),
+      }
+
+      const completed = await testRuntime(
+        store,
+        new ToolRegistry(),
+        registryWith(fakeAdapter(scriptedModel(() => ({ text: '当前只有初步结论。' })))),
+        goalJudge,
+      ).run(runOptions(run, thread.id))
+
+      expect(completed.status).toBe('failed')
+      expect(completed.state.goal).toMatchObject({
+        status: 'exhausted',
+        recheckCount: 0,
+        lastVerdict: { status: 'incomplete' },
+      })
+      expect(completed.state.errors.at(-1)).toContain('0 次最大复验续跑')
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
+  it('fails hard when independent Goal judgement crosses the token budget', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-goal-token-budget-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, 'Goal 词元预算边界')
+      const run = await store.createRun(session.id, '在预算内完成目标', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        goal: testGoalInput({ maxRechecks: 2, maxTokenBudget: 5 }),
+        runtimeConfigSnapshot: testRuntimeConfig(),
+      })
+      const goalJudge: GoalJudgePort = {
+        evaluate: async input => ({
+          status: 'satisfied',
+          reason: '证据满足目标，但验收调用已越过预算。',
+          evidence: [{ source: 'transcript', referenceId: 'entry_test', statement: '测试证据。' }],
+          missingCriteria: [],
+          attempt: input.goal.recheckCount + 1,
+          evaluatedAt: new Date().toISOString(),
+          tokenUsage: 6,
+        }),
+      }
+
+      const completed = await testRuntime(
+        store,
+        new ToolRegistry(),
+        registryWith(fakeAdapter(scriptedModel(() => ({ text: '目标内容已完成。' })))),
+        goalJudge,
+      ).run(runOptions(run, thread.id))
+
+      expect(completed.status).toBe('failed')
+      expect(completed.state.goal).toMatchObject({ status: 'exhausted' })
+      expect(completed.state.goal?.failureReason).toContain('6/5')
+      expect(completed.state.errors.at(-1)).toContain('词元预算已用尽')
     } finally {
       await removeTempRoot(root)
     }
@@ -2653,6 +2937,68 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     }
   })
 
+  it('omits disabled developer tools from supervisor and subagent assembly', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-no-developer-tools-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '地理分析不装配开发工具')
+      const config = testRuntimeConfig()
+      config.subAgents = [{
+        agentId: 'maintenance_assistant',
+        name: '维护助手',
+        role: 'maintenance',
+        summary: '仅用于验证工具装配边界。',
+        systemPrompt: '测试。',
+        model: null,
+        tools: ['read_file'],
+        delegationMode: 'as_tool',
+        parallelSafe: false,
+        maxTurns: 2,
+        timeoutMs: 5_000,
+      }]
+      const run = await store.createRun(session.id, '回答一个 GIS 问题', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: config,
+      })
+      const tools = new ToolRegistry()
+      tools.register(providerFromTools('geo-platform-developer-tools', [{
+        name: 'read_file',
+        label: '读取文件',
+        description: '开发者文件读取。',
+        prompt: '仅在维护模式使用。',
+        group: '开发工具',
+        tags: ['developer'],
+        isReadOnly: true,
+        isDestructive: false,
+        jsonSchema: {
+          type: 'object',
+          properties: { file_path: { type: 'string' } },
+          required: ['file_path'],
+        },
+        handler: async () => result('read_file', [], {}),
+      }]))
+      let exposedToolNames: string[] = []
+      const model = scriptedModel(request => {
+        exposedToolNames = request.tools.map(tool => tool.name)
+        return { text: 'GIS 运行未装配开发者工具。' }
+      })
+
+      const completed = await testRuntime(store, tools, registryWith(fakeAdapter(model))).run({
+        ...runOptions(run, thread.id),
+        runtimeConfig: config,
+      })
+
+      expect(completed.status).toBe('completed')
+      expect(exposedToolNames).not.toContain('read_file')
+      expect(completed.state.subAgents[0]?.tools).toEqual([])
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
 })
 
 interface ScriptedResponse {
@@ -2947,6 +3293,16 @@ function toolDefinition(name: string, required: string[]): Omit<ToolDef, 'handle
   }
 }
 
+function phaseTool(name: string, executed: string[]): ToolDef {
+  return {
+    ...toolDefinition(name, []),
+    handler: async () => {
+      executed.push(name)
+      return result(name, [], { verified: true })
+    },
+  }
+}
+
 function workflowStep(stepId: string, title: string, toolName: string, dependsOn: string[] = []) {
   return {
     stepId,
@@ -2995,6 +3351,17 @@ function testRuntimeConfig() {
   const config = defaultRuntimeConfig()
   config.subAgents = []
   return config
+}
+
+function testGoalInput(overrides: Partial<RunGoalInput> = {}): RunGoalInput {
+  return {
+    condition: '工具执行结果与最终结论必须共同满足目标。',
+    acceptanceCriteria: ['存在可复核的客观证据', '最终回答覆盖目标条件'],
+    maxRechecks: 2,
+    deadlineAt: null,
+    maxTokenBudget: null,
+    ...overrides,
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

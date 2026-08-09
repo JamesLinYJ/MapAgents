@@ -26,6 +26,7 @@ import {
   Network,
   Plus,
   Save,
+  Search,
   Server,
   Trash2,
   type LucideIcon,
@@ -34,6 +35,9 @@ import {
   agentRuntimeConfigSchema,
   type AgentRuntimeConfig,
   type RuntimeMcpServerConfig,
+  type SkillCatalogEntry,
+  type SkillCatalogSnapshot,
+  type SkillMatchResult,
 } from '@geo-agent-platform/shared-types'
 
 import { StatusPill } from '../../shared/components/StatusPill'
@@ -44,12 +48,16 @@ export type SdkManagementView = 'mcp' | 'skills' | 'memory'
 interface SdkExtensionManagementProps {
   view: SdkManagementView
   runtimeConfig?: AgentRuntimeConfig
+  skillCatalog?: SkillCatalogSnapshot
+  skillSearchResults?: SkillMatchResult[]
   memories?: MemoryEntry[]
   activeSkills?: string[]
   activeMcpServers?: string[]
   isSaving?: boolean
+  isSkillSearching?: boolean
   onRefreshMemories?: () => void
   onSaveRuntimeConfig?: (config: AgentRuntimeConfig) => void | Promise<void>
+  onSearchSkills?: (query: string) => Promise<SkillMatchResult[]>
 }
 
 interface RuntimeConfigDraftState {
@@ -63,13 +71,18 @@ interface RuntimeConfigDraftState {
 export function SdkExtensionManagement({
   view,
   runtimeConfig,
+  skillCatalog,
+  skillSearchResults = [],
   memories = [],
   activeSkills = [],
   activeMcpServers = [],
   isSaving,
+  isSkillSearching,
   onRefreshMemories,
   onSaveRuntimeConfig,
+  onSearchSkills,
 }: SdkExtensionManagementProps) {
+  const [skillQuery, setSkillQuery] = useState('')
   const [draftState, setDraftState] = useState<RuntimeConfigDraftState>({
     source: runtimeConfig,
     draft: runtimeConfig,
@@ -94,6 +107,10 @@ export function SdkExtensionManagement({
       enabled: servers.filter(server => server.enabled).length,
     }
   }, [draft?.sdk.mcp.servers])
+  const skillMatchesById = useMemo(
+    () => new Map(skillSearchResults.map(match => [match.skillId, match])),
+    [skillSearchResults],
+  )
 
   const applyDraft = (updater: (config: AgentRuntimeConfig) => AgentRuntimeConfig) => {
     setDraftState(current => {
@@ -194,6 +211,22 @@ export function SdkExtensionManagement({
     updateSelectedMcpIndex(previous => Math.max(0, Math.min(previous, (draft?.sdk.mcp.servers.length ?? 1) - 2)))
   }
 
+  const updateSkillRegistration = (
+    skill: SkillCatalogEntry,
+    update: { enabled?: boolean; trustCurrentDigest?: boolean },
+  ) => {
+    applyDraft(config => ({
+      ...config,
+      sdk: {
+        ...config.sdk,
+        skills: {
+          ...config.sdk.skills,
+          registrations: upsertSkillRegistration(config, skill, update),
+        },
+      },
+    }))
+  }
+
   const save = async () => {
     if (!draft || !onSaveRuntimeConfig) return
     const parsed = agentRuntimeConfigSchema.safeParse(draft)
@@ -261,7 +294,7 @@ export function SdkExtensionManagement({
         <div className="panel__section sdk-config-overview">
           <CapabilityStat icon={Globe2} label="联网搜索" value={draft.sdk.hostedTools.webSearch.enabled ? '开启' : '关闭'} hint={`上下文：${searchContextSizeLabel(draft.sdk.hostedTools.webSearch.searchContextSize)}`} />
           <CapabilityStat icon={Network} label="MCP Server" value={`${mcpSummary.enabled}/${mcpSummary.total}`} hint={draft.sdk.mcp.enabled ? '运行时启用' : '运行时关闭'} />
-          <CapabilityStat icon={FolderCog} label="Skill 目录" value={String(draft.sdk.skills.skillPaths.length + draft.sdk.skills.skillRoots.length)} hint={draft.sdk.skills.enabled ? '严格读取 SKILL.md' : '未启用'} />
+          <CapabilityStat icon={FolderCog} label="Skill 注册表" value={String(skillCatalog?.entries.length ?? 0)} hint={draft.sdk.skills.enabled ? '摘要与信任校验' : '未启用'} />
           <CapabilityStat icon={Brain} label="长期记忆" value={draft.context.memoryEnabled ? '开启' : '关闭'} hint={`${memories.length} 条索引`} />
           <CapabilityStat icon={CheckCircle2} label="本轮 Skill" value={String(activeSkills.length)} hint={summarizeNames(activeSkills, '当前运行未装配 Skill')} />
           <CapabilityStat icon={Server} label="本轮 MCP" value={String(activeMcpServers.length)} hint={summarizeNames(activeMcpServers, '当前运行未连接 MCP')} />
@@ -449,43 +482,140 @@ export function SdkExtensionManagement({
       ) : null}
 
       {view === 'skills' ? (
-        <section className="panel sdk-config-panel">
-          <div className="panel__header">
-            <div>
-              <div className="panel__eyebrow">SDK Skills</div>
-              <h2>Skill 目录</h2>
+        <section className="sdk-config-grid sdk-config-grid--skills">
+          <section className="panel sdk-config-panel">
+            <div className="panel__header">
+              <div>
+                <div className="panel__eyebrow">SDK Skills</div>
+                <h2>Skill 来源与路由</h2>
+              </div>
+              <StatusPill label={draft.sdk.skills.enabled ? '已启用' : '已关闭'} tone={draft.sdk.skills.enabled ? 'success' : 'neutral'} />
             </div>
-            <StatusPill label={draft.sdk.skills.enabled ? '已启用' : '已关闭'} tone={draft.sdk.skills.enabled ? 'success' : 'neutral'} />
-          </div>
-          <div className="panel__section sdk-form-grid">
-            <ToggleField
-              label="启用 Skill"
-              checked={draft.sdk.skills.enabled}
-              onChange={enabled => applyDraft(config => ({ ...config, sdk: { ...config.sdk, skills: { ...config.sdk.skills, enabled } } }))}
-            />
-            <TextField
-              label="sandbox 内路径"
-              value={draft.sdk.skills.skillsPath}
-              onChange={skillsPath => applyDraft(config => ({ ...config, sdk: { ...config.sdk, skills: { ...config.sdk.skills, skillsPath } } }))}
-            />
-            <TextAreaField
-              label="单个 Skill 目录"
-              value={draft.sdk.skills.skillPaths.join('\n')}
-              placeholder="每行一个 Skill 目录，目录内必须有 SKILL.md"
-              onChange={value => applyDraft(config => ({ ...config, sdk: { ...config.sdk, skills: { ...config.sdk.skills, skillPaths: splitLines(value) } } }))}
-            />
-            <TextAreaField
-              label="Skill 根目录"
-              value={draft.sdk.skills.skillRoots.join('\n')}
-              placeholder="每行一个根目录，子目录会作为 Skill 扫描"
-              onChange={value => applyDraft(config => ({ ...config, sdk: { ...config.sdk, skills: { ...config.sdk.skills, skillRoots: splitLines(value) } } }))}
-            />
-          </div>
-          <div className="panel__section sdk-rule-list">
-            <RuleItem icon={CheckCircle2} title="入口文件严格为 SKILL.md" body="大小写错误会被明确拒绝，避免 Windows/macOS 上的隐式兼容污染运行时。" />
-            <RuleItem icon={FolderCog} title="只导入明确目录" body="平台会读取 SKILL.md、scripts、references、assets 并交给 SDK skills capability，不把宿主绝对路径注入提示词。" />
-            <RuleItem icon={KeyRound} title="不是权限绕过入口" body="Skill 脚本进入 sandbox workspace 后仍受工具审批、文件沙箱和运行模式约束。" />
-          </div>
+            <div className="panel__section sdk-form-grid">
+              <ToggleField
+                label="启用 Skill 路由"
+                checked={draft.sdk.skills.enabled}
+                onChange={enabled => applyDraft(config => ({ ...config, sdk: { ...config.sdk, skills: { ...config.sdk.skills, enabled } } }))}
+              />
+              <TextField
+                label="sandbox 内路径"
+                value={draft.sdk.skills.skillsPath}
+                onChange={skillsPath => applyDraft(config => ({ ...config, sdk: { ...config.sdk, skills: { ...config.sdk.skills, skillsPath } } }))}
+              />
+              <TextAreaField
+                label="单个 Skill 目录"
+                value={draft.sdk.skills.skillPaths.join('\n')}
+                placeholder="每行一个 Skill 目录，目录内必须有 SKILL.md"
+                onChange={value => applyDraft(config => ({ ...config, sdk: { ...config.sdk, skills: { ...config.sdk.skills, skillPaths: splitLines(value) } } }))}
+              />
+              <TextAreaField
+                label="Skill 根目录"
+                value={draft.sdk.skills.skillRoots.join('\n')}
+                placeholder="每行一个根目录，子目录会作为 Skill 扫描"
+                onChange={value => applyDraft(config => ({ ...config, sdk: { ...config.sdk, skills: { ...config.sdk.skills, skillRoots: splitLines(value) } } }))}
+              />
+            </div>
+            <div className="panel__section sdk-rule-list">
+              <RuleItem icon={CheckCircle2} title="入口与摘要都受校验" body="入口必须严格为 SKILL.md；脚本、参考和资源的任何变化都会改变 SHA-256 摘要。" />
+              <RuleItem icon={FolderCog} title="确定性路由" body="按 /skill-id、精确名称/别名和词项相关度匹配；低置信候选只展示，不注入运行时。" />
+              <RuleItem icon={KeyRound} title="不是权限绕过入口" body="Skill 只提供说明与资源，仍受工具 RBAC、审批、文件沙箱和运行模式约束。" />
+            </div>
+          </section>
+
+          <section className="panel sdk-config-panel">
+            <div className="panel__header">
+              <div>
+                <div className="panel__eyebrow">Trusted Registry</div>
+                <h2>GIS Skill 注册表</h2>
+              </div>
+              <StatusPill
+                label={`${skillCatalog?.entries.filter(skill => skill.active).length ?? 0}/${skillCatalog?.entries.length ?? 0} 可用`}
+                tone={skillCatalog?.entries.some(skill => skill.active) ? 'success' : 'neutral'}
+              />
+            </div>
+            <div className="panel__section">
+              <form
+                className="sdk-skill-search"
+                onSubmit={event => {
+                  event.preventDefault()
+                  if (onSearchSkills) void onSearchSkills(skillQuery)
+                }}
+              >
+                <Search size={15} aria-hidden="true" />
+                <input
+                  className="composer__input"
+                  value={skillQuery}
+                  placeholder="输入任务，查看匹配分数与原因"
+                  aria-label="搜索 Skill"
+                  onChange={event => setSkillQuery(event.target.value)}
+                />
+                <button className="toolbar-button" type="submit" disabled={!skillQuery.trim() || !onSearchSkills || Boolean(isSkillSearching)}>
+                  {isSkillSearching ? '匹配中' : '测试路由'}
+                </button>
+              </form>
+              {skillSearchResults.length ? (
+                <div className="sdk-skill-match-list" aria-label="Skill 匹配解释">
+                  {skillSearchResults.map(match => (
+                    <div key={match.skillId}>
+                      <strong>{match.name} · {Math.round(match.score * 100)}%</strong>
+                      <span>{match.reason}{match.autoLoad ? '（将自动装配）' : '（仅候选）'}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            {skillCatalog?.diagnostics.length ? (
+              <div className="panel__section sdk-skill-diagnostics" role="status">
+                {skillCatalog.diagnostics.map((diagnostic, index) => (
+                  <div key={`${diagnostic.code}:${diagnostic.skillId ?? diagnostic.sourceLabel ?? index}`}>
+                    <AlertTriangle size={14} aria-hidden="true" />
+                    <span>{diagnostic.message}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <div className="panel__section sdk-skill-list">
+              {skillCatalog?.entries.length ? skillCatalog.entries.map(skill => {
+                const registration = draft.sdk.skills.registrations.find(item => item.skillId === skill.skillId)
+                const draftEnabled = registration?.enabled ?? skill.enabled
+                const draftTrusted = skill.source.kind === 'builtin'
+                  || registration?.trustedDigest === skill.contentDigest
+                const match = skillMatchesById.get(skill.skillId)
+                return (
+                  <article key={skill.skillId} className="sdk-skill-card">
+                    <div className="sdk-skill-card__head">
+                      <div>
+                        <strong>{skill.name}</strong>
+                        <small>{skill.skillId} · v{skill.version}</small>
+                      </div>
+                      <StatusPill label={skillTrustLabel(skill, draftEnabled, draftTrusted)} tone={skillTrustTone(skill, draftEnabled, draftTrusted)} />
+                    </div>
+                    <p>{skill.description}</p>
+                    <div className="sdk-skill-card__meta">
+                      <span>{skill.source.label}</span>
+                      <code>{skill.contentDigest.slice(0, 19)}…</code>
+                    </div>
+                    <div className="sdk-skill-card__tags">
+                      {skill.tags.map(tag => <span key={tag}>{tag}</span>)}
+                    </div>
+                    {match ? <div className="sdk-skill-card__match">{match.reason}</div> : null}
+                    <div className="sdk-skill-card__actions">
+                      <button type="button" className="toolbar-button" onClick={() => updateSkillRegistration(skill, { enabled: !draftEnabled })}>
+                        {draftEnabled ? '禁用' : '启用'}
+                      </button>
+                      {skill.source.kind !== 'builtin' && !draftTrusted ? (
+                        <button type="button" className="toolbar-button toolbar-button--primary" onClick={() => updateSkillRegistration(skill, { enabled: true, trustCurrentDigest: true })}>
+                          {skill.trustStatus === 'content_changed' ? '重新信任此摘要' : '信任此摘要'}
+                        </button>
+                      ) : null}
+                    </div>
+                  </article>
+                )
+              }) : (
+                <div className="panel__empty">正在读取 Skill 注册表。</div>
+              )}
+            </div>
+          </section>
         </section>
       ) : null}
 
@@ -544,6 +674,40 @@ export function SdkExtensionManagement({
       ) : null}
     </main>
   )
+}
+
+function upsertSkillRegistration(
+  config: AgentRuntimeConfig,
+  skill: SkillCatalogEntry,
+  update: { enabled?: boolean; trustCurrentDigest?: boolean },
+): AgentRuntimeConfig['sdk']['skills']['registrations'] {
+  const existing = config.sdk.skills.registrations.find(item => item.skillId === skill.skillId)
+  const next = {
+    skillId: skill.skillId,
+    enabled: update.enabled ?? existing?.enabled ?? skill.enabled,
+    trustedDigest: update.trustCurrentDigest
+      ? skill.contentDigest
+      : existing?.trustedDigest ?? null,
+  }
+  return [
+    ...config.sdk.skills.registrations.filter(item => item.skillId !== skill.skillId),
+    next,
+  ].sort((left, right) => left.skillId.localeCompare(right.skillId))
+}
+
+function skillTrustLabel(skill: SkillCatalogEntry, enabled: boolean, digestTrusted: boolean): string {
+  if (!enabled) return '已禁用'
+  if (skill.source.kind === 'builtin') return '内置可信'
+  if (digestTrusted) return skill.trustStatus === 'trusted' ? '已信任' : '待应用信任'
+  if (skill.trustStatus === 'content_changed') return '摘要已变化'
+  return '未信任'
+}
+
+function skillTrustTone(skill: SkillCatalogEntry, enabled: boolean, digestTrusted: boolean): string {
+  if (!enabled) return 'neutral'
+  if (skill.source.kind === 'builtin' || skill.trustStatus === 'trusted') return 'success'
+  if (digestTrusted) return 'accent'
+  return 'warning'
 }
 
 function memoryTypeLabel(type: MemoryEntry['type']): string {

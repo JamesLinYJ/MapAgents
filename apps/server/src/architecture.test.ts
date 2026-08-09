@@ -336,6 +336,7 @@ describe('platform architecture', () => {
       '008_tool_result_commit_idempotency.sql',
       '009_file_object_lifecycle.sql',
       '010_file_ready_source_invariant.sql',
+      '011_custom_model_providers.sql',
     ])
 
     const operationalSourceFiles = await collectProductionFiles([

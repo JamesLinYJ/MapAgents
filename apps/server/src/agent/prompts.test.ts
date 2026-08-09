@@ -54,6 +54,9 @@ describe('system prompt', () => {
       skillsPath: '.agents',
       skillPaths: ['skills/reporting'],
       skillRoots: [],
+      registrations: [],
+      autoMatchThreshold: 0.72,
+      candidateThreshold: 0.12,
     }
 
     const prompt = buildSystemPrompt(config, null, '', '', '')
@@ -62,7 +65,7 @@ describe('system prompt', () => {
     expect(prompt).toContain('docs')
     expect(prompt).toContain('search_docs')
     expect(prompt).toContain('## Skill 指令')
-    expect(prompt).toContain('SKILL.md')
+    expect(prompt).toContain('未信任')
     expect(prompt).not.toMatch(/Claude|CLAUDE/u)
     expect(prompt).not.toContain(PRODUCT_CODENAME)
   })

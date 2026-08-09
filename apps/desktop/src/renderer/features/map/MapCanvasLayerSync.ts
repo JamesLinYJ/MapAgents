@@ -8,8 +8,9 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
-import { LngLatBounds, Map as MapLibreMap } from 'maplibre-gl/dist/maplibre-gl-csp'
+import type { Map as MapLibreMap } from 'maplibre-gl/dist/maplibre-gl-csp'
 import type { MapLayerSource } from '@geo-agent-platform/shared-types'
+import type { MapBounds } from './MapCanvasEngine'
 import type { SceneRenderLayer } from './useMapScene'
 import { defaultRendererRegistry } from './renderers/defaultRendererRegistry'
 import type { MapLayerRendererRegistry } from './renderers/MapLayerRendererRegistry'
@@ -19,7 +20,7 @@ export { buildLabelLayerDefinition } from './renderers/styles'
 const sourceSignatures = new WeakMap<MapLibreMap, Map<string, string>>()
 
 export interface MapLayerSyncResult {
-  bounds: LngLatBounds | null
+  bounds: MapBounds | null
   errors: Record<string, string>
 }
 
@@ -35,9 +36,8 @@ export function syncSceneLayers(
   const activeSourceIds = new Set(layers.map(layer => sceneSourceId(layer.manifest.mapLayerId)))
   removeStaleSceneLayers(map, activeSourceIds, signatures)
 
-  const totalBounds = new LngLatBounds()
+  let totalBounds: MapBounds | null = null
   const errors: Record<string, string> = {}
-  let hasBounds = false
   for (const layer of layers) {
     try {
       syncSceneLayer(
@@ -48,14 +48,19 @@ export function syncSceneLayers(
         registry,
       )
       const [west, south, east, north] = layer.manifest.bounds
-      totalBounds.extend([west, south])
-      totalBounds.extend([east, north])
-      hasBounds = true
+      totalBounds = totalBounds
+        ? [
+            Math.min(totalBounds[0], west),
+            Math.min(totalBounds[1], south),
+            Math.max(totalBounds[2], east),
+            Math.max(totalBounds[3], north),
+          ]
+        : [west, south, east, north]
     } catch (error) {
       errors[layer.manifest.mapLayerId] = error instanceof Error ? error.message : String(error)
     }
   }
-  return { bounds: hasBounds ? totalBounds : null, errors }
+  return { bounds: totalBounds, errors }
 }
 
 function syncSceneLayer(

@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -197,7 +197,90 @@ describe('FileHandleRegistry', () => {
       purpose: 'automation-draft-import',
     })).rejects.toThrow('不得超过')
   })
+
+  it('stages a signature-checked image as an owner-bound one-time handle', async () => {
+    const registry = new FileHandleRegistry()
+    const bytes = Uint8Array.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0x00, 0x00, 0x00, 0x00,
+    ])
+    const handle = await registry.stageImage(23, {
+      name: '../clipboard.jpeg',
+      mediaType: 'image/png',
+      bytes: bytes.buffer,
+    })
+
+    expect(handle).toMatchObject({
+      name: 'clipboard.png',
+      relativePath: 'clipboard.png',
+      mediaType: 'image/png',
+      sizeBytes: bytes.byteLength,
+    })
+    expect(JSON.stringify(handle)).not.toContain(os.tmpdir())
+    await expect(registry.openForUpload(24, handle.handleId, handle.name)).rejects.toThrow(
+      '不属于当前工作区窗口',
+    )
+    const opened = await registry.openForUpload(23, handle.handleId, handle.name)
+    const chunks: Buffer[] = []
+    for await (const chunk of opened.stream) chunks.push(Buffer.from(chunk))
+    expect(Buffer.concat(chunks)).toEqual(Buffer.from(bytes))
+    await expect(registry.openForUpload(23, handle.handleId, handle.name)).rejects.toThrow(
+      '文件句柄不存在',
+    )
+  })
+
+  it('rejects staged image bytes whose signature disagrees with the declared type', async () => {
+    const registry = new FileHandleRegistry()
+    await expect(registry.stageImage(1, {
+      name: 'spoofed.png',
+      mediaType: 'image/png',
+      bytes: Uint8Array.from([0xff, 0xd8, 0xff, 0x00]).buffer,
+    })).rejects.toThrow('媒体类型')
+    expect(internalHandleCount(registry)).toBe(0)
+  })
+
+  it('releases an abandoned staged image only for its owning window', async () => {
+    const registry = new FileHandleRegistry()
+    const handle = await registry.stageImage(23, {
+      name: 'map.png',
+      mediaType: 'image/png',
+      bytes: pngBytes().buffer,
+    })
+    const directory = internalRegisteredFile(registry, handle.handleId).ownedTempDirectory
+    expect(directory).toBeTruthy()
+
+    await registry.release(24, handle.handleId)
+    expect(internalHandleCount(registry)).toBe(1)
+    await expect(stat(directory ?? '')).resolves.toBeDefined()
+
+    await registry.release(23, handle.handleId)
+    await registry.release(23, handle.handleId)
+    expect(internalHandleCount(registry)).toBe(0)
+    await expect(stat(directory ?? '')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('cleans a staged image when opening its temporary file fails', async () => {
+    const registry = new FileHandleRegistry()
+    const handle = await registry.stageImage(23, {
+      name: 'map.png',
+      mediaType: 'image/png',
+      bytes: pngBytes().buffer,
+    })
+    const registered = internalRegisteredFile(registry, handle.handleId)
+    const directory = registered.ownedTempDirectory
+    await rm(registered.absolutePath)
+
+    await expect(registry.openForUpload(23, handle.handleId, handle.name)).rejects.toThrow()
+    await expect(stat(directory ?? '')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
 })
+
+function pngBytes(): Uint8Array<ArrayBuffer> {
+  return Uint8Array.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    0x00, 0x00, 0x00, 0x00,
+  ])
+}
 
 async function createTemporaryDirectory(): Promise<string> {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-file-handles-'))
@@ -231,4 +314,15 @@ function windowFor(webContentsId: number): BrowserWindow {
 
 function internalHandleCount(registry: FileHandleRegistry): number {
   return (registry as unknown as { handles: Map<string, unknown> }).handles.size
+}
+
+function internalRegisteredFile(registry: FileHandleRegistry, handleId: string): {
+  absolutePath: string
+  ownedTempDirectory: string | null
+} {
+  const file = (registry as unknown as {
+    handles: Map<string, { absolutePath: string; ownedTempDirectory: string | null }>
+  }).handles.get(handleId)
+  if (!file) throw new Error(`Missing internal test handle ${handleId}`)
+  return file
 }

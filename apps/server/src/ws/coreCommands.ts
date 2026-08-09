@@ -12,12 +12,14 @@
 import { z } from 'zod'
 
 import type { AuthContext } from '../security/types.js'
+import { buildSkillRegistry, searchSkillRegistry } from '../agent/skillRegistry.js'
 import { resolveRuntimeConfig } from './runtimeConfig.js'
 import type { WsCommandRegistry } from './commandRegistry.js'
 
 const emptyPayloadSchema = z.object({}).passthrough()
 const sessionGetPayloadSchema = z.object({ sessionId: z.string().min(1) }).passthrough()
 const fileListPayloadSchema = z.object({ threadId: z.string().min(1) }).strict()
+const skillSearchPayloadSchema = z.object({ query: z.string().trim().min(1).max(4000) }).strict()
 
 export function registerCoreCommands(registry: WsCommandRegistry): void {
   registry.register({
@@ -67,6 +69,35 @@ export function registerCoreCommands(registry: WsCommandRegistry): void {
       context.dependencies.store.runtimeConfiguration,
       context.dependencies.defaultRuntimeConfig,
     ),
+  })
+
+  registry.register({
+    type: 'skill:list',
+    payloadSchema: emptyPayloadSchema,
+    auth: 'required',
+    csrf: false,
+    handler: async (_payload, context) => {
+      const config = await resolveRuntimeConfig(
+        context.dependencies.store.runtimeConfiguration,
+        context.dependencies.defaultRuntimeConfig,
+      )
+      return buildSkillRegistry(config.sdk.skills, process.cwd(), { strict: false }).snapshot
+    },
+  })
+
+  registry.register({
+    type: 'skill:search',
+    payloadSchema: skillSearchPayloadSchema,
+    auth: 'required',
+    csrf: false,
+    handler: async (payload, context) => {
+      const config = await resolveRuntimeConfig(
+        context.dependencies.store.runtimeConfiguration,
+        context.dependencies.defaultRuntimeConfig,
+      )
+      const registrySnapshot = buildSkillRegistry(config.sdk.skills, process.cwd(), { strict: false })
+      return { query: payload.query, matches: searchSkillRegistry(payload.query, registrySnapshot) }
+    },
   })
 
   registry.register({

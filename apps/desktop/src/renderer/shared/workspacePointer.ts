@@ -89,5 +89,14 @@ function normalizeStoredParam(value: unknown): string | undefined {
 
 function readSessionIdFromPath(pathname: string): string | undefined {
   const match = /^\/session\/([^/?#]+)/u.exec(pathname)
-  return match?.[1] ? decodeURIComponent(match[1]) : undefined
+  if (!match?.[1]) return undefined
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(match[1])
+  } catch (error) {
+    throw new Error('会话链接包含无效的 URL 编码。', { cause: error })
+  }
+  const sessionId = normalizeParam(decoded)
+  if (!sessionId) throw new Error('会话链接缺少有效的会话 ID。')
+  return sessionId
 }

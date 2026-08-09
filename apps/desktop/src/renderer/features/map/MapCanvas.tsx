@@ -18,6 +18,7 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 
 import type { BasemapDescriptor, MapSceneLayer } from '@geo-agent-platform/shared-types'
 import { DEFAULT_BASEMAP } from '../../shared/constants'
+import { releaseDesktopFileHandle, stageDesktopImageBlob } from '../../api/desktopFiles'
 import {
   buildBasemapStyle,
   boundsFromLayer,
@@ -41,6 +42,8 @@ import {
   subscribeMapWorkbenchCommand,
 } from './mapWorkbenchBridge'
 import type { SceneRenderLayer } from './useMapScene'
+import { publishMapScreenshotAttachment } from './composerAttachmentBridge'
+import { buildMapScreenshotContext, collectRenderedSceneLayerIds } from './mapScreenshot'
 
 type MapLibreRuntime = typeof import('maplibre-gl/dist/maplibre-gl-csp').default
 
@@ -101,6 +104,7 @@ export function MapCanvas({
   const cursorCoordinateRef = useRef<[number, number] | null>(null)
   const selectedFeatureCountRef = useRef(0)
   const basemapTileLoadedRef = useRef(false)
+  const layerErrorsRef = useRef<Record<string, string>>({})
   const [mapReadyVersion, setMapReadyVersion] = useState(0)
   const [renderedBasemapKey, setRenderedBasemapKey] = useState<string | null>(null)
   const [cursor, setCursor] = useState('—')
@@ -111,6 +115,8 @@ export function MapCanvas({
   const [measureMode, setMeasureMode] = useState(false)
   const measureModeRef = useRef(false)
   const [measurePoints, setMeasurePoints] = useState<Array<[number, number]>>([])
+  const [captureBusy, setCaptureBusy] = useState(false)
+  const [captureError, setCaptureError] = useState<string | null>(null)
   const reducedMotion = useReducedMotion() ?? false
 
   const availableBasemaps = useMemo(() => basemaps.filter(item => item.available !== false), [basemaps])
@@ -193,7 +199,11 @@ export function MapCanvas({
           ? layersRef.current.find(candidate => sceneSourceId(candidate.manifest.mapLayerId) === sourceId)
           : null
         if (layer) {
-          setLayerErrors(current => ({ ...current, [layer.manifest.mapLayerId]: formatMapResourceWarning(message) }))
+          setLayerErrors(current => {
+            const next = { ...current, [layer.manifest.mapLayerId]: formatMapResourceWarning(message) }
+            layerErrorsRef.current = next
+            return next
+          })
         } else {
           setResourceWarning(formatMapResourceWarning(message))
         }
@@ -285,6 +295,7 @@ export function MapCanvas({
     const apply = () => {
       if (!map.isStyleLoaded()) return
       const result = syncSceneLayers(map, layers, selectedLayer?.manifest.mapLayerId)
+      layerErrorsRef.current = result.errors
       setLayerErrors(result.errors)
       const demLayer = layers.find(layer => layer.scene.visible && layer.manifest.source.kind === 'raster_dem')
       if (demLayer) {
@@ -343,6 +354,49 @@ export function MapCanvas({
     })
   }, [])
 
+  const captureMapScreenshot = useCallback(async () => {
+    const map = mapRef.current
+    if (!map || !map.isStyleLoaded()) {
+      setCaptureError('地图尚未准备好，暂时不能截图。')
+      return
+    }
+    setCaptureBusy(true)
+    setCaptureError(null)
+    try {
+      const frame = await captureIdleMapFrame(
+        map,
+        () => layersRef.current,
+        () => layerErrorsRef.current,
+      )
+      if (mapRef.current !== map) throw new Error('地图在截图期间已关闭。')
+      const context = buildMapScreenshotContext({
+        bounds: frame.bounds,
+        center: frame.center,
+        zoom: frame.zoom,
+        bearing: frame.bearing,
+        pitch: frame.pitch,
+      }, frame.layers, {
+        status: 'idle',
+        tilesLoaded: true,
+        renderedLayerIds: frame.renderedLayerIds,
+      }, frame.capturedAt)
+      const file = await stageDesktopImageBlob(
+        frame.blob,
+        `map-screenshot-${context.capturedAt.replaceAll(':', '-')}.png`,
+      )
+      try {
+        await publishMapScreenshotAttachment({ file, context })
+      } finally {
+        // 若上传尚未消费句柄，立即回收 Main 持有的临时图片。
+        await releaseDesktopFileHandle(file.handleId).catch(() => undefined)
+      }
+    } catch (error) {
+      setCaptureError(error instanceof Error ? error.message : '地图截图失败，请重试。')
+    } finally {
+      setCaptureBusy(false)
+    }
+  }, [])
+
   useEffect(() => subscribeMapWorkbenchCommand(command => {
     const map = mapRef.current
     if (command === 'zoom-in') map?.zoomIn()
@@ -367,9 +421,78 @@ export function MapCanvas({
       sceneLoading={sceneLoading}
       selectedLayerId={selectedLayer?.manifest.mapLayerId}
       selectedLayerName={selectedLayer?.manifest.title ?? selectedArtifactName}
+      captureBusy={captureBusy}
+      captureError={captureError}
+      onCapture={() => { void captureMapScreenshot() }}
       onSetCurrentFrame={(mapLayerId, currentFrameId) => onUpdateLayer(mapLayerId, { currentFrameId })}
     />
   )
+}
+
+interface CapturedMapFrame {
+  blob: Blob
+  bounds: [number, number, number, number]
+  center: [number, number]
+  zoom: number
+  bearing: number
+  pitch: number
+  layers: SceneRenderLayer[]
+  renderedLayerIds: string[]
+  capturedAt: string
+}
+
+/**
+ * 在 MapLibre 的 idle 帧内直接复制画布：这既能证明当前样式/瓦片已完成，
+ * 也避免为了偶发截图永久开启 preserveDrawingBuffer 拖慢所有地图帧。
+ */
+function captureIdleMapFrame(
+  map: Map,
+  readLayers: () => SceneRenderLayer[],
+  readLayerErrors: () => Readonly<Record<string, string>>,
+): Promise<CapturedMapFrame> {
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      cleanup()
+      reject(new Error('地图资源未能在 15 秒内完成渲染，请检查图层或底图连接。'))
+    }, 15_000)
+
+    const cleanup = () => {
+      window.clearTimeout(timeout)
+      map.off('idle', onIdle)
+    }
+    const onIdle = () => {
+      if (!map.isStyleLoaded() || !map.areTilesLoaded()) return
+      const layers = [...readLayers()]
+      const bounds = map.getBounds()
+      const center = map.getCenter()
+      const zoom = map.getZoom()
+      const bearing = map.getBearing()
+      const pitch = map.getPitch()
+      const capturedAt = new Date().toISOString()
+      const renderedLayerIds = collectRenderedSceneLayerIds(map, layers, readLayerErrors())
+      cleanup()
+      map.getCanvas().toBlob(blob => {
+        if (!blob) {
+          reject(new Error('地图画布没有产生可用的 PNG。'))
+          return
+        }
+        resolve({
+          blob,
+          bounds: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()],
+          center: [center.lng, center.lat],
+          zoom,
+          bearing,
+          pitch,
+          layers,
+          renderedLayerIds,
+          capturedAt,
+        })
+      }, 'image/png')
+    }
+
+    map.on('idle', onIdle)
+    map.triggerRepaint()
+  })
 }
 
 function publishMapStatus(

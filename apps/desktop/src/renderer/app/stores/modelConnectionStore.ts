@@ -28,13 +28,27 @@ export const useModelConnectionStore = create<ModelConnectionState>((set, get) =
   provider: 'deepseek',
   model: '',
   applyProviders: providers => {
+    const currentProvider = get().provider
+    const currentModel = get().model
+    const current = providers.find(item => (
+      item.provider === currentProvider && supportsAgentSdkLiveSupervisor(item)
+    ))
     const preferred =
+      current ??
       providers.find(item => item.provider === 'deepseek' && supportsAgentSdkLiveSupervisor(item)) ??
       providers.find(item => supportsAgentSdkLiveSupervisor(item)) ??
       (providers.length > 0 ? providers[0] : undefined)
+    const availableModels = preferred
+      ? new Set([preferred.defaultModel, ...preferred.availableModels].filter(Boolean))
+      : new Set<string>()
     set({
       providers,
-      ...(preferred ? { provider: preferred.provider, model: preferred.defaultModel ?? '' } : {}),
+      ...(preferred ? {
+        provider: preferred.provider,
+        model: preferred.provider === currentProvider && availableModels.has(currentModel)
+          ? currentModel
+          : preferred.defaultModel ?? '',
+      } : {}),
     })
   },
   changeProvider: provider => {

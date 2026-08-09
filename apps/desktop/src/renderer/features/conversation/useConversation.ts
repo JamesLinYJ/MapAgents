@@ -58,6 +58,7 @@ export interface DecisionWorkflowPreview {
     stepId: string
     title: string
     kind: string
+    phase: string | null
     toolName: string
     ownerAgentId: string
     args: Record<string, unknown>
@@ -84,6 +85,7 @@ export function workflowPreviewFromDecision(decision: DecisionRequest): Decision
         stepId: typeof step.stepId === 'string' && step.stepId.trim() ? step.stepId : `step_${index + 1}`,
         title: step.title.trim(),
         kind: typeof step.kind === 'string' ? step.kind.trim() : '',
+        phase: typeof step.phase === 'string' && step.phase.trim() ? step.phase.trim() : null,
         toolName: typeof step.toolName === 'string' ? step.toolName.trim() : '',
         ownerAgentId: typeof step.ownerAgentId === 'string' ? step.ownerAgentId.trim() : '',
         args: asRecord(step.args) ?? {},
@@ -128,4 +130,3 @@ export function formatSessionDate(value?: string | null) {
   if (Number.isNaN(date.getTime())) return value
   return format(date, 'yyyy-MM-dd')
 }
-

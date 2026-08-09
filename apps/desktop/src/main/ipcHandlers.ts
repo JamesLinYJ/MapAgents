@@ -28,7 +28,9 @@ import {
   desktopDiagnosticExportRequestSchema,
   desktopDiagnosticExportResultSchema,
   desktopExportRequestSchema,
+  desktopFileHandleReleaseRequestSchema,
   desktopFileSelectionRequestSchema,
+  desktopImageBlobStageRequestSchema,
   desktopTextFileReadRequestSchema,
   desktopMicrophonePermissionRequestSchema,
   desktopMicrophonePermissionResultSchema,
@@ -184,6 +186,18 @@ export function installDesktopIpcHandlers(dependencies: DesktopIpcDependencies):
   ipcMain.handle(DESKTOP_IPC_CHANNELS.fileSelect, async (event, input: unknown) => {
     const window = requireWindow(event, dependencies.windows)
     return dependencies.files.select(window, desktopFileSelectionRequestSchema.parse(input))
+  })
+  ipcMain.handle(DESKTOP_IPC_CHANNELS.fileStageImage, async (event, input: unknown) => {
+    requireWindow(event, dependencies.windows)
+    return dependencies.files.stageImage(
+      event.sender.id,
+      desktopImageBlobStageRequestSchema.parse(input),
+    )
+  })
+  ipcMain.handle(DESKTOP_IPC_CHANNELS.fileRelease, async (event, input: unknown) => {
+    requireWindow(event, dependencies.windows)
+    const request = desktopFileHandleReleaseRequestSchema.parse(input)
+    await dependencies.files.release(event.sender.id, request.handleId)
   })
   ipcMain.handle(DESKTOP_IPC_CHANNELS.fileReadText, async (event, input: unknown) => {
     requireWindow(event, dependencies.windows)

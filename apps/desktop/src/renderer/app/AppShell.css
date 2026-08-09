@@ -39,7 +39,7 @@
     @apply min-h-dvh overflow-x-hidden text-[#1c1c1e] antialiased;
     background:
       linear-gradient(180deg, rgb(255 255 255 / 0.18), rgb(255 255 255 / 0.04) 48%, rgb(255 255 255 / 0.16)),
-      url("../assets/backgrounds/liquid-map-background.png") center / cover no-repeat,
+      url("../assets/backgrounds/liquid-map-background.webp") center / cover no-repeat,
       #eef4f8;
   }
 
@@ -2558,7 +2558,7 @@
     @apply min-h-dvh px-6 py-8;
     background:
       linear-gradient(180deg, rgb(255 255 255 / 0.18), rgb(255 255 255 / 0.04) 48%, rgb(255 255 255 / 0.16)),
-      url("../assets/backgrounds/liquid-map-background.png") center / cover no-repeat,
+      url("../assets/backgrounds/liquid-map-background.webp") center / cover no-repeat,
       #eef4f8;
   }
 
@@ -3827,7 +3827,7 @@
     color: var(--dc-ink);
     background:
       linear-gradient(180deg, rgb(255 255 255 / 0.18), rgb(255 255 255 / 0.04) 48%, rgb(255 255 255 / 0.16)),
-      url("../assets/backgrounds/liquid-map-background.png") center / cover no-repeat,
+      url("../assets/backgrounds/liquid-map-background.webp") center / cover no-repeat,
       #eef4f8;
   }
 
@@ -4450,6 +4450,10 @@
     @apply grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)];
   }
 
+  .sdk-config-grid--skills {
+    @apply grid-cols-[minmax(300px,0.82fr)_minmax(420px,1.18fr)];
+  }
+
   .sdk-form-grid {
     @apply grid min-w-0 grid-cols-2 gap-3;
   }
@@ -4610,6 +4614,84 @@
 
   .sdk-memory-card small {
     @apply text-[10px] text-[#93a3a8];
+  }
+
+  .sdk-skill-search {
+    @apply grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2;
+  }
+
+  .sdk-skill-search > svg {
+    @apply text-[#638088];
+  }
+
+  .sdk-skill-match-list,
+  .sdk-skill-diagnostics {
+    @apply mt-3 grid gap-1.5;
+  }
+
+  .sdk-skill-match-list > div,
+  .sdk-skill-diagnostics > div {
+    @apply flex items-start gap-2 rounded-[13px] border border-white/50 bg-white/28 px-2.5 py-2 text-[10px] leading-4 text-[#61777e];
+  }
+
+  .sdk-skill-match-list strong {
+    @apply shrink-0 text-[#284b54];
+  }
+
+  .sdk-skill-diagnostics > div {
+    @apply border-[#e4bc98]/55 bg-[#fff6e9]/68 text-[#805f3d];
+  }
+
+  .sdk-skill-diagnostics svg {
+    @apply mt-0.5 shrink-0;
+  }
+
+  .sdk-skill-list {
+    @apply grid max-h-[660px] gap-2 overflow-y-auto;
+  }
+
+  .sdk-skill-card {
+    @apply rounded-[18px] border border-white/50 bg-white/27 p-3;
+  }
+
+  .sdk-skill-card__head {
+    @apply flex items-start justify-between gap-3;
+  }
+
+  .sdk-skill-card__head strong {
+    @apply block text-[13px] text-[#203f48];
+  }
+
+  .sdk-skill-card__head small {
+    @apply mt-0.5 block text-[10px] text-[#80949a];
+  }
+
+  .sdk-skill-card > p {
+    @apply mt-2 text-[11px] leading-5 text-[#647b82];
+  }
+
+  .sdk-skill-card__meta {
+    @apply mt-2 flex flex-wrap items-center justify-between gap-2 text-[9px] text-[#8a9ba0];
+  }
+
+  .sdk-skill-card__meta code {
+    @apply rounded-md bg-[#dce8ea]/60 px-1.5 py-0.5 font-mono text-[#597079];
+  }
+
+  .sdk-skill-card__tags {
+    @apply mt-2 flex flex-wrap gap-1;
+  }
+
+  .sdk-skill-card__tags span {
+    @apply rounded-full border border-[#b9d1d6]/55 bg-[#eaf4f5]/65 px-2 py-0.5 text-[9px] font-semibold text-[#4d7179];
+  }
+
+  .sdk-skill-card__match {
+    @apply mt-2 rounded-[12px] border border-[#9ecbd3]/45 bg-[#edf8f9]/55 px-2.5 py-2 text-[10px] leading-4 text-[#3f6f78];
+  }
+
+  .sdk-skill-card__actions {
+    @apply mt-3 flex flex-wrap justify-end gap-2;
   }
 
   .composer__input,

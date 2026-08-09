@@ -29,9 +29,17 @@ import type { ItemSink } from '../conversation/itemSink.js'
 import type { ToolRegistry } from '../framework/registry.js'
 import { buildMemoryPrompt, createMemoryRuntime, rebuildSessionMemory } from '../memory/service.js'
 import type { LocalAgentTracing } from '../observability/agentTracing.js'
-import type { ModelAdapter, ModelAdapterRegistry } from '../model/registry.js'
+import {
+  resolveAdapterModelCapabilities,
+  type ModelAdapter,
+  type ModelAdapterRegistry,
+} from '../model/registry.js'
 import { recordModelCompletionUsage, type ModelCompletionService } from '../model/modelResultCache.js'
-import type { AgentRuntimeConfig, ToolValueRef } from '../schemas/types.js'
+import type {
+  AgentRuntimeConfig,
+  ModelCapabilitySnapshot,
+  ToolValueRef,
+} from '../schemas/types.js'
 import type { VisibleArtifactResource } from '../store/postgres/artifactRepository.js'
 import type { AgentRuntimeStore } from '../store/runtimePorts.js'
 import {
@@ -69,7 +77,12 @@ import type { RunOptions, RuntimeAssembly } from './runtimeTypes.js'
 import { RuntimeModelInputController, type ToolOutputReference } from './runtimeModelInput.js'
 import { createSubAgentTools } from './subAgentToolFactory.js'
 import { SubAgentStateController } from './subAgentRuntimeSupport.js'
+import type { SubAgentControlPlane } from './subAgentControlPlane.js'
 import { ToolExecutionCoordinator } from './toolExecutionCoordinator.js'
+import {
+  DEVELOPER_TOOL_PROVIDER_ID,
+  developerToolsEnabledForRuntime,
+} from './toolExecutionPolicy.js'
 import type { RunEventSink } from './turnRunner.js'
 import { ToolResultCommitService } from '../tools/resultPersistence.js'
 
@@ -85,6 +98,7 @@ interface RuntimeAssemblyFactoryDependencies {
   transcriptProjector: RuntimeTranscriptProjector
   runtimeOptions: RuntimeAssemblyFactoryOptions
   modelCompletions?: ModelCompletionService
+  subAgentControls: SubAgentControlPlane
   recordWarning: (
     runId: string,
     message: string,
@@ -112,6 +126,7 @@ export class RuntimeAssemblyFactory {
       recordWarning,
       runtimeOptions,
       store,
+      subAgentControls,
       toolRegistry,
       transcriptProjector,
     } = this.dependencies
@@ -120,13 +135,29 @@ export class RuntimeAssemblyFactory {
     if (!adapter.createAgentModel) {
       throw new Error(`模型 provider '${adapter.provider}' 不支持 Agents SDK Supervisor`)
     }
-    assertAgentRuntimeCapabilities(adapter, options.runtimeConfig)
     const selectedModel = options.modelName ?? adapter.defaultModel
     if (!selectedModel) throw new Error(`模型 provider '${adapter.provider}' 未配置模型名称`)
+    const modelCapabilities = resolveAdapterModelCapabilities(adapter, selectedModel)
+    assertAgentRuntimeCapabilities(adapter, modelCapabilities, options.runtimeConfig)
     const model = adapter.createAgentModel(selectedModel)
+    const developerToolsEnabled = developerToolsEnabledForRuntime(options.runtimeConfig)
+    const registeredAgentTools = toolRegistry.list()
+      .filter(tool => tool.executionSurfaces?.includes('agent') ?? true)
+    const supervisorToolDefinitions = developerToolsEnabled
+      ? registeredAgentTools
+      : registeredAgentTools.filter(tool => tool.providerId !== DEVELOPER_TOOL_PROVIDER_ID)
+    const disabledDeveloperToolNames = developerToolsEnabled
+      ? new Set<string>()
+      : new Set(registeredAgentTools
+          .filter(tool => tool.providerId === DEVELOPER_TOOL_PROVIDER_ID)
+          .map(tool => tool.name))
+    const subAgentConfigs = options.runtimeConfig.subAgents.map(config => ({
+      ...config,
+      tools: config.tools.filter(toolName => !disabledDeveloperToolNames.has(toolName)),
+    }))
     const contextConfig = {
       ...options.runtimeConfig.context,
-      contextWindowTokens: adapter.contextWindowTokens ?? options.runtimeConfig.context.contextWindowTokens,
+      contextWindowTokens: modelCapabilities.contextWindowTokens,
     }
     const summarize = async (prompt: string) => {
       const summaryAdapter = modelRegistry.resolveProvider(
@@ -178,7 +209,7 @@ export class RuntimeAssemblyFactory {
     const buildSupervisorInstructions = (): string => {
       const currentState = store.getRun(options.runId).state
       const planningCatalog = currentState.planMode
-        ? buildPlanningCapabilityCatalog(toolRegistry.list(), options.runtimeConfig.subAgents)
+        ? buildPlanningCapabilityCatalog(supervisorToolDefinitions, subAgentConfigs)
         : ''
       return buildSystemPrompt(options.runtimeConfig, currentState, planningCatalog, '', memoryPrompt)
     }
@@ -221,6 +252,7 @@ export class RuntimeAssemblyFactory {
       runToolExecution: (lane, operation) => executionGate.run(lane, operation),
       toolOutputMetadata: callId => coordinator.toolOutputMetadata(callId),
     }
+    const recoveryCheckpoint = await store.getRunCheckpoint(options.runId)
     coordinator = new ToolExecutionCoordinator({
       store,
       resultCommitService: new ToolResultCommitService(store),
@@ -235,22 +267,25 @@ export class RuntimeAssemblyFactory {
       modelName: selectedModel,
       inlineToolResultMaxChars: options.runtimeConfig.context.inlineToolResultMaxChars,
       runtimeConfig: options.runtimeConfig,
+      subAgentConfigs,
       auth: options.auth ?? null,
       eventSink,
       itemSink,
       valueState,
       signal,
+      initialPendingToolCallIds: recoveryCheckpoint.pendingToolCallIds,
     })
 
     const approvalTools = new Set(options.runtimeConfig.supervisor.approvalInterruptTools)
-    const returnDirectToolNames = toolRegistry.list()
-      .filter(tool => (tool.executionSurfaces?.includes('agent') ?? true) && tool.agentResultMode === 'return_direct')
+    const returnDirectToolNames = supervisorToolDefinitions
+      .filter(tool => tool.agentResultMode === 'return_direct')
       .map(tool => tool.name)
     const supervisorTools = createAgentsTools(toolRegistry, approvalTools, {
       schemaMode: adapter.agentToolSchemaMode,
+      allowedToolNames: new Set(supervisorToolDefinitions.map(tool => tool.name)),
     })
     const subAgentDependencies = {
-      configs: options.runtimeConfig.subAgents,
+      configs: subAgentConfigs,
       selectedModel,
       rootModel: model,
       reasoning: options.reasoning,
@@ -263,10 +298,11 @@ export class RuntimeAssemblyFactory {
       eventSink,
       coordinator,
       executionGate,
+      subAgentControls,
       ...(runtimeOptions.agentTracing ? { agentTracing: runtimeOptions.agentTracing } : {}),
     }
     const subAgentState = new SubAgentStateController(subAgentDependencies)
-    await subAgentState.initialize(options.runtimeConfig.subAgents)
+    await subAgentState.initialize(subAgentConfigs)
     const subAgentTools = await createSubAgentTools({
       ...subAgentDependencies,
       stateController: subAgentState,
@@ -278,6 +314,7 @@ export class RuntimeAssemblyFactory {
 
     const sandboxIntegration = buildRuntimeSdkSandboxIntegration(options.runtimeConfig, {
       executionGate,
+      query: options.query,
     })
     const sandboxManifest = sandboxEnabled
       ? buildSandboxManifest(
@@ -357,6 +394,7 @@ export class RuntimeAssemblyFactory {
     ) {
       eventSink.emit('step.started', 'SDK 扩展已装配', {
         active_skills: sandboxIntegration.activeSkills,
+        skill_matches: sandboxIntegration.skillMatches,
         active_mcp_servers: sdkIntegration.activeMcpServers,
         active_hosted_tools: hostedTools.map(tool => tool.name),
       })
@@ -372,7 +410,7 @@ export class RuntimeAssemblyFactory {
       name: options.runtimeConfig.supervisor.name,
       instructions: () => buildSupervisorInstructions(),
       model,
-      modelSettings: modelSettings(options.reasoning),
+      modelSettings: modelSettings(options.reasoning !== false && modelCapabilities.capabilities.reasoning),
       resetToolChoice: true,
       tools: explicitTools,
       toolUseBehavior: { stopAtToolNames: returnDirectToolNames },
@@ -474,8 +512,11 @@ export class RuntimeAssemblyFactory {
           continue
         }
         if (item.type === 'function_call') {
-          const exists = (await store.activeTranscript(threadId))
+          const transcript = await store.activeTranscript(threadId)
+          const exists = transcript
             .some(entry => entry.kind === 'tool_call' && entry.payload.callId === item.callId)
+          const terminal = transcript
+            .some(entry => entry.kind === 'tool_result' && entry.payload.callId === item.callId)
           if (!exists) {
             if (unavailableSdkToolCallIds.has(item.callId)) {
               const label = currentAssembly.subAgentToolNames.has(item.name)
@@ -502,6 +543,11 @@ export class RuntimeAssemblyFactory {
               )
             }
           }
+          if (unavailableSdkToolCallIds.has(item.callId) || terminal) {
+            await coordinator.markSdkToolCallTerminal(item.callId)
+          } else if (!transcriptProjector.isPlatformManagedTool(item.name, currentAssembly)) {
+            await coordinator.markSdkToolCallPending(item.callId)
+          }
           if (pendingSessionAssistantContent) {
             await transcriptProjector.appendAssistantContentCheckpoint(
               assembly,
@@ -517,7 +563,10 @@ export class RuntimeAssemblyFactory {
           const transcript = await store.activeTranscript(threadId)
           const exists = transcript
             .some(entry => entry.kind === 'tool_result' && entry.payload.callId === item.callId)
-          if (exists) continue
+          if (exists) {
+            await coordinator.markSdkToolCallTerminal(item.callId)
+            continue
+          }
           const content = toolResultText(item.output)
           const isSubAgent = currentAssembly.subAgentToolNames.has(item.name)
           const isSdkRejectedTool = unavailableSdkToolCallIds.has(item.callId)
@@ -581,10 +630,7 @@ export class RuntimeAssemblyFactory {
               },
             })
           }
-          await store.saveRunCheckpoint(options.runId, {
-            pendingToolCallIds: [],
-            recoveryStatus: 'clean',
-          })
+          await coordinator.markSdkToolCallTerminal(item.callId)
           unavailableSdkToolCallIds.delete(item.callId)
         }
       }
@@ -603,6 +649,7 @@ export class RuntimeAssemblyFactory {
       coordinator,
       adapter,
       modelName: selectedModel,
+      modelCapabilities,
       ...(sandbox ? { sandbox } : {}),
       sdkIntegration,
       modelInput,
@@ -610,7 +657,7 @@ export class RuntimeAssemblyFactory {
       sdkVersion: await agentsSdkVersion(),
       threadId,
       turnId,
-      subAgentToolNames: new Set(options.runtimeConfig.subAgents
+      subAgentToolNames: new Set(subAgentConfigs
         .filter(config => config.delegationMode === 'as_tool')
         .map(config => config.agentId)),
       handoffToolNames: new Set(handoffIntegration.handoffs.map(item => item.toolName)),
@@ -675,13 +722,17 @@ async function resolveToolOutputReference(
   }
 }
 
-function assertAgentRuntimeCapabilities(adapter: ModelAdapter, config: AgentRuntimeConfig): void {
+function assertAgentRuntimeCapabilities(
+  adapter: ModelAdapter,
+  model: ModelCapabilitySnapshot,
+  config: AgentRuntimeConfig,
+): void {
   const capabilities = adapter.agentRuntimeCapabilities
-  if (capabilities.structuredOutput === 'none') {
-    throw new Error(`模型 provider '${adapter.provider}' 不支持 Agent 结构化输出`)
+  if (capabilities.structuredOutput === 'none' || !model.capabilities.structuredOutput) {
+    throw new Error(`模型 '${model.modelId}' 不支持 Agent 结构化输出`)
   }
-  if (!capabilities.functionTools) {
-    throw new Error(`模型 provider '${adapter.provider}' 不支持 Agent function tools`)
+  if (!capabilities.functionTools || !model.capabilities.toolCalls) {
+    throw new Error(`模型 '${model.modelId}' 不支持 Agent function tools`)
   }
   const enabledMcp = config.sdk.mcp.enabled
     ? config.sdk.mcp.servers.filter(server => server.enabled)

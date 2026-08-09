@@ -11,13 +11,16 @@
 
 import type {
   AgentRuntimeConfig,
+  AgentRunProfile,
   AgentState,
   AnalysisRun,
   ArtifactRef,
   ConversationItem,
   ConversationItemTextDelta,
+  ContextReference,
   RunCheckpoint,
   RunEvent,
+  RunGoalInput,
   RunItemStreamSnapshot,
   RunItemUpsert,
   RunSummary,
@@ -179,7 +182,10 @@ export class RunStore {
     threadId?: string | null
     modelProvider?: string | null
     modelName?: string | null
+    runProfile?: AgentRunProfile
+    goal?: RunGoalInput | null
     runtimeConfigSnapshot?: AgentRuntimeConfig | null
+    contextReferences?: ContextReference[]
   }): Promise<AnalysisRun> {
     const session = this.sessionStore.get(sessionId)
     const thread = opts?.threadId ? this.index.getThread(opts.threadId) : null
@@ -209,6 +215,7 @@ export class RunStore {
         loopTrace: [],
         todos: [],
         tasks: [],
+        runProfile: opts?.runProfile ?? 'standard',
         subAgents: [],
         activeSkills: [],
         activeMcpServers: [],
@@ -228,13 +235,28 @@ export class RunStore {
         loopPhase: 'idle',
         planRepairAttempts: 0,
         planMode: false,
-        contextReferences: [],
+        contextReferences: structuredClone(opts?.contextReferences ?? []),
         contextResolution: null,
         parsedIntent: null,
         clarification: null,
         placeResolution: null,
         agentWorkflow: null,
         runLifecycle: { status: 'created', reason: null, updatedAt: null },
+        goal: opts?.goal ? {
+          goalId: makeId('goal'),
+          condition: opts.goal.condition,
+          acceptanceCriteria: [...opts.goal.acceptanceCriteria],
+          maxRechecks: opts.goal.maxRechecks,
+          deadlineAt: opts.goal.deadlineAt,
+          maxTokenBudget: opts.goal.maxTokenBudget,
+          status: 'active',
+          recheckCount: 0,
+          lastVerdict: null,
+          failureReason: null,
+          createdAt: now,
+          updatedAt: now,
+          completedAt: null,
+        } : null,
         failedStepId: null,
         failedTool: null,
       },

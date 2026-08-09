@@ -77,6 +77,9 @@ export function ConversationTimeline({
   entryVariants,
   reducedMotion,
 }: ConversationTimelineProps) {
+  'use no memo'
+  // TanStack Virtual 返回带内部可变状态的方法集合；本组件保持其生命周期局部化，
+  // 不把 virtualizer 传给 memoized 子组件，因此应明确退出 React Compiler 自动记忆化。
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [activeJumpAnchorId, setActiveJumpAnchorId] = useState<string | null>(null)
   const timelineRef = useRef<HTMLDivElement>(null)
@@ -87,6 +90,7 @@ export function ConversationTimeline({
     () => new Map(conversation.map((entry, index) => [entry.id, index])),
     [conversation],
   )
+  // eslint-disable-next-line react-hooks/incompatible-library -- 已由 use no memo 明确隔离在本组件内。
   const virtualizer = useVirtualizer({
     count: conversation.length,
     getScrollElement: () => timelineRef.current,

@@ -11,7 +11,7 @@
 
 import { useEffect, useMemo, useState, type RefObject } from 'react'
 import { AnimatePresence, m } from 'framer-motion'
-import { Pause, Play, SkipBack, SkipForward } from 'lucide-react'
+import { Camera, LoaderCircle, Pause, Play, SkipBack, SkipForward } from 'lucide-react'
 import type { MapLegend } from '@geo-agent-platform/shared-types'
 import { buildFadeMotion, buildFadeUpMotion } from '../../shared/motion'
 import type { SceneRenderLayer } from './useMapScene'
@@ -31,6 +31,9 @@ interface MapCanvasChromeProps {
   sceneLoading: boolean
   selectedLayerId?: string
   selectedLayerName?: string
+  captureBusy: boolean
+  captureError: string | null
+  onCapture: () => void
   onSetCurrentFrame: (mapLayerId: string, frameId: string) => Promise<void>
 }
 
@@ -49,6 +52,9 @@ export function MapCanvasChrome({
   sceneLoading,
   selectedLayerId,
   selectedLayerName,
+  captureBusy,
+  captureError,
+  onCapture,
   onSetCurrentFrame,
 }: MapCanvasChromeProps) {
   const selectedLayer = layers.find(layer => layer.manifest.mapLayerId === selectedLayerId)
@@ -89,7 +95,20 @@ export function MapCanvasChrome({
           <span>{selectedLayerName ?? (sceneLoading ? '正在读取地图场景' : '当前对话暂无地图结果')}</span>
           <small>{measureMode ? measurementLabel : selectedError ?? `${layers.length} 个图层 · ${cursor}`}</small>
         </div>
+        <button
+          type="button"
+          className="dc-map-stage__capture"
+          onClick={onCapture}
+          disabled={!mapReady || captureBusy}
+          aria-label="将当前地图截图附加到对话"
+          title="附加当前地图截图"
+        >
+          {captureBusy ? <LoaderCircle className="cc-spin" size={16} /> : <Camera size={16} />}
+          <span>{captureBusy ? '截图中' : '附加截图'}</span>
+        </button>
       </m.div>
+
+      {captureError ? <p className="dc-map-stage__capture-error" role="alert">{captureError}</p> : null}
 
       <AnimatePresence initial={false}>
         {legendLayer ? (

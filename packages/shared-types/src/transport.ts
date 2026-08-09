@@ -12,10 +12,13 @@
 // 平台 HTTP/WS 传输投影协议。
 import { z } from 'zod'
 import {
+  agentRunProfileSchema,
   conversationItemSchema,
   runEventSchema,
   memoryFileRecordSchema,
   memorySearchResultSchema,
+  runGoalInputSchema,
+  subAgentStateSchema,
   runSteeringRecordSchema,
 } from './core.js'
 import {
@@ -43,9 +46,16 @@ import {
   automationValidationResultSchema,
   automationVersionRecordSchema,
   backgroundTaskInfoSchema,
+  customProviderConfigSchema,
+  customProviderRecordSchema,
+  customProviderSaveResultSchema,
   layerDescriptorSchema,
   modelProviderDescriptorSchema,
+  providerCredentialStageSchema,
+  runAttachmentsSchema,
   scheduledTaskSchema,
+  skillCatalogSnapshotSchema,
+  skillSearchResponseSchema,
   speechAuthorizationSchema,
   systemComponentsStatusSchema,
   tokenUsageSummarySchema,
@@ -184,10 +194,14 @@ export const wsControlCommands = [
   'thread:memory:get', 'thread:memory:update', 'thread:memory:rebuild',
   'thread:trash:list', 'thread:trash:restore', 'thread:trash:purge',
   'run:list', 'run:start', 'run:get', 'run:cancel', 'run:resume', 'run:steer', 'run:respond-decision', 'run:subscribe', 'run:unsubscribe',
+  'subagent:list', 'subagent:get', 'subagent:follow-up', 'subagent:cancel',
   'tool:list', 'tool:run',
   'tool-catalog:list', 'tool-catalog:upsert', 'tool-catalog:delete',
+  'skill:list', 'skill:search',
   'runtime-config:get', 'runtime-config:update',
-  'provider:list', 'system:get',
+  'provider:list',
+  'provider:custom:list', 'provider:credential:stage', 'provider:custom:upsert', 'provider:custom:delete',
+  'system:get',
   'usage:summary',
   'speech:authorization',
   'memory:list', 'memory:read', 'memory:write', 'memory:delete', 'memory:search',
@@ -256,12 +270,46 @@ const wsRunStartPayloadSchema = z.object({
   modelProvider: z.string().min(1).nullable().optional(),
   modelName: z.string().min(1).nullable().optional(),
   executionMode: z.enum(['auto', 'plan']).optional(),
+  runProfile: agentRunProfileSchema.optional(),
+  goal: runGoalInputSchema.nullable().optional(),
   reasoning: z.boolean().optional(),
+  attachments: runAttachmentsSchema.default([]),
 }).passthrough()
 const wsRunSteerPayloadSchema = z.object({
   runId: z.string().min(1),
   steeringId: z.string().min(1).max(160),
   content: z.string().trim().min(1).max(4000),
+}).strict()
+const wsSubAgentIdentityPayloadSchema = z.object({
+  runId: z.string().min(1),
+  agentId: z.string().min(1),
+}).strict()
+const wsSubAgentFollowUpPayloadSchema = wsSubAgentIdentityPayloadSchema.extend({
+  followUpId: z.string().min(1).max(160),
+  content: z.string().trim().min(1).max(4000),
+}).strict()
+const wsSubAgentCancelPayloadSchema = wsSubAgentIdentityPayloadSchema.extend({
+  cancellationId: z.string().min(1).max(160),
+  reason: z.string().trim().min(1).max(1000).optional(),
+}).strict()
+const wsProviderCredentialStagePayloadSchema = z.object({
+  secret: z.string().min(1).max(8192),
+}).strict()
+const wsCustomProviderUpsertPayloadSchema = z.object({
+  config: customProviderConfigSchema,
+  credentialHandle: z.string().min(1).max(200).nullable().optional(),
+  clearCredential: z.boolean().default(false),
+}).strict().superRefine((payload, context) => {
+  if (payload.credentialHandle && payload.clearCredential) {
+    context.addIssue({
+      code: 'custom',
+      path: ['credentialHandle'],
+      message: 'credentialHandle 与 clearCredential 不能同时使用',
+    })
+  }
+})
+const wsCustomProviderDeletePayloadSchema = z.object({
+  providerId: z.string().min(1).max(64),
 }).strict()
 const wsRespondDecisionPayloadSchema = z.object({
   runId: z.string().min(1),
@@ -341,6 +389,9 @@ const wsToolCatalogDeletePayloadSchema = z.object({
   toolKind: z.string().min(1),
   toolName: z.string().min(1),
 }).passthrough()
+const wsSkillSearchPayloadSchema = z.object({
+  query: z.string().trim().min(1).max(4000),
+}).strict()
 const wsRuntimeConfigUpdatePayloadSchema = z.object({
   config: agentRuntimeConfigSchema,
 }).passthrough()
@@ -474,6 +525,13 @@ const wsScheduledTaskListResponseSchema = z.object({
 const wsBackgroundTaskListResponseSchema = z.object({
   tasks: z.array(backgroundTaskInfoSchema),
 }).strict()
+const wsSubAgentListResponseSchema = z.object({
+  items: z.array(subAgentStateSchema),
+}).strict()
+const wsSubAgentDetailResponseSchema = z.object({
+  agent: subAgentStateSchema,
+  events: z.array(runEventSchema),
+}).strict()
 
 export type WsCommandSemantic = {
   auth: 'required' | 'optional'
@@ -552,14 +610,27 @@ export const wsCommandContracts = {
   'run:respond-decision': writeContract(wsRespondDecisionPayloadSchema, analysisRunSchema),
   'run:subscribe': readContract(wsRunIdPayloadSchema, runSnapshotSchema),
   'run:unsubscribe': readContract(wsRunIdPayloadSchema, z.object({ unsubscribed: z.boolean(), runId: z.string() }).strict()),
+  'subagent:list': readContract(wsRunIdPayloadSchema, wsSubAgentListResponseSchema),
+  'subagent:get': readContract(wsSubAgentIdentityPayloadSchema, wsSubAgentDetailResponseSchema),
+  'subagent:follow-up': writeContract(wsSubAgentFollowUpPayloadSchema, subAgentStateSchema),
+  'subagent:cancel': writeContract(wsSubAgentCancelPayloadSchema, subAgentStateSchema),
   'tool:list': readContract(wsEmptyPayloadSchema, z.array(toolDescriptorSchema)),
   'tool:run': writeContract(wsToolRunPayloadSchema, directToolRunResponseSchema),
   'tool-catalog:list': readContract(wsEmptyPayloadSchema, z.array(wsUnknownRecordSchema)),
   'tool-catalog:upsert': writeContract(wsToolCatalogUpsertPayloadSchema, wsUnknownRecordSchema),
   'tool-catalog:delete': writeContract(wsToolCatalogDeletePayloadSchema, wsMutationAckSchema),
+  'skill:list': readContract(wsEmptyPayloadSchema, skillCatalogSnapshotSchema),
+  'skill:search': readContract(wsSkillSearchPayloadSchema, skillSearchResponseSchema),
   'runtime-config:get': readContract(wsEmptyPayloadSchema, agentRuntimeConfigSchema),
   'runtime-config:update': writeContract(wsRuntimeConfigUpdatePayloadSchema, agentRuntimeConfigSchema),
   'provider:list': readContract(wsEmptyPayloadSchema, z.array(modelProviderDescriptorSchema)),
+  'provider:custom:list': readContract(wsEmptyPayloadSchema, z.array(customProviderRecordSchema)),
+  'provider:credential:stage': writeContract(wsProviderCredentialStagePayloadSchema, providerCredentialStageSchema),
+  'provider:custom:upsert': writeContract(wsCustomProviderUpsertPayloadSchema, customProviderSaveResultSchema),
+  'provider:custom:delete': writeContract(
+    wsCustomProviderDeletePayloadSchema,
+    z.object({ deleted: z.boolean(), providerId: z.string() }).strict(),
+  ),
   'system:get': readContract(wsEmptyPayloadSchema, systemComponentsStatusSchema),
   'usage:summary': readContract(wsEmptyPayloadSchema, tokenUsageSummarySchema),
   'speech:authorization': writeContract(wsEmptyPayloadSchema, speechAuthorizationSchema),

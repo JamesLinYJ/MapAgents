@@ -19,6 +19,7 @@ export const eventTypeSchema = z.enum([
   'intent.parsed', 'plan.ready', 'step.started', 'step.completed',
   'agent_workflow.created', 'agent_workflow.revised', 'agent_workflow.completed',
   'artifact.created', 'subagent.created', 'subagent.updated',
+  'goal.updated',
   'loop.updated', 'todo.updated', 'tool.started', 'tool.completed',
   'clarification.required', 'approval.required', 'warning.raised',
   'trace.recorded',
@@ -124,6 +125,15 @@ export const userIntentSchema = z.object({
 })
 
 export const agentWorkflowStepKindSchema = z.enum(['analysis', 'tool', 'agent', 'automation', 'delivery'])
+export const agentRunProfileSchema = z.enum(['standard', 'geospatial_compose'])
+export const agentWorkflowStepPhaseSchema = z.enum([
+  'discover',
+  'validate',
+  'analyze',
+  'visualize',
+  'verify',
+  'deliver',
+])
 export const agentWorkflowStepStatusSchema = z.enum([
   'pending', 'running', 'completed', 'failed', 'blocked', 'skipped',
 ])
@@ -135,6 +145,7 @@ export const agentWorkflowStepDraftSchema = z.object({
   stepId: z.string().min(1),
   title: z.string().min(1),
   kind: agentWorkflowStepKindSchema,
+  phase: agentWorkflowStepPhaseSchema.nullable().default(null),
   toolName: z.string().min(1),
   ownerAgentId: z.string().min(1).default('supervisor'),
   args: z.record(z.string(), z.unknown()).prefault({}),
@@ -306,6 +317,61 @@ export const runLifecycleSchema = z.object({
   updatedAt: z.string().nullable().default(null),
 })
 
+export const runGoalInputSchema = z.object({
+  condition: z.string().trim().min(1).max(2000),
+  acceptanceCriteria: z.array(z.string().trim().min(1).max(500)).max(20).default([]),
+  maxRechecks: z.number().int().min(0).max(10).default(2),
+  deadlineAt: z.string().datetime({ offset: true }).nullable().default(null),
+  maxTokenBudget: z.number().int().positive().max(10_000_000).nullable().default(null),
+})
+
+export const runGoalEvidenceSchema = z.object({
+  source: z.enum(['transcript', 'tool_result', 'artifact', 'workflow']),
+  referenceId: z.string().min(1),
+  statement: z.string().trim().min(1).max(1000),
+})
+
+export const runGoalVerdictStatusSchema = z.enum(['satisfied', 'incomplete', 'impossible'])
+export const runGoalVerdictSchema = z.object({
+  status: runGoalVerdictStatusSchema,
+  reason: z.string().trim().min(1).max(4000),
+  evidence: z.array(runGoalEvidenceSchema).max(50).default([]),
+  missingCriteria: z.array(z.string().trim().min(1).max(1000)).max(20).default([]),
+  attempt: z.number().int().positive(),
+  evaluatedAt: z.string(),
+  tokenUsage: z.number().int().nonnegative(),
+}).superRefine((verdict, context) => {
+  if ((verdict.status === 'satisfied' || verdict.status === 'impossible') && verdict.evidence.length === 0) {
+    context.addIssue({
+      code: 'custom',
+      path: ['evidence'],
+      message: `Goal ${verdict.status} 判定必须包含可验证证据。`,
+    })
+  }
+  if (verdict.status === 'incomplete' && verdict.missingCriteria.length === 0) {
+    context.addIssue({
+      code: 'custom',
+      path: ['missingCriteria'],
+      message: 'Goal incomplete 判定必须列出尚缺少的验收条件。',
+    })
+  }
+})
+
+export const runGoalStatusSchema = z.enum([
+  'active', 'evaluating', 'satisfied', 'impossible', 'exhausted', 'cancelled', 'failed',
+])
+
+export const runGoalSchema = runGoalInputSchema.extend({
+  goalId: z.string().min(1),
+  status: runGoalStatusSchema,
+  recheckCount: z.number().int().nonnegative().default(0),
+  lastVerdict: runGoalVerdictSchema.nullable().default(null),
+  failureReason: z.string().nullable().default(null),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  completedAt: z.string().nullable().default(null),
+})
+
 export const todoItemSchema = z.object({
   todoId: z.string(),
   title: z.string(),
@@ -326,16 +392,42 @@ export const taskRecordSchema = z.object({
   resultSummary: z.string().nullable().default(null),
 })
 
+export const subAgentControlMessageSchema = z.object({
+  controlId: z.string().min(1),
+  kind: z.enum(['follow_up', 'cancel']),
+  content: z.string().trim().min(1).max(4000),
+  status: z.enum(['queued', 'delivered', 'acknowledged', 'rejected']).default('queued'),
+  createdByUserId: z.string().min(1),
+  createdAt: z.string(),
+  deliveredAt: z.string().nullable().default(null),
+})
+
 export const subAgentStateSchema = z.object({
   agentId: z.string(),
   name: z.string(),
   role: z.string(),
-  status: z.string().default('pending'),
+  delegationMode: z.enum(['as_tool', 'handoff']).default('as_tool'),
+  status: z.enum(['pending', 'running', 'completed', 'failed', 'cancelling', 'cancelled']).default('pending'),
   summary: z.string().default(''),
   stepIds: z.array(z.string()).default([]),
   tools: z.array(z.string()).default([]),
   currentStepId: z.string().nullable().default(null),
+  currentStep: z.string().nullable().default(null),
+  activeCallId: z.string().nullable().default(null),
   latestMessage: z.string().nullable().default(null),
+  progressPercent: z.number().int().min(0).max(100).nullable().default(null),
+  activityCount: z.number().int().nonnegative().default(0),
+  startedAt: z.string().nullable().default(null),
+  completedAt: z.string().nullable().default(null),
+  lastActivityAt: z.string().nullable().default(null),
+  stalled: z.boolean().default(false),
+  stalledSince: z.string().nullable().default(null),
+  resultRefs: z.array(z.string().min(1)).default([]),
+  deliveryEvidence: z.array(z.object({
+    claim: z.string().trim().min(1),
+    source: z.string().trim().min(1),
+  })).default([]),
+  controls: z.array(subAgentControlMessageSchema).default([]),
 })
 
 export const approvalRequestSchema = z.object({
@@ -385,6 +477,7 @@ export const agentStateSchema = z.object({
   contextReferences: z.array(contextReferenceSchema).default([]),
   contextResolution: contextResolutionSchema.nullable().default(null),
   runLifecycle: runLifecycleSchema.default({ status: 'created', reason: null, updatedAt: null }),
+  goal: runGoalSchema.nullable().default(null),
   agentWorkflow: agentWorkflowSchema.nullable().default(null),
   currentStep: z.number().default(0),
   loopIteration: z.number().default(0),
@@ -392,6 +485,7 @@ export const agentStateSchema = z.object({
   loopTrace: z.array(loopTraceEntrySchema).default([]),
   todos: z.array(todoItemSchema).default([]),
   tasks: z.array(taskRecordSchema).default([]),
+  runProfile: agentRunProfileSchema.default('standard'),
   planMode: z.boolean().default(false),
   subAgents: z.array(subAgentStateSchema).default([]),
   activeSkills: z.array(z.string()).default([]),
@@ -470,6 +564,8 @@ export type DecisionRequest = z.infer<typeof decisionRequestSchema>
 export type PlaceSearchCandidate = z.infer<typeof placeSearchCandidateSchema>
 export type PlaceResolution = z.infer<typeof placeResolutionSchema>
 export type UserIntent = z.infer<typeof userIntentSchema>
+export type AgentRunProfile = z.infer<typeof agentRunProfileSchema>
+export type AgentWorkflowStepPhase = z.infer<typeof agentWorkflowStepPhaseSchema>
 export type AgentWorkflowStep = z.infer<typeof agentWorkflowStepSchema>
 export type AgentWorkflowDraft = z.infer<typeof agentWorkflowDraftSchema>
 export type AgentWorkflowRevision = z.infer<typeof agentWorkflowRevisionSchema>
@@ -485,9 +581,16 @@ export type MemoryFileRecord = z.infer<typeof memoryFileRecordSchema>
 export type MemorySearchResult = z.infer<typeof memorySearchResultSchema>
 export type MemoryOperationResult = z.infer<typeof memoryOperationResultSchema>
 export type RunLifecycle = z.infer<typeof runLifecycleSchema>
+export type RunGoalInput = z.infer<typeof runGoalInputSchema>
+export type RunGoalEvidence = z.infer<typeof runGoalEvidenceSchema>
+export type RunGoalVerdictStatus = z.infer<typeof runGoalVerdictStatusSchema>
+export type RunGoalVerdict = z.infer<typeof runGoalVerdictSchema>
+export type RunGoalStatus = z.infer<typeof runGoalStatusSchema>
+export type RunGoal = z.infer<typeof runGoalSchema>
 export type TodoItem = z.infer<typeof todoItemSchema>
 export type TaskRecord = z.infer<typeof taskRecordSchema>
 export type SubAgentState = z.infer<typeof subAgentStateSchema>
+export type SubAgentControlMessage = z.infer<typeof subAgentControlMessageSchema>
 export type ApprovalRequest = z.infer<typeof approvalRequestSchema>
 export type ArtifactRef = z.infer<typeof artifactRefSchema>
 export type LoopTraceEntry = z.infer<typeof loopTraceEntrySchema>
