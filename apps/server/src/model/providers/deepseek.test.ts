@@ -45,6 +45,7 @@ describe('DeepSeek configured model boundary', () => {
       remoteConversation: false,
       serverCompaction: false,
     })
+    expect(adapter.protocol).toBe('responses')
     expect(adapter.capabilities()).toContain('responses')
     expect(adapter.capabilities()).toContain('hosted_web_search')
   })
@@ -107,6 +108,7 @@ describe('DeepSeek configured model boundary', () => {
       model: DEEPSEEK_RESPONSES_MODEL,
       input: [{ role: 'user', content: '请回复 OK。' }],
       stream: false,
+      reasoning: { effort: 'none' },
     })
     expect(requests[0]?.body).not.toHaveProperty('messages')
   })

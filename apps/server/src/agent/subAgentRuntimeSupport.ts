@@ -83,7 +83,8 @@ export function createSubAgentDeliveryAgent(
     handoffDescription: config.summary,
     model: resolveSubAgentModel(config, dependencies),
     modelSettings: modelSettings(
-      dependencies.reasoning !== false && modelCapabilities.capabilities.reasoning,
+      dependencies.reasoning,
+      modelCapabilities.capabilities.reasoning,
     ),
     outputType: subAgentDeliverySchema,
     tools: createAgentsTools(dependencies.toolRegistry, approvalTools, {

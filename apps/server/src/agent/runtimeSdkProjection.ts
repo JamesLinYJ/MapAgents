@@ -23,12 +23,19 @@ import type {
 import type { TranscriptEntry } from '../schemas/types.js'
 import type { ConversationChatMessage } from './contextManager.js'
 
-export function modelSettings(reasoning = true): ModelSettings {
+export function modelSettings(
+  reasoning: boolean | undefined = true,
+  supportsReasoning = true,
+): ModelSettings {
   return {
     // 计划模式的安全边界由 ToolExecutionCoordinator 和终止状态校验负责。
     // `required` 会迫使模型调用无关工具，且与部分供应商的 thinking 模式冲突。
     toolChoice: 'auto',
-    ...(reasoning ? { reasoning: { effort: 'high' as const } } : {}),
+    // 支持 reasoning 的 Responses 模型必须用 `none` 显式关闭；省略字段会让
+    // DeepSeek 等 Provider 回到默认开启状态。不支持 reasoning 的模型则不发送该字段。
+    ...(supportsReasoning
+      ? { reasoning: { effort: reasoning === false ? 'none' as const : 'high' as const } }
+      : {}),
     retry: {
       maxRetries: 1,
       policy: ({ providerAdvice }: { providerAdvice?: { replaySafety?: 'safe' | 'unsafe'; suggested?: boolean } }) =>

@@ -410,7 +410,7 @@ export class RuntimeAssemblyFactory {
       name: options.runtimeConfig.supervisor.name,
       instructions: () => buildSupervisorInstructions(),
       model,
-      modelSettings: modelSettings(options.reasoning !== false && modelCapabilities.capabilities.reasoning),
+      modelSettings: modelSettings(options.reasoning, modelCapabilities.capabilities.reasoning),
       resetToolChoice: true,
       tools: explicitTools,
       toolUseBehavior: { stopAtToolNames: returnDirectToolNames },

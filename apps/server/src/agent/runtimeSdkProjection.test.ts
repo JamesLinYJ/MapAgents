@@ -23,8 +23,9 @@ describe('runtimeSdkProjection', () => {
     })
     expect(modelSettings(false)).toMatchObject({
       toolChoice: 'auto',
+      reasoning: { effort: 'none' },
     })
-    expect(modelSettings(false)).not.toHaveProperty('reasoning')
+    expect(modelSettings(false, false)).not.toHaveProperty('reasoning')
   })
 
   it('projects native Responses API reasoning events', () => {

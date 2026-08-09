@@ -86,7 +86,8 @@ export function createHandoffAgents(options: HandoffAgentFactoryOptions): Handof
       handoffDescription: config.summary,
       model: resolveSubAgentModel(config, options),
       modelSettings: modelSettings(
-        options.reasoning !== false && modelCapabilities.capabilities.reasoning,
+        options.reasoning,
+        modelCapabilities.capabilities.reasoning,
       ),
       tools: createAgentsTools(options.toolRegistry, options.approvalTools, {
         schemaMode: options.adapter.agentToolSchemaMode,

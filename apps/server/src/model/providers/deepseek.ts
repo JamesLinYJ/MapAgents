@@ -68,6 +68,7 @@ export function createDeepSeekAdapter(opts: DeepSeekOptions): ModelAdapter {
     modelCapabilitySnapshots,
     contextWindowTokens: defaultModelCapabilities.contextWindowTokens,
     modalities: defaultModelCapabilities.modalities,
+    protocol: 'responses',
     agentToolSchemaMode: opts.toolSchemaMode,
     agentRuntimeCapabilities: {
       transport: 'deepseek_responses',
@@ -128,7 +129,7 @@ export function createDeepSeekAdapter(opts: DeepSeekOptions): ModelAdapter {
           model,
           input: messages.map(m => toResponseMessage(m.role, m.content)),
           stream: false,
-          ...(kwargs?.reasoning !== false ? { reasoning: { effort: 'high' as const } } : {}),
+          reasoning: { effort: kwargs?.reasoning === false ? 'none' : 'high' },
           ...(kwargs?.reasoning === false && typeof kwargs?.temperature === 'number'
             ? { temperature: kwargs.temperature }
             : {}),
