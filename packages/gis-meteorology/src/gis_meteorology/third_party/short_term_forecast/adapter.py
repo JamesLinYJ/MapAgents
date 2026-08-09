@@ -21,10 +21,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-import xarray as xr
-
 from gis_meteorology.third_party.common import choose_label_column, ensure_parent, finite_float, load_geodataframe
+from gis_meteorology.xarray_io import open_xarray_dataset
 
 
 DEFAULT_STYLE = {
@@ -55,8 +53,11 @@ def _format_time_from_stem(path: Path, part_index: int) -> str:
     return _format_time_from_name(path.name, part_index)
 
 
-def _read_rate(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
-    with xr.open_dataset(path) as dataset:
+def _read_rate(path: Path) -> tuple[Any, Any, Any, str]:
+    np = _np()
+    xr = _xarray()
+    dataset, _engine = open_xarray_dataset(xr, path)
+    with dataset:
         lat_name = "lat" if "lat" in dataset.variables else "latitude"
         lon_name = "lon" if "lon" in dataset.variables else "longitude"
         if lat_name not in dataset.variables or lon_name not in dataset.variables:
@@ -90,7 +91,8 @@ def _read_rate(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
         )
 
 
-def _accumulate_rainfall(nc_paths: list[Path]) -> tuple[np.ndarray, np.ndarray, np.ndarray, str, list[str]]:
+def _accumulate_rainfall(nc_paths: list[Path]) -> tuple[Any, Any, Any, str, list[str]]:
+    np = _np()
     if not nc_paths:
         raise ValueError("区域累计面雨量排行表需要至少一个 NC 文件")
     logs = [f"共 {len(nc_paths)} 个 NC 文件"]
@@ -111,7 +113,8 @@ def _accumulate_rainfall(nc_paths: list[Path]) -> tuple[np.ndarray, np.ndarray, 
         elif rain_sum.shape != rate.shape:
             raise ValueError(f"NC 网格尺寸不一致: {path.name}")
         rain_sum += rate * time_weight
-    assert rain_sum is not None and lats is not None and lons is not None and data_type is not None
+    if rain_sum is None or lats is None or lons is None or data_type is None:
+        raise RuntimeError("降水累计未生成有效网格。")
     finite = rain_sum[np.isfinite(rain_sum)]
     logs.append(f"降水累加完成: max={float(np.nanmax(finite)):.2f}mm mean={float(np.nanmean(finite)):.2f}mm")
     return rain_sum, lats, lons, data_type, logs
@@ -119,15 +122,16 @@ def _accumulate_rainfall(nc_paths: list[Path]) -> tuple[np.ndarray, np.ndarray, 
 
 def _aggregate_county(
     *,
-    rainfall: np.ndarray,
-    lats: np.ndarray,
-    lons: np.ndarray,
+    rainfall: Any,
+    lats: Any,
+    lons: Any,
     boundary_path: Path,
     label_field: str | None,
 ) -> tuple[Any, str, Any]:
     import geopandas as gpd
     import pandas as pd
 
+    np = _np()
     gdf = load_geodataframe(boundary_path)
     label_column = choose_label_column(list(gdf.columns), label_field)
     if not label_column:
@@ -324,7 +328,9 @@ def generate_area_rainfall_table(
         label_field=label_field,
     )
 
-    display_names = nc_names if nc_names and len(nc_names) == len(nc_paths) else [path.name for path in nc_paths]
+    if nc_names is not None and len(nc_names) != len(nc_paths):
+        raise ValueError("nc_names 数量必须与 nc_paths 一致")
+    display_names = nc_names if nc_names is not None else [path.name for path in nc_paths]
     ordered_names = [name for _, name in sorted(zip(nc_paths, display_names), key=lambda item: item[1])]
     start_text = _format_time_from_name(ordered_names[0], 0)
     end_text = _format_time_from_name(ordered_names[-1], 1)
@@ -357,3 +363,13 @@ def generate_area_rainfall_table(
             "png": output_png.name,
         },
     }
+
+
+def _np() -> Any:
+    import numpy as np
+    return np
+
+
+def _xarray() -> Any:
+    import xarray as xr
+    return xr

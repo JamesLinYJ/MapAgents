@@ -159,7 +159,7 @@ def _write_dataset(path: Path, *, increment: float) -> None:
             "lon": np.asarray([120.0, 120.25, 120.5, 120.75, 121.0]),
         },
     )
-    dataset.to_netcdf(path)
+    dataset.to_netcdf(path, engine="h5netcdf")
     dataset.close()
 
 

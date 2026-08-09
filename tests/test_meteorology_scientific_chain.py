@@ -87,7 +87,7 @@ def test_generated_netcdf_inspect_stats_threshold_render_and_report(tmp_path: Pa
         coords={"time": ["2026-06-08T00:00:00"], "lat": [30.0, 31.0], "lon": [120.0, 121.0]},
     )
     dataset["rain"].attrs["units"] = "mm"
-    dataset.to_netcdf(source)
+    dataset.to_netcdf(source, engine="h5netcdf")
 
     service = MeteorologicalDataService()
     metadata = service.inspect(source)
@@ -125,7 +125,7 @@ def test_worker_reads_extensionless_runtime_object_with_original_filename(
         coords={"lat": [30.0, 31.0], "lon": [120.0, 121.0]},
     )
     dataset["QPF"].attrs["units"] = "mm"
-    dataset.to_netcdf(source)
+    dataset.to_netcdf(source, engine="h5netcdf")
 
     common = {
         "file_relative_path": source.relative_to(tmp_path).as_posix(),
@@ -162,7 +162,7 @@ def test_generated_netcdf_nowcast_reference_chain(tmp_path: Path) -> None:
             coords={"time": [f"2026-06-08T0{index}:00:00"], "lat": [30.0, 31.0], "lon": [120.0, 121.0]},
         )
         dataset["rain"].attrs["units"] = "mm"
-        dataset.to_netcdf(source)
+        dataset.to_netcdf(source, engine="h5netcdf")
         files.append({"fileId": f"file_{index}", "name": source.name, "relativePath": source.relative_to(tmp_path).as_posix()})
 
     sequence = dispatch_worker_tool(tmp_path, "create_nowcast_sequence", {"files": files, "variable": "rain"})
@@ -545,7 +545,7 @@ def test_third_party_risk_map_and_area_rainfall_outputs_are_real_files(tmp_path:
         )
         dataset["QPF"].attrs["units"] = "mm"
         dataset["QPF"].attrs["standard_name"] = "QPF"
-        dataset.to_netcdf(source)
+        dataset.to_netcdf(source, engine="h5netcdf")
         nc_paths.append(source)
 
     boundary = tmp_path / "boundary.geojson"

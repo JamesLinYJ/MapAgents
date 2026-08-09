@@ -22,10 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-import xarray as xr
-
 from gis_meteorology.third_party.common import choose_label_column, ensure_parent, finite_float, load_geodataframe
+from gis_meteorology.xarray_io import open_xarray_dataset
 
 
 DEFAULT_THRESHOLDS = [
@@ -42,15 +40,15 @@ DEFAULT_THRESHOLDS = [
 class RiskGrid:
     """Two-dimensional rainfall field and its coordinate metadata."""
 
-    data: np.ndarray
-    lats: np.ndarray
-    lons: np.ndarray
+    data: Any
+    lats: Any
+    lons: Any
     variable: str
     units: str
     long_name: str
 
 
-def _coord_name(dataset: xr.Dataset, candidates: tuple[str, ...]) -> str:
+def _coord_name(dataset: Any, candidates: tuple[str, ...]) -> str:
     for name in candidates:
         if name in dataset.coords or name in dataset.variables:
             return name
@@ -58,7 +56,10 @@ def _coord_name(dataset: xr.Dataset, candidates: tuple[str, ...]) -> str:
 
 
 def _select_2d_grid(nc_path: Path, variable: str) -> RiskGrid:
-    with xr.open_dataset(nc_path) as dataset:
+    np = _np()
+    xr = _xarray()
+    dataset, _engine = open_xarray_dataset(xr, nc_path)
+    with dataset:
         if variable not in dataset.data_vars:
             raise ValueError(f"NC 文件中不存在变量 {variable}")
         lat_name = _coord_name(dataset, ("lat", "latitude", "y"))
@@ -87,7 +88,9 @@ def _select_2d_grid(nc_path: Path, variable: str) -> RiskGrid:
 def inspect_rainfall_dataset(nc_path: Path) -> dict[str, Any]:
     """Return renderable variable candidates for the mini-app selector."""
 
-    with xr.open_dataset(nc_path) as dataset:
+    xr = _xarray()
+    dataset, _engine = open_xarray_dataset(xr, nc_path)
+    with dataset:
         variables = []
         for name, da in dataset.data_vars.items():
             dims = list(da.dims)
@@ -110,7 +113,9 @@ def inspect_rainfall_dataset(nc_path: Path) -> dict[str, Any]:
 def normalize_thresholds(thresholds: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """Validate and normalize threshold levels into a contiguous palette."""
 
-    levels = thresholds or DEFAULT_THRESHOLDS
+    if thresholds == []:
+        raise ValueError("阈值配置不能为空")
+    levels = DEFAULT_THRESHOLDS if thresholds is None else thresholds
     normalized: list[dict[str, Any]] = []
     for index, item in enumerate(levels):
         try:
@@ -132,9 +137,10 @@ def _aggregate_by_region(
     boundary_path: Path,
     method: str,
     label_field: str | None,
-) -> tuple[Any, np.ndarray, str | None]:
+) -> tuple[Any, Any, str | None]:
     import geopandas as gpd
 
+    np = _np()
     gdf = load_geodataframe(boundary_path)
     label_column = choose_label_column(list(gdf.columns), label_field)
     lon_grid, lat_grid = np.meshgrid(grid.lons, grid.lats)
@@ -160,7 +166,8 @@ def _aggregate_by_region(
     return gdf, values, label_column
 
 
-def _classify(values: np.ndarray, thresholds: list[dict[str, Any]]) -> dict[str, int]:
+def _classify(values: Any, thresholds: list[dict[str, Any]]) -> dict[str, int]:
+    np = _np()
     counts = {item["label"]: 0 for item in thresholds}
     for value in values:
         if not np.isfinite(value):
@@ -175,7 +182,7 @@ def _classify(values: np.ndarray, thresholds: list[dict[str, Any]]) -> dict[str,
 def _risk_level(value: float | None, thresholds: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Return the configured risk level for a scalar region value."""
 
-    if value is None or not np.isfinite(value):
+    if value is None or not _np().isfinite(value):
         return None
     for item in thresholds:
         if item["min"] <= float(value) < item["max"]:
@@ -186,6 +193,7 @@ def _risk_level(value: float | None, thresholds: list[dict[str, Any]]) -> dict[s
 def _bounds_from_grid(grid: RiskGrid) -> list[float]:
     """Derive WGS84 bounds from the NC grid coordinates."""
 
+    np = _np()
     return [
         float(np.nanmin(grid.lons)),
         float(np.nanmin(grid.lats)),
@@ -204,7 +212,7 @@ def _coordinates_from_bounds(bounds: list[float]) -> list[list[float]]:
 def _write_region_geojson(
     *,
     gdf: Any,
-    values: np.ndarray,
+    values: Any,
     thresholds: list[dict[str, Any]],
     output_geojson: Path,
     label_column: str | None,
@@ -255,6 +263,7 @@ def _normalize_geojson_properties(gdf: Any) -> None:
 
 
 def _json_native_value(value: Any) -> Any:
+    np = _np()
     if value is None:
         return None
     if isinstance(value, np.ndarray):
@@ -274,7 +283,7 @@ def _draw_map(
     *,
     grid: RiskGrid,
     gdf: Any | None,
-    region_values: np.ndarray | None,
+    region_values: Any | None,
     thresholds: list[dict[str, Any]],
     output_png: Path,
     map_mode: str,
@@ -363,6 +372,7 @@ def render_rainfall_risk_map(
 ) -> dict[str, Any]:
     """Render regional, gradient, or comparison rainfall risk map."""
 
+    np = _np()
     mode = map_mode.lower().strip()
     if mode not in {"regional", "gradient", "compare"}:
         raise ValueError(f"不支持的风险图模式: {map_mode}")
@@ -446,3 +456,13 @@ def render_rainfall_risk_map(
             **({"geojson": output_geojson.name} if output_geojson is not None else {}),
         },
     }
+
+
+def _np() -> Any:
+    import numpy as np
+    return np
+
+
+def _xarray() -> Any:
+    import xarray as xr
+    return xr

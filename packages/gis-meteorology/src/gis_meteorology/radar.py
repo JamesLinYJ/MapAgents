@@ -25,8 +25,6 @@ from typing import Any
 
 logger = logging.getLogger("gis_meteorology.radar")
 
-import numpy as np
-
 from .third_party.common import import_source_module
 
 
@@ -71,6 +69,7 @@ def decode_radar_bz2(path: Path) -> DecodedRadar:
 
     if path.suffix.lower() != ".bz2":
         raise ValueError(f"天气雷达径向数据必须是 .bz2 文件：{path.name}")
+    np = _np()
     decoder = import_source_module("radar_decoder", SOURCE_DIR)
     result = decoder.decoderaw(f"{path.parent.as_posix()}/", path.name)
     if not isinstance(result, tuple) or len(result) != 12 or result[0] is None:
@@ -119,17 +118,17 @@ def radar_product_to_grid(
 ) -> tuple[Any, Any, Any, RadarProduct, int]:
     """Select a decoded radar product and return data plus generated coordinates."""
 
+    np = _np()
     product_key = _select_product(decoded.products, variable)
     product = decoded.products[product_key]
     selected_index = int(elevation_index or 0)
     if selected_index < 0 or selected_index >= product.data.shape[0]:
         raise ValueError(f"雷达产品 {product.name} 没有仰角索引 {selected_index}")
-    data = np.asarray(product.data[selected_index], dtype="float64")
-    lat, lon = _polar_coordinates(
+    radial_data = np.asarray(product.data[selected_index], dtype="float64")
+    data, lat, lon = _polar_to_cartesian_grid(
+        radial_data,
         latitude=decoded.latitude,
         longitude=decoded.longitude,
-        azimuth_count=data.shape[0],
-        range_count=data.shape[1],
     )
     return data, lat, lon, product, selected_index
 
@@ -146,19 +145,40 @@ def _select_product(products: dict[str, RadarProduct], variable: str | None) -> 
     return next(iter(products))
 
 
-def _polar_coordinates(*, latitude: float, longitude: float, azimuth_count: int, range_count: int) -> tuple[Any, Any]:
-    azimuth = np.linspace(0.0, 360.0, azimuth_count, endpoint=False)
-    distance_km = np.arange(range_count, dtype="float64")
-    theta = np.deg2rad(azimuth)[:, None]
-    x_km = np.sin(theta) * distance_km[None, :]
-    y_km = np.cos(theta) * distance_km[None, :]
-    lat = latitude + y_km / 111.32
+def _polar_to_cartesian_grid(
+    radial_data: Any,
+    *,
+    latitude: float,
+    longitude: float,
+) -> tuple[Any, Any, Any]:
+    """把等方位径向矩阵按最近邻采样到规则 WGS84 笛卡尔网格。"""
+
+    np = _np()
+    values = np.asarray(radial_data, dtype="float64")
+    if values.ndim != 2 or values.shape[0] < 1 or values.shape[1] < 2:
+        raise ValueError("雷达径向切片必须是至少包含两个距离库的二维矩阵。")
+    azimuth_count, range_count = values.shape
+    range_km = float(range_count - 1)
+    grid_size = range_count * 2 - 1
+    x_axis_km = np.linspace(-range_km, range_km, grid_size)
+    y_axis_km = np.linspace(range_km, -range_km, grid_size)
+    x_grid_km, y_grid_km = np.meshgrid(x_axis_km, y_axis_km)
+    radius_km = np.hypot(x_grid_km, y_grid_km)
+    azimuth_deg = np.mod(np.degrees(np.arctan2(x_grid_km, y_grid_km)), 360.0)
+    azimuth_indices = np.rint(azimuth_deg * azimuth_count / 360.0).astype("int64") % azimuth_count
+    range_indices = np.rint(radius_km).astype("int64")
+    inside = range_indices < range_count
+    cartesian = np.full((grid_size, grid_size), np.nan, dtype="float64")
+    cartesian[inside] = values[azimuth_indices[inside], range_indices[inside]]
+
+    lat = latitude + y_axis_km / 111.32
     lon_scale = max(0.1, 111.32 * np.cos(np.deg2rad(latitude)))
-    lon = longitude + x_km / lon_scale
-    return lat, lon
+    lon = longitude + x_axis_km / lon_scale
+    return cartesian, lat, lon
 
 
 def _radar_bounds(latitude: float, longitude: float, range_km: float) -> list[float]:
+    np = _np()
     lat_delta = range_km / 111.32
     lon_delta = range_km / max(0.1, 111.32 * np.cos(np.deg2rad(latitude)))
     return [
@@ -170,10 +190,11 @@ def _radar_bounds(latitude: float, longitude: float, range_km: float) -> list[fl
 
 
 def _elevations(values: Any, expected: int) -> list[float]:
+    np = _np()
     array = np.asarray(values, dtype="float64").ravel()
-    if array.size >= expected:
-        return [float(item) for item in array[:expected]]
-    return [float(item) for item in range(expected)]
+    if array.size < expected or not np.isfinite(array[:expected]).all():
+        raise ValueError(f"雷达产品缺少 {expected} 层有效仰角信息。")
+    return [float(item) for item in array[:expected]]
 
 
 def _read_header(path: Path) -> dict[str, float | int | None]:
@@ -189,3 +210,8 @@ def _read_header(path: Path) -> dict[str, float | int | None]:
     except (struct.error, IndexError, EOFError, OSError) as exc:
         logger.warning("雷达文件头解析失败 %s: %s", path, exc)
         return {"height_m": None, "radar_type": None}
+
+
+def _np() -> Any:
+    import numpy as np
+    return np

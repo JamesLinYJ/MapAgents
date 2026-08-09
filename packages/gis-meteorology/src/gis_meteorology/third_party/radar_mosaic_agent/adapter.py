@@ -25,8 +25,6 @@ import shutil
 import tempfile
 from typing import Any
 
-import numpy as np
-
 from gis_meteorology.third_party.common import ensure_parent, finite_float, import_source_module
 
 
@@ -58,9 +56,11 @@ def _parse_records(paths: list[Path]) -> tuple[Any, list[Any]]:
             records.append(rm.parse_record(path))
         except Exception as exc:  # noqa: BLE001 - third-party decoder raises broad exceptions.
             failures.append(f"{path.name}: {exc}")
-    if not records:
+    if failures:
         detail = "; ".join(failures[:5])
-        raise ValueError(f"未找到可解析的雷达 bz2 文件。{detail}")
+        raise ValueError(f"有 {len(failures)} 个雷达文件解析失败：{detail}")
+    if not records:
+        raise ValueError("未提供可解析的雷达 bz2 文件。")
     return rm, records
 
 
@@ -142,6 +142,7 @@ def render_radar_mosaic(
 ) -> dict[str, Any]:
     """Run one radar mosaic and copy generated artifacts to platform targets."""
 
+    np = _np()
     rm, records = _parse_records(paths)
     normalized_strategy = strategy.lower().strip()
     if normalized_strategy not in {"max", "weighted", "quality"}:
@@ -177,16 +178,17 @@ def render_radar_mosaic(
         )
         generated_pngs = sorted(tmp_dir.glob("*.png"))
         generated_npzs = sorted(tmp_dir.glob("*.npz"))
-        if not generated_pngs or not generated_npzs:
-            raise RuntimeError("天气雷达组网拼图算法未生成 PNG/NPZ 输出")
+        if len(generated_pngs) != 1 or len(generated_npzs) != 1:
+            raise RuntimeError(
+                f"天气雷达组网拼图算法应生成一组 PNG/NPZ，实际为 {len(generated_pngs)}/{len(generated_npzs)}"
+            )
         shutil.copy2(generated_pngs[0], output_png)
         shutil.copy2(generated_npzs[0], output_npz)
 
     payload = np.load(output_npz, allow_pickle=False)
-    display_key = "display_ref" if "display_ref" in payload.files else "mosaic_ref"
-    if display_key not in payload.files:
-        raise RuntimeError(f"天气雷达组网拼图 NPZ 缺少结果字段: {payload.files}")
-    mosaic = payload[display_key]
+    if "display_ref" not in payload.files:
+        raise RuntimeError(f"天气雷达组网拼图 NPZ 缺少 display_ref 字段: {payload.files}")
+    mosaic = payload["display_ref"]
     bounds = _grid_bounds(payload)
     if output_map_png is not None:
         _write_map_overlay_png(
@@ -218,6 +220,7 @@ def render_radar_mosaic(
 
 
 def _grid_bounds(payload: Any) -> list[float]:
+    np = _np()
     required = {"grid_lon", "grid_lat"}
     if not required.issubset(payload.files):
         raise RuntimeError(f"天气雷达组网拼图 NPZ 缺少地图坐标字段: {', '.join(sorted(required - set(payload.files)))}")
@@ -236,7 +239,7 @@ def _coordinates_from_bounds(bounds: list[float]) -> list[list[float]]:
     return [[west, north], [east, north], [east, south], [west, south]]
 
 
-def _write_map_overlay_png(*, output_map_png: Path, data: np.ndarray, product: str) -> None:
+def _write_map_overlay_png(*, output_map_png: Path, data: Any, product: str) -> None:
     """Write a transparent map-native radar overlay without axes or legends."""
 
     import matplotlib
@@ -244,6 +247,7 @@ def _write_map_overlay_png(*, output_map_png: Path, data: np.ndarray, product: s
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    np = _np()
     rm = _radar_mosaic_module()
     config = rm.get_product_config(product)
     cmap, norm, _levels = rm.get_radar_colormap(config.key)
@@ -269,14 +273,14 @@ def compare_radar_mosaic_reference(
 ) -> dict[str, Any]:
     """Compare a generated mosaic NPZ with an NC reference product."""
 
+    np = _np()
     mc = _mosaic_comparison_module()
     data = np.load(mosaic_npz, allow_pickle=False)
     required = {"grid_lon", "grid_lat"}
     if not required.issubset(data.files):
         raise ValueError(f"天气雷达组网拼图 NPZ 缺少字段: {', '.join(sorted(required - set(data.files)))}")
-    display_key = "display_ref" if "display_ref" in data.files else "mosaic_ref"
-    if display_key not in data.files:
-        raise ValueError("天气雷达组网拼图 NPZ 缺少 display_ref/mosaic 字段")
+    if "display_ref" not in data.files:
+        raise ValueError("天气雷达组网拼图 NPZ 缺少 display_ref 字段")
 
     ensure_parent(output_png)
     ensure_parent(output_reference_png)
@@ -286,7 +290,7 @@ def compare_radar_mosaic_reference(
         result = mc.run_comparison(
             grid_lon=data["grid_lon"],
             grid_lat=data["grid_lat"],
-            generated_display=data[display_key],
+            generated_display=data["display_ref"],
             target_time=_parse_target_time(target_time),
             output_dir=tmp_dir,
             level_index=int(level_index),
@@ -297,10 +301,12 @@ def compare_radar_mosaic_reference(
         )
         if result is None:
             raise ValueError(f"没有找到目标时次 {target_time} 对应的 NC 参考文件")
-        generated_pngs = sorted(tmp_dir.glob("comparison_*.png"))
+        generated_pngs = sorted(path for path in tmp_dir.glob("comparison_*.png") if not path.name.endswith("_ref.png"))
         reference_pngs = sorted(tmp_dir.glob("comparison_*_ref.png"))
-        if not generated_pngs or not reference_pngs:
-            raise RuntimeError("雷达对比算法未生成对比 PNG")
+        if len(generated_pngs) != 1 or len(reference_pngs) != 1:
+            raise RuntimeError(
+                f"雷达对比算法应生成一组对比 PNG，实际为 {len(generated_pngs)}/{len(reference_pngs)}"
+            )
         shutil.copy2(generated_pngs[0], output_png)
         shutil.copy2(reference_pngs[0], output_reference_png)
 
@@ -315,3 +321,8 @@ def compare_radar_mosaic_reference(
             "referencePng": output_reference_png.name,
         },
     }
+
+
+def _np() -> Any:
+    import numpy as np
+    return np
