@@ -51,7 +51,7 @@ export function buildLabelLayerDefinition(
     source: id,
     ...(source.kind === 'vector_tiles' ? { 'source-layer': source.sourceLayer } : {}),
     layout: {
-      visibility: visible ? 'visible' : 'none',
+      visibility: visible && sceneOpacity > 0 ? 'visible' : 'none',
       'symbol-placement': placement,
       'text-field': ['to-string', ['get', label.field]],
       'text-size': label.size,

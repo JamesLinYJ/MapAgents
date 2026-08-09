@@ -17,7 +17,7 @@ export function layerBase(context: MapStyleRenderContext) {
   return {
     source: context.id,
     ...(sourceLayer ? { 'source-layer': sourceLayer } : {}),
-    layout: { visibility: context.visible ? 'visible' : 'none' } as const,
+    layout: { visibility: context.visible && context.sceneOpacity > 0 ? 'visible' : 'none' } as const,
   }
 }
 

@@ -110,7 +110,7 @@ const contourRenderer = defineStyleRenderer('contour', context => {
     type: 'symbol',
     ...layerBase(context),
     layout: {
-      visibility: context.visible ? 'visible' : 'none',
+      visibility: context.visible && context.sceneOpacity > 0 ? 'visible' : 'none',
       'symbol-placement': 'line',
       'text-field': ['to-string', ['get', style.valueField]],
       'text-size': 11,

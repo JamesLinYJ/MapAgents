@@ -43,7 +43,13 @@ import {
 } from './mapWorkbenchBridge'
 import type { SceneRenderLayer } from './useMapScene'
 import { publishMapScreenshotAttachment } from './composerAttachmentBridge'
-import { buildMapScreenshotContext, collectRenderedSceneLayerIds } from './mapScreenshot'
+import {
+  buildMapScreenshotContext,
+  collectRenderedSceneLayerIds,
+  confirmReadySourcesAtIdle,
+  encodeMapScreenshotPng,
+  MapSourceReadinessTracker,
+} from './mapScreenshot'
 
 type MapLibreRuntime = typeof import('maplibre-gl/dist/maplibre-gl-csp').default
 
@@ -105,6 +111,7 @@ export function MapCanvas({
   const selectedFeatureCountRef = useRef(0)
   const basemapTileLoadedRef = useRef(false)
   const layerErrorsRef = useRef<Record<string, string>>({})
+  const sourceReadinessRef = useRef(new MapSourceReadinessTracker())
   const [mapReadyVersion, setMapReadyVersion] = useState(0)
   const [renderedBasemapKey, setRenderedBasemapKey] = useState<string | null>(null)
   const [cursor, setCursor] = useState('—')
@@ -137,6 +144,7 @@ export function MapCanvas({
   useEffect(() => {
     const target = containerRef.current
     if (!target || mapRef.current) return
+    const sourceReadiness = sourceReadinessRef.current
     let disposed = false
     let waitingForSize: ResizeObserver | null = null
 
@@ -190,11 +198,25 @@ export function MapCanvas({
         if (event.tile || event.sourceDataType === 'content') setResourceWarning(null)
         if (event.sourceDataType === 'idle') publishRenderedBasemap()
       })
-      map.on('idle', publishRenderedBasemap)
+      map.on('sourcedataloading', event => {
+        if (!event.sourceId) return
+        const generation = sourceReadiness.currentGeneration(event.sourceId)
+        if (generation !== null) {
+          sourceReadiness.markLoading(event.sourceId, generation)
+        }
+      })
+      map.on('idle', () => {
+        confirmReadySourcesAtIdle(map, sourceReadiness)
+        publishRenderedBasemap()
+      })
       map.on('error', event => {
+        const sourceId = (event as unknown as { sourceId?: string }).sourceId
+        if (sourceId) {
+          const generation = sourceReadiness.currentGeneration(sourceId)
+          if (generation !== null) sourceReadiness.markErrored(sourceId, generation)
+        }
         const message = event.error?.message ?? '地图资源加载失败'
         if (isStaleMapLayerError(message, layersRef.current)) return
-        const sourceId = (event as unknown as { sourceId?: string }).sourceId
         const layer = sourceId?.startsWith('map-layer-')
           ? layersRef.current.find(candidate => sceneSourceId(candidate.manifest.mapLayerId) === sourceId)
           : null
@@ -285,6 +307,7 @@ export function MapCanvas({
       popupRef.current?.remove()
       mapRef.current?.remove()
       mapRef.current = null
+      sourceReadiness.clear()
       publishMapWorkbenchStatus(INITIAL_MAP_WORKBENCH_STATUS)
     }
   }, [])
@@ -294,7 +317,13 @@ export function MapCanvas({
     if (!map) return
     const apply = () => {
       if (!map.isStyleLoaded()) return
-      const result = syncSceneLayers(map, layers, selectedLayer?.manifest.mapLayerId)
+      const result = syncSceneLayers(
+        map,
+        layers,
+        selectedLayer?.manifest.mapLayerId,
+        undefined,
+        sourceReadinessRef.current,
+      )
       layerErrorsRef.current = result.errors
       setLayerErrors(result.errors)
       const demLayer = layers.find(layer => layer.scene.visible && layer.manifest.source.kind === 'raster_dem')
@@ -367,6 +396,7 @@ export function MapCanvas({
         map,
         () => layersRef.current,
         () => layerErrorsRef.current,
+        sourceReadinessRef.current,
       )
       if (mapRef.current !== map) throw new Error('地图在截图期间已关闭。')
       const context = buildMapScreenshotContext({
@@ -449,6 +479,7 @@ function captureIdleMapFrame(
   map: Map,
   readLayers: () => SceneRenderLayer[],
   readLayerErrors: () => Readonly<Record<string, string>>,
+  sourceReadiness: MapSourceReadinessTracker,
 ): Promise<CapturedMapFrame> {
   return new Promise((resolve, reject) => {
     const timeout = window.setTimeout(() => {
@@ -462,6 +493,7 @@ function captureIdleMapFrame(
     }
     const onIdle = () => {
       if (!map.isStyleLoaded() || !map.areTilesLoaded()) return
+      confirmReadySourcesAtIdle(map, sourceReadiness)
       const layers = [...readLayers()]
       const bounds = map.getBounds()
       const center = map.getCenter()
@@ -469,13 +501,14 @@ function captureIdleMapFrame(
       const bearing = map.getBearing()
       const pitch = map.getPitch()
       const capturedAt = new Date().toISOString()
-      const renderedLayerIds = collectRenderedSceneLayerIds(map, layers, readLayerErrors())
+      const renderedLayerIds = collectRenderedSceneLayerIds(
+        map,
+        layers,
+        readLayerErrors(),
+        sourceReadiness,
+      )
       cleanup()
-      map.getCanvas().toBlob(blob => {
-        if (!blob) {
-          reject(new Error('地图画布没有产生可用的 PNG。'))
-          return
-        }
+      void encodeMapScreenshotPng(map.getCanvas()).then(blob => {
         resolve({
           blob,
           bounds: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()],
@@ -487,7 +520,7 @@ function captureIdleMapFrame(
           renderedLayerIds,
           capturedAt,
         })
-      }, 'image/png')
+      }, reject)
     }
 
     map.on('idle', onIdle)
