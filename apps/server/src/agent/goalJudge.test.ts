@@ -18,7 +18,12 @@ import { describe, expect, it } from 'vitest'
 import type { ModelCompletionService } from '../model/modelResultCache.js'
 import { toolCallSchema } from '../schemas/types.js'
 import { createTestPersistenceFacade } from '../../test-support/persistenceFacadeHarness.js'
-import { GoalJudge } from './goalJudge.js'
+import {
+  GoalJudge,
+  goalJudgeDecisionSchema,
+  type CanonicalGoalEvidenceBundle,
+  validateJudgeEvidence,
+} from './goalJudge.js'
 
 describe('GoalJudge', () => {
   it('uses a separate structured call over canonical evidence and records its usage', async () => {
@@ -232,6 +237,222 @@ describe('GoalJudge', () => {
   })
 })
 
+describe('validateJudgeEvidence', () => {
+  it.each([
+    {
+      label: '模型输入摘要 checkpoint',
+      source: 'transcript' as const,
+      referenceId: 'entry_summary',
+      bundle: evidenceBundle({
+        transcript: [transcriptEvidence('entry_summary', 'checkpoint', {
+          type: 'model_input_summary',
+          content: '已完成。',
+        })],
+      }),
+    },
+    {
+      label: '助手工具前文 checkpoint',
+      source: 'transcript' as const,
+      referenceId: 'entry_preamble',
+      bundle: evidenceBundle({
+        transcript: [transcriptEvidence('entry_preamble', 'checkpoint', {
+          type: 'assistant_content_for_tool_call',
+          content: '结果已生成。',
+        })],
+      }),
+    },
+    {
+      label: 'Goal 复检 checkpoint',
+      source: 'transcript' as const,
+      referenceId: 'entry_recheck',
+      bundle: evidenceBundle({
+        transcript: [transcriptEvidence('entry_recheck', 'checkpoint', {
+          type: 'goal_recheck',
+          status: 'satisfied',
+        })],
+      }),
+    },
+    {
+      label: 'started checkpoint',
+      source: 'transcript' as const,
+      referenceId: 'entry_started',
+      bundle: evidenceBundle({
+        transcript: [transcriptEvidence('entry_started', 'checkpoint', {
+          name: 'query_layer',
+          ledgerStatus: 'started',
+        })],
+      }),
+    },
+    {
+      label: 'failed checkpoint',
+      source: 'transcript' as const,
+      referenceId: 'entry_failed_checkpoint',
+      bundle: evidenceBundle({
+        transcript: [transcriptEvidence('entry_failed_checkpoint', 'checkpoint', {
+          name: 'query_layer',
+          ledgerStatus: 'failed',
+          error: '失败。',
+        })],
+      }),
+    },
+    {
+      label: '失败的 transcript 工具结果',
+      source: 'transcript' as const,
+      referenceId: 'entry_failed',
+      bundle: evidenceBundle({
+        transcript: [transcriptEvidence('entry_failed', 'tool_result', {
+          ledgerStatus: 'failed',
+          summary: '数据读取失败。',
+        })],
+      }),
+    },
+    {
+      label: '失败的 durable 工具结果',
+      source: 'tool_result' as const,
+      referenceId: 'result_failed',
+      bundle: evidenceBundle({
+        toolLedger: [{ referenceId: 'result_failed', resultId: 'result_failed', status: 'failed', message: '失败。' }],
+      }),
+    },
+    {
+      label: '中间 Artifact',
+      source: 'artifact' as const,
+      referenceId: 'artifact_intermediate',
+      bundle: evidenceBundle({
+        artifacts: [{ referenceId: 'artifact_intermediate', artifactId: 'artifact_intermediate', isIntermediate: true }],
+      }),
+    },
+    {
+      label: '未完成的 workflow',
+      source: 'workflow' as const,
+      referenceId: 'workflow_pending',
+      bundle: evidenceBundle({
+        workflow: workflowEvidence('workflow_pending', 'running', [
+          workflowStepEvidence('step_pending', 'running'),
+        ]),
+      }),
+    },
+    {
+      label: '失败的 workflow',
+      source: 'workflow' as const,
+      referenceId: 'workflow_failed',
+      bundle: evidenceBundle({
+        workflow: workflowEvidence('workflow_failed', 'failed', [
+          workflowStepEvidence('step_failed', 'failed', { errorMessage: '失败。' }),
+        ]),
+      }),
+    },
+  ])('rejects $label as satisfied evidence', ({ source, referenceId, bundle }) => {
+    expect(() => validateJudgeEvidence(goalDecision('satisfied', source, referenceId), bundle))
+      .toThrow(`证据 '${referenceId}' 状态或来源不支持该结论`)
+  })
+
+  it.each([
+    {
+      label: '成功的 transcript 工具结果',
+      source: 'transcript' as const,
+      referenceId: 'entry_completed',
+      bundle: evidenceBundle({
+        transcript: [transcriptEvidence('entry_completed', 'tool_result', {
+          ledgerStatus: 'completed',
+          summary: '成功。',
+        })],
+      }),
+    },
+    {
+      label: '成功的 durable 工具结果',
+      source: 'tool_result' as const,
+      referenceId: 'result_completed',
+      bundle: evidenceBundle({
+        toolLedger: [{ referenceId: 'result_completed', resultId: 'result_completed', status: 'completed', message: '成功。' }],
+      }),
+    },
+    {
+      label: '非中间 Artifact',
+      source: 'artifact' as const,
+      referenceId: 'artifact_completed',
+      bundle: evidenceBundle({
+        artifacts: [{ referenceId: 'artifact_completed', artifactId: 'artifact_completed', isIntermediate: false }],
+      }),
+    },
+    {
+      label: '完成的 workflow',
+      source: 'workflow' as const,
+      referenceId: 'workflow_completed',
+      bundle: evidenceBundle({
+        workflow: workflowEvidence('workflow_completed', 'completed', [
+          workflowStepEvidence('step_completed', 'completed', { resultSummary: '查询返回 12 个要素。' }),
+        ]),
+      }),
+    },
+  ])('rejects $label as impossible evidence', ({ source, referenceId, bundle }) => {
+    expect(() => validateJudgeEvidence(goalDecision('impossible', source, referenceId), bundle))
+      .toThrow(`证据 '${referenceId}' 状态或来源不支持该结论`)
+  })
+
+  it('accepts completed durable outcomes for satisfied', () => {
+    const bundle = evidenceBundle({
+      toolLedger: [{
+        referenceId: 'result_completed',
+        resultId: 'result_completed',
+        status: 'completed',
+        message: '返回 12 个要素。',
+      }],
+      artifacts: [{
+        referenceId: 'artifact_completed',
+        artifactId: 'artifact_completed',
+        isIntermediate: false,
+      }],
+      workflow: workflowEvidence('workflow_completed', 'completed', [
+        workflowStepEvidence('step_completed', 'completed', { resultSummary: '返回 12 个要素。' }),
+      ]),
+    })
+    const decision = goalJudgeDecisionSchema.parse({
+      status: 'satisfied',
+      reason: '已有客观结果。',
+      evidence: [
+        { source: 'tool_result', referenceId: 'result_completed', statement: '工具完成。' },
+        { source: 'artifact', referenceId: 'artifact_completed', statement: '产物已发布。' },
+        { source: 'workflow', referenceId: 'workflow_completed', statement: '工作流完成。' },
+      ],
+      missingCriteria: [],
+    })
+
+    expect(() => validateJudgeEvidence(decision, bundle)).not.toThrow()
+  })
+
+  it('accepts explicit failed outcomes for impossible', () => {
+    const bundle = evidenceBundle({
+      transcript: [transcriptEvidence('entry_failed', 'tool_result', {
+        ledgerStatus: 'failed',
+        summary: '必需数据集不存在。',
+      })],
+      workflow: workflowEvidence('workflow_failed', 'failed', [
+        workflowStepEvidence('step_failed', 'failed', { errorMessage: '必需数据集不存在。' }),
+      ]),
+    })
+    const decision = goalJudgeDecisionSchema.parse({
+      status: 'impossible',
+      reason: '必需数据已证实不可用。',
+      evidence: [
+        { source: 'transcript', referenceId: 'entry_failed', statement: '数据读取失败。' },
+        { source: 'workflow', referenceId: 'step_failed', statement: '必需步骤失败。' },
+      ],
+      missingCriteria: [],
+    })
+
+    expect(() => validateJudgeEvidence(decision, bundle)).not.toThrow()
+  })
+
+  it('validates references but allows contextual evidence for incomplete', () => {
+    const bundle = evidenceBundle({
+      transcript: [transcriptEvidence('entry_user', 'message', { role: 'user', content: '请完成检查。' })],
+    })
+
+    expect(() => validateJudgeEvidence(goalDecision('incomplete', 'transcript', 'entry_user'), bundle)).not.toThrow()
+  })
+})
+
 function goalInput() {
   return {
     condition: '图层已完成检查并有客观证据。',
@@ -240,6 +461,77 @@ function goalInput() {
     deadlineAt: null,
     maxTokenBudget: 1000,
   }
+}
+
+function evidenceBundle(
+  overrides: Partial<CanonicalGoalEvidenceBundle> = {},
+): CanonicalGoalEvidenceBundle {
+  return {
+    transcript: [],
+    toolLedger: [],
+    artifacts: [],
+    workflow: null,
+    ...overrides,
+  }
+}
+
+function transcriptEvidence(
+  entryId: string,
+  kind: CanonicalGoalEvidenceBundle['transcript'][number]['kind'],
+  payload: Record<string, unknown>,
+): CanonicalGoalEvidenceBundle['transcript'][number] {
+  return { entryId, kind, timestamp: '2026-08-09T00:00:00.000Z', payload }
+}
+
+function workflowEvidence(
+  agentWorkflowId: string,
+  status: string,
+  steps: Array<Record<string, unknown>>,
+): Record<string, unknown> {
+  return {
+    referenceId: agentWorkflowId,
+    agentWorkflowId,
+    revision: 1,
+    goal: '检查图层。',
+    status,
+    completedAt: status === 'completed' ? '2026-08-09T00:01:00.000Z' : null,
+    steps,
+  }
+}
+
+function workflowStepEvidence(
+  stepId: string,
+  status: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    referenceId: stepId,
+    stepId,
+    title: '检查数据',
+    phase: 'analyze',
+    toolName: 'query_layer',
+    ownerAgentId: 'supervisor',
+    status,
+    resultSummary: null,
+    errorMessage: null,
+    completedAt: status === 'completed' || status === 'failed' || status === 'blocked'
+      ? '2026-08-09T00:01:00.000Z'
+      : null,
+    ...overrides,
+  }
+}
+
+function goalDecision(
+  status: 'satisfied' | 'incomplete' | 'impossible',
+  source: 'transcript' | 'tool_result' | 'artifact' | 'workflow',
+  referenceId: string,
+) {
+  return goalJudgeDecisionSchema.parse({
+    status,
+    reason: '测试判定。',
+    evidence: [{ source, referenceId, statement: '测试证据。' }],
+    missingCriteria: status === 'incomplete' ? ['尚缺少客观结果。'] : [],
+  })
 }
 
 function fakeCompletions(
