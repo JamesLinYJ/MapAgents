@@ -53,10 +53,18 @@ def create_worker_app(
         settings.max_concurrency,
         lease_ttl_seconds=settings.concurrency_lease_seconds,
     )
-    tool_executor = ProcessToolExecutor(tool_registry)
+    tool_executor = ProcessToolExecutor(tool_registry, pool_size=settings.max_concurrency)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        try:
+            await tool_executor.start()
+        except BaseException:
+            try:
+                await tool_executor.shutdown()
+            except BaseException:
+                app_logger.exception("Worker 工具进程池启动失败后的回收也失败")
+            raise
         try:
             yield
         finally:

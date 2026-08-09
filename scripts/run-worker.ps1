@@ -43,6 +43,7 @@ if (-not [int]::TryParse($env:WORKER_PORT, [ref]$WorkerPort) -or $WorkerPort -lt
 }
 
 $Arguments = @(
+    # HTTP 控制面保持单进程；科学计算并发由应用内可终止进程池统一承载。
     '-m', 'uvicorn',
     'worker_app.sidecar:app',
     '--app-dir', 'apps/worker/src',
@@ -50,14 +51,6 @@ $Arguments = @(
     '--port', [string]$WorkerPort,
     '--no-access-log'
 )
-
-if ($env:NODE_ENV -eq 'production') {
-    $WorkerProcesses = 0
-    if (-not [int]::TryParse($env:WORKER_PROCESSES, [ref]$WorkerProcesses) -or $WorkerProcesses -lt 1 -or $WorkerProcesses -gt 64) {
-        throw 'Worker 启动失败：生产环境的 WORKER_PROCESSES 必须是 1 到 64 之间的整数。'
-    }
-    $Arguments += @('--workers', [string]$WorkerProcesses)
-}
 
 & $PythonCommand @Arguments
 exit $LASTEXITCODE

@@ -45,6 +45,7 @@ if [[ ! "$WORKER_PORT_VALUE" =~ ^[0-9]+$ ]] || (( WORKER_PORT_VALUE < 1 || WORKE
 fi
 
 arguments=(
+  # HTTP 控制面保持单进程；科学计算并发由应用内可终止进程池统一承载。
   -m uvicorn
   worker_app.sidecar:app
   --app-dir apps/worker/src
@@ -52,14 +53,5 @@ arguments=(
   --port "$WORKER_PORT_VALUE"
   --no-access-log
 )
-
-if [[ "${NODE_ENV:-development}" == production ]]; then
-  WORKER_PROCESSES_VALUE="${WORKER_PROCESSES:-}"
-  if [[ ! "$WORKER_PROCESSES_VALUE" =~ ^[0-9]+$ ]] || (( WORKER_PROCESSES_VALUE < 1 || WORKER_PROCESSES_VALUE > 64 )); then
-    echo 'Worker 启动失败：生产环境的 WORKER_PROCESSES 必须是 1 到 64 之间的整数。' >&2
-    exit 2
-  fi
-  arguments+=(--workers "$WORKER_PROCESSES_VALUE")
-fi
 
 exec "$PYTHON_COMMAND" "${arguments[@]}"
