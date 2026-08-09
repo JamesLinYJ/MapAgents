@@ -322,7 +322,8 @@ export class OpenAIProviderTransport implements OpenAIClientTransport {
       keepAliveMaxTimeout: 120_000,
     })
 
-    const requestFetch = options.fetchImplementation ?? dispatchingFetch(this.dispatcher)
+    const requestFetch = options.fetchImplementation
+      ?? dispatchingFetch(bindDispatcherToOrigin(this.dispatcher, origin.origin))
     if (this.dnsCache) {
       const prime = this.dnsCache.prime(origin.hostname, dnsStrategy === 'bounded-ipv4' ? 4 : 0)
       // The rejected promise remains intact for the first provider request. This
@@ -334,6 +335,7 @@ export class OpenAIProviderTransport implements OpenAIClientTransport {
     }
     this.fetch = async (input, init) => {
       await this.warmup()
+      assertInitialProviderOrigin(input, origin.origin)
       return requestFetch(input, init)
     }
   }
@@ -357,6 +359,52 @@ export class OpenAIProviderTransport implements OpenAIClientTransport {
   }
 }
 
+class ProviderOriginViolationError extends Error {
+  override readonly name = 'ProviderOriginViolationError'
+}
+
+/**
+ * Undici dispatches every redirect hop through the same dispatcher before it
+ * opens a socket. Binding the dispatcher to the verified origin therefore
+ * keeps native streaming and redirect replay without pre-buffering the body.
+ */
+function bindDispatcherToOrigin(
+  dispatcher: Dispatcher,
+  verifiedOrigin: string,
+): Dispatcher {
+  return dispatcher.compose(dispatch => (options, handler) => {
+    let requestedOrigin: string
+    try {
+      if (!options.origin) throw new Error('missing origin')
+      requestedOrigin = new URL(options.origin).origin
+    } catch {
+      throw new ProviderOriginViolationError('OpenAI 兼容 transport 拒绝缺失或无效的请求来源。')
+    }
+    if (requestedOrigin !== verifiedOrigin) {
+      throw new ProviderOriginViolationError(
+        `OpenAI 兼容 transport 拒绝跨来源重定向：`
+        + `'${verifiedOrigin}' -> '${requestedOrigin}'。`,
+      )
+    }
+    return dispatch(options, handler)
+  })
+}
+
+function assertInitialProviderOrigin(
+  input: Parameters<typeof globalThis.fetch>[0],
+  verifiedOrigin: string,
+): void {
+  const requestedOrigin = new URL(
+    typeof input === 'string' || input instanceof URL ? input : input.url,
+  ).origin
+  if (requestedOrigin !== verifiedOrigin) {
+    throw new ProviderOriginViolationError(
+      `OpenAI 兼容 transport 拒绝访问未验证来源 '${requestedOrigin}'；`
+      + `已验证来源为 '${verifiedOrigin}'。`,
+    )
+  }
+}
+
 export function selectOpenAIDnsStrategy(
   hostname: string,
   requested?: OpenAIDnsStrategy,
@@ -366,10 +414,29 @@ export function selectOpenAIDnsStrategy(
 }
 
 function dispatchingFetch(dispatcher: Dispatcher): typeof globalThis.fetch {
-  return async (input, init) => await undiciFetch(
-    input as Parameters<typeof undiciFetch>[0],
-    { ...init, dispatcher } as Parameters<typeof undiciFetch>[1],
-  ) as unknown as Response
+  return async (input, init) => {
+    try {
+      return await undiciFetch(
+        input as Parameters<typeof undiciFetch>[0],
+        { ...init, dispatcher } as Parameters<typeof undiciFetch>[1],
+      ) as unknown as Response
+    } catch (error) {
+      const violation = findProviderOriginViolation(error)
+      if (violation) throw violation
+      throw error
+    }
+  }
+}
+
+function findProviderOriginViolation(error: unknown): ProviderOriginViolationError | null {
+  const visited = new Set<unknown>()
+  let current = error
+  while (current instanceof Error && !visited.has(current)) {
+    if (current instanceof ProviderOriginViolationError) return current
+    visited.add(current)
+    current = current.cause
+  }
+  return null
 }
 
 /**

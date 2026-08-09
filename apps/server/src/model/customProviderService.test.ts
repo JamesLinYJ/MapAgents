@@ -60,6 +60,80 @@ describe('CustomProviderService', () => {
     expect(installed).toHaveLength(0)
   })
 
+  it('serializes mutations per provider without blocking a different provider', async () => {
+    const records = new Map<string, StoredCustomProvider>()
+    const installed: ModelAdapter[] = []
+    const firstStarted = deferred<void>()
+    const releaseFirst = deferred<void>()
+    const created: string[] = []
+    const service = new CustomProviderService(
+      repositoryFor(records),
+      registryFor(installed),
+      new ProviderCredentialCipher('test-server-secret-that-is-at-least-32-bytes'),
+      new ProviderCredentialStagingService(),
+      ({ config: providerConfig }) => {
+        created.push(providerConfig.displayName)
+        return adapter(vi.fn(async () => {
+          if (providerConfig.displayName === 'First') {
+            firstStarted.resolve(undefined)
+            await releaseFirst.promise
+          }
+          return { content: 'OK' }
+        }), providerConfig.providerId, providerConfig.displayName)
+      },
+    )
+    const auth = fakeAuth()
+
+    const firstSave = service.save({ config: config({ displayName: 'First' }), auth })
+    await firstStarted.promise
+    const secondSave = service.save({ config: config({ displayName: 'Second' }), auth })
+    const otherSave = service.save({
+      config: config({ providerId: 'other-provider', displayName: 'Other' }),
+      auth,
+    })
+
+    await otherSave
+    expect(created).toEqual(['First', 'Other'])
+    releaseFirst.resolve(undefined)
+    await Promise.all([firstSave, secondSave])
+
+    expect(created).toEqual(['First', 'Other', 'Second'])
+    expect(records.get('my-provider')?.displayName).toBe('Second')
+    expect(records.get('other-provider')?.displayName).toBe('Other')
+  })
+
+  it('orders deletion after an in-flight save for the same provider', async () => {
+    const records = new Map<string, StoredCustomProvider>()
+    const repository = repositoryFor(records)
+    const installed: ModelAdapter[] = []
+    const registry = registryFor(installed)
+    const saveStarted = deferred<void>()
+    const releaseSave = deferred<void>()
+    const service = new CustomProviderService(
+      repository,
+      registry,
+      new ProviderCredentialCipher('test-server-secret-that-is-at-least-32-bytes'),
+      new ProviderCredentialStagingService(),
+      ({ config: providerConfig }) => adapter(vi.fn(async () => {
+        saveStarted.resolve(undefined)
+        await releaseSave.promise
+        return { content: 'OK' }
+      }), providerConfig.providerId, providerConfig.displayName),
+    )
+
+    const save = service.save({ config: config(), auth: fakeAuth() })
+    await saveStarted.promise
+    const deletion = service.delete('my-provider')
+    await Promise.resolve()
+
+    expect(repository.delete).not.toHaveBeenCalled()
+    releaseSave.resolve(undefined)
+    await expect(save).resolves.toBeDefined()
+    await expect(deletion).resolves.toBe(true)
+    expect(records.has('my-provider')).toBe(false)
+    expect(registry.removeCustom).toHaveBeenCalledWith('my-provider')
+  })
+
   it('resolves context, modalities, and capabilities from the selected model snapshot', () => {
     const candidate = adapter(vi.fn(async () => ({ content: 'OK' })))
 
@@ -107,10 +181,14 @@ function registryFor(installed: ModelAdapter[]) {
   }
 }
 
-function adapter(chat: ModelAdapter['chat']): ModelAdapter {
+function adapter(
+  chat: ModelAdapter['chat'],
+  provider = 'my-provider',
+  displayName = 'My Provider',
+): ModelAdapter {
   return {
-    provider: 'my-provider',
-    displayName: 'My Provider',
+    provider,
+    displayName,
     source: 'custom',
     defaultModel: 'model-1',
     availableModels: ['model-1', 'model-2'],
@@ -149,7 +227,7 @@ function adapter(chat: ModelAdapter['chat']): ModelAdapter {
   }
 }
 
-function config(): CustomProviderConfig {
+function config(overrides: Partial<CustomProviderConfig> = {}): CustomProviderConfig {
   return {
     providerId: 'my-provider',
     displayName: 'My Provider',
@@ -169,7 +247,14 @@ function config(): CustomProviderConfig {
     defaultModel: 'model-1',
     toolSchemaMode: 'compatible',
     networkAccess: 'public',
+    ...overrides,
   }
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(resolvePromise => { resolve = resolvePromise })
+  return { promise, resolve }
 }
 
 function fakeAuth(): AuthContext {

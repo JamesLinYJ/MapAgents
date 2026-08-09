@@ -36,6 +36,8 @@ type CustomProviderRegistry = Pick<ModelAdapterRegistry, 'installCustom' | 'remo
 type AdapterFactory = (input: { config: CustomProviderConfig; apiKey: string }) => ModelAdapter
 
 export class CustomProviderService {
+  private readonly providerMutationTails = new Map<string, Promise<void>>()
+
   constructor(
     private readonly repository: CustomProviderRepository,
     private readonly registry: CustomProviderRegistry,
@@ -67,67 +69,84 @@ export class CustomProviderService {
     if (MODEL_PROVIDER_IDS.includes(config.providerId as (typeof MODEL_PROVIDER_IDS)[number])) {
       throw new Error(`Provider ID '${config.providerId}' 已由内置适配器使用。`)
     }
-    const existing = await this.repository.get(config.providerId)
-    const secret = input.credentialHandle
-      ? this.credentials.resolve(input.credentialHandle, input.auth)
-      : input.clearCredential
-        ? ''
-        : existing?.credential
-          ? this.cipher.decrypt(config.providerId, existing.credential)
-          : ''
-    const candidate = this.adapterFactory({ config, apiKey: secret })
-    const startedAt = performance.now()
-    let installed = false
-    try {
-      await candidate.warmup?.()
-      const response = await candidate.chat('Reply with exactly OK.', {
-        model: config.defaultModel,
-        reasoning: false,
-        maxOutputTokens: 8,
-      })
-      if (typeof response.content !== 'string' || !response.content.trim()) {
-        throw new Error('最小模型调用没有返回文本内容。')
-      }
-      const testedAt = new Date().toISOString()
-      const credential = input.credentialHandle
-        ? this.cipher.encrypt(config.providerId, secret)
+    return this.runProviderMutation(config.providerId, async () => {
+      const existing = await this.repository.get(config.providerId)
+      const secret = input.credentialHandle
+        ? this.credentials.resolve(input.credentialHandle, input.auth)
         : input.clearCredential
-          ? null
-          : existing?.credential ?? null
-      const stored = await this.repository.upsert({
-        ...config,
-        credential,
-        createdByUserId: existing?.createdByUserId ?? input.auth.userId,
-        lastValidatedAt: testedAt,
-      })
-      await this.registry.installCustom(candidate)
-      installed = true
-      if (input.credentialHandle) this.credentials.consume(input.credentialHandle, input.auth)
-      const descriptor = this.registry.descriptors().find(item => item.provider === config.providerId)
-      if (!descriptor) throw new Error(`自定义 Provider '${config.providerId}' 注册后没有描述信息。`)
-      return customProviderSaveResultSchema.parse({
-        provider: publicRecord(stored),
-        descriptor,
-        validation: {
-          connectivityOk: true,
-          modelCallOk: true,
-          testedModel: config.defaultModel,
-          latencyMs: elapsedMilliseconds(startedAt),
-          testedAt,
-        },
-      })
-    } finally {
-      if (!installed) await candidate.close?.().catch(() => undefined)
-    }
+          ? ''
+          : existing?.credential
+            ? this.cipher.decrypt(config.providerId, existing.credential)
+            : ''
+      const candidate = this.adapterFactory({ config, apiKey: secret })
+      const startedAt = performance.now()
+      let installed = false
+      try {
+        await candidate.warmup?.()
+        const response = await candidate.chat('Reply with exactly OK.', {
+          model: config.defaultModel,
+          reasoning: false,
+          maxOutputTokens: 8,
+        })
+        if (typeof response.content !== 'string' || !response.content.trim()) {
+          throw new Error('最小模型调用没有返回文本内容。')
+        }
+        const testedAt = new Date().toISOString()
+        const credential = input.credentialHandle
+          ? this.cipher.encrypt(config.providerId, secret)
+          : input.clearCredential
+            ? null
+            : existing?.credential ?? null
+        const stored = await this.repository.upsert({
+          ...config,
+          credential,
+          createdByUserId: existing?.createdByUserId ?? input.auth.userId,
+          lastValidatedAt: testedAt,
+        })
+        await this.registry.installCustom(candidate)
+        installed = true
+        if (input.credentialHandle) this.credentials.consume(input.credentialHandle, input.auth)
+        const descriptor = this.registry.descriptors().find(item => item.provider === config.providerId)
+        if (!descriptor) throw new Error(`自定义 Provider '${config.providerId}' 注册后没有描述信息。`)
+        return customProviderSaveResultSchema.parse({
+          provider: publicRecord(stored),
+          descriptor,
+          validation: {
+            connectivityOk: true,
+            modelCallOk: true,
+            testedModel: config.defaultModel,
+            latencyMs: elapsedMilliseconds(startedAt),
+            testedAt,
+          },
+        })
+      } finally {
+        if (!installed) await candidate.close?.().catch(() => undefined)
+      }
+    })
   }
 
   async delete(providerId: string): Promise<boolean> {
     if (MODEL_PROVIDER_IDS.includes(providerId as (typeof MODEL_PROVIDER_IDS)[number])) {
       throw new Error('不能删除内置模型 Provider。')
     }
-    const deleted = await this.repository.delete(providerId)
-    if (deleted) await this.registry.removeCustom(providerId)
-    return deleted
+    return this.runProviderMutation(providerId, async () => {
+      const deleted = await this.repository.delete(providerId)
+      if (deleted) await this.registry.removeCustom(providerId)
+      return deleted
+    })
+  }
+
+  private runProviderMutation<T>(providerId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.providerMutationTails.get(providerId) ?? Promise.resolve()
+    const result = previous.then(operation)
+    const tail = result.then(() => undefined, () => undefined)
+    this.providerMutationTails.set(providerId, tail)
+    void tail.then(() => {
+      if (this.providerMutationTails.get(providerId) === tail) {
+        this.providerMutationTails.delete(providerId)
+      }
+    })
+    return result
   }
 }
 

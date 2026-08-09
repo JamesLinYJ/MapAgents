@@ -253,6 +253,26 @@ describe('OpenAIProviderTransport', () => {
     expect(fetchImplementation).not.toHaveBeenCalled()
   })
 
+  it('passes a normal request body through without pre-buffering it', async () => {
+    const body = new Blob(['large-provider-request'])
+    const fetchImplementation = vi.fn(async (_input, init) => {
+      expect(init?.body).toBe(body)
+      return new Response('{"ok":true}', { status: 200 })
+    })
+    const transport = new OpenAIProviderTransport('http://127.0.0.1:11434', {
+      fetchImplementation,
+    })
+    transports.push(transport)
+
+    const response = await transport.fetch('http://127.0.0.1:11434/responses', {
+      method: 'POST',
+      body,
+    })
+
+    expect(response.status).toBe(200)
+    expect(fetchImplementation).toHaveBeenCalledOnce()
+  })
+
   it.each([
     ['localhost', 'http://localhost:11434'],
     ['IPv4 literal', 'http://127.0.0.1:11434'],
@@ -304,6 +324,73 @@ describe('OpenAIProviderTransport', () => {
     await expect(response.json()).resolves.toEqual({ ok: true })
     expect(resolver.mock.calls).toEqual([['api.deepseek.example', 4]])
   })
+
+  it('blocks a verified endpoint from redirecting a provider request to another origin', async () => {
+    let redirectedRequests = 0
+    const redirectedServer = createServer((_request, response) => {
+      redirectedRequests += 1
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end('{"secret":"loopback service"}')
+    })
+    servers.push(redirectedServer)
+    const redirectedPort = await listenOnLoopback(redirectedServer)
+
+    const providerServer = createServer((_request, response) => {
+      response.writeHead(302, {
+        location: `http://127.0.0.1:${redirectedPort}/internal`,
+      })
+      response.end()
+    })
+    servers.push(providerServer)
+    const providerPort = await listenOnLoopback(providerServer)
+    const providerOrigin = `http://127.0.0.1:${providerPort}`
+    const transport = new OpenAIProviderTransport(providerOrigin)
+    transports.push(transport)
+
+    await expect(transport.fetch(`${providerOrigin}/responses`))
+      .rejects.toThrow('跨来源重定向')
+    expect(redirectedRequests).toBe(0)
+  })
+
+  it('preserves same-origin provider redirects', async () => {
+    const paths: string[] = []
+    const methods: string[] = []
+    const bodies: string[] = []
+    const providerServer = createServer((request, response) => {
+      let body = ''
+      request.setEncoding('utf8')
+      request.on('data', chunk => { body += String(chunk) })
+      request.on('end', () => {
+        paths.push(request.url ?? '')
+        methods.push(request.method ?? '')
+        bodies.push(body)
+        if (request.url === '/responses') {
+          response.writeHead(307, { location: '/v1/responses' })
+          response.end()
+          return
+        }
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end('{"ok":true}')
+      })
+    })
+    servers.push(providerServer)
+    const providerPort = await listenOnLoopback(providerServer)
+    const providerOrigin = `http://127.0.0.1:${providerPort}`
+    const transport = new OpenAIProviderTransport(providerOrigin)
+    transports.push(transport)
+
+    const response = await transport.fetch(`${providerOrigin}/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"model":"test"}',
+    })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ ok: true })
+    expect(paths).toEqual(['/responses', '/v1/responses'])
+    expect(methods).toEqual(['POST', 'POST'])
+    expect(bodies).toEqual(['{"model":"test"}', '{"model":"test"}'])
+  })
 })
 
 function createCache(
@@ -333,6 +420,13 @@ function lookupOne(
       else resolve({ address: String(address), family: Number(resolvedFamily) })
     })
   })
+}
+
+async function listenOnLoopback(server: Server): Promise<number> {
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('测试 HTTP server 未监听 TCP 端口。')
+  return address.port
 }
 
 function deferred<T>(): {
