@@ -284,15 +284,17 @@ function supportsSatisfiedVerdict(
       && hasEvidenceText(record.payload)
   }
   if (source === 'tool_result') {
-    return isRecord(record)
-      && record.status === 'completed'
-      && hasEvidenceText(record)
+    const value = asEvidenceRecord(record)
+    return value !== null
+      && value.status === 'completed'
+      && hasEvidenceText(value)
   }
   if (source === 'artifact') {
-    return isRecord(record)
-      && record.isIntermediate === false
-      && typeof record.artifactId === 'string'
-      && record.artifactId.length > 0
+    const value = asEvidenceRecord(record)
+    return value !== null
+      && value.isIntermediate === false
+      && typeof value.artifactId === 'string'
+      && value.artifactId.length > 0
   }
   if (!isWorkflowEvidence(record)) return false
   return record.kind === 'step'
@@ -311,9 +313,10 @@ function supportsImpossibleVerdict(
       && hasEvidenceText(record.payload)
   }
   if (source === 'tool_result') {
-    return isRecord(record)
-      && isFailureStatus(record.status)
-      && hasEvidenceText(record)
+    const value = asEvidenceRecord(record)
+    return value !== null
+      && isFailureStatus(value.status)
+      && hasEvidenceText(value)
   }
   if (source === 'artifact' || !isWorkflowEvidence(record)) return false
   if (record.kind === 'step') return isFailedWorkflowStep(record.value)
@@ -354,11 +357,21 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isTranscriptEvidence(value: ResolvedGoalEvidence): value is CanonicalTranscriptEvidence {
-  return isRecord(value) && typeof value.entryId === 'string' && typeof value.kind === 'string' && isRecord(value.payload)
+  if (!isRecord(value)) return false
+  const record = value as Record<string, unknown>
+  return typeof record.entryId === 'string'
+    && typeof record.kind === 'string'
+    && isRecord(record.payload)
 }
 
 function isWorkflowEvidence(value: ResolvedGoalEvidence): value is WorkflowEvidenceRecord {
-  return isRecord(value) && (value.kind === 'workflow' || value.kind === 'step') && isRecord(value.value)
+  if (!isRecord(value)) return false
+  const record = value as Record<string, unknown>
+  return (record.kind === 'workflow' || record.kind === 'step') && isRecord(record.value)
+}
+
+function asEvidenceRecord(value: ResolvedGoalEvidence): Record<string, unknown> | null {
+  return isRecord(value) ? value : null
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
