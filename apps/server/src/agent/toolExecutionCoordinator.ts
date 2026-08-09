@@ -20,6 +20,7 @@ import {
   agentToolOutputMetadataSchema,
   subAgentInvocationSchema,
   type AgentToolOutputMetadata,
+  type AgentWorkflow,
   type AgentWorkflowStep,
   type TodoItem,
 } from '../schemas/types.js'
@@ -62,6 +63,15 @@ interface CoordinatorOptions {
   initialPendingToolCallIds?: readonly string[]
 }
 
+interface ClaimedWorkflowStep {
+  readonly agentWorkflowId: string
+  readonly workflowRevision: number
+  readonly objectiveRevision: number
+  readonly stepId: string
+  readonly attempt: number
+  readonly startedAt: string
+}
+
 // ToolExecutionCoordinator
 //
 // 自动 Agent 工具与确定性领域链共享这一执行路径；prepared 之后的每个状态
@@ -69,7 +79,7 @@ interface CoordinatorOptions {
 export class ToolExecutionCoordinator {
   private readonly preparedCalls = new Set<string>()
   private readonly callItems = new Map<string, string>()
-  private readonly claimedWorkflowSteps = new Map<string, string>()
+  private readonly claimedWorkflowSteps = new Map<string, ClaimedWorkflowStep>()
   private readonly externalAgentCalls = new Map<string, string>()
   private readonly outputMetadata = new Map<string, AgentToolOutputMetadata>()
   private readonly callObjectiveRevisions = new Map<string, number>()
@@ -92,7 +102,9 @@ export class ToolExecutionCoordinator {
     this.policy = new ToolExecutionPolicy({
       registry: options.registry,
       state: () => this.options.store.getRun(this.options.runId).state,
-      claimedWorkflowSteps: () => new Set(this.claimedWorkflowSteps.values()),
+      claimedWorkflowSteps: () => this.activeClaimedWorkflowStepIds(
+        this.options.store.getRun(this.options.runId).state.agentWorkflow,
+      ),
       externalAgentCalls: () => this.externalAgentCalls,
       developerModeEnabled: () => this.options.runtimeConfig
         ? developerToolsEnabledForRuntime(this.options.runtimeConfig)
@@ -349,15 +361,17 @@ export class ToolExecutionCoordinator {
   ): void {
     const state = this.options.store.getRun(this.options.runId).state
     if (stepId) {
-      const step = state.agentWorkflow?.steps.find(candidate => candidate.stepId === stepId)
-      if (!step
+      const workflow = state.agentWorkflow
+      const step = workflow?.steps.find(candidate => candidate.stepId === stepId)
+      if (!workflow
+        || !step
         || step.status !== 'running'
         || step.kind !== 'agent'
         || step.toolName !== agentId
         || step.ownerAgentId !== agentId) {
         throw new Error(`子智能体 '${agentId}' 的运行中工作流步骤 '${stepId}' 无法恢复`)
       }
-      this.claimedWorkflowSteps.set(callId, stepId)
+      this.claimedWorkflowSteps.set(callId, workflowStepClaim(workflow, step))
     } else if (state.agentWorkflow) {
       throw new Error(`子智能体 '${agentId}' 缺少可恢复的工作流步骤`)
     }
@@ -594,7 +608,7 @@ export class ToolExecutionCoordinator {
         if (workflow.status === 'completed' || workflow.status === 'cancelled' || workflow.status === 'failed') {
           throw new Error(`智能体工作流已经处于 ${workflow.status} 状态，不能继续调用工具。`)
         }
-        const claimed = new Set(this.claimedWorkflowSteps.values())
+        const claimed = this.activeClaimedWorkflowStepIds(workflow)
         const invocation = {
           toolName,
           ...(ownerAgentId ? { ownerAgentId } : {}),
@@ -657,11 +671,13 @@ export class ToolExecutionCoordinator {
       if (!step) throw new Error(`工具开始后智能体工作流步骤 '${claimedStepId}' 不存在。`)
       const nextStep = next.steps.find(item => item.stepId === step.stepId)
       if (!nextStep) throw new Error(`工具开始时智能体工作流步骤 '${step.stepId}' 不存在。`)
-      this.claimedWorkflowSteps.set(callId, step.stepId)
+      this.claimedWorkflowSteps.set(callId, workflowStepClaim(next, step))
       this.options.eventSink.emit('step.started', step.title, {
         agentWorkflowId: next.agentWorkflowId,
         revision: next.revision,
+        objectiveRevision: next.objectiveRevision,
         stepId: step.stepId,
+        attempt: step.attempt,
         toolName,
       })
       return step.stepId
@@ -669,68 +685,95 @@ export class ToolExecutionCoordinator {
   }
 
   private completeClaimedAgentWorkflowStep(callId: string, summary: string): Promise<void> {
-    const stepId = this.claimedWorkflowSteps.get(callId)
-    if (!stepId) return Promise.resolve()
+    const claim = this.claimedWorkflowSteps.get(callId)
+    if (!claim) return Promise.resolve()
     return this.enqueueWorkflowMutation(async () => {
-      const updated = await this.options.store.mutateRunState(this.options.runId, state => {
+      const completion: {
+        value?: { workflow: AgentWorkflow; step: AgentWorkflowStep }
+      } = {}
+      await this.options.store.mutateRunState(this.options.runId, state => {
         const workflow = state.agentWorkflow
-        if (!workflow) throw new Error('工具完成时智能体工作流状态缺失。')
-        const next = completeAgentWorkflowStep(workflow, { stepId, resultSummary: summary })
-        const nextStep = next.steps.find(item => item.stepId === stepId)
-        if (!nextStep) throw new Error(`工具完成时智能体工作流步骤 '${stepId}' 不存在。`)
+        if (!matchingClaimedWorkflowStep(workflow, claim)) return {}
+        const next = completeAgentWorkflowStep(workflow, {
+          stepId: claim.stepId,
+          resultSummary: summary,
+        })
+        const nextStep = next.steps.find(item => item.stepId === claim.stepId)
+        if (!nextStep) return {}
+        completion.value = { workflow: next, step: nextStep }
         return {
           agentWorkflow: next,
           todos: projectWorkflowStepToTodos(state.todos, nextStep),
         }
       })
-      const next = updated.state.agentWorkflow
-      if (!next) throw new Error('工具完成后智能体工作流状态缺失。')
-      const step = next.steps.find(item => item.stepId === stepId)
-      if (!step) throw new Error(`工具完成后智能体工作流步骤 '${stepId}' 不存在。`)
-      const nextStep = next.steps.find(item => item.stepId === stepId)
-      if (!nextStep) throw new Error(`工具完成时智能体工作流步骤 '${stepId}' 不存在。`)
-      this.claimedWorkflowSteps.delete(callId)
-      this.options.eventSink.emit('step.completed', step.title, {
-        agentWorkflowId: next.agentWorkflowId,
-        revision: next.revision,
-        stepId,
-        toolName: step.toolName,
+      this.clearWorkflowClaim(callId, claim)
+      const completed = completion.value
+      if (!completed) return
+      this.options.eventSink.emit('step.completed', completed.step.title, {
+        agentWorkflowId: completed.workflow.agentWorkflowId,
+        revision: completed.workflow.revision,
+        objectiveRevision: completed.workflow.objectiveRevision,
+        stepId: claim.stepId,
+        attempt: claim.attempt,
+        toolName: completed.step.toolName,
       })
-      if (next.status === 'completed') {
-        this.options.eventSink.emit('agent_workflow.completed', next.goal, {
-          agentWorkflowId: next.agentWorkflowId,
-          revision: next.revision,
+      if (completed.workflow.status === 'completed') {
+        this.options.eventSink.emit('agent_workflow.completed', completed.workflow.goal, {
+          agentWorkflowId: completed.workflow.agentWorkflowId,
+          revision: completed.workflow.revision,
+          objectiveRevision: completed.workflow.objectiveRevision,
         })
       }
     })
   }
 
   private failClaimedAgentWorkflowStep(callId: string, message: string): Promise<void> {
-    const stepId = this.claimedWorkflowSteps.get(callId)
-    if (!stepId) return Promise.resolve()
+    const claim = this.claimedWorkflowSteps.get(callId)
+    if (!claim) return Promise.resolve()
     return this.enqueueWorkflowMutation(async () => {
-      const updated = await this.options.store.mutateRunState(this.options.runId, state => {
+      const failure: {
+        value?: { workflow: AgentWorkflow; step: AgentWorkflowStep }
+      } = {}
+      await this.options.store.mutateRunState(this.options.runId, state => {
         const workflow = state.agentWorkflow
-        if (!workflow) return {}
-        const next = failAgentWorkflowStep(workflow, { stepId, errorMessage: message })
-        const nextStep = next.steps.find(item => item.stepId === stepId)
-        if (!nextStep) throw new Error(`工具失败时智能体工作流步骤 '${stepId}' 不存在。`)
+        if (!matchingClaimedWorkflowStep(workflow, claim)) return {}
+        const next = failAgentWorkflowStep(workflow, {
+          stepId: claim.stepId,
+          errorMessage: message,
+        })
+        const nextStep = next.steps.find(item => item.stepId === claim.stepId)
+        if (!nextStep) return {}
+        failure.value = { workflow: next, step: nextStep }
         return {
           agentWorkflow: next,
           todos: projectWorkflowStepToTodos(state.todos, nextStep),
         }
       })
-      const next = updated.state.agentWorkflow
-      if (!next) return
-      const nextStep = next.steps.find(item => item.stepId === stepId)
-      if (!nextStep) throw new Error(`工具失败时智能体工作流步骤 '${stepId}' 不存在。`)
-      this.claimedWorkflowSteps.delete(callId)
+      this.clearWorkflowClaim(callId, claim)
+      const failed = failure.value
+      if (!failed) return
       this.options.eventSink.emit('warning.raised', `步骤执行失败：${message}`, {
-        agentWorkflowId: next.agentWorkflowId,
-        revision: next.revision,
-        stepId,
+        agentWorkflowId: failed.workflow.agentWorkflowId,
+        revision: failed.workflow.revision,
+        objectiveRevision: failed.workflow.objectiveRevision,
+        stepId: claim.stepId,
+        attempt: claim.attempt,
       })
     })
+  }
+
+  private clearWorkflowClaim(callId: string, claim: ClaimedWorkflowStep): void {
+    if (this.claimedWorkflowSteps.get(callId) === claim) {
+      this.claimedWorkflowSteps.delete(callId)
+    }
+  }
+
+  private activeClaimedWorkflowStepIds(workflow: AgentWorkflow | null): Set<string> {
+    return new Set(
+      [...this.claimedWorkflowSteps.values()]
+        .filter(claim => matchingClaimedWorkflowStep(workflow, claim))
+        .map(claim => claim.stepId),
+    )
   }
 
   private enqueueWorkflowMutation<T>(operation: () => Promise<T>): Promise<T> {
@@ -916,6 +959,39 @@ export class ToolExecutionCoordinator {
       },
     })
   }
+}
+
+function workflowStepClaim(
+  workflow: AgentWorkflow,
+  step: AgentWorkflowStep,
+): ClaimedWorkflowStep {
+  if (step.status !== 'running' || !step.startedAt) {
+    throw new Error(`工作流步骤 '${step.stepId}' 缺少可恢复的运行身份`)
+  }
+  return Object.freeze({
+    agentWorkflowId: workflow.agentWorkflowId,
+    workflowRevision: workflow.revision,
+    objectiveRevision: workflow.objectiveRevision,
+    stepId: step.stepId,
+    attempt: step.attempt,
+    startedAt: step.startedAt,
+  })
+}
+
+function matchingClaimedWorkflowStep(
+  workflow: AgentWorkflow | null,
+  claim: ClaimedWorkflowStep,
+): workflow is AgentWorkflow {
+  if (!workflow
+    || workflow.agentWorkflowId !== claim.agentWorkflowId
+    || workflow.revision !== claim.workflowRevision
+    || workflow.objectiveRevision !== claim.objectiveRevision) {
+    return false
+  }
+  const step = workflow.steps.find(candidate => candidate.stepId === claim.stepId)
+  return step?.status === 'running'
+    && step.attempt === claim.attempt
+    && step.startedAt === claim.startedAt
 }
 
 function projectWorkflowStepToTodos(todos: TodoItem[], step: AgentWorkflowStep): TodoItem[] {

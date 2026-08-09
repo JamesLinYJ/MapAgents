@@ -19,7 +19,11 @@ import type { ToolExecutionStore } from '../store/runtimePorts.js'
 import { ToolResultCommitService } from '../tools/resultPersistence.js'
 import { formatToolResultForModel, ToolExecutionCoordinator, validateAgentWorkflowDraft } from './toolExecutionCoordinator.js'
 import { RunEventSink } from './turnRunner.js'
-import { createAgentWorkflow } from './agentWorkflowState.js'
+import {
+  advanceAgentWorkflowObjectiveRevision,
+  createAgentWorkflow,
+  reviseAgentWorkflow,
+} from './agentWorkflowState.js'
 
 describe('formatToolResultForModel', () => {
   it('keeps valueRefs visible while summarizing oversized payloads', () => {
@@ -423,6 +427,159 @@ describe('ToolExecutionCoordinator', () => {
     }))
   })
 
+  it('keeps a late success from an advanced and revised workflow out of the new step attempt', async () => {
+    const started = deferredSignal()
+    const release = deferredSignal()
+    let invocation = 0
+    const provider = inspectionProvider(async () => {
+      const currentInvocation = ++invocation
+      if (currentInvocation === 1) {
+        started.resolve()
+        await release.promise
+      }
+      return inspectionResult(`result_revision_success_${currentInvocation}`)
+    })
+    const harness = coordinatorHarness(provider, false, [], inspectionWorkflow())
+
+    const staleExecution = harness.coordinator.executeDirect('inspect_dataset', {
+      datasetId: 'dataset_old',
+      workflowStepId: 'inspect_scope',
+    })
+    await started.promise
+    const running = harness.getState().agentWorkflow
+    if (!running) throw new Error('测试工作流缺失')
+    const revised = revisedInspectionWorkflow(running)
+    harness.setWorkflow(revised)
+    harness.coordinator.bindModelInputObjectiveRevision(2)
+
+    expect(harness.getState().agentWorkflow).toEqual(revised)
+    expect(harness.getState().agentWorkflow?.steps[0]).toMatchObject({
+      stepId: 'inspect_scope',
+      status: 'pending',
+      attempt: 0,
+      resultSummary: null,
+    })
+
+    await expect(harness.coordinator.executeDirect('inspect_dataset', {
+      datasetId: 'dataset_new',
+      workflowStepId: 'inspect_scope',
+    })).resolves.toMatchObject({ resultId: 'result_revision_success_2' })
+
+    release.resolve()
+    await expect(staleExecution).resolves.toMatchObject({ resultId: 'result_revision_success_1' })
+    await harness.flushEvents()
+
+    expect(harness.getState().agentWorkflow).toMatchObject({
+      objectiveRevision: 2,
+      revision: 2,
+      status: 'completed',
+      steps: [expect.objectContaining({
+        stepId: 'inspect_scope',
+        status: 'completed',
+        attempt: 1,
+      })],
+    })
+    expect(harness.getEvents().filter(event => event.type === 'step.completed')).toHaveLength(1)
+  })
+
+  it('keeps a late failure from an advanced and revised workflow out of the new step attempt', async () => {
+    const started = deferredSignal()
+    const release = deferredSignal()
+    let invocation = 0
+    const provider = inspectionProvider(async () => {
+      const currentInvocation = ++invocation
+      if (currentInvocation === 1) {
+        started.resolve()
+        await release.promise
+        throw new Error('旧 revision 调用失败')
+      }
+      return inspectionResult(`result_revision_recovery_${currentInvocation}`)
+    })
+    const harness = coordinatorHarness(provider, false, [], inspectionWorkflow())
+
+    const staleExecution = harness.coordinator.executeDirect('inspect_dataset', {
+      datasetId: 'dataset_old',
+      workflowStepId: 'inspect_scope',
+    })
+    await started.promise
+    const running = harness.getState().agentWorkflow
+    if (!running) throw new Error('测试工作流缺失')
+    const revised = revisedInspectionWorkflow(running)
+    harness.setWorkflow(revised)
+    harness.coordinator.bindModelInputObjectiveRevision(2)
+
+    expect(harness.getState().agentWorkflow).toEqual(revised)
+    expect(harness.getState().agentWorkflow?.steps[0]).toMatchObject({
+      stepId: 'inspect_scope',
+      status: 'pending',
+      attempt: 0,
+      errorMessage: null,
+    })
+
+    await expect(harness.coordinator.executeDirect('inspect_dataset', {
+      datasetId: 'dataset_new',
+      workflowStepId: 'inspect_scope',
+    })).resolves.toMatchObject({ resultId: 'result_revision_recovery_2' })
+
+    release.resolve()
+    await expect(staleExecution).rejects.toThrow('旧 revision 调用失败')
+    await harness.flushEvents()
+
+    expect(harness.getState().agentWorkflow?.status).toBe('completed')
+    expect(harness.getEvents().some(event => event.type === 'warning.raised')).toBe(false)
+  })
+
+  it('does not let an old claim complete a newer attempt with the same workflow and step ids', async () => {
+    const started = deferredSignal()
+    const release = deferredSignal()
+    let invocation = 0
+    const provider = inspectionProvider(async () => {
+      const currentInvocation = ++invocation
+      if (currentInvocation === 1) {
+        started.resolve()
+        await release.promise
+      }
+      return inspectionResult(`result_attempt_${currentInvocation}`)
+    })
+    const harness = coordinatorHarness(provider, false, [], inspectionWorkflow())
+
+    const staleExecution = harness.coordinator.executeDirect('inspect_dataset', {
+      datasetId: 'dataset_old',
+      workflowStepId: 'inspect_scope',
+    })
+    await started.promise
+    const running = harness.getState().agentWorkflow
+    const runningStep = running?.steps[0]
+    if (!running || !runningStep?.startedAt) throw new Error('测试运行步骤缺失')
+    const retryable: AgentWorkflow = {
+      ...running,
+      steps: running.steps.map(step => step.stepId === runningStep.stepId
+        ? {
+            ...step,
+            status: 'pending',
+            startedAt: null,
+          }
+        : step),
+    }
+    harness.setWorkflow(retryable)
+
+    await expect(harness.coordinator.executeDirect('inspect_dataset', {
+      datasetId: 'dataset_retry',
+      workflowStepId: 'inspect_scope',
+    })).resolves.toMatchObject({ resultId: 'result_attempt_2' })
+
+    release.resolve()
+    await expect(staleExecution).resolves.toMatchObject({ resultId: 'result_attempt_1' })
+    await harness.flushEvents()
+
+    expect(harness.getState().agentWorkflow?.steps[0]).toMatchObject({
+      status: 'completed',
+      attempt: 2,
+      resultSummary: '检查完成',
+    })
+    expect(harness.getEvents().filter(event => event.type === 'step.completed')).toHaveLength(1)
+  })
+
   it('does not publish stale workflow control callbacks or events after the objective advances', async () => {
     let markStarted = (): void => {}
     const started = new Promise<void>(resolve => { markStarted = resolve })
@@ -807,9 +964,71 @@ function coordinatorHarness(
     }),
     getState: () => state,
     setObjectiveRevision: (objectiveRevision: number) => { state = { ...state, objectiveRevision } },
+    setWorkflow: (workflow: AgentWorkflow) => {
+      state = {
+        ...state,
+        objectiveRevision: workflow.objectiveRevision,
+        agentWorkflow: workflow,
+      }
+    },
     getTranscriptWrites: () => transcriptWrites,
     getEvents: () => events,
     flushEvents: () => eventSink.flush(),
+  }
+}
+
+function deferredSignal(): { promise: Promise<void>; resolve: () => void } {
+  let resolve = (): void => {}
+  const promise = new Promise<void>(settle => { resolve = settle })
+  return { promise, resolve }
+}
+
+function inspectionProvider(handler: () => Promise<ToolResult>): ToolProvider {
+  const provider = testProvider()
+  const definition = provider.tools()[0]
+  if (!definition) throw new Error('测试工具缺失')
+  return {
+    ...provider,
+    tools: () => [{ ...definition, handler }],
+  }
+}
+
+function inspectionResult(resultId: string): ToolResult {
+  return {
+    message: '检查完成',
+    payload: {},
+    warnings: [],
+    resultId,
+    source: 'test',
+  }
+}
+
+function inspectionWorkflow(): AgentWorkflow {
+  return createAgentWorkflow({
+    goal: '检查指定范围',
+    steps: [inspectionWorkflowStep()],
+  }, 1)
+}
+
+function revisedInspectionWorkflow(current: AgentWorkflow): AgentWorkflow {
+  const advanced = advanceAgentWorkflowObjectiveRevision(current, 2)
+  return reviseAgentWorkflow(advanced, {
+    goal: '检查新的指定范围',
+    changeReason: '用户修改了检查范围',
+    steps: [inspectionWorkflowStep()],
+  }, 2)
+}
+
+function inspectionWorkflowStep() {
+  return {
+    stepId: 'inspect_scope',
+    title: '检查范围',
+    kind: 'tool' as const,
+    toolName: 'inspect_dataset',
+    ownerAgentId: 'supervisor',
+    args: { datasetId: 'dataset_scope' },
+    reason: '验证工作流 claim 身份',
+    dependsOn: [],
   }
 }
 
