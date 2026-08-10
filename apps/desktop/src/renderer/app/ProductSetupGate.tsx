@@ -32,6 +32,7 @@ import type {
 } from '../../contracts/desktopIpc'
 import { desktopMenuCommandSchema } from '../../contracts/desktopIpc'
 import { BootScreen } from './AppLoader'
+import { ProductIdentityProvider } from './ProductIdentityProvider'
 import './styles/product-setup.css'
 
 export function ProductSetupGate({ children }: { children: ReactNode }) {
@@ -75,10 +76,19 @@ export function ProductSetupGate({ children }: { children: ReactNode }) {
     return <SetupLoadFailure message={error ?? '无法读取首次设置。'} onRetry={loadStatus} />
   }
   if (status.state === 'required') {
-    return <ProductSetupWizard suggestedApiBaseUrl={status.suggestedApiBaseUrl} />
+    return (
+      <ProductSetupWizard
+        deploymentMode={status.deploymentMode}
+        suggestedApiBaseUrl={status.suggestedApiBaseUrl}
+        suggestedProductName={status.suggestedProductName}
+      />
+    )
   }
   return (
-    <>
+    <ProductIdentityProvider
+      productName={status.productName}
+      onOpenSettings={() => setSettingsOpen(true)}
+    >
       {children}
       {settingsOpen ? (
         <ConnectionSettings
@@ -86,13 +96,22 @@ export function ProductSetupGate({ children }: { children: ReactNode }) {
           onClose={() => setSettingsOpen(false)}
         />
       ) : null}
-    </>
+    </ProductIdentityProvider>
   )
 }
 
-function ProductSetupWizard({ suggestedApiBaseUrl }: { suggestedApiBaseUrl: string }) {
+function ProductSetupWizard({
+  deploymentMode,
+  suggestedApiBaseUrl,
+  suggestedProductName,
+}: {
+  deploymentMode: 'local_managed' | 'remote'
+  suggestedApiBaseUrl: string
+  suggestedProductName: string
+}) {
   const [step, setStep] = useState<1 | 2 | 3>(1)
   const [apiBaseUrl, setApiBaseUrl] = useState(suggestedApiBaseUrl)
+  const [productName, setProductName] = useState(suggestedProductName)
   const [testResult, setTestResult] = useState<DesktopProductSetupTestResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -105,7 +124,7 @@ function ProductSetupWizard({ suggestedApiBaseUrl }: { suggestedApiBaseUrl: stri
     setError(null)
     setTestResult(null)
     try {
-      const result = await bridge.setup.test({ apiBaseUrl })
+      const result = await bridge.setup.test({ apiBaseUrl, productName })
       setTestResult(result)
       if (result.ok) setApiBaseUrl(result.apiBaseUrl)
     } catch (reason) {
@@ -121,7 +140,7 @@ function ProductSetupWizard({ suggestedApiBaseUrl }: { suggestedApiBaseUrl: stri
     setBusy(true)
     setError(null)
     try {
-      await bridge.setup.save({ apiBaseUrl })
+      await bridge.setup.save({ apiBaseUrl, productName })
       await bridge.setup.restart()
     } catch (reason) {
       setError(safeMessage(reason))
@@ -134,16 +153,22 @@ function ProductSetupWizard({ suggestedApiBaseUrl }: { suggestedApiBaseUrl: stri
       <div className="product-setup__terrain" aria-hidden="true" />
       <header className="product-setup__masthead">
         <span className="product-setup__brand-mark"><MapPinned size={18} /></span>
-        <span>GeoForge</span>
+        <span>{productName.trim() || suggestedProductName}</span>
         <small>地理智能工作台</small>
       </header>
       <section className="product-setup__frame" aria-labelledby="product-setup-title">
         <SetupRail step={step} />
         <div className="product-setup__content">
           {step === 1 ? (
-            <WelcomeStep onContinue={() => setStep(2)} />
+            <WelcomeStep
+              deploymentMode={deploymentMode}
+              productName={productName}
+              onProductNameChange={setProductName}
+              onContinue={() => setStep(2)}
+            />
           ) : step === 2 ? (
             <ConnectionStep
+              deploymentMode={deploymentMode}
               apiBaseUrl={apiBaseUrl}
               busy={busy}
               error={error}
@@ -159,7 +184,9 @@ function ProductSetupWizard({ suggestedApiBaseUrl }: { suggestedApiBaseUrl: stri
             />
           ) : (
             <ReviewStep
+              deploymentMode={deploymentMode}
               apiBaseUrl={apiBaseUrl}
+              productName={productName}
               busy={busy}
               error={error}
               result={testResult}
@@ -179,8 +206,8 @@ function ProductSetupWizard({ suggestedApiBaseUrl }: { suggestedApiBaseUrl: stri
 
 function SetupRail({ step }: { step: 1 | 2 | 3 }) {
   const items = [
-    { step: 1, label: '欢迎', description: '选择部署方式' },
-    { step: 2, label: '连接', description: '验证服务地址' },
+    { step: 1, label: '命名', description: '设置显示名称' },
+    { step: 2, label: '连接', description: '确认服务部署' },
     { step: 3, label: '完成', description: '保存并启动' },
   ] as const
   return (
@@ -204,27 +231,60 @@ function SetupRail({ step }: { step: 1 | 2 | 3 }) {
   )
 }
 
-function WelcomeStep({ onContinue }: { onContinue: () => void }) {
+function WelcomeStep({
+  deploymentMode,
+  productName,
+  onProductNameChange,
+  onContinue,
+}: {
+  deploymentMode: 'local_managed' | 'remote'
+  productName: string
+  onProductNameChange: (value: string) => void
+  onContinue: () => void
+}) {
+  const localManaged = deploymentMode === 'local_managed'
   return (
     <div className="product-setup__step product-setup__welcome">
       <span className="product-setup__eyebrow">首次启动 · 约 1 分钟</span>
-      <h1 id="product-setup-title">把工作台连接到你的<br />地理智能服务</h1>
-      <p>安装包会自动识别本机托管环境。当前没有检测到系统运行清单，因此只需填写已有服务地址即可开始使用。</p>
+      <h1 id="product-setup-title">为你的地理智能<br />工作台命名</h1>
+      <p>{localManaged
+        ? '本机运行时已经部署完成。填写一个显示名称后，应用会自动连接并启动后台服务。'
+        : '填写工作台显示名称，再连接已有的本机、团队或云端地理智能服务。'}</p>
+      <label className="product-setup__field">
+        <span>产品显示名称</span>
+        <span className="product-setup__input-shell">
+          <Settings2 size={17} />
+          <input
+            autoFocus
+            required
+            maxLength={80}
+            value={productName}
+            onChange={event => onProductNameChange(event.target.value)}
+            placeholder="我的地理工作台"
+          />
+        </span>
+        <small>只保存在当前电脑；安装包名称、协议和数据目录不会改变。</small>
+      </label>
       <div className="product-setup__mode-card">
         <span className="product-setup__mode-icon"><Server size={22} /></span>
         <span>
-          <strong>连接已有部署</strong>
-          <small>适用于团队服务器、云主机或本机独立运行时</small>
+          <strong>{localManaged ? '本机受管部署' : '连接已有部署'}</strong>
+          <small>{localManaged ? 'RPM 已安装并配置系统运行时' : '适用于团队服务器、云主机或本机独立运行时'}</small>
         </span>
         <CheckCircle2 size={19} />
       </div>
       <ul className="product-setup__facts">
         <li><Check size={14} /> 不在安装包中写入数据库或模型参数</li>
         <li><Check size={14} /> 完成登录后再配置模型供应商</li>
-        <li><Check size={14} /> 随时可从“帮助 → 服务连接设置”更改</li>
+        <li><Check size={14} /> 随时可从设置页或“帮助 → 服务连接设置”更改</li>
       </ul>
       <div className="product-setup__actions is-end">
-        <button type="button" className="product-setup__primary" onClick={onContinue}>
+        <button
+          type="button"
+          className="product-setup__primary"
+          disabled={!productName.trim()}
+          onClick={onContinue}
+        >
           开始设置 <ArrowRight size={16} />
         </button>
       </div>
@@ -233,6 +293,7 @@ function WelcomeStep({ onContinue }: { onContinue: () => void }) {
 }
 
 function ConnectionStep({
+  deploymentMode,
   apiBaseUrl,
   busy,
   error,
@@ -242,6 +303,7 @@ function ConnectionStep({
   onSubmit,
   onContinue,
 }: {
+  deploymentMode: 'local_managed' | 'remote'
   apiBaseUrl: string
   busy: boolean
   error: string | null
@@ -251,6 +313,28 @@ function ConnectionStep({
   onSubmit: (event: FormEvent) => void
   onContinue: () => void
 }) {
+  if (deploymentMode === 'local_managed') {
+    return (
+      <div className="product-setup__step">
+        <span className="product-setup__eyebrow">本机运行时</span>
+        <h1 id="product-setup-title">后台已经随应用安装</h1>
+        <p>首次进入工作台后，桌面端会自动启动 PostgreSQL/PostGIS、Python 科学计算服务和平台 API。</p>
+        <div className="product-setup__mode-card">
+          <span className="product-setup__mode-icon"><Server size={22} /></span>
+          <span><strong>受管服务地址</strong><small>{apiBaseUrl}</small></span>
+          <CheckCircle2 size={19} />
+        </div>
+        <div className="product-setup__actions">
+          <button type="button" className="product-setup__back" onClick={onBack}>
+            <ArrowLeft size={16} /> 返回
+          </button>
+          <button type="button" className="product-setup__primary" onClick={onContinue}>
+            下一步 <ArrowRight size={16} />
+          </button>
+        </div>
+      </div>
+    )
+  }
   return (
     <form className="product-setup__step" onSubmit={onSubmit}>
       <span className="product-setup__eyebrow">服务发现</span>
@@ -294,14 +378,18 @@ function ConnectionStep({
 }
 
 function ReviewStep({
+  deploymentMode,
   apiBaseUrl,
+  productName,
   busy,
   error,
   result,
   onBack,
   onFinish,
 }: {
+  deploymentMode: 'local_managed' | 'remote'
   apiBaseUrl: string
+  productName: string
   busy: boolean
   error: string | null
   result: DesktopProductSetupTestResult | null
@@ -311,13 +399,19 @@ function ReviewStep({
   return (
     <div className="product-setup__step">
       <span className="product-setup__eyebrow">准备就绪</span>
-      <h1 id="product-setup-title">连接已经验证</h1>
-      <p>保存后应用会重新启动，并进入账号登录。模型供应商和 API 密钥将在登录后的设置页面填写。</p>
+      <h1 id="product-setup-title">工作台已经准备好</h1>
+      <p>保存后应用会重新启动。模型供应商和 API 密钥可以在进入工作台后的设置页面填写。</p>
       <dl className="product-setup__summary">
+        <div><dt>产品名称</dt><dd>{productName.trim()}</dd></div>
         <div><dt>服务地址</dt><dd>{apiBaseUrl}</dd></div>
-        <div><dt>服务版本</dt><dd>{result?.releaseId ?? '—'}</dd></div>
-        <div><dt>数据库结构</dt><dd>v{result?.databaseSchemaVersion ?? '—'}</dd></div>
-        <div><dt>检测延迟</dt><dd>{result?.latencyMs ?? '—'} ms</dd></div>
+        <div><dt>部署方式</dt><dd>{deploymentMode === 'local_managed' ? '本机受管运行时' : '远程服务'}</dd></div>
+        {deploymentMode === 'remote' ? (
+          <>
+            <div><dt>服务版本</dt><dd>{result?.releaseId ?? '—'}</dd></div>
+            <div><dt>数据库结构</dt><dd>v{result?.databaseSchemaVersion ?? '—'}</dd></div>
+            <div><dt>检测延迟</dt><dd>{result?.latencyMs ?? '—'} ms</dd></div>
+          </>
+        ) : null}
       </dl>
       {error ? <p className="product-setup__error" role="alert">{error}</p> : null}
       <div className="product-setup__next-note">
@@ -326,7 +420,7 @@ function ReviewStep({
       </div>
       <div className="product-setup__actions">
         <button type="button" className="product-setup__back" disabled={busy} onClick={onBack}>
-          <ArrowLeft size={16} /> 修改地址
+          <ArrowLeft size={16} /> 返回
         </button>
         <button type="button" className="product-setup__primary" disabled={busy} onClick={onFinish}>
           {busy ? <RefreshCw className="is-spinning" size={16} /> : <CheckCircle2 size={16} />}
@@ -365,8 +459,26 @@ function ConnectionSettings({
   status: Extract<DesktopProductSetupStatus, { state: 'configured' }>
   onClose: () => void
 }) {
+  const [productName, setProductName] = useState(status.productName)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const save = async () => {
+    const bridge = window.platformDesktop
+    if (!bridge) return
+    setBusy(true)
+    setError(null)
+    try {
+      await bridge.setup.save({
+        apiBaseUrl: status.apiBaseUrl,
+        productName,
+      })
+      await bridge.setup.restart()
+    } catch (reason) {
+      setError(safeMessage(reason))
+      setBusy(false)
+    }
+  }
 
   const reset = async () => {
     const bridge = window.platformDesktop
@@ -391,18 +503,36 @@ function ConnectionSettings({
           <X size={18} />
         </button>
         <span className="product-connection__icon"><Settings2 size={21} /></span>
-        <h2 id="connection-settings-title">服务连接设置</h2>
+        <h2 id="connection-settings-title">工作台与服务设置</h2>
         <p>{status.deploymentMode === 'local_managed'
-          ? '当前由本机系统运行清单统一管理，桌面端会自动使用受管服务。'
-          : '当前工作台连接到以下远程部署。重新设置会退出当前工作台并返回首次设置。'}</p>
+          ? '当前由本机系统运行清单统一管理。显示名称保存在这台电脑，可以随时修改。'
+          : '当前工作台连接到以下远程部署。显示名称可以直接修改，也可以重新设置连接。'}</p>
+        <label className="product-connection__field">
+          <span>产品显示名称</span>
+          <input
+            value={productName}
+            required
+            maxLength={80}
+            onChange={event => setProductName(event.target.value)}
+          />
+          <small>保存后重启桌面应用，后端服务不会停止。</small>
+        </label>
         <div className="product-connection__value">
           <span>当前服务</span><strong>{status.apiBaseUrl}</strong>
         </div>
         {error ? <p className="product-setup__error" role="alert">{error}</p> : null}
         <div className="product-connection__actions">
           <button type="button" onClick={onClose}>关闭</button>
+          <button
+            type="button"
+            className="is-primary"
+            disabled={busy || !productName.trim() || productName.trim() === status.productName}
+            onClick={() => { void save() }}
+          >
+            {busy ? '正在重启…' : '保存名称并重启'}
+          </button>
           {status.canReset ? (
-            <button type="button" className="is-primary" disabled={busy} onClick={reset}>
+            <button type="button" disabled={busy} onClick={reset}>
               {busy ? '正在重启…' : '重新设置连接'}
             </button>
           ) : null}

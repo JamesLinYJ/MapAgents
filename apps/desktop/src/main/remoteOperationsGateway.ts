@@ -18,6 +18,7 @@ import {
   type OperationsOperationResult,
   type OperationsSnapshot,
 } from '@geo-agent-platform/shared-types/operations'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 import {
   desktopSupervisorCommandSchema,
@@ -116,7 +117,10 @@ export class RemoteDesktopOperationsGateway implements DesktopOperationsGateway 
   }
 
   private async snapshot(): Promise<OperationsSnapshot> {
-    const connection = await this.setup.test({ apiBaseUrl: this.apiBaseUrl })
+    const connection = await this.setup.test({
+      apiBaseUrl: this.apiBaseUrl,
+      productName: PRODUCT_CODENAME,
+    })
     if (!connection.ok || !connection.releaseId) throw new Error(connection.message)
     const releaseId = connection.releaseId
     if (this.releaseId !== null && this.releaseId !== releaseId) this.restartCount += 1

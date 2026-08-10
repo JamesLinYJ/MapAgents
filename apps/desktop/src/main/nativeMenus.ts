@@ -39,6 +39,7 @@ export interface NativeApplicationMenuOptions {
   authorization: NativeMenuAuthorization
   shutdown: Pick<DesktopShutdownCoordinator, 'requestStopAllAndQuit'>
   localServiceControl?: boolean
+  productName?: string
 }
 
 /**
@@ -143,6 +144,7 @@ function applicationMenuTemplate(
   access: NativeMenuAccess,
   options: NativeApplicationMenuOptions,
 ): MenuItemConstructorOptions[] {
+  const productName = options.productName ?? PRODUCT_CODENAME
   const managementItems = managementMenuItems(access)
   return [
     {
@@ -154,7 +156,7 @@ function applicationMenuTemplate(
         commandItem('导出成果', 'export-results', 'CommandOrControl+Shift+E'),
         { type: 'separator' },
         { role: 'close', label: '关闭窗口' },
-        { role: 'quit', label: `退出 ${PRODUCT_CODENAME}` },
+        { role: 'quit', label: `退出 ${productName}` },
         ...(access.canStopAllAndQuit
           ? [
               { type: 'separator' as const },
@@ -165,7 +167,7 @@ function applicationMenuTemplate(
                     ? window
                     : BrowserWindow.getFocusedWindow()
                   void options.shutdown.requestStopAllAndQuit(target).catch(error => (
-                    showShutdownFailure(target, error)
+                    showShutdownFailure(target, error, productName)
                   ))
                 },
               },
@@ -217,10 +219,10 @@ function applicationMenuTemplate(
       label: '帮助',
       submenu: [
         commandItem('命令搜索', 'focus-command', 'Alt+Q'),
-        commandItem('服务连接设置', 'open-connection-settings'),
+        commandItem('工作台与服务设置', 'open-connection-settings'),
         { type: 'separator' },
         {
-          label: `关于 ${PRODUCT_CODENAME}`,
+          label: `关于 ${productName}`,
           click: (_item, window) => {
             const target = window instanceof BrowserWindow ? window : BrowserWindow.getFocusedWindow()
             void app.showAboutPanel()
@@ -268,6 +270,7 @@ function sendCommand(window: BrowserWindow, command: DesktopMenuCommand): void {
 async function showShutdownFailure(
   window: BrowserWindow | null,
   error: unknown,
+  productName: string,
 ): Promise<void> {
   const message = error instanceof Error
     ? error.message.replace(/[\r\n]+/gu, ' ').slice(0, 500)
@@ -276,7 +279,7 @@ async function showShutdownFailure(
     type: 'error',
     title: '未停止后台服务',
     message,
-    detail: `${PRODUCT_CODENAME} Desktop 将继续运行；普通退出也不会停止后台服务。`,
+    detail: `${productName} Desktop 将继续运行；普通退出也不会停止后台服务。`,
     buttons: ['知道了'],
     defaultId: 0,
     cancelId: 0,

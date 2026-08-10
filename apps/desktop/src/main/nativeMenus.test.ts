@@ -71,9 +71,12 @@ describe('native application menu authorization', () => {
         },
       },
       shutdown,
+      productName: '团队地理工作台',
     })
 
     expect(menuLabels('管理')).toEqual(['系统日志'])
+    expect(menuLabels('工程')).toContain('退出 团队地理工作台')
+    expect(menuLabels('帮助')).toContain('关于 团队地理工作台')
     expect(menuLabels('工程')).not.toContain('停止全部并退出')
 
     identity = authenticated(['viewer'])

@@ -23,6 +23,7 @@ import {
   Plus,
   Route,
   ServerCog,
+  Settings2,
   ShieldCheck,
   Sparkles,
   Trash2,
@@ -44,6 +45,7 @@ import {
   supportsAgentSdkLiveSupervisor,
 } from '../../shared/providerCapabilities'
 import { requireDesktopBridge } from '../../api/transport'
+import { useProductIdentity } from '../../app/ProductIdentityContext'
 
 export interface ModelSettingsPageProps {
   authMode: DesktopAuthMode
@@ -78,6 +80,7 @@ export function ModelSettingsPage({
   const [providerError, setProviderError] = useState<string | null>(null)
   const [providerNotice, setProviderNotice] = useState<string | null>(null)
   const selectedProvider = providers.find(item => item.provider === provider)
+  const { productName, openProductSettings } = useProductIdentity()
   const selectedModel = model || selectedProvider?.defaultModel || ''
   const models = uniqueModels(selectedProvider)
 
@@ -601,12 +604,24 @@ export function ModelSettingsPage({
         </section>
       ) : null}
 
+      <section className="model-settings__identity" aria-labelledby="product-identity-title">
+        <span className="model-settings__identity-icon" aria-hidden="true">
+          <Settings2 size={22} />
+        </span>
+        <div>
+          <span className="model-settings__eyebrow">{canManageProviders ? '04' : '03'} · 工作台</span>
+          <h2 id="product-identity-title">{productName}</h2>
+          <p>显示名称保存在当前电脑，不改变安装包、协议、服务名称或已有数据目录。</p>
+        </div>
+        <button type="button" onClick={openProductSettings}>修改名称与连接</button>
+      </section>
+
       <section className="model-settings__identity" aria-labelledby="identity-title">
         <span className="model-settings__identity-icon" aria-hidden="true">
           {authMode === 'local_auto' ? <ShieldCheck size={22} /> : <CircleUserRound size={22} />}
         </span>
         <div>
-          <span className="model-settings__eyebrow">{canManageProviders ? '04' : '03'} · 身份</span>
+          <span className="model-settings__eyebrow">{canManageProviders ? '05' : '04'} · 身份</span>
           <h2 id="identity-title">
             {authMode === 'local_auto' ? '本机身份由应用托管' : '正在使用扩展账号模式'}
           </h2>

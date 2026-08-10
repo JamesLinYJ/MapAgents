@@ -520,6 +520,37 @@
   cursor: pointer;
 }
 
+.product-connection__field {
+  display: grid;
+  gap: 7px;
+  margin: 22px 0 14px;
+  color: #40575d;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.product-connection__field input {
+  min-height: 42px;
+  padding: 0 12px;
+  color: #183036;
+  border: 1px solid #adc1c1;
+  border-radius: 5px;
+  outline: 0;
+  background: #fff;
+  font: inherit;
+}
+
+.product-connection__field input:focus {
+  border-color: #126b70;
+  box-shadow: 0 0 0 3px rgb(18 107 112 / 12%);
+}
+
+.product-connection__field small {
+  color: #718386;
+  font-size: 9px;
+  font-weight: 450;
+}
+
 .product-connection__icon {
   display: grid;
   width: 42px;

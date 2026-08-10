@@ -13,7 +13,6 @@ import { app, net, session, utilityProcess } from 'electron'
 import path from 'node:path'
 import {
   PLATFORM_DESKTOP_USER_MODEL_ID,
-  PRODUCT_CODENAME,
 } from '@geo-agent-platform/shared-types/product-identity'
 
 import { DesktopApiGateway } from './apiGateway.js'
@@ -79,12 +78,6 @@ async function launchDesktop(): Promise<void> {
 
 async function startDesktop(logger: DesktopSystemLogger): Promise<void> {
   if (process.platform === 'win32') app.setAppUserModelId(PLATFORM_DESKTOP_USER_MODEL_ID)
-  app.setAboutPanelOptions({
-    applicationName: PRODUCT_CODENAME,
-    applicationVersion: app.getVersion(),
-    copyright: '地理智能平台',
-    version: app.getVersion(),
-  })
   const packagedLocalRuntime = app.isPackaged
     ? await preparePackagedLocalRuntime({
         platform: process.platform,
@@ -110,6 +103,15 @@ async function startDesktop(logger: DesktopSystemLogger): Promise<void> {
     fetch: (input, init) => net.fetch(input, init),
   })
   const startup = await setup.resolve()
+  const productName = startup.state === 'configured'
+    ? startup.productName
+    : startup.suggestedProductName
+  app.setAboutPanelOptions({
+    applicationName: productName,
+    applicationVersion: app.getVersion(),
+    copyright: '地理智能平台',
+    version: app.getVersion(),
+  })
   logger.info('desktop_starting', {
     profile: app.isPackaged ? 'production' : 'development',
     deploymentMode: startup.state === 'configured' ? startup.deploymentMode : 'setup_required',
@@ -117,7 +119,7 @@ async function startDesktop(logger: DesktopSystemLogger): Promise<void> {
   await installAppProtocol()
 
   const files = new FileHandleRegistry()
-  const windows = new WorkspaceWindowRegistry(files)
+  const windows = new WorkspaceWindowRegistry(files, productName)
   let restartScheduled = false
   installDesktopProductSetupIpcHandlers({
     setup,
@@ -167,11 +169,13 @@ async function startDesktop(logger: DesktopSystemLogger): Promise<void> {
     supervisor,
     new DesktopTypedConfirmationWindow(),
     app,
+    productName,
   )
   const uninstallNativeMenu = installNativeApplicationMenu({
     authorization: auth,
     shutdown,
     localServiceControl: startup.deploymentMode === 'local_managed',
+    productName,
   })
   installDesktopIpcHandlers({
     api: new DesktopApiGateway(apiBaseUrl, auth),

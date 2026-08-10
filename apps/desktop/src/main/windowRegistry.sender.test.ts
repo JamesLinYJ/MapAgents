@@ -109,6 +109,24 @@ describe('WorkspaceWindowRegistry IPC ownership', () => {
     expect(() => window.destroyForTest()).not.toThrow()
     expect(releaseForWebContents).toHaveBeenCalledWith(41)
   })
+
+  it('uses the locally configured product name in workspace window titles', () => {
+    const registry = new WorkspaceWindowRegistry(
+      { releaseForWebContents: vi.fn() } as never,
+      '团队地理工作台',
+    )
+    const window = registry.openBootstrap() as never
+
+    registry.bind(window, {
+      workspaceId: 'workspace_1',
+      workspaceName: '测试工作区',
+      sessionId: null,
+      threadId: null,
+    })
+
+    expect((window as { setTitle: ReturnType<typeof vi.fn> }).setTitle)
+      .toHaveBeenCalledWith('测试工作区 — 团队地理工作台')
+  })
 })
 
 function registeredWindows(

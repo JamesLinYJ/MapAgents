@@ -10,7 +10,6 @@
 // --------------------------------------------------------------------------
 
 import type { ComponentProps, ComponentType } from 'react'
-import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 import type { DesktopDocumentSlots, WorkspaceLayoutProps } from './WorkspaceLayout'
 import type { DesktopDocument } from './documentTabs'
 import { TopBar } from './TopBar'
@@ -30,6 +29,7 @@ import {
   createWorkspaceShellInspectorDetails,
   type WorkspaceInspectorDetailsInput,
 } from '../workspaceInspectorDetails'
+import { useProductIdentity } from '../ProductIdentityContext'
 
 type LayoutProps = Omit<WorkspaceLayoutProps,
   | 'topBar'
@@ -93,6 +93,7 @@ export function WorkspaceShell({
   onConfirmExport,
   onAuthenticated,
 }: WorkspaceShellProps) {
+  const { productName } = useProductIdentity()
   const { inspectorDetails, contentsDetails } = createWorkspaceShellInspectorDetails(
     panels.inspector.details,
   )
@@ -136,7 +137,7 @@ export function WorkspaceShell({
           className="gf-login-overlay"
           role="dialog"
           aria-modal="true"
-          aria-label={`登录 ${PRODUCT_CODENAME}`}
+          aria-label={`登录 ${productName}`}
         >
           <LoginScreen onAuthenticated={onAuthenticated} />
         </div>

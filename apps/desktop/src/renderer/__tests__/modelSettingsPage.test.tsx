@@ -14,23 +14,28 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
 import { ModelSettingsPage } from '../features/settings/ModelSettingsPage'
+import { ProductIdentityProvider } from '../app/ProductIdentityProvider'
 
 describe('ModelSettingsPage', () => {
   it('shows only catalog models and keeps account management optional', () => {
     const html = renderToStaticMarkup(
-      <ModelSettingsPage
-        authMode="local_auto"
-        canAccessAccount
-        provider="deepseek"
-        model="deepseek-v4-flash"
-        providers={[deepSeek(), unavailableProvider()]}
-        onProviderChange={vi.fn()}
-        onModelChange={vi.fn()}
-        onOpenAccount={vi.fn()}
-      />,
+      <ProductIdentityProvider productName="团队地理工作台" onOpenSettings={vi.fn()}>
+        <ModelSettingsPage
+          authMode="local_auto"
+          canAccessAccount
+          provider="deepseek"
+          model="deepseek-v4-flash"
+          providers={[deepSeek(), unavailableProvider()]}
+          onProviderChange={vi.fn()}
+          onModelChange={vi.fn()}
+          onOpenAccount={vi.fn()}
+        />
+      </ProductIdentityProvider>,
     )
 
     expect(html).toContain('本机身份由应用托管')
+    expect(html).toContain('团队地理工作台')
+    expect(html).toContain('修改名称与连接')
     expect(html).toContain('deepseek-v4-flash')
     expect(html).toContain('128,000 词元')
     expect(html).not.toContain('deepseek-v4-pro')

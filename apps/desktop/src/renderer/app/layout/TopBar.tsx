@@ -17,8 +17,8 @@
 import { useState } from 'react'
 import { FileText, LockKeyhole, LogOut, Menu, PanelLeft, Search, ShieldCheck, UserRound } from 'lucide-react'
 import type { PlatformWorkspace } from '@geo-agent-platform/shared-types'
-import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 import type { DesktopAuthProjection } from '../../../contracts/desktopIpc'
+import { useProductIdentity } from '../ProductIdentityContext'
 import type { DesktopDocument } from './WorkspaceLayout'
 import { requestDesktopCommand } from '../desktopNavigation'
 import { requireDesktopBridge } from '../../api/transport'
@@ -42,6 +42,7 @@ export function TopBar({
   onOpenDocument,
   onOpenWorkspace,
 }: TopBarProps) {
+  const { productName } = useProductIdentity()
   const [accountOpen, setAccountOpen] = useState(false)
   const canOpenSecurity = authMe?.platformRoles.includes('platform_admin') ?? false
   const displayName = authMe ? authMe.user.displayName || authMe.user.email : '本机工作台'
@@ -83,7 +84,7 @@ export function TopBar({
         </button>
         <span className="workbench-chrome__divider" />
         <span className="workbench-chrome__brand">
-          <strong>{PRODUCT_CODENAME}</strong>
+          <strong>{productName}</strong>
           <small>GIS 工作台</small>
         </span>
       </div>

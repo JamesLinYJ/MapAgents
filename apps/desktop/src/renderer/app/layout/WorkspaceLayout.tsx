@@ -22,7 +22,6 @@ import {
   type ReactNode,
 } from 'react'
 import type { AgentThreadRecord } from '@geo-agent-platform/shared-types'
-import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 import { requireDesktopBridge } from '../../api/transport'
 import {
   desktopMenuCommandSchema,
@@ -70,6 +69,7 @@ import {
 } from 'react-resizable-panels'
 
 import type { SidebarItemId, WorkspaceMode } from '../types'
+import { useProductIdentity } from '../ProductIdentityContext'
 import {
   subscribeDesktopCommand,
 } from '../desktopNavigation'
@@ -148,6 +148,7 @@ const RIBBON_TABS: ReadonlyArray<{ id: RibbonTab; label: string }> = [
 ]
 
 export function WorkspaceLayout(props: WorkspaceLayoutProps) {
+  const { productName } = useProductIdentity()
   const {
     topBar,
     onSidebarItemClick,
@@ -404,7 +405,7 @@ export function WorkspaceLayout(props: WorkspaceLayoutProps) {
         </label>
       </div>
 
-      <section className="gf-ribbon" aria-label={`${PRODUCT_CODENAME} 功能区`}>
+      <section className="gf-ribbon" aria-label={`${productName} 功能区`}>
         <div className="gf-ribbon-tabs" role="tablist" aria-label="功能区选项卡">
           {visibleRibbonTabs.map(tab => (
             <button

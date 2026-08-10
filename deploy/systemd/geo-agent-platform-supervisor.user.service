@@ -1,5 +1,5 @@
 [Unit]
-Description=GeoForge local runtime
+Description=Geo Agent Platform local runtime
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=%E/geo-agent-platform/runtime.env

@@ -9,6 +9,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 import {
   DesktopProductSetupService,
@@ -30,7 +31,9 @@ describe('DesktopProductSetupService', () => {
 
     await expect(service.status()).resolves.toEqual({
       state: 'required',
+      deploymentMode: 'remote',
       suggestedApiBaseUrl: 'http://127.0.0.1:8000',
+      suggestedProductName: PRODUCT_CODENAME,
     })
   })
 
@@ -50,7 +53,10 @@ describe('DesktopProductSetupService', () => {
     })
     const service = fixture.service(fetch, [100, 127, 200, 233])
 
-    await expect(service.test({ apiBaseUrl: 'http://127.0.0.1:8000/' }))
+    await expect(service.test({
+      apiBaseUrl: 'http://127.0.0.1:8000/',
+      productName: '山河工作台',
+    }))
       .resolves.toMatchObject({
         ok: true,
         apiBaseUrl: 'http://127.0.0.1:8000',
@@ -58,19 +64,24 @@ describe('DesktopProductSetupService', () => {
         releaseId: 'geo-agent-platform@0.1.0+test',
         databaseSchemaVersion: 12,
       })
-    await expect(service.save({ apiBaseUrl: 'http://127.0.0.1:8000/' }))
+    await expect(service.save({
+      apiBaseUrl: 'http://127.0.0.1:8000/',
+      productName: '山河工作台',
+    }))
       .resolves.toEqual({
         state: 'configured',
         deploymentMode: 'remote',
         apiBaseUrl: 'http://127.0.0.1:8000',
+        productName: '山河工作台',
         canReset: true,
       })
 
     const saved = await readFile(fixture.userSetupPath, 'utf8')
     expect(JSON.parse(saved)).toEqual({
       kind: 'geo-agent-platform.desktop-setup',
-      schemaVersion: 1,
+      schemaVersion: 2,
       mode: 'remote',
+      productName: '山河工作台',
       apiBaseUrl: 'http://127.0.0.1:8000',
     })
     expect(saved).not.toMatch(/password|secret|api.?key/iu)
@@ -86,11 +97,46 @@ describe('DesktopProductSetupService', () => {
       throw new Error('connect ECONNREFUSED')
     }))
 
-    await expect(service.test({ apiBaseUrl: 'http://127.0.0.1:8123' }))
+    await expect(service.test({
+      apiBaseUrl: 'http://127.0.0.1:8123',
+      productName: PRODUCT_CODENAME,
+    }))
       .resolves.toMatchObject({ ok: false, message: 'connect ECONNREFUSED' })
-    await expect(service.save({ apiBaseUrl: 'http://127.0.0.1:8123' }))
+    await expect(service.save({
+      apiBaseUrl: 'http://127.0.0.1:8123',
+      productName: PRODUCT_CODENAME,
+    }))
       .rejects.toThrow('ECONNREFUSED')
     await expect(service.status()).resolves.toMatchObject({ state: 'required' })
+  })
+
+  it('loads a legacy remote setup with the default display name and updates only the name offline', async () => {
+    const fixture = await createFixture()
+    await writeFile(fixture.userSetupPath, JSON.stringify({
+      kind: 'geo-agent-platform.desktop-setup',
+      schemaVersion: 1,
+      mode: 'remote',
+      apiBaseUrl: 'https://geo.example.com',
+    }), { encoding: 'utf8', mode: 0o600 })
+    const fetch = vi.fn()
+    const service = fixture.service(fetch)
+
+    await expect(service.status()).resolves.toEqual({
+      state: 'configured',
+      deploymentMode: 'remote',
+      apiBaseUrl: 'https://geo.example.com',
+      productName: PRODUCT_CODENAME,
+      canReset: true,
+    })
+    await expect(service.save({
+      apiBaseUrl: 'https://geo.example.com',
+      productName: '团队地理工作台',
+    })).resolves.toMatchObject({
+      state: 'configured',
+      productName: '团队地理工作台',
+    })
+    expect(fetch).not.toHaveBeenCalled()
+    await expect(readFile(fixture.userSetupPath, 'utf8')).resolves.toContain('团队地理工作台')
   })
 
   it('lets a user reset a remote address but never overrides an installed system runtime', async () => {
@@ -121,10 +167,21 @@ describe('DesktopProductSetupService', () => {
       allowedEnvironmentOverrides: [],
     }), 'utf8')
 
-    await expect(fixture.service(vi.fn()).status()).resolves.toEqual({
+    const local = fixture.service(vi.fn())
+    await expect(local.status()).resolves.toEqual({
+      state: 'required',
+      deploymentMode: 'local_managed',
+      suggestedApiBaseUrl: 'http://127.0.0.1:9000',
+      suggestedProductName: PRODUCT_CODENAME,
+    })
+    await expect(local.save({
+      apiBaseUrl: 'http://127.0.0.1:9000',
+      productName: '本机地理工作台',
+    })).resolves.toEqual({
       state: 'configured',
       deploymentMode: 'local_managed',
       apiBaseUrl: 'http://127.0.0.1:9000',
+      productName: '本机地理工作台',
       canReset: false,
     })
   })

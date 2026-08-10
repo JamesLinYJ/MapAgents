@@ -21,7 +21,6 @@
 import { Suspense, useCallback, useDeferredValue, useMemo } from 'react'
 import { domAnimation, LazyMotion, MotionConfig } from 'framer-motion'
 import { useQuery } from '@tanstack/react-query'
-import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 import './AppShell.css'
 import './styles/glass.css'
@@ -101,6 +100,7 @@ import {
 import {
   type WorkspaceInspectorDetailsInput,
 } from './workspaceInspectorDetails'
+import { useProductIdentity } from './ProductIdentityContext'
 
 function useVoidCallback<Args extends unknown[]>(fn: (...args: Args) => Promise<void>): (...args: Args) => void {
   return useCallback((...args: Args) => { void fn(...args) }, [fn])
@@ -112,6 +112,7 @@ function AppShell() {
   // 装配会话、运行、资源、工具和导航控制器的页面状态。
   // 网络语义和实时订阅分别由控制器与 useRunState 所有。
   const desktopPathname = '/'
+  const { productName } = useProductIdentity()
   const {
     activeDesktopDocument,
     setActiveDesktopDocument,
@@ -933,7 +934,7 @@ function AppShell() {
                 }}
                 exportWizard={exportWizardOpen ? {
                   open: true,
-                  title: currentThreadTitle || `${PRODUCT_CODENAME} 分析成果`,
+                  title: currentThreadTitle || `${productName} 分析成果`,
                   artifacts,
                   defaultArtifactId: selectedArtifact?.artifactId ?? artifacts.at(-1)?.artifactId,
                   busy: exportBusy,

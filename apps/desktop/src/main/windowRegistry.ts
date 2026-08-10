@@ -42,7 +42,10 @@ export class WorkspaceWindowRegistry {
   private readonly windowStates = new Map<BrowserWindow, windowStateKeeper.State>()
   private readonly windowTitles = new Map<BrowserWindow, string>()
 
-  constructor(private readonly files: FileHandleRegistry) {}
+  constructor(
+    private readonly files: FileHandleRegistry,
+    private readonly productName = PRODUCT_CODENAME,
+  ) {}
 
   openBootstrap(): BrowserWindow {
     const existing = this.windows.get(BOOTSTRAP_WINDOW_KEY)
@@ -93,7 +96,7 @@ export class WorkspaceWindowRegistry {
     }
     this.windows.set(workspace.workspaceId, sourceWindow)
     this.restoreWorkspaceWindowState(sourceWindow, workspace.workspaceId)
-    const title = `${workspace.workspaceName} — ${PRODUCT_CODENAME}`
+    const title = `${workspace.workspaceName} — ${this.productName}`
     this.windowTitles.set(sourceWindow, title)
     sourceWindow.setTitle(title)
     return sourceWindow
@@ -117,7 +120,7 @@ export class WorkspaceWindowRegistry {
 
   private createWindow(workspace: DesktopWorkspaceWindowDescriptor | null): BrowserWindow {
     const state = createWindowState(workspace?.workspaceId ?? BOOTSTRAP_WINDOW_KEY)
-    const windowTitle = `${workspace?.workspaceName ?? `${PRODUCT_CODENAME} 工作台`} — ${PRODUCT_CODENAME}`
+    const windowTitle = `${workspace?.workspaceName ?? `${this.productName} 工作台`} — ${this.productName}`
     const window = new BrowserWindow({
       width: Math.max(1_100, state.width),
       height: Math.max(700, state.height),

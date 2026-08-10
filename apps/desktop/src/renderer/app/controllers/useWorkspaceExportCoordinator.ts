@@ -11,13 +11,13 @@
 
 import { useCallback, useState } from 'react'
 import type { ArtifactRef, SessionRecord } from '@geo-agent-platform/shared-types'
-import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 import { requestDesktopDownload } from '../../api/client'
 import { exportWorkspaceResult } from '../../features/export/desktopExport'
 import type { ExportWizardSelection } from '../../features/export/ExportWizard'
 import { formatUiError } from '../bootstrap'
 import type { DesktopDocument } from '../layout/WorkspaceLayout'
+import { useProductIdentity } from '../ProductIdentityContext'
 
 interface ExportScopeInput {
   session?: Pick<SessionRecord, 'id' | 'workspaceId'>
@@ -59,6 +59,7 @@ export function useWorkspaceExportCoordinator({
   setActiveDesktopDocument,
   setUiError,
 }: WorkspaceExportCoordinatorOptions) {
+  const { productName } = useProductIdentity()
   const [exportWizardOpen, setExportWizardOpen] = useState(false)
   const [exportBusy, setExportBusy] = useState(false)
 
@@ -90,7 +91,7 @@ export function useWorkspaceExportCoordinator({
       await waitForDesktopPaint()
       const result = await exportWorkspaceResult({
         ...scope,
-        title: threadTitle || `${PRODUCT_CODENAME} 分析成果`,
+        title: threadTitle || `${productName} 分析成果`,
         formats: selection.formats,
         artifactIds: selection.artifactIds,
       })
@@ -103,6 +104,7 @@ export function useWorkspaceExportCoordinator({
   }, [
     activateMap,
     defaultWorkspaceId,
+    productName,
     session,
     setActiveDesktopDocument,
     setUiError,

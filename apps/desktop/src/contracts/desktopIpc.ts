@@ -158,18 +158,22 @@ export const desktopAuthBootstrapResultSchema = z.object({
 export const desktopProductSetupStatusSchema = z.discriminatedUnion('state', [
   z.object({
     state: z.literal('required'),
+    deploymentMode: z.enum(['local_managed', 'remote']),
     suggestedApiBaseUrl: z.string().url(),
+    suggestedProductName: z.string().trim().min(1).max(80),
   }).strict(),
   z.object({
     state: z.literal('configured'),
     deploymentMode: z.enum(['local_managed', 'remote']),
     apiBaseUrl: z.string().url(),
+    productName: z.string().trim().min(1).max(80),
     canReset: z.boolean(),
   }).strict(),
 ])
 
 export const desktopProductSetupConnectionSchema = z.object({
   apiBaseUrl: z.string().trim().min(1).max(2_048),
+  productName: z.string().trim().min(1).max(80),
 }).strict().superRefine(enforceDesktopControlFrameSize)
 
 export const desktopProductSetupTestResultSchema = z.object({

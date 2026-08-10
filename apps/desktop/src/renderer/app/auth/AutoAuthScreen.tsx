@@ -10,10 +10,7 @@
 // --------------------------------------------------------------------------
 
 import { RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
-import {
-  PRODUCT_CODENAME,
-  PRODUCT_DESKTOP_NAME,
-} from '@geo-agent-platform/shared-types/product-identity'
+import { useProductIdentity } from '../ProductIdentityContext'
 
 export function AutoAuthScreen({
   errorMessage,
@@ -24,13 +21,14 @@ export function AutoAuthScreen({
   isChecking: boolean
   onRetry: () => void
 }) {
+  const { productName } = useProductIdentity()
   return (
     <main className="dc-auto-auth-screen" aria-live="polite">
       <section className="dc-auto-auth-card" aria-labelledby="auto-auth-title">
         <div className="dc-auto-auth-brand">
-          <span aria-hidden="true">{PRODUCT_CODENAME.slice(0, 1).toLocaleUpperCase()}</span>
+          <span aria-hidden="true">{productName.slice(0, 1).toLocaleUpperCase()}</span>
           <div>
-            <strong>{PRODUCT_DESKTOP_NAME}</strong>
+            <strong>{productName} GIS 工作台</strong>
             <small>本机演示环境</small>
           </div>
         </div>

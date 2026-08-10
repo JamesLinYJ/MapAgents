@@ -52,6 +52,7 @@ export class DesktopShutdownCoordinator {
     private readonly supervisor: DesktopShutdownSupervisor,
     private readonly confirmation: DesktopShutdownConfirmation,
     private readonly application: DesktopShutdownApplication,
+    private readonly productName = PRODUCT_CODENAME,
   ) {}
 
   async requestStopAllAndQuit(parent: BrowserWindow | null): Promise<'canceled' | 'completed'> {
@@ -59,9 +60,9 @@ export class DesktopShutdownCoordinator {
       this.authorization.requireAuthorizationContext(),
     )
     const enteredText = await this.confirmation.request(parent, {
-      title: `停止全部服务并退出 ${PRODUCT_CODENAME}`,
+      title: `停止全部服务并退出 ${this.productName}`,
       message: '此操作会停止 API、Python Worker、PostgreSQL/PostGIS，并关闭本机监督器。',
-      detail: `正在运行的分析、上传和后台任务会被中断。普通“退出 ${PRODUCT_CODENAME}”不会停止这些服务。`,
+      detail: `正在运行的分析、上传和后台任务会被中断。普通“退出 ${this.productName}”不会停止这些服务。`,
       expectedText: STOP_ALL_CONFIRMATION_TEXT,
     })
     if (enteredText === null) return 'canceled'

@@ -5,7 +5,7 @@
 //   文件:       productSetup.ts
 //
 //   说明:       本机受管运行时优先；普通安装包在没有系统清单时改为连接
-//               用户指定的服务端。用户配置只保存服务地址，不保存凭据。
+//               用户指定的服务端。用户配置只保存显示名称和服务地址，不保存凭据。
 // --------------------------------------------------------------------------
 
 import { randomUUID } from 'node:crypto'
@@ -24,6 +24,7 @@ import {
   DESKTOP_PROTOCOL_VERSION,
   runtimeCapabilitiesSchema,
 } from '@geo-agent-platform/shared-types/release'
+import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 import type {
   DesktopProductSetupConnection,
@@ -39,13 +40,29 @@ import {
 import type { RuntimeManifestProtectionOptions } from './runtimeManifest.js'
 
 const USER_SETUP_KIND = 'geo-agent-platform.desktop-setup' as const
-const USER_SETUP_SCHEMA_VERSION = 1 as const
+const USER_SETUP_SCHEMA_VERSION = 2 as const
 const SETUP_RESPONSE_MAX_BYTES = 64 * 1024
 const SETUP_REQUEST_TIMEOUT_MS = 8_000
 
-const desktopUserSetupConfigSchema = z.object({
+const desktopProductNameSchema = z.string().trim().min(1).max(80)
+const desktopUserSetupConfigSchema = z.discriminatedUnion('mode', [
+  z.object({
+    kind: z.literal(USER_SETUP_KIND),
+    schemaVersion: z.literal(USER_SETUP_SCHEMA_VERSION),
+    mode: z.literal('local_managed'),
+    productName: desktopProductNameSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal(USER_SETUP_KIND),
+    schemaVersion: z.literal(USER_SETUP_SCHEMA_VERSION),
+    mode: z.literal('remote'),
+    productName: desktopProductNameSchema,
+    apiBaseUrl: z.string().url(),
+  }).strict(),
+])
+const legacyDesktopUserSetupConfigSchema = z.object({
   kind: z.literal(USER_SETUP_KIND),
-  schemaVersion: z.literal(USER_SETUP_SCHEMA_VERSION),
+  schemaVersion: z.literal(1),
   mode: z.literal('remote'),
   apiBaseUrl: z.string().url(),
 }).strict()
@@ -55,12 +72,16 @@ type DesktopUserSetupConfig = z.infer<typeof desktopUserSetupConfigSchema>
 export type DesktopProductSetupResolution =
   | {
       state: 'required'
+      deploymentMode: 'local_managed' | 'remote'
       suggestedApiBaseUrl: string
+      suggestedProductName: string
+      runtime: DesktopRuntimeConfig | null
     }
   | {
       state: 'configured'
       deploymentMode: 'local_managed'
       apiBaseUrl: string
+      productName: string
       canReset: false
       runtime: DesktopRuntimeConfig
     }
@@ -68,6 +89,7 @@ export type DesktopProductSetupResolution =
       state: 'configured'
       deploymentMode: 'remote'
       apiBaseUrl: string
+      productName: string
       canReset: true
       runtime: null
     }
@@ -88,13 +110,14 @@ export class DesktopProductSetupService {
   constructor(private readonly options: DesktopProductSetupOptions) {}
 
   async resolve(): Promise<DesktopProductSetupResolution> {
+    const configured = await this.readUserSetup()
     if (this.options.profile === 'development') {
       const runtime = resolveDesktopRuntimeConfig(this.options.environment, {
         profile: 'development',
         applicationPath: this.options.applicationPath,
         platform: this.options.platform,
       })
-      return localResolution(runtime)
+      return localResolution(runtime, configured?.productName ?? PRODUCT_CODENAME)
     }
 
     const runtimeManifestPath = this.options.runtimeManifestPath
@@ -107,22 +130,34 @@ export class DesktopProductSetupService {
         runtimeManifestPath,
         manifestProtection: this.options.manifestProtection,
       })
-      return localResolution(runtime)
+      if (!configured) {
+        return {
+          state: 'required',
+          deploymentMode: 'local_managed',
+          suggestedApiBaseUrl: runtime.apiBaseUrl,
+          suggestedProductName: PRODUCT_CODENAME,
+          runtime,
+        }
+      }
+      return localResolution(runtime, configured.productName)
     }
 
-    const configured = await this.readUserSetup()
-    if (configured) {
+    if (configured?.mode === 'remote') {
       return {
         state: 'configured',
         deploymentMode: 'remote',
         apiBaseUrl: configured.apiBaseUrl,
+        productName: configured.productName,
         canReset: true,
         runtime: null,
       }
     }
     return {
       state: 'required',
+      deploymentMode: 'remote',
       suggestedApiBaseUrl: 'http://127.0.0.1:8000',
+      suggestedProductName: configured?.productName ?? PRODUCT_CODENAME,
+      runtime: null,
     }
   }
 
@@ -183,17 +218,32 @@ export class DesktopProductSetupService {
   }
 
   async save(input: DesktopProductSetupConnection): Promise<DesktopProductSetupStatus> {
-    const local = await this.resolve()
-    if (local.state === 'configured' && local.deploymentMode === 'local_managed') {
-      return publicStatus(local)
+    const productName = desktopProductNameSchema.parse(input.productName)
+    const current = await this.resolve()
+    if (current.deploymentMode === 'local_managed') {
+      await this.writeUserSetup({
+        kind: USER_SETUP_KIND,
+        schemaVersion: USER_SETUP_SCHEMA_VERSION,
+        mode: 'local_managed',
+        productName,
+      })
+      return publicStatus(await this.resolve())
     }
-    const result = await this.test(input)
-    if (!result.ok) throw new Error(result.message)
+    const apiBaseUrl = parseDesktopApiBaseUrl(input.apiBaseUrl)
+    if (
+      current.state !== 'configured'
+      || current.deploymentMode !== 'remote'
+      || current.apiBaseUrl !== apiBaseUrl
+    ) {
+      const result = await this.test(input)
+      if (!result.ok) throw new Error(result.message)
+    }
     await this.writeUserSetup({
       kind: USER_SETUP_KIND,
       schemaVersion: USER_SETUP_SCHEMA_VERSION,
       mode: 'remote',
-      apiBaseUrl: result.apiBaseUrl,
+      productName,
+      apiBaseUrl,
     })
     return publicStatus(await this.resolve())
   }
@@ -209,12 +259,20 @@ export class DesktopProductSetupService {
       if (!file.isFile() || file.size > 16 * 1024) {
         throw new Error('桌面设置文件不是有效的小型常规文件。')
       }
-      const parsed = desktopUserSetupConfigSchema.parse(JSON.parse(
-        await readFile(this.options.userSetupPath, 'utf8'),
-      ))
+      const raw = JSON.parse(await readFile(this.options.userSetupPath, 'utf8'))
+      const current = desktopUserSetupConfigSchema.safeParse(raw)
+      if (current.success) {
+        return current.data.mode === 'remote'
+          ? { ...current.data, apiBaseUrl: parseDesktopApiBaseUrl(current.data.apiBaseUrl) }
+          : current.data
+      }
+      const legacy = legacyDesktopUserSetupConfigSchema.parse(raw)
       return {
-        ...parsed,
-        apiBaseUrl: parseDesktopApiBaseUrl(parsed.apiBaseUrl),
+        kind: USER_SETUP_KIND,
+        schemaVersion: USER_SETUP_SCHEMA_VERSION,
+        mode: 'remote',
+        productName: PRODUCT_CODENAME,
+        apiBaseUrl: parseDesktopApiBaseUrl(legacy.apiBaseUrl),
       }
     } catch (error) {
       if (isMissingPathError(error)) return null
@@ -273,22 +331,34 @@ export function parseDesktopApiBaseUrl(input: string): string {
   return url.origin
 }
 
-function localResolution(runtime: DesktopRuntimeConfig): DesktopProductSetupResolution {
+function localResolution(
+  runtime: DesktopRuntimeConfig,
+  productName: string,
+): DesktopProductSetupResolution {
   return {
     state: 'configured',
     deploymentMode: 'local_managed',
     apiBaseUrl: runtime.apiBaseUrl,
+    productName: desktopProductNameSchema.parse(productName),
     canReset: false,
     runtime,
   }
 }
 
 function publicStatus(resolution: DesktopProductSetupResolution): DesktopProductSetupStatus {
-  if (resolution.state === 'required') return resolution
+  if (resolution.state === 'required') {
+    return {
+      state: 'required',
+      deploymentMode: resolution.deploymentMode,
+      suggestedApiBaseUrl: resolution.suggestedApiBaseUrl,
+      suggestedProductName: resolution.suggestedProductName,
+    }
+  }
   return {
     state: 'configured',
     deploymentMode: resolution.deploymentMode,
     apiBaseUrl: resolution.apiBaseUrl,
+    productName: resolution.productName,
     canReset: resolution.canReset,
   }
 }
