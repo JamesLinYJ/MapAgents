@@ -34,9 +34,11 @@ import { rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DesktopZipMaker } from './packaging/desktopZipMaker.mjs'
+import { DesktopRpmMaker } from './packaging/desktopRpmMaker.mjs'
 
 const squirrelVendorDirectory = fileURLToPath(new URL('./.squirrel-vendor', import.meta.url))
 const windowsIconPath = fileURLToPath(new URL('./assets/desktop.ico', import.meta.url))
+const linuxIconPath = fileURLToPath(new URL('./assets/desktop.png', import.meta.url))
 const windowsSigningOptions = resolveWindowsSigningOptions(process.env)
 const unsignedTestBuild = windowsSigningOptions === undefined
 const executableFilename = `${PRODUCT_EXECUTABLE_BASENAME}.exe`
@@ -93,20 +95,19 @@ export default {
       },
     },
     new DesktopZipMaker({}, ['win32']),
-    {
-      name: '@electron-forge/maker-rpm',
-      config: {
-        options: {
-          name: `${PLATFORM_TECHNICAL_ID}-desktop`,
-          productName: PRODUCT_DESKTOP_NAME,
-          genericName: '地理智能工作台',
-          description: PRODUCT_DESKTOP_NAME,
-          productDescription: '本机地理空间分析、气象数据处理与智能体工作台',
-          categories: ['Science', 'Utility'],
-          license: 'UNLICENSED',
-        },
+    new DesktopRpmMaker({
+      options: {
+        name: `${PLATFORM_TECHNICAL_ID}-desktop`,
+        bin: PRODUCT_EXECUTABLE_BASENAME,
+        productName: PRODUCT_DESKTOP_NAME,
+        genericName: '地理智能工作台',
+        description: PRODUCT_DESKTOP_NAME,
+        productDescription: '本机地理空间分析、气象数据处理与智能体工作台',
+        categories: ['Science', 'Utility'],
+        icon: linuxIconPath,
+        license: 'UNLICENSED',
       },
-    },
+    }, ['linux']),
   ],
   hooks: {
     postPackage: async (_forgeConfig, packageResult) => {

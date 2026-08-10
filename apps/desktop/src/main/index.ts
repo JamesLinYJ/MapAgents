@@ -9,7 +9,8 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { app, session, utilityProcess } from 'electron'
+import { app, net, session, utilityProcess } from 'electron'
+import path from 'node:path'
 import {
   PLATFORM_DESKTOP_USER_MODEL_ID,
   PRODUCT_CODENAME,
@@ -31,7 +32,9 @@ import { LocalDesktopIdentityBroker } from './localDesktopIdentityBroker.js'
 import { MicrophonePermissionGate } from './microphonePermissionGate.js'
 import { installNativeApplicationMenu } from './nativeMenus.js'
 import { installResourceProtocol } from './resourceProtocol.js'
-import { resolveDesktopRuntimeConfig } from './runtimeConfig.js'
+import { DesktopProductSetupService } from './productSetup.js'
+import { installDesktopProductSetupIpcHandlers } from './productSetupIpc.js'
+import { RemoteDesktopOperationsGateway } from './remoteOperationsGateway.js'
 import { handleSquirrelLifecycle } from './squirrelLifecycle.js'
 import { safeStartupMessage } from './startupFailureDocument.js'
 import { showStartupFailureWindow } from './startupFailureWindow.js'
@@ -80,19 +83,50 @@ async function startDesktop(logger: DesktopSystemLogger): Promise<void> {
     copyright: '地理智能平台',
     version: app.getVersion(),
   })
-  const runtime = resolveDesktopRuntimeConfig(process.env)
+  const setup = new DesktopProductSetupService({
+    profile: app.isPackaged ? 'production' : 'development',
+    environment: process.env,
+    applicationPath: app.getAppPath(),
+    platform: process.platform,
+    userSetupPath: path.join(app.getPath('userData'), 'product-setup.v1.json'),
+    fetch: (input, init) => net.fetch(input, init),
+  })
+  const startup = await setup.resolve()
   logger.info('desktop_starting', {
-    profile: runtime.profile,
-    runtimeManifestConfigured: runtime.runtimeManifestPath !== null,
-    autoAuth: runtime.autoAuth !== null,
+    profile: app.isPackaged ? 'production' : 'development',
+    deploymentMode: startup.state === 'configured' ? startup.deploymentMode : 'setup_required',
   })
   await installAppProtocol()
 
   const files = new FileHandleRegistry()
   const windows = new WorkspaceWindowRegistry(files)
-  const auth = new DesktopAuthGateway(runtime.apiBaseUrl, {
-    autoAuth: runtime.autoAuth,
-    managedIdentity: runtime.autoAuth
+  let restartScheduled = false
+  installDesktopProductSetupIpcHandlers({
+    setup,
+    windows,
+    scheduleRestart: () => {
+      if (restartScheduled) return
+      restartScheduled = true
+      setTimeout(() => {
+        app.relaunch()
+        app.exit(0)
+      }, 120)
+    },
+  })
+  registerWindowLifecycle(windows)
+  if (startup.state === 'required') {
+    windows.openBootstrap()
+    logger.info('desktop_setup_required')
+    app.once('before-quit', () => logger.close())
+    return
+  }
+
+  const runtime = startup.runtime
+  const apiBaseUrl = startup.apiBaseUrl
+  const autoAuth = runtime?.autoAuth ?? null
+  const auth = new DesktopAuthGateway(apiBaseUrl, {
+    autoAuth,
+    managedIdentity: runtime?.autoAuth
       ? new LocalDesktopIdentityBroker(runtime, {
         fork: (modulePath, args, options) => utilityProcess.fork(modulePath, args, options),
       })
@@ -103,9 +137,11 @@ async function startDesktop(logger: DesktopSystemLogger): Promise<void> {
     microphone.revokeAll()
   })
   installDesktopPermissionPolicy(session.defaultSession, microphone)
-  await installResourceProtocol(runtime.apiBaseUrl, auth)
-  const control = new DesktopControlGateway(runtime.apiBaseUrl, auth)
-  const supervisor = new DesktopSupervisorGateway(runtime, logger)
+  await installResourceProtocol(apiBaseUrl, auth)
+  const control = new DesktopControlGateway(apiBaseUrl, auth)
+  const supervisor = runtime
+    ? new DesktopSupervisorGateway(runtime, logger)
+    : new RemoteDesktopOperationsGateway(apiBaseUrl, setup)
   const shutdown = new DesktopShutdownCoordinator(
     auth,
     supervisor,
@@ -115,14 +151,15 @@ async function startDesktop(logger: DesktopSystemLogger): Promise<void> {
   const uninstallNativeMenu = installNativeApplicationMenu({
     authorization: auth,
     shutdown,
+    localServiceControl: startup.deploymentMode === 'local_managed',
   })
   installDesktopIpcHandlers({
-    api: new DesktopApiGateway(runtime.apiBaseUrl, auth),
+    api: new DesktopApiGateway(apiBaseUrl, auth),
     auth,
     control,
-    downloads: new DesktopDownloadService(runtime.apiBaseUrl, auth),
+    downloads: new DesktopDownloadService(apiBaseUrl, auth),
     diagnosticExports: new DesktopDiagnosticExportService(),
-    exports: new DesktopExportService(runtime.apiBaseUrl, auth),
+    exports: new DesktopExportService(apiBaseUrl, auth),
     files,
     logger,
     microphone,
@@ -132,15 +169,9 @@ async function startDesktop(logger: DesktopSystemLogger): Promise<void> {
 
   windows.openBootstrap()
   logger.info('desktop_ready', {
-    profile: runtime.profile,
-    autoAuth: runtime.autoAuth !== null,
-  })
-  app.on('second-instance', () => {
-    const existing = windows.first()
-    if (!existing) return
-    if (existing.isMinimized()) existing.restore()
-    existing.show()
-    existing.focus()
+    profile: runtime?.profile ?? 'production',
+    deploymentMode: startup.deploymentMode,
+    autoAuth: autoAuth !== null,
   })
   app.on('before-quit', () => {
     logger.info('desktop_stopping')
@@ -151,9 +182,17 @@ async function startDesktop(logger: DesktopSystemLogger): Promise<void> {
     void auth.close().catch(error => logger.error('desktop_identity_close_failed', error))
     logger.close()
   })
+}
+
+function registerWindowLifecycle(windows: WorkspaceWindowRegistry): void {
+  app.on('second-instance', () => {
+    const existing = windows.first()
+    if (!existing) return
+    if (existing.isMinimized()) existing.restore()
+    existing.show()
+    existing.focus()
+  })
   app.on('activate', () => {
-    if (!windows.first()) {
-      windows.openBootstrap()
-    }
+    if (!windows.first()) windows.openBootstrap()
   })
 }

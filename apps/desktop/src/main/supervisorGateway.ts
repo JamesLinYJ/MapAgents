@@ -56,6 +56,21 @@ export interface DesktopDiagnosticBundle {
   entries: OperationsLogEntry[]
 }
 
+export interface DesktopOperationsGateway {
+  handle(request: DesktopControlRequest): Promise<DesktopControlResponse>
+  logs(query: OperationsLogQuery): Promise<OperationsLogPage>
+  history(query: OperationsLogQuery): Promise<OperationsLogPage>
+  diagnosticBundle(): Promise<DesktopDiagnosticBundle>
+  subscribeLogs(
+    ownerWebContentsId: number,
+    active: boolean,
+    filter: OperationsLogFilter,
+    deliver: (entry: OperationsLogEntry) => void,
+  ): Promise<void>
+  close(): void
+  shutdown(): Promise<OperationsOperationResult>
+}
+
 const BROAD_LOG_FILTER: OperationsLogFilter = {
   services: ['infra', 'worker', 'api'],
   levels: [],
@@ -69,7 +84,7 @@ const BROAD_LOG_FILTER: OperationsLogFilter = {
   afterSequence: null,
 }
 
-export class DesktopSupervisorGateway {
+export class DesktopSupervisorGateway implements DesktopOperationsGateway {
   private client: OperationsClient | null = null
   private clientEventDisposer: (() => void) | null = null
   private reconnectTimer: NodeJS.Timeout | null = null

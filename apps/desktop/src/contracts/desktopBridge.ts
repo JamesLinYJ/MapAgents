@@ -29,6 +29,10 @@ import type {
   DesktopTextFileReadRequest,
   DesktopTextFileReadResult,
   DesktopMicrophonePermissionResult,
+  DesktopProductSetupConnection,
+  DesktopProductSetupRestartResult,
+  DesktopProductSetupStatus,
+  DesktopProductSetupTestResult,
   DesktopWindowCommand,
   DesktopUploadOperation,
 } from './desktopIpc.js'
@@ -70,6 +74,13 @@ export interface DesktopBridge {
   }
   readonly permissions: {
     requestSpeechMicrophone(): Promise<DesktopMicrophonePermissionResult>
+  }
+  readonly setup: {
+    status(): Promise<DesktopProductSetupStatus>
+    test(connection: DesktopProductSetupConnection): Promise<DesktopProductSetupTestResult>
+    save(connection: DesktopProductSetupConnection): Promise<DesktopProductSetupStatus>
+    reset(): Promise<DesktopProductSetupStatus>
+    restart(): Promise<DesktopProductSetupRestartResult>
   }
   readonly export: {
     create(request: DesktopExportRequest): Promise<DesktopExportResult>

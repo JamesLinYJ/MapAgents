@@ -38,6 +38,7 @@ export interface NativeMenuAuthorization {
 export interface NativeApplicationMenuOptions {
   authorization: NativeMenuAuthorization
   shutdown: Pick<DesktopShutdownCoordinator, 'requestStopAllAndQuit'>
+  localServiceControl?: boolean
 }
 
 /**
@@ -48,7 +49,10 @@ export function installNativeApplicationMenu(
   options: NativeApplicationMenuOptions,
 ): () => void {
   const rebuild = (): void => {
-    const access = deriveNativeMenuAccess(options.authorization.currentAuthorizationContext())
+    const access = deriveNativeMenuAccess(
+      options.authorization.currentAuthorizationContext(),
+      options.localServiceControl ?? true,
+    )
     Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate(access, options)))
   }
   const unsubscribe = options.authorization.onAuthorizationChanged(rebuild)
@@ -124,13 +128,14 @@ export interface NativeMenuAccess {
 
 export function deriveNativeMenuAccess(
   identity: DesktopAuthenticatedIdentity | null,
+  localServiceControl = true,
 ): NativeMenuAccess {
   const platformAdministrator = identity?.platformRoles.includes('platform_admin') ?? false
   return {
     canAccessAccount: identity !== null,
     canAccessDiagnostics: platformAdministrator,
     canAccessSecurity: platformAdministrator,
-    canStopAllAndQuit: platformAdministrator,
+    canStopAllAndQuit: platformAdministrator && localServiceControl,
   }
 }
 
@@ -212,6 +217,8 @@ function applicationMenuTemplate(
       label: '帮助',
       submenu: [
         commandItem('命令搜索', 'focus-command', 'Alt+Q'),
+        commandItem('服务连接设置', 'open-connection-settings'),
+        { type: 'separator' },
         {
           label: `关于 ${PRODUCT_CODENAME}`,
           click: (_item, window) => {

@@ -81,6 +81,14 @@ describe('desktop packaging contract', () => {
 
   it('keeps Windows and Linux package identity and metadata explicit in Forge', async () => {
     const forgeSource = await readFile(path.resolve(process.cwd(), 'forge.config.mjs'), 'utf8')
+    const rpmMakerSource = await readFile(
+      path.resolve(process.cwd(), 'packaging', 'desktopRpmMaker.mjs'),
+      'utf8',
+    )
+    const rpmSpecSource = await readFile(
+      path.resolve(process.cwd(), 'packaging', 'desktop-rpm.spec.ejs'),
+      'utf8',
+    )
     const zipMakerSource = await readFile(
       path.resolve(process.cwd(), 'packaging', 'desktopZipMaker.mjs'),
       'utf8',
@@ -106,10 +114,13 @@ describe('desktop packaging contract', () => {
       'setupIcon: windowsIconPath',
       "import { DesktopZipMaker } from './packaging/desktopZipMaker.mjs'",
       "new DesktopZipMaker({}, ['win32'])",
-      "name: '@electron-forge/maker-rpm'",
+      "import { DesktopRpmMaker } from './packaging/desktopRpmMaker.mjs'",
+      'new DesktopRpmMaker({',
       'name: `${PLATFORM_TECHNICAL_ID}-desktop`',
+      'bin: PRODUCT_EXECUTABLE_BASENAME',
       'productName: PRODUCT_DESKTOP_NAME',
       "categories: ['Science', 'Utility']",
+      'icon: linuxIconPath',
       "packageResult.platform !== 'win32'",
       'schemes: [PLATFORM_DESKTOP_PROTOCOL_SCHEME]',
     ]) {
@@ -120,6 +131,9 @@ describe('desktop packaging contract', () => {
     expect(PLATFORM_MACHINE_ID).not.toContain(PRODUCT_CODENAME.toLowerCase())
     expect(forgeSource).toContain("artifact.replace(/\\.zip$/iu, '-UNSIGNED-TEST.zip')")
     expect(forgeSource).not.toContain('@electron-forge/maker-zip')
+    expect(rpmMakerSource).toContain('class Rpm6CompatibleInstaller extends RedhatInstaller')
+    expect(rpmMakerSource).toContain('await installer.createPackage()')
+    expect(rpmSpecSource).toContain('%{_topdir}/BUILD/usr/*')
     expect(zipMakerSource).toContain('new ZipArchive(')
     expect(zipMakerSource).toContain('await rm(destinationPath, { force: true })')
     expect(zipMakerSource).not.toContain('fs.rmdir')
@@ -228,5 +242,12 @@ describe('desktop packaging contract', () => {
       '128x128',
       '256x256',
     ])
+  })
+
+  it('ships a native Linux PNG icon instead of reusing the Windows ICO container', async () => {
+    const icon = await readFile(path.resolve(process.cwd(), 'assets', 'desktop.png'))
+    expect(icon.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
+    expect(icon.readUInt32BE(16)).toBe(256)
+    expect(icon.readUInt32BE(20)).toBe(256)
   })
 })

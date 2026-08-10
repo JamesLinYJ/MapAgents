@@ -11,14 +11,17 @@
 
 import { AppLoader } from './AppLoader'
 import { DesktopBackendMonitor } from './DesktopBackendMonitor'
+import { ProductSetupGate } from './ProductSetupGate'
 
 /**
  * 把后台监督、日志和完整工作区留在异步运行壳中，入口只负责立即呈现稳定启动画面。
  */
 export default function DesktopApplicationRuntime() {
   return (
-    <DesktopBackendMonitor>
-      <AppLoader />
-    </DesktopBackendMonitor>
+    <ProductSetupGate>
+      <DesktopBackendMonitor>
+        <AppLoader />
+      </DesktopBackendMonitor>
+    </ProductSetupGate>
   )
 }

@@ -53,6 +53,10 @@ import {
   desktopTextFileReadResultSchema,
   desktopMicrophonePermissionRequestSchema,
   desktopMicrophonePermissionResultSchema,
+  desktopProductSetupConnectionSchema,
+  desktopProductSetupRestartResultSchema,
+  desktopProductSetupStatusSchema,
+  desktopProductSetupTestResultSchema,
   desktopSupervisorLogsQuerySchema,
   desktopSupervisorLogsResponseSchema,
   desktopSupervisorLogSubscriptionSchema,
@@ -188,6 +192,39 @@ const bridge: DesktopBridge = {
             purpose: 'speech-recognition',
           }),
         ),
+      )
+    },
+  },
+  setup: {
+    async status() {
+      return desktopProductSetupStatusSchema.parse(
+        await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.setupStatus),
+      )
+    },
+    async test(input) {
+      return desktopProductSetupTestResultSchema.parse(
+        await ipcRenderer.invoke(
+          DESKTOP_IPC_CHANNELS.setupTest,
+          desktopProductSetupConnectionSchema.parse(input),
+        ),
+      )
+    },
+    async save(input) {
+      return desktopProductSetupStatusSchema.parse(
+        await ipcRenderer.invoke(
+          DESKTOP_IPC_CHANNELS.setupSave,
+          desktopProductSetupConnectionSchema.parse(input),
+        ),
+      )
+    },
+    async reset() {
+      return desktopProductSetupStatusSchema.parse(
+        await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.setupReset),
+      )
+    },
+    async restart() {
+      return desktopProductSetupRestartResultSchema.parse(
+        await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.setupRestart),
       )
     },
   },

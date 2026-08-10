@@ -55,7 +55,7 @@ import {
   reportRendererDiagnostic,
   type RendererDiagnosticLogger,
 } from './rendererDiagnosticReporter.js'
-import type { DesktopSupervisorGateway } from './supervisorGateway.js'
+import type { DesktopOperationsGateway } from './supervisorGateway.js'
 import { isTrustedApplicationUrl } from './trustedApplicationLocation.js'
 import type { WorkspaceWindowRegistry } from './windowRegistry.js'
 
@@ -69,7 +69,7 @@ export interface DesktopIpcDependencies {
   files: FileHandleRegistry
   logger: RendererDiagnosticLogger
   microphone: MicrophonePermissionGate
-  supervisor: DesktopSupervisorGateway
+  supervisor: DesktopOperationsGateway
   windows: WorkspaceWindowRegistry
 }
 

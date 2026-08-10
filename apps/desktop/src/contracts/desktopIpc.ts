@@ -63,6 +63,7 @@ export const desktopMenuCommandSchema = z.enum([
   'open-security',
   'open-diagnostics',
   'open-system-logs',
+  'open-connection-settings',
   'toggle-contents',
   'toggle-assistant',
   'export-results',
@@ -152,6 +153,36 @@ export const desktopAuthBootstrapResultSchema = z.object({
   mode: z.enum(['interactive', 'local_auto']),
   status: z.enum(['ready', 'authenticated', 'failed']),
   message: z.string().trim().min(1).max(800).nullable(),
+}).strict()
+
+export const desktopProductSetupStatusSchema = z.discriminatedUnion('state', [
+  z.object({
+    state: z.literal('required'),
+    suggestedApiBaseUrl: z.string().url(),
+  }).strict(),
+  z.object({
+    state: z.literal('configured'),
+    deploymentMode: z.enum(['local_managed', 'remote']),
+    apiBaseUrl: z.string().url(),
+    canReset: z.boolean(),
+  }).strict(),
+])
+
+export const desktopProductSetupConnectionSchema = z.object({
+  apiBaseUrl: z.string().trim().min(1).max(2_048),
+}).strict().superRefine(enforceDesktopControlFrameSize)
+
+export const desktopProductSetupTestResultSchema = z.object({
+  ok: z.boolean(),
+  apiBaseUrl: z.string().url(),
+  latencyMs: z.number().int().nonnegative(),
+  releaseId: z.string().min(1).max(200).nullable(),
+  databaseSchemaVersion: z.number().int().nonnegative().nullable(),
+  message: z.string().trim().min(1).max(800),
+}).strict().superRefine(enforceDesktopControlFrameSize)
+
+export const desktopProductSetupRestartResultSchema = z.object({
+  scheduled: z.literal(true),
 }).strict()
 
 const safeRelativeApiPathSchema = z.string().trim().min(1).max(2_048).superRefine((value, context) => {
@@ -497,6 +528,11 @@ export const DESKTOP_IPC_CHANNELS = {
   fileRelease: `${PLATFORM_IPC_CHANNEL_PREFIX}:file:release`,
   fileReadText: `${PLATFORM_IPC_CHANNEL_PREFIX}:file:read-text`,
   microphonePermission: `${PLATFORM_IPC_CHANNEL_PREFIX}:microphone:permission`,
+  setupStatus: `${PLATFORM_IPC_CHANNEL_PREFIX}:setup:status`,
+  setupTest: `${PLATFORM_IPC_CHANNEL_PREFIX}:setup:test`,
+  setupSave: `${PLATFORM_IPC_CHANNEL_PREFIX}:setup:save`,
+  setupReset: `${PLATFORM_IPC_CHANNEL_PREFIX}:setup:reset`,
+  setupRestart: `${PLATFORM_IPC_CHANNEL_PREFIX}:setup:restart`,
   supervisorLogs: `${PLATFORM_IPC_CHANNEL_PREFIX}:supervisor:logs`,
   supervisorLogHistory: `${PLATFORM_IPC_CHANNEL_PREFIX}:supervisor:log-history`,
   supervisorLogSubscription: `${PLATFORM_IPC_CHANNEL_PREFIX}:supervisor:log-subscription`,
@@ -514,6 +550,10 @@ export type DesktopUploadOperation = z.infer<typeof desktopUploadOperationSchema
 export type DesktopAuthCommand = z.infer<typeof desktopAuthCommandSchema>
 export type DesktopAuthBootstrapResult = z.infer<typeof desktopAuthBootstrapResultSchema>
 export type DesktopAuthProjection = z.infer<typeof desktopAuthProjectionSchema>
+export type DesktopProductSetupStatus = z.infer<typeof desktopProductSetupStatusSchema>
+export type DesktopProductSetupConnection = z.infer<typeof desktopProductSetupConnectionSchema>
+export type DesktopProductSetupTestResult = z.infer<typeof desktopProductSetupTestResultSchema>
+export type DesktopProductSetupRestartResult = z.infer<typeof desktopProductSetupRestartResultSchema>
 export type DesktopWorkspaceBootstrapSnapshot = z.infer<typeof desktopWorkspaceBootstrapSnapshotSchema>
 export type DesktopClipboardWrite = z.infer<typeof desktopClipboardWriteSchema>
 export type DesktopConfirmationRequest = z.infer<typeof desktopConfirmationRequestSchema>
