@@ -43,6 +43,7 @@ const windowsSigningOptions = resolveWindowsSigningOptions(process.env)
 const unsignedTestBuild = windowsSigningOptions === undefined
 const executableFilename = `${PRODUCT_EXECUTABLE_BASENAME}.exe`
 const setupFilename = `${PRODUCT_EXECUTABLE_BASENAME}-0.1.0-Setup.exe`
+const linuxRuntimeServicePath = fileURLToPath(new URL('../../artifacts/runtime-service', import.meta.url))
 
 export default {
   outDir: 'release',
@@ -52,6 +53,9 @@ export default {
     asar: true,
     executableName: PRODUCT_EXECUTABLE_BASENAME,
     icon: windowsIconPath,
+    extraResource: process.platform === 'linux' && existsSync(linuxRuntimeServicePath)
+      ? [linuxRuntimeServicePath]
+      : [],
     windowsSign: windowsSigningOptions,
     win32metadata: {
       CompanyName: 'Geo Agent Platform Contributors',
@@ -106,6 +110,39 @@ export default {
         categories: ['Science', 'Utility'],
         icon: linuxIconPath,
         license: 'UNLICENSED',
+        requires: [
+          'bash',
+          'nodejs >= 22',
+          'postgresql-server',
+          'postgresql-contrib',
+          'postgresql-private-devel',
+          'postgis',
+          'systemd',
+          'python3 >= 3.11',
+          'python3dist(attrs) >= 19.2',
+          'python3dist(click)',
+          'python3dist(fastapi) >= 0.115',
+          'python3dist(pydantic) >= 2.10',
+          'python3dist(uvicorn) >= 0.32',
+          'python3dist(contourpy) >= 1.3',
+          'python3dist(eccodes) >= 2.43',
+          'python3dist(geopandas) >= 1.0',
+          'python3dist(h5netcdf) >= 1.6',
+          'python3dist(h5py) >= 3.12',
+          'python3dist(matplotlib) >= 3.9',
+          'python3dist(netcdf4) >= 1.7',
+          'python3dist(numpy) >= 2.0',
+          'python3dist(openpyxl) >= 3.1',
+          'python3dist(pandas) >= 2.2',
+          'python3dist(pillow) >= 11',
+          'python3dist(pyproj) >= 3.7',
+          'python3dist(rasterio) >= 1.4',
+          'python3dist(scipy) >= 1.14',
+          'python3dist(shapely) >= 2.0',
+          'python3dist(lxml) >= 3.1',
+          'python3dist(typing-extensions) >= 4.9',
+          'python3dist(xarray) >= 2025.1',
+        ],
       },
     }, ['linux']),
   ],

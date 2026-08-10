@@ -21,7 +21,7 @@
     "package:windows": "npm --prefix ../.. run build:desktop && electron-forge package --platform win32 --arch x64",
     "make": "npm run make:windows",
     "make:windows": "npm --prefix ../.. run build:desktop && pwsh -NoProfile -ExecutionPolicy Bypass -File ../../scripts/prepare-squirrel-vendor.ps1 && electron-forge make --platform win32 --arch x64",
-    "make:linux:rpm": "npm --prefix ../.. run build:desktop && electron-forge make --platform linux --arch x64",
+    "make:linux:rpm": "npm --prefix ../.. run release:runtime:linux && npm --prefix ../.. run verify:runtime && npm --prefix ../.. run build:desktop && electron-forge make --platform linux --arch x64",
     "make:release": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../../scripts/make-desktop-release.ps1",
     "lint": "eslint src --ext .ts,.tsx",
     "test": "vitest run src",

@@ -72,7 +72,7 @@ export function createRuntimeRootPackageManifest(source) {
     engines: source.engines,
     workspaces: [...RUNTIME_WORKSPACE_PATHS],
     scripts: {
-      'start:api': 'npm run start --workspace geo-agent-server',
+      'start:api': 'node apps/server/dist/main.js',
     },
     dependencies: source.dependencies,
     overrides: source.overrides,

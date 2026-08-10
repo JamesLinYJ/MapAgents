@@ -47,6 +47,13 @@ async function main(): Promise<void> {
   const mode = parseMode(process.argv.slice(2))
   const projectRoot = fileURLToPath(new URL('../../../../', import.meta.url))
   loadDotEnv({ path: path.join(projectRoot, '.env'), quiet: true })
+  const serviceEnvironmentFile = process.env.GEO_AGENT_PLATFORM_SERVICE_ENV_FILE?.trim()
+  if (serviceEnvironmentFile) {
+    if (!path.isAbsolute(serviceEnvironmentFile)) {
+      throw new Error('GEO_AGENT_PLATFORM_SERVICE_ENV_FILE 必须是绝对路径。')
+    }
+    loadDotEnv({ path: serviceEnvironmentFile, override: true, quiet: true })
+  }
   const env = parseEnv(process.env)
   const profile: OperationsProfile = process.env.NODE_ENV === 'production' ? 'production' : 'development'
   const paths = await resolveOperationsPaths({

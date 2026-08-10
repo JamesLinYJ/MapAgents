@@ -1,5 +1,13 @@
 %define _binary_payload w<%= compressionLevel %>.xzdio
 
+# Electron 和离线 Python Runtime 是已校验的发布载荷。Fedora 的通用
+# buildroot 后处理不应重写其 shebang、ELF 或 Python 文件。
+%global __strip /bin/true
+%global __brp_mangle_shebangs %{nil}
+%global __os_install_post_python %{nil}
+%global __os_install_post_build_reproducibility %{nil}
+%global __os_install_post_hardlink %{nil}
+
 %if "%{_host_cpu}" != "%{_target_cpu}"
 %global __strip /bin/true
 %endif
@@ -25,6 +33,9 @@ print('\n\n\n') }
 %>%install
 mkdir -p %{buildroot}/usr/
 cp <%= process.platform === 'darwin' ? '-R' : '-r' %> %{_topdir}/BUILD/usr/* %{buildroot}/usr/
+install -Dm0644 \
+  %{buildroot}/usr/lib/<%= name %>/resources/runtime-service/deploy/systemd/geo-agent-platform-supervisor.user.service \
+  %{buildroot}/usr/lib/systemd/user/geo-agent-platform-supervisor.service
 
 
 %files
@@ -32,6 +43,7 @@ cp <%= process.platform === 'darwin' ? '-R' : '-r' %> %{_topdir}/BUILD/usr/* %{b
 /usr/lib/<%= name %>/
 /usr/share/applications/<%= name %>.desktop
 /usr/share/doc/<%= name %>/
+/usr/lib/systemd/user/geo-agent-platform-supervisor.service
 <% if (_.isObject(icon)) {
   _.forEach(icon, function (path, resolution) {
     %>/usr/share/icons/hicolor/<%= resolution %>/apps/<%= name %><%= resolution === 'symbolic' ? '-symbolic' : '' %>.<%= ['scalable', 'symbolic'].includes(resolution) ? 'svg' : 'png' %>

@@ -44,6 +44,7 @@
     "generate:glass": "node scripts/generate-liquid-glass-maps.mjs",
     "check:bundle": "node scripts/check-desktop-bundle-budget.mjs",
     "release:runtime": "node scripts/create-runtime-service-artifact.mjs --build",
+    "release:runtime:linux": "node scripts/create-runtime-service-artifact.mjs --build --force --materialize-linux",
     "verify:runtime": "node scripts/verify-runtime-service-artifact.mjs",
     "generate:architecture-manifest": "npm run build --workspace @geo-agent-platform/shared-types && npm run build --workspace geo-agent-server && node scripts/generate-architecture-manifest.mjs",
     "migrate:file-lifecycle": "node scripts/migrate-runtime-file-metadata.mjs",

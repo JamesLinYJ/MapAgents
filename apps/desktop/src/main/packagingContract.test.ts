@@ -55,6 +55,8 @@ describe('desktop packaging contract', () => {
     expect(desktopPackage.scripts['make:windows']).toContain('prepare-squirrel-vendor.ps1')
     expect(desktopPackage.scripts['make:windows']).toContain('--platform win32 --arch x64')
     expect(desktopPackage.scripts['make:linux:rpm']).toContain('npm --prefix ../.. run build:desktop')
+    expect(desktopPackage.scripts['make:linux:rpm']).toContain('run release:runtime:linux')
+    expect(desktopPackage.scripts['make:linux:rpm']).toContain('run verify:runtime')
     expect(desktopPackage.scripts['make:linux:rpm']).toContain('--platform linux --arch x64')
     expect(desktopPackage.scripts['make:release']).toContain('make-desktop-release.ps1')
     expect(desktopPackage.devDependencies?.['@electron-forge/maker-base']).toBe('7.11.2')
@@ -120,6 +122,15 @@ describe('desktop packaging contract', () => {
       'bin: PRODUCT_EXECUTABLE_BASENAME',
       'productName: PRODUCT_DESKTOP_NAME',
       "categories: ['Science', 'Utility']",
+      "'postgresql-server'",
+      "'postgresql-private-devel'",
+      "'postgis'",
+      "'python3 >= 3.11'",
+      "'python3dist(click)'",
+      "'python3dist(lxml) >= 3.1'",
+      "'python3dist(rasterio) >= 1.4'",
+      "'python3dist(eccodes) >= 2.43'",
+      'extraResource:',
       'icon: linuxIconPath',
       "packageResult.platform !== 'win32'",
       'schemes: [PLATFORM_DESKTOP_PROTOCOL_SCHEME]',
@@ -134,6 +145,9 @@ describe('desktop packaging contract', () => {
     expect(rpmMakerSource).toContain('class Rpm6CompatibleInstaller extends RedhatInstaller')
     expect(rpmMakerSource).toContain('await installer.createPackage()')
     expect(rpmSpecSource).toContain('%{_topdir}/BUILD/usr/*')
+    expect(rpmSpecSource).toContain('%global __brp_mangle_shebangs %{nil}')
+    expect(rpmSpecSource).toContain('%global __os_install_post_python %{nil}')
+    expect(rpmSpecSource).toContain('/usr/lib/systemd/user/geo-agent-platform-supervisor.service')
     expect(zipMakerSource).toContain('new ZipArchive(')
     expect(zipMakerSource).toContain('await rm(destinationPath, { force: true })')
     expect(zipMakerSource).not.toContain('fs.rmdir')

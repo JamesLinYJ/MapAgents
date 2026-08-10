@@ -102,6 +102,7 @@ test('runtime package 和 lock 只保留生产 workspace', () => {
   }, runtimePackage)
 
   assert.deepEqual(runtimePackage.workspaces, RUNTIME_WORKSPACE_PATHS)
+  assert.equal(runtimePackage.scripts['start:api'], 'node apps/server/dist/main.js')
   assert.equal('devDependencies' in runtimePackage, false)
   assert.deepEqual(runtimeLock.packages[''].workspaces, RUNTIME_WORKSPACE_PATHS)
   assert.deepEqual(runtimeLock.packages['apps/server'].dependencies, { pino: '1.0.0' })

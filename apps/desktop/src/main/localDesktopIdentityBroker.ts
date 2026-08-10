@@ -48,6 +48,10 @@ export interface DesktopBrokerProcessFactory {
   ): DesktopBrokerProcess
 }
 
+export interface LocalDesktopIdentityBrokerOptions {
+  serviceEnvironmentFile?: string
+}
+
 /**
  * Electron Main 只持有 Broker 签发的短期 Cookie。根密钥、派生凭据和 Better Auth
  * Admin API 全部留在服务器子进程边界内，不进入 Renderer 或桌面配置页。
@@ -66,6 +70,7 @@ export class LocalDesktopIdentityBroker implements DesktopManagedIdentityPort {
   constructor(
     private readonly runtime: DesktopRuntimeConfig,
     private readonly processes: DesktopBrokerProcessFactory,
+    private readonly options: LocalDesktopIdentityBrokerOptions = {},
   ) {}
 
   open(): Promise<LocalDesktopAuthorization> {
@@ -136,6 +141,9 @@ export class LocalDesktopIdentityBroker implements DesktopManagedIdentityPort {
         GEO_AGENT_PLATFORM_ROOT: this.runtime.projectRoot,
         RUNTIME_ROOT: this.runtime.runtimeRoot,
         APP_BASE_URL: this.runtime.apiBaseUrl,
+        ...(this.options.serviceEnvironmentFile
+          ? { GEO_AGENT_PLATFORM_SERVICE_ENV_FILE: this.options.serviceEnvironmentFile }
+          : {}),
       },
       stdio: ['ignore', 'ignore', 'pipe'],
       serviceName: 'Desktop Identity Broker',

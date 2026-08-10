@@ -97,6 +97,27 @@ describe('LocalDesktopIdentityBroker', () => {
     )
   })
 
+  it('只把受保护的本机服务环境路径传给 Broker', async () => {
+    const harness = createBrokerProcess()
+    const environmentFile = '/home/tester/.config/geo-agent-platform/runtime.env'
+    const broker = new LocalDesktopIdentityBroker(runtime, harness.factory, {
+      serviceEnvironmentFile: environmentFile,
+    })
+    const opening = broker.open()
+    harness.process.emit('message', authorization)
+    await opening
+
+    expect(harness.fork).toHaveBeenCalledWith(
+      expect.any(String),
+      ['desktop'],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          GEO_AGENT_PLATFORM_SERVICE_ENV_FILE: environmentFile,
+        }),
+      }),
+    )
+  })
+
   it('关闭时发送有 schema 的控制消息并等待 Broker 确认', async () => {
     const harness = createBrokerProcess()
     const broker = new LocalDesktopIdentityBroker(runtime, harness.factory)

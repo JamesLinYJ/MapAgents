@@ -12,6 +12,7 @@ apps/desktop/runtime/
 playwright-report/
 test-results/
 artifacts/**/*.log
+artifacts/runtime-service/
 .DS_Store
 *.docx
 __pycache__/

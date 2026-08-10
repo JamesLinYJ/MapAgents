@@ -10,7 +10,15 @@
  */
 
 import { createHash, createPrivateKey, sign } from 'node:crypto'
-import { cp, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import {
+  cp,
+  mkdir,
+  readFile,
+  readdir,
+  readlink,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
@@ -113,6 +121,8 @@ for (const workspacePath of RUNTIME_WORKSPACE_PATHS) {
   await writeFile(packagePath, `${JSON.stringify(runtimePackage, null, 2)}\n`, 'utf8')
 }
 
+if (args.materializeLinux) await materializeLinuxRuntime(output)
+
 const serverPackagePath = path.join(output, 'apps/server/package.json')
 const serverPackage = JSON.parse(await readFile(serverPackagePath, 'utf8'))
 const releaseId = process.env.GEO_AGENT_PLATFORM_RELEASE_ID?.trim()
@@ -125,16 +135,20 @@ const releaseContracts = await loadReleaseContracts()
 const signingMaterial = args.signingKey ? await readSigningMaterial(args.signingKey) : null
 await writeRuntimeSbom(output, runtimeLock, releaseId)
 
-const files = await listFiles(output)
+const files = await listArtifactEntries(output)
 const entries = []
 for (const file of files) {
-  const relativePath = path.relative(output, file).replaceAll(path.sep, '/')
-  const content = await readFile(file)
-  entries.push({
-    path: relativePath,
-    sizeBytes: content.byteLength,
-    sha256: `sha256:${createHash('sha256').update(content).digest('hex')}`,
-  })
+  const relativePath = path.relative(output, file.path).replaceAll(path.sep, '/')
+  if (file.kind === 'symlink') {
+    entries.push({ path: relativePath, kind: 'symlink', target: file.target })
+  } else {
+    const content = await readFile(file.path)
+    entries.push({
+      path: relativePath,
+      sizeBytes: content.byteLength,
+      sha256: `sha256:${createHash('sha256').update(content).digest('hex')}`,
+    })
+  }
 }
 entries.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0)
 
@@ -163,11 +177,18 @@ if (signingMaterial) await writeManifestSignature(output, manifestBytes, signing
 process.stdout.write(`${output}${process.platform === 'win32' ? '\\' : '/'}runtime-service-manifest.json\n`)
 
 function parseArgs(argv) {
-  const result = { build: false, force: false, out: null, signingKey: null }
+  const result = {
+    build: false,
+    force: false,
+    materializeLinux: false,
+    out: null,
+    signingKey: null,
+  }
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
     if (argument === '--build') result.build = true
     else if (argument === '--force') result.force = true
+    else if (argument === '--materialize-linux') result.materializeLinux = true
     else if (argument === '--out') {
       result.out = argv[index + 1]
       index += 1
@@ -183,18 +204,122 @@ function parseArgs(argv) {
   return result
 }
 
-async function listFiles(directory) {
+async function listArtifactEntries(directory) {
   const result = []
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const fullPath = path.join(directory, entry.name)
     if (entry.isSymbolicLink()) {
-      throw new Error(`Runtime Service 制品输入不得包含符号链接：${path.relative(output, fullPath)}`)
+      const target = await readlink(fullPath)
+      if (path.isAbsolute(target)) {
+        throw new Error(`Runtime Service 制品符号链接不得使用绝对目标：${path.relative(output, fullPath)}`)
+      }
+      const resolvedTarget = path.resolve(path.dirname(fullPath), target)
+      const relativeTarget = path.relative(output, resolvedTarget)
+      if (relativeTarget === '..' || relativeTarget.startsWith(`..${path.sep}`) || path.isAbsolute(relativeTarget)) {
+        throw new Error(`Runtime Service 制品符号链接越界：${path.relative(output, fullPath)}`)
+      }
+      await stat(resolvedTarget)
+      result.push({ path: fullPath, kind: 'symlink', target: target.replaceAll(path.sep, '/') })
+      continue
     }
-    if (entry.isDirectory()) result.push(...await listFiles(fullPath))
-    else if (entry.isFile()) result.push(fullPath)
+    if (entry.isDirectory()) result.push(...await listArtifactEntries(fullPath))
+    else if (entry.isFile()) result.push({ path: fullPath, kind: 'file' })
     else throw new Error(`Runtime Service 制品输入包含不支持的文件类型：${path.relative(output, fullPath)}`)
   }
   return result
+}
+
+async function materializeLinuxRuntime(artifactRoot) {
+  if (process.platform !== 'linux' || process.arch !== 'x64') {
+    throw new Error('--materialize-linux 当前只支持 Linux x64 构建主机。')
+  }
+
+  runRequired('npm', [
+    'ci',
+    '--omit=dev',
+    '--ignore-scripts',
+    '--no-audit',
+    '--no-fund',
+  ], { cwd: artifactRoot })
+
+  const workerLock = await readFile(path.join(artifactRoot, 'apps', 'worker', 'uv.lock'), 'utf8')
+  const requirementsPath = path.join(artifactRoot, 'python-private-requirements.lock')
+  const privateRequirements = ['cfgrib', 'python-docx']
+    .map(packageName => lockedPurePythonRequirement(workerLock, packageName))
+  await writeFile(requirementsPath, `${privateRequirements.join('\n')}\n`, 'utf8')
+  const privatePackagesRoot = path.join(artifactRoot, 'python-packages')
+  runRequired('uv', [
+    'pip',
+    'install',
+    '--python', '/usr/bin/python3',
+    '--target', privatePackagesRoot,
+    '--no-deps',
+    '--require-hashes',
+    '--requirements', requirementsPath,
+  ], { cwd: artifactRoot, quiet: true })
+
+  const pythonPath = [
+    path.join(artifactRoot, 'apps', 'worker', 'src'),
+    path.join(artifactRoot, 'packages', 'gis-meteorology', 'src'),
+    privatePackagesRoot,
+  ].join(path.delimiter)
+  runRequired('/usr/bin/python3', [
+    '-c',
+    [
+      'from pathlib import Path',
+      'root = Path("python-packages")',
+      'files = list(root.rglob("*.py"))',
+      'assert files',
+      '[compile(file.read_bytes(), str(file), "exec") for file in files]',
+      'import docx',
+      'assert (root / "cfgrib" / "__init__.py").is_file()',
+      'import worker_app.sidecar',
+    ].join('; '),
+  ], { cwd: artifactRoot, environment: { PYTHONPATH: pythonPath } })
+  runRequired(process.execPath, [
+    '--input-type=module',
+    '--eval',
+    "await import('sharp'); await import('@geo-agent-platform/operations-supervisor')",
+  ], { cwd: path.join(artifactRoot, 'apps', 'server') })
+  await writeFile(path.join(artifactRoot, 'linux-runtime-bundle.json'), `${JSON.stringify({
+    schemaVersion: 1,
+    platform: 'linux',
+    architecture: 'x64',
+    pythonRuntime: 'system',
+    minimumPythonVersion: '3.11',
+    privatePythonPackages: privateRequirements.map(value => value.split(' ')[0]),
+    nodeRuntime: 'system',
+  }, null, 2)}\n`, 'utf8')
+}
+
+function runRequired(file, commandArguments, options) {
+  const stdio = options.capture
+    ? ['ignore', 'pipe', 'inherit']
+    : (options.quiet ? ['ignore', 'ignore', 'inherit'] : 'inherit')
+  const result = spawnSync(file, commandArguments, {
+    cwd: options.cwd,
+    encoding: options.capture ? 'utf8' : undefined,
+    env: { ...process.env, ...options.environment },
+    stdio,
+  })
+  if (result.error || result.status !== 0) {
+    throw new Error(`Runtime Service 依赖物化失败：${file} ${commandArguments.join(' ')}`)
+  }
+  return options.capture ? String(result.stdout) : ''
+}
+
+function lockedPurePythonRequirement(lockSource, packageName) {
+  const marker = `[[package]]\nname = "${packageName}"`
+  const start = lockSource.indexOf(marker)
+  if (start < 0) throw new Error(`Worker uv.lock 缺少 ${packageName}。`)
+  const next = lockSource.indexOf('[[package]]', start + marker.length)
+  const block = lockSource.slice(start, next < 0 ? undefined : next)
+  const version = /^version = "([^"]+)"$/mu.exec(block)?.[1]
+  const wheel = /url = "[^"]+-py3-none-any\.whl", hash = "(sha256:[a-f0-9]{64})"/u.exec(block)
+  if (!version || !wheel) {
+    throw new Error(`Worker uv.lock 中的 ${packageName} 不是可私有携带的锁定纯 Python wheel。`)
+  }
+  return `${packageName}==${version} --hash=${wheel[1]}`
 }
 
 async function writeRuntimeSbom(artifactRoot, npmLock, releaseId) {

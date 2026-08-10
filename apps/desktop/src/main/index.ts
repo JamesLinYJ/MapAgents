@@ -31,6 +31,7 @@ import { DesktopDiagnosticExportService } from './diagnosticExportService.js'
 import { LocalDesktopIdentityBroker } from './localDesktopIdentityBroker.js'
 import { MicrophonePermissionGate } from './microphonePermissionGate.js'
 import { installNativeApplicationMenu } from './nativeMenus.js'
+import { preparePackagedLocalRuntime } from './packagedLocalRuntime.js'
 import { installResourceProtocol } from './resourceProtocol.js'
 import { DesktopProductSetupService } from './productSetup.js'
 import { installDesktopProductSetupIpcHandlers } from './productSetupIpc.js'
@@ -39,6 +40,7 @@ import { handleSquirrelLifecycle } from './squirrelLifecycle.js'
 import { safeStartupMessage } from './startupFailureDocument.js'
 import { showStartupFailureWindow } from './startupFailureWindow.js'
 import { DesktopSupervisorGateway } from './supervisorGateway.js'
+import { defaultDesktopRuntimeManifestPath } from './runtimeConfig.js'
 import { DesktopTypedConfirmationWindow } from './typedConfirmationWindow.js'
 import { WorkspaceWindowRegistry } from './windowRegistry.js'
 
@@ -83,12 +85,28 @@ async function startDesktop(logger: DesktopSystemLogger): Promise<void> {
     copyright: '地理智能平台',
     version: app.getVersion(),
   })
+  const packagedLocalRuntime = app.isPackaged
+    ? await preparePackagedLocalRuntime({
+        platform: process.platform,
+        resourcesPath: process.resourcesPath,
+        homeDirectory: app.getPath('home'),
+        environment: process.env,
+        ownerUid: process.getuid?.(),
+        systemRuntimeManifestPath: defaultDesktopRuntimeManifestPath(process.platform, process.env),
+      })
+    : null
   const setup = new DesktopProductSetupService({
     profile: app.isPackaged ? 'production' : 'development',
     environment: process.env,
     applicationPath: app.getAppPath(),
     platform: process.platform,
     userSetupPath: path.join(app.getPath('userData'), 'product-setup.v1.json'),
+    ...(packagedLocalRuntime
+      ? {
+          runtimeManifestPath: packagedLocalRuntime.runtimeManifestPath,
+          manifestProtection: packagedLocalRuntime.manifestProtection,
+        }
+      : {}),
     fetch: (input, init) => net.fetch(input, init),
   })
   const startup = await setup.resolve()
@@ -129,6 +147,8 @@ async function startDesktop(logger: DesktopSystemLogger): Promise<void> {
     managedIdentity: runtime?.autoAuth
       ? new LocalDesktopIdentityBroker(runtime, {
         fork: (modulePath, args, options) => utilityProcess.fork(modulePath, args, options),
+      }, {
+        serviceEnvironmentFile: packagedLocalRuntime?.serviceEnvironmentFile,
       })
       : null,
   })

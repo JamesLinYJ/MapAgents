@@ -131,8 +131,8 @@ export const SERVICE_CATALOG: Readonly<Record<OperationsServiceId, ServiceDefini
         linux: 'npm run dev:supervised --workspace geo-agent-server',
       },
       production: {
-        windows: 'npm run start --workspace geo-agent-server',
-        linux: 'npm run start --workspace geo-agent-server',
+        windows: 'node apps/server/dist/main.js',
+        linux: 'node apps/server/dist/main.js',
       },
     },
     health: {

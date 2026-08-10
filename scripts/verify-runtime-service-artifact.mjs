@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto'
-import { lstat, readFile, readdir, realpath } from 'node:fs/promises'
+import { lstat, readFile, readdir, readlink, realpath } from 'node:fs/promises'
 import path from 'node:path'
 
 import {
@@ -33,6 +33,12 @@ for (const entry of manifest.entries) {
   const filePath = resolveArtifactPath(artifactRoot, entry.path)
   await assertCanonicalArtifactPath(canonicalArtifactRoot, filePath, entry.path)
   const metadata = await lstat(filePath)
+  if (entry.kind === 'symlink') {
+    if (!metadata.isSymbolicLink() || await readlink(filePath) !== entry.target) {
+      throw new Error(`运行服务制品符号链接校验失败：${entry.path}`)
+    }
+    continue
+  }
   const content = await readFile(filePath)
   const actualHash = await sha256(content)
   if (!metadata.isFile() || metadata.size !== entry.sizeBytes || actualHash !== entry.sha256) {
@@ -40,7 +46,7 @@ for (const entry of manifest.entries) {
   }
 }
 
-for (const requiredPath of requiredRuntimePaths()) {
+for (const requiredPath of requiredRuntimePaths(entryPaths)) {
   if (!entryPaths.has(requiredPath)) throw new Error(`运行服务制品缺少必需文件：${requiredPath}`)
 }
 
@@ -94,7 +100,7 @@ if (manifest.signing) {
 }
 
 assertArtifactFileSet(
-  await listArtifactFiles(artifactRoot),
+  await listArtifactPaths(artifactRoot),
   entryPaths,
   manifest.signing?.signatureFile ?? null,
 )
@@ -147,15 +153,16 @@ async function assertCanonicalArtifactPath(canonicalRoot, candidate, relativePat
   }
 }
 
-async function listArtifactFiles(root, directory = root) {
+async function listArtifactPaths(root, directory = root) {
   const files = []
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const fullPath = path.join(directory, entry.name)
     const relativePath = path.relative(root, fullPath).replaceAll(path.sep, '/')
     if (entry.isSymbolicLink()) {
-      throw new Error(`Runtime Service 制品不得包含符号链接：${relativePath}`)
+      files.push(relativePath)
+      continue
     }
-    if (entry.isDirectory()) files.push(...await listArtifactFiles(root, fullPath))
+    if (entry.isDirectory()) files.push(...await listArtifactPaths(root, fullPath))
     else if (entry.isFile()) files.push(relativePath)
     else throw new Error(`Runtime Service 制品包含不支持的文件类型：${relativePath}`)
   }
@@ -163,9 +170,16 @@ async function listArtifactFiles(root, directory = root) {
 }
 
 function isManifestEntry(entry) {
-  return entry
-    && typeof entry === 'object'
-    && typeof entry.path === 'string'
+  if (!entry || typeof entry !== 'object') return false
+  if (typeof entry.path !== 'string') return false
+  if (entry.kind === 'symlink') {
+    return typeof entry.target === 'string'
+      && entry.target.length > 0
+      && !entry.target.includes('\\')
+      && !path.posix.isAbsolute(entry.target)
+      && path.posix.normalize(entry.target) === entry.target
+  }
+  return entry.kind === undefined
     && Number.isInteger(entry.sizeBytes)
     && entry.sizeBytes >= 0
     && typeof entry.sha256 === 'string'
@@ -199,8 +213,8 @@ function assertNpmSbomClosure(sbomPackages, expectedPackages) {
   }
 }
 
-function requiredRuntimePaths() {
-  return [
+function requiredRuntimePaths(entryPaths) {
+  const paths = [
     RUNTIME_OUTPUT_MARKER,
     '.node-version',
     'package.json',
@@ -220,9 +234,19 @@ function requiredRuntimePaths() {
     'packages/gis-meteorology/pyproject.toml',
     'infra/migrations/000_schema_migrations.sql',
     'deploy/systemd/geo-agent-platform-supervisor.service',
+    'deploy/systemd/geo-agent-platform-supervisor.user.service',
     'deploy/windows/GeoAgentPlatformSupervisor.xml.template',
     'scripts/run-worker.ps1',
     'scripts/run-worker.sh',
     'scripts/run-windows-service.ps1',
   ]
+  if (entryPaths.has('linux-runtime-bundle.json')) {
+    paths.push(
+      'node_modules/.package-lock.json',
+      'python-private-requirements.lock',
+      'python-packages/cfgrib/__init__.py',
+      'python-packages/docx/__init__.py',
+    )
+  }
+  return paths
 }
