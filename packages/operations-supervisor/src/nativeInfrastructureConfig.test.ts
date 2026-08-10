@@ -15,7 +15,11 @@ import path from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { postgisHealthArguments } from './nativeInfrastructure.js'
+import {
+  postgresServerArguments,
+  postgisAvailabilityArguments,
+  postgisHealthArguments,
+} from './nativeInfrastructure.js'
 import { resolveNativeInfrastructureConfig } from './nativeInfrastructureConfig.js'
 
 const temporaryDirectories: string[] = []
@@ -53,7 +57,7 @@ describe('native infrastructure configuration', () => {
       'bin',
     )
     fs.mkdirSync(portableBin, { recursive: true })
-    for (const name of ['postgres', 'initdb', 'pg_ctl', 'pg_isready', 'pg_config', 'psql', 'createdb']) {
+    for (const name of ['postgres', 'initdb', 'pg_ctl', 'pg_isready', 'psql', 'createdb']) {
       fs.writeFileSync(path.join(portableBin, executable(name)), '')
     }
     const environment = {
@@ -143,6 +147,48 @@ describe('native infrastructure configuration', () => {
     expect(arguments_.at(-1)).toContain('platform_layer_features')
     expect(arguments_.at(-1)).toContain('platform_schema_migrations')
   })
+
+  it('discovers PostGIS through the running server without requiring pg_config', () => {
+    const fixture = createFixture()
+    const config = resolveNativeInfrastructureConfig({
+      profile: 'production',
+      projectRoot: fixture.projectRoot,
+      runtimeRoot: fixture.runtimeRoot,
+      platform: process.platform,
+      environment: fixture.environment,
+    })
+
+    expect(postgisAvailabilityArguments(config)).toEqual(expect.arrayContaining([
+      '-d',
+      'postgres',
+      '-X',
+      '-qAt',
+      'ON_ERROR_STOP=1',
+    ]))
+    expect(postgisAvailabilityArguments(config).at(-1)).toContain('pg_available_extensions')
+    expect(config.database.binaries).not.toHaveProperty('pgConfig')
+  })
+
+  it('starts the user-owned database without a privileged system socket', () => {
+    const fixture = createFixture()
+    const config = resolveNativeInfrastructureConfig({
+      profile: 'production',
+      projectRoot: fixture.projectRoot,
+      runtimeRoot: fixture.runtimeRoot,
+      platform: process.platform,
+      environment: fixture.environment,
+    })
+
+    const arguments_ = postgresServerArguments(config)
+    expect(arguments_).toEqual(expect.arrayContaining([
+      '-h',
+      '127.0.0.1',
+      '-c',
+      'unix_socket_directories=',
+      'logging_collector=off',
+    ]))
+    expect(arguments_.join(' ')).not.toContain('/var/run/postgresql')
+  })
 })
 
 function createFixture(): {
@@ -156,7 +202,7 @@ function createFixture(): {
   const runtimeRoot = path.join(projectRoot, 'runtime')
   const postgresBin = path.join(projectRoot, 'postgres', 'bin')
   fs.mkdirSync(postgresBin, { recursive: true })
-  for (const name of ['postgres', 'initdb', 'pg_ctl', 'pg_isready', 'pg_config', 'psql', 'createdb']) {
+  for (const name of ['postgres', 'initdb', 'pg_ctl', 'pg_isready', 'psql', 'createdb']) {
     fs.writeFileSync(path.join(postgresBin, executable(name)), '')
   }
   return {

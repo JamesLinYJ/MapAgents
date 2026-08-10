@@ -14,7 +14,12 @@ import { describe, expect, it } from 'vitest'
 import { shouldRetryAuthentication } from './useWorkspaceAuthenticationCoordinator'
 
 describe('workspace authentication coordinator', () => {
-  it('retries only after a newer backend-online event while authentication is failed', () => {
+  it('keeps an online revision available when broker failure arrives after the backend', () => {
+    expect(shouldRetryAuthentication(0, 1, 'checking')).toBe(false)
+    expect(shouldRetryAuthentication(0, 1, 'error')).toBe(true)
+  })
+
+  it('consumes each backend-online revision at most once after authentication fails', () => {
     expect(shouldRetryAuthentication(2, 3, 'error')).toBe(true)
     expect(shouldRetryAuthentication(3, 3, 'error')).toBe(false)
     expect(shouldRetryAuthentication(2, 3, 'authenticated')).toBe(false)

@@ -123,7 +123,6 @@ describe('desktop packaging contract', () => {
       'productName: PRODUCT_DESKTOP_NAME',
       "categories: ['Science', 'Utility']",
       "'postgresql-server'",
-      "'postgresql-private-devel'",
       "'postgis'",
       "'python3 >= 3.11'",
       "'python3dist(click)'",
@@ -137,6 +136,7 @@ describe('desktop packaging contract', () => {
     ]) {
       expect(forgeSource, requiredMetadata).toContain(requiredMetadata)
     }
+    expect(forgeSource).not.toContain("'postgresql-private-devel'")
     expect(PLATFORM_DESKTOP_APPLICATION_ID).not.toContain(PRODUCT_CODENAME)
     expect(PLATFORM_DESKTOP_PROTOCOL_SCHEME).not.toContain(PRODUCT_CODENAME.toLowerCase())
     expect(PLATFORM_MACHINE_ID).not.toContain(PRODUCT_CODENAME.toLowerCase())

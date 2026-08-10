@@ -28,7 +28,6 @@ export interface PostgreSqlBinaries {
   initdb: string
   pgCtl: string
   pgIsReady: string
-  pgConfig: string
   psql: string
   createdb: string
 }
@@ -120,7 +119,6 @@ export function resolveNativeInfrastructureConfig(input: {
         initdb: postgresExecutable('initdb'),
         pgCtl: postgresExecutable('pg_ctl'),
         pgIsReady: postgresExecutable('pg_isready'),
-        pgConfig: postgresExecutable('pg_config'),
         psql: postgresExecutable('psql'),
         createdb: postgresExecutable('createdb'),
       },

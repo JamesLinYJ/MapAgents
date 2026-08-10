@@ -567,6 +567,34 @@ describe('OperationsSupervisor operations', () => {
     }
   })
 
+  it('reports the redacted startup stderr instead of a later restart generation', async () => {
+    const { supervisor } = await createSupervisor()
+    const harness = supervisor as unknown as {
+      requireRecord(serviceId: 'infra'): {
+        command: object | null
+        commandGeneration: number
+        startupFailures: Map<number, string>
+      }
+      assertCurrentCommand(record: unknown, command: object, generation: number): void
+    }
+    const record = harness.requireRecord('infra')
+    const failedCommand = { pid: 101 }
+    record.command = { pid: 202 }
+    record.commandGeneration = 4
+    record.startupFailures.set(
+      3,
+      '基础设施 启动进程在就绪前退出（退出码 1）：PostgreSQL 运行时组件缺失。',
+    )
+
+    try {
+      expect(() => harness.assertCurrentCommand(record, failedCommand, 3))
+        .toThrow('PostgreSQL 运行时组件缺失')
+    } finally {
+      record.command = null
+      await supervisor.close()
+    }
+  })
+
   it('ignores a restart timer that belongs to an older command generation', async () => {
     vi.useFakeTimers()
     const { supervisor } = await createSupervisor()

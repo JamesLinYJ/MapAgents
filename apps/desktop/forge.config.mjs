@@ -115,7 +115,6 @@ export default {
           'nodejs >= 22',
           'postgresql-server',
           'postgresql-contrib',
-          'postgresql-private-devel',
           'postgis',
           'systemd',
           'python3 >= 3.11',

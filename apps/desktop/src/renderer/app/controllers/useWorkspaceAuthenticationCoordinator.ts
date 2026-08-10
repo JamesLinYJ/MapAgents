@@ -26,11 +26,11 @@ interface WorkspaceAuthenticationCoordinatorOptions {
 }
 
 export function shouldRetryAuthentication(
-  previousOnlineRevision: number,
+  lastRetriedOnlineRevision: number,
   currentOnlineRevision: number,
   authStatus: AuthStatus,
 ): boolean {
-  return currentOnlineRevision > previousOnlineRevision && authStatus === 'error'
+  return currentOnlineRevision > lastRetriedOnlineRevision && authStatus === 'error'
 }
 
 export function useWorkspaceAuthenticationCoordinator({
@@ -42,16 +42,19 @@ export function useWorkspaceAuthenticationCoordinator({
   retryAuth,
   setUiError,
 }: WorkspaceAuthenticationCoordinatorOptions) {
-  const previousBackendOnlineRevision = useRef(backendOnlineRevision)
+  // 只在真正发起重试时消耗 online revision。冷启动时后端可能先报
+  // online，而早已发起的 Broker 稍后才超时；若在 checking 阶段就把
+  // revision 当作已处理，这个唯一恢复信号会被永久丢失。
+  const lastRetriedBackendOnlineRevision = useRef(0)
   useEffect(() => {
     if (shouldRetryAuthentication(
-      previousBackendOnlineRevision.current,
+      lastRetriedBackendOnlineRevision.current,
       backendOnlineRevision,
       authStatus,
     )) {
+      lastRetriedBackendOnlineRevision.current = backendOnlineRevision
       retryAuth()
     }
-    previousBackendOnlineRevision.current = backendOnlineRevision
   }, [authStatus, backendOnlineRevision, retryAuth])
 
   const handleLogout = useCallback(async () => {

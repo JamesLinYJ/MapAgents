@@ -30,29 +30,66 @@ export async function runNativeInfrastructure(input: {
   environment: NodeJS.ProcessEnv
 }): Promise<void> {
   const config = resolveNativeInfrastructureConfig(input)
-  await verifyPostgisInstallation(config)
   await ensurePostgresCluster(config)
 
   const postgres = startGroup([{
     name: 'postgresql',
-    command: commandLine(config.database.binaries.postgres, [
-      '-D', config.database.dataDirectory,
-      '-h', config.database.host,
-      '-p', String(config.database.port),
-      '-c', 'log_checkpoints=off',
-    ]),
+    command: commandLine(
+      config.database.binaries.postgres,
+      postgresServerArguments(config),
+    ),
   }], config)
   const stopPostgres = installShutdownHandlers(postgres.commands)
+  const postgresExit = failWhenGroupExits(postgres, 'PostgreSQL')
 
   try {
-    await waitForPostgres(config, 60_000)
-    await ensureDatabase(config)
-    await applyMigrations(config)
-    await failWhenGroupExits(postgres, 'PostgreSQL')
+    await Promise.race([
+      (async () => {
+        await waitForPostgres(config, 60_000)
+        await verifyPostgisAvailability(config)
+        await ensureDatabase(config)
+        await applyMigrations(config)
+      })(),
+      postgresExit,
+    ])
+    await postgresExit
   } finally {
     stopPostgres()
     killCommands(postgres.commands)
   }
+}
+
+/**
+ * 私有数据库的所有客户端都显式走 TCP loopback。Linux 发行版常把
+ * Unix socket 默认到只允许系统 PostgreSQL 用户写入的 /var/run/postgresql，
+ * 普通桌面用户启动时会在已监听 TCP 后反而因创建 socket 锁失败。显式
+ * 禁用未使用的 Unix socket，同时关闭发行版默认的 logging collector，
+ * 让真实启动错误留在 Supervisor 的受控日志中。
+ */
+export function postgresServerArguments(config: NativeInfrastructureConfig): string[] {
+  return [
+    '-D', config.database.dataDirectory,
+    '-h', config.database.host,
+    '-p', String(config.database.port),
+    '-c', 'unix_socket_directories=',
+    '-c', 'logging_collector=off',
+    '-c', 'log_checkpoints=off',
+  ]
+}
+
+/**
+ * PostGIS 是 PostgreSQL 的运行时扩展，不应为了定位 extension 目录而强迫最终用户
+ * 安装只面向编译扩展的 pg_config/devel 软件包。私有集群启动后直接询问 PostgreSQL
+ * 的扩展目录事实源，既能验证当前服务端主版本，也能给出稳定的产品错误。
+ */
+export function postgisAvailabilityArguments(config: NativeInfrastructureConfig): string[] {
+  return [
+    ...databaseArguments(config, 'postgres'),
+    '-X',
+    '-qAt',
+    '-v', 'ON_ERROR_STOP=1',
+    '-c', "SELECT default_version FROM pg_available_extensions WHERE name = 'postgis';",
+  ]
 }
 
 export async function checkNativeInfrastructure(input: {
@@ -134,18 +171,18 @@ export function postgisHealthArguments(config: NativeInfrastructureConfig): stri
   ]
 }
 
-async function verifyPostgisInstallation(config: NativeInfrastructureConfig): Promise<void> {
-  const { stdout } = await execFileAsync(config.database.binaries.pgConfig, ['--sharedir'], {
-    timeout: 5_000,
-    windowsHide: true,
-  })
-  const controlFile = path.join(stdout.trim(), 'extension', 'postgis.control')
-  try {
-    await fs.access(controlFile)
-  } catch {
-    throw new Error(
-      `当前 PostgreSQL 未安装 PostGIS 扩展（缺少 ${controlFile}）。请先安装与 PostgreSQL 主版本匹配的官方 PostGIS。`,
-    )
+async function verifyPostgisAvailability(config: NativeInfrastructureConfig): Promise<void> {
+  const { stdout } = await execFileAsync(
+    config.database.binaries.psql,
+    postgisAvailabilityArguments(config),
+    {
+      env: processEnvironment(config),
+      timeout: 10_000,
+      windowsHide: true,
+    },
+  )
+  if (!stdout.trim()) {
+    throw new Error('当前 PostgreSQL 未安装可用的 PostGIS 扩展。请安装与 PostgreSQL 主版本匹配的官方 PostGIS。')
   }
 }
 

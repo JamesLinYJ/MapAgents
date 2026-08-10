@@ -78,6 +78,7 @@ interface ManagedService {
   healthMessage: string
   command: Command | null
   commandGeneration: number
+  startupFailures: Map<number, string>
   startPromise: Promise<void> | null
   conflictKind: 'port' | 'unverified_lease' | null
   desiredRunning: boolean
@@ -139,6 +140,7 @@ export class OperationsSupervisor {
         healthMessage: '未启动',
         command: null,
         commandGeneration: 0,
+        startupFailures: new Map(),
         startPromise: null,
         conflictKind: null,
         desiredRunning: false,
@@ -525,22 +527,35 @@ export class OperationsSupervisor {
   private bindCommand(record: ManagedService, command: Command, generation: number): void {
     const stdout = new LineDecoder()
     const stderr = new LineDecoder()
+    let lastStderrMessage: string | null = null
+    const appendStderr = (lines: readonly string[]): void => {
+      const entries = this.appendLines(
+        record.definition.serviceId,
+        'stderr',
+        lines,
+        command.pid ?? null,
+      )
+      lastStderrMessage = entries.at(-1)?.message ?? lastStderrMessage
+    }
     command.stdout.subscribe(chunk => this.appendLines(
       record.definition.serviceId,
       'stdout',
       stdout.push(chunk),
       command.pid ?? null,
     ))
-    command.stderr.subscribe(chunk => this.appendLines(
-      record.definition.serviceId,
-      'stderr',
-      stderr.push(chunk),
-      command.pid ?? null,
-    ))
+    command.stderr.subscribe(chunk => appendStderr(stderr.push(chunk)))
     command.close.subscribe(event => {
       this.appendLines(record.definition.serviceId, 'stdout', stdout.finish(), command.pid ?? null)
-      this.appendLines(record.definition.serviceId, 'stderr', stderr.finish(), command.pid ?? null)
-      void this.handleClose(record, command, generation, event)
+      appendStderr(stderr.finish())
+      const failedDuringStartup = this.isCurrentCommand(record, command, generation)
+        && record.state === 'starting'
+      const startupFailure = failedDuringStartup
+        ? [
+            `${record.definition.displayName} 启动进程在就绪前退出（退出码 ${String(event.exitCode)}）`,
+            lastStderrMessage,
+          ].filter(Boolean).join('：')
+        : null
+      void this.handleClose(record, command, generation, event, startupFailure)
     })
     command.error.subscribe(error => {
       this.appendSupervisorLog('error', `${record.definition.displayName} 启动错误：${safeMessage(error)}`, record.definition.serviceId)
@@ -552,8 +567,10 @@ export class OperationsSupervisor {
     command: Command,
     generation: number,
     event: CloseEvent,
+    startupFailure: string | null = null,
   ): Promise<void> {
     if (!this.isCurrentCommand(record, command, generation)) return
+    if (startupFailure) this.rememberStartupFailure(record, generation, startupFailure)
     if (record.healthTimer) clearInterval(record.healthTimer)
     record.healthTimer = null
     record.command = null
@@ -949,7 +966,22 @@ export class OperationsSupervisor {
 
   private assertCurrentCommand(record: ManagedService, command: Command, generation: number): void {
     if (!this.isCurrentCommand(record, command, generation)) {
+      const startupFailure = record.startupFailures.get(generation)
+      if (startupFailure) throw new Error(startupFailure)
       throw new Error(`${record.definition.displayName} 的启动已被新的进程代次取代。`)
+    }
+  }
+
+  private rememberStartupFailure(
+    record: ManagedService,
+    generation: number,
+    message: string,
+  ): void {
+    record.startupFailures.set(generation, message)
+    while (record.startupFailures.size > 8) {
+      const oldest = record.startupFailures.keys().next().value as number | undefined
+      if (oldest === undefined) break
+      record.startupFailures.delete(oldest)
     }
   }
 
@@ -978,9 +1010,11 @@ export class OperationsSupervisor {
     stream: 'stdout' | 'stderr',
     lines: readonly string[],
     processId: number | null,
-  ): void {
+  ): OperationsLogEntry[] {
+    const entries: OperationsLogEntry[] = []
     for (const message of lines) {
       const entry = this.options.logBuffer.append({ serviceId, stream, message, processId })
+      entries.push(entry)
       this.events.emit('log', entry)
       const context = {
         ...entry.attributes,
@@ -1002,6 +1036,7 @@ export class OperationsSupervisor {
       else if (entry.level === 'debug') this.options.logger.debug(context, entry.message)
       else this.options.logger.info(context, entry.message)
     }
+    return entries
   }
 
   private appendSupervisorLog(
