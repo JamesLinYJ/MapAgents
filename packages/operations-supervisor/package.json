@@ -1,7 +1,7 @@
 {
   "name": "@geo-agent-platform/operations-supervisor",
   "private": true,
-  "version": "0.1.3",
+  "version": "0.1.4",
   "type": "module",
   "bin": {
     "geo-agent-platform-supervisor": "./dist/cli.js",

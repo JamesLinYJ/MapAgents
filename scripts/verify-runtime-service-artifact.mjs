@@ -239,7 +239,7 @@ function requiredRuntimePaths(entryPaths) {
     'infra/migrations/000_schema_migrations.sql',
     'deploy/systemd/geo-agent-platform-supervisor.service',
     'deploy/systemd/geo-agent-platform-supervisor.user.service',
-    'deploy/bin/geoforge',
+    'deploy/bin/geo-agent-platform',
     'deploy/windows/GeoAgentPlatformSupervisor.xml.template',
     'scripts/run-worker.ps1',
     'scripts/run-worker.sh',

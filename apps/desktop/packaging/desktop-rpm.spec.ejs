@@ -37,13 +37,13 @@ install -Dm0644 \
   %{buildroot}/usr/lib/<%= name %>/resources/runtime-service/deploy/systemd/geo-agent-platform-supervisor.user.service \
   %{buildroot}/usr/lib/systemd/user/geo-agent-platform-supervisor.service
 install -Dm0755 \
-  %{buildroot}/usr/lib/<%= name %>/resources/runtime-service/deploy/bin/geoforge \
-  %{buildroot}/usr/bin/geoforge
+  %{buildroot}/usr/lib/<%= name %>/resources/runtime-service/deploy/bin/geo-agent-platform \
+  %{buildroot}/usr/bin/geo-agent-platform
 
 
 %files
 /usr/bin/<%= name %>
-/usr/bin/geoforge
+/usr/bin/geo-agent-platform
 /usr/lib/<%= name %>/
 /usr/share/applications/<%= name %>.desktop
 /usr/share/doc/<%= name %>/

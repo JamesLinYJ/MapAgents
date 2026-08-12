@@ -262,7 +262,10 @@ async function defaultIsPortAvailable(port: number): Promise<boolean> {
 
 async function defaultRunSystemctl(arguments_: readonly string[]): Promise<number> {
   try {
-    await execFileAsync('systemctl', [...arguments_], { timeout: 30_000, windowsHide: true })
+    // user service 的 TimeoutStopSec 是 120 秒；升级时 PostgreSQL/Worker 需要先
+    // 完成一致性关闭。调用侧必须覆盖同一时限，不能在 systemd 仍正常收尾时
+    // 提前把首次启动误报为失败。
+    await execFileAsync('systemctl', [...arguments_], { timeout: 150_000, windowsHide: true })
     return 0
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'number') {

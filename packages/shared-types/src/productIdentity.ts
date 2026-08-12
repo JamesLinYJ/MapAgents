@@ -13,13 +13,13 @@
  * 可变产品代号只允许在本模块定义。界面、CLI、导出物和安装包必须引用这些常量，
  * 稳定协议与持久化标识则使用不含代号的技术标识，避免品牌变更破坏已有数据。
  */
-export const PRODUCT_CODENAME = 'GeoForge'
+// 编译期只提供中性的缺省身份。实际展示名称由首次设置向导写入用户配置，
+// 后续可在设置中修改；稳定协议、包名和 CLI 不绑定任何可变品牌名。
+export const PRODUCT_CODENAME = 'Geo Agent Platform'
 export const PRODUCT_CODENAME_UPPER = PRODUCT_CODENAME.toLocaleUpperCase('en-US')
-export const PRODUCT_PLATFORM_NAME = `${PRODUCT_CODENAME} 地理智能平台`
-export const PRODUCT_DESKTOP_NAME = `${PRODUCT_CODENAME} GIS 工作台`
-export const PRODUCT_EXECUTABLE_BASENAME = (
-  PRODUCT_CODENAME.replace(/[^A-Za-z0-9._-]/gu, '') || 'GeoAgentPlatform'
-)
+export const PRODUCT_PLATFORM_NAME = '地理智能平台'
+export const PRODUCT_DESKTOP_NAME = 'GIS 工作台'
+export const PRODUCT_EXECUTABLE_BASENAME = 'GeoAgentPlatform'
 
 export const PLATFORM_TECHNICAL_ID = 'geo-agent-platform'
 export const PLATFORM_MACHINE_ID = 'geo_agent_platform'

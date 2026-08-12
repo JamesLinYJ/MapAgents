@@ -135,24 +135,24 @@ export function parseInstalledCli(argv: readonly string[]): InstalledCliCommand 
   if (first === 'status' || first === 'logs') {
     return { kind: 'supervisor', command: first, arguments: rest }
   }
-  // `geoforge` 和 `geoforge -p "..."` 都直接进入 Agent，保持最短使用路径。
+  // 无子命令和直接传 Agent 参数都进入 Agent，保持最短使用路径。
   return { kind: 'agent', arguments: [...argv] }
 }
 
 export function installedCliHelpText(): string {
   return [
-    `${PRODUCT_CODENAME} 安装版命令行`,
+    '地理智能平台安装版命令行',
     '',
     '用法：',
-    '  geoforge                         自动启动后端并进入交互式 Agent',
-    '  geoforge -p "分析杭州降雨"       执行一次任务',
-    '  geoforge agent [参数]            Agent 完整参数',
-    '  geoforge console                 打开本机运维台',
-    '  geoforge start                   部署并启动本机后端',
-    '  geoforge status                  查看后端状态',
-    '  geoforge logs [服务]             查看后端日志',
-    '  geoforge desktop                 打开桌面工作台',
-    '  geoforge --version               显示版本',
+    '  geo-agent-platform                         自动启动后端并进入交互式 Agent',
+    '  geo-agent-platform -p "分析杭州降雨"       执行一次任务',
+    '  geo-agent-platform agent [参数]            Agent 完整参数',
+    '  geo-agent-platform console                 打开本机运维台',
+    '  geo-agent-platform start                   部署并启动本机后端',
+    '  geo-agent-platform status                  查看后端状态',
+    '  geo-agent-platform logs [服务]             查看后端日志',
+    '  geo-agent-platform desktop                 打开桌面工作台',
+    '  geo-agent-platform --version               显示版本',
     '',
     '首次运行会自动创建当前用户的 PostgreSQL、Worker、API 配置并启动 systemd 用户服务。',
     '无需 Docker，也无需进入源码目录。',

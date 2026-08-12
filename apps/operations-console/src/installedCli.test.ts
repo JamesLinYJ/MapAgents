@@ -43,7 +43,7 @@ describe('installed CLI', () => {
 
   it('documents the installed command rather than requiring a source checkout', () => {
     const help = installedCliHelpText()
-    expect(help).toContain('geoforge')
+    expect(help).toContain('geo-agent-platform')
     expect(help).toContain('自动启动后端')
     expect(help).toContain('无需 Docker')
     expect(help).not.toContain('dev.sh')

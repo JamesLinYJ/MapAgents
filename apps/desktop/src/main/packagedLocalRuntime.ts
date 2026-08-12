@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-// Desktop 与安装后的 `geoforge` CLI 必须共享同一套首次部署规则，避免
+// Desktop 与安装后的稳定技术 CLI 必须共享同一套首次部署规则，避免
 // 两个入口生成不兼容的端口、密钥或 systemd 配置。
 export {
   preparePackagedLocalRuntime,
