@@ -14,7 +14,7 @@ import { open, rm } from 'node:fs/promises'
 /** 将 Chromium Web Stream 顺序落盘；任何中途失败都会删除不完整文件。 */
 export async function writeResponseBodyToFile(response: Response, filePath: string): Promise<void> {
   if (!response.body) throw new Error('服务响应缺少可写入的内容流。')
-  const output = await open(filePath, 'w')
+  const output = await open(filePath, 'w', 0o600)
   try {
     const reader = response.body.getReader()
     while (true) {

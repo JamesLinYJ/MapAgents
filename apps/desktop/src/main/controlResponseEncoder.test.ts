@@ -9,6 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
+import { randomBytes } from 'node:crypto'
 import { gunzipSync } from 'node:zlib'
 
 import { describe, expect, it } from 'vitest'
@@ -50,6 +51,27 @@ describe('desktop control response encoder', () => {
     expect(encoded).toMatchObject({ encoding: 'gzip-base64' })
     expect(Buffer.byteLength(JSON.stringify(encoded), 'utf8'))
       .toBeLessThanOrEqual(DESKTOP_CONTROL_FRAME_MAX_BYTES)
+    expect(desktopControlResponseTransportSchema.safeParse(encoded).success).toBe(true)
+    if (!('encoding' in encoded)) throw new Error('测试载荷未进入压缩传输。')
+    const decoded = JSON.parse(gunzipSync(Buffer.from(encoded.payload, 'base64')).toString('utf8'))
+    expect(desktopControlResponsePayloadSchema.parse(decoded)).toEqual(response)
+  })
+
+  it('does not apply the 64 KiB command limit to bounded compressed read responses', () => {
+    const response = {
+      version: 1 as const,
+      requestId: crypto.randomUUID(),
+      ok: true,
+      data: {
+        history: randomBytes(128 * 1024).toString('base64'),
+      },
+    }
+
+    const encoded = encodeDesktopControlResponse(response)
+
+    expect(encoded).toMatchObject({ encoding: 'gzip-base64' })
+    expect(Buffer.byteLength(JSON.stringify(encoded), 'utf8'))
+      .toBeGreaterThan(DESKTOP_CONTROL_FRAME_MAX_BYTES)
     expect(desktopControlResponseTransportSchema.safeParse(encoded).success).toBe(true)
     if (!('encoding' in encoded)) throw new Error('测试载荷未进入压缩传输。')
     const decoded = JSON.parse(gunzipSync(Buffer.from(encoded.payload, 'base64')).toString('utf8'))

@@ -50,15 +50,10 @@ export function registerThreadCommands(registry: WsCommandRegistry): void {
     payloadSchema: threadIdPayloadSchema,
     auth: 'required',
     csrf: false,
-    handler: async (payload, context) => {
-      const runs = context.dependencies.store.listRunsForThread(payload.threadId)
-      return {
-        thread: context.dependencies.store.getThread(payload.threadId),
-        manifest: await context.dependencies.store.getThreadManifest(payload.threadId),
-        runs,
-        latestRun: runs[0] ?? null,
-      }
-    },
+    handler: async (payload, context) => ({
+      thread: context.dependencies.store.getThread(payload.threadId),
+      manifest: await context.dependencies.store.getThreadManifest(payload.threadId),
+    }),
   })
 
   registry.register({

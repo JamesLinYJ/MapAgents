@@ -91,6 +91,10 @@ export function installDesktopIpcHandlers(dependencies: DesktopIpcDependencies):
     const window = requireWindow(event, dependencies.windows)
     return dependencies.downloads.save(window, desktopDownloadRequestSchema.parse(input))
   })
+  ipcMain.handle(DESKTOP_IPC_CHANNELS.apiOpen, async (event, input: unknown) => {
+    requireWindow(event, dependencies.windows)
+    return dependencies.downloads.open(desktopDownloadRequestSchema.parse(input))
+  })
   ipcMain.handle(DESKTOP_IPC_CHANNELS.authRequest, async (event, input: unknown) => {
     requireWindow(event, dependencies.windows)
     return encodeDesktopControlResponse(

@@ -54,6 +54,7 @@ import {
 } from './bootstrap'
 import { useConversationTimelineProjection } from '../features/runs/useConversationTimelineProjection'
 import type { RunSelectionToken } from '../features/runs/useRunState'
+import { requestArtifactOpen } from '../features/artifacts/desktopArtifactDownload'
 import {
   useConnectionController,
   useNavigationController,
@@ -333,9 +334,15 @@ function AppShell() {
 
   const handleSelectConversationArtifact = useCallback((artifactId: string) => {
     setSelectedArtifactId(artifactId)
-    setActiveNav('analysis')
-    setPanelMode('summary')
-  }, [setActiveNav, setPanelMode, setSelectedArtifactId])
+    const artifact = artifacts.find(item => item.artifactId === artifactId)
+    if (!artifact) {
+      setUiError('当前历史记录中找不到该结果文件，请重新打开这条运行。')
+      return
+    }
+    void requestArtifactOpen(artifact).catch(error => {
+      setUiError(formatUiError(error, `无法打开“${artifact.name}”。`))
+    })
+  }, [artifacts, setSelectedArtifactId, setUiError])
 
   const handleLayerZoomTo = useCallback((mapLayerId: string) => {
     const target = mapScene.layers.find(layer => layer.manifest.mapLayerId === mapLayerId)

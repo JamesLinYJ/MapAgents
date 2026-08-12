@@ -50,6 +50,7 @@ export interface DesktopBridge {
     request(operation: DesktopApiOperation): Promise<DesktopApiResponse>
     upload(operation: DesktopUploadOperation): Promise<DesktopApiResponse>
     download(request: DesktopDownloadRequest): Promise<DesktopDownloadResult>
+    open(request: DesktopDownloadRequest): Promise<DesktopDownloadResult>
   }
   readonly auth: {
     request(request: DesktopControlRequest): Promise<DesktopControlResponse>

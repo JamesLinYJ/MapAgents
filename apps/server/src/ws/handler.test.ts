@@ -155,6 +155,16 @@ describe('WebSocket run subscriptions', () => {
     expect(isRecord(bootstrap) && isRecord(bootstrap.session) ? bootstrap.session.id : null).toBe(session.id)
     expect(isRecord(bootstrap) && Array.isArray(bootstrap.threads) ? bootstrap.threads : []).toHaveLength(4)
     expect(isRecord(bootstrap) && Array.isArray(bootstrap.tools) ? bootstrap.tools : null).toEqual([])
+    const bootstrapThreads = isRecord(bootstrap) && Array.isArray(bootstrap.threads)
+      ? bootstrap.threads
+      : []
+    const firstThread = bootstrapThreads[0]
+    if (!isRecord(firstThread) || typeof firstThread.id !== 'string') {
+      throw new Error('工作区引导未返回可用线程。')
+    }
+    const detail = payloadData(await request(ws, 'thread:get', { threadId: firstThread.id }, 'thread_detail'))
+    expect(isRecord(detail) ? Object.keys(detail).sort() : []).toEqual(['manifest', 'thread'])
+    expect(JSON.stringify(detail)).not.toContain('"state"')
 
     const first = payloadData(await request(ws, 'run:list', { sessionId: session.id, limit: 3 }, 'runs_1'))
     expect(isRecord(first) && Array.isArray(first.items) ? first.items : []).toHaveLength(3)

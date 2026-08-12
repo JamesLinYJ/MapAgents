@@ -29,4 +29,5 @@ export {
   formatApiErrorMessage,
   formatSchemaValidationError,
   requestDesktopDownload,
+  requestDesktopOpen,
 } from './transport'

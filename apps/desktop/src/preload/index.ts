@@ -96,6 +96,14 @@ const bridge: DesktopBridge = {
         ),
       )
     },
+    async open(input) {
+      return desktopDownloadResultSchema.parse(
+        await ipcRenderer.invoke(
+          DESKTOP_IPC_CHANNELS.apiOpen,
+          desktopDownloadRequestSchema.parse(input),
+        ),
+      )
+    },
   },
   auth: {
     async request(input) {

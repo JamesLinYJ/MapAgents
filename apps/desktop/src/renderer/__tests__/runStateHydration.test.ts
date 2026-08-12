@@ -686,10 +686,12 @@ function threadDetail(
   run: RunSnapshot['run'],
 ): ThreadDetailSnapshot {
   return {
-    thread: { id: threadId, sessionId: run.sessionId } as ThreadDetailSnapshot['thread'],
+    thread: {
+      id: threadId,
+      sessionId: run.sessionId,
+      latestRunId: run.id,
+    } as ThreadDetailSnapshot['thread'],
     manifest: {} as ThreadDetailSnapshot['manifest'],
-    runs: [run],
-    latestRun: run,
   }
 }
 

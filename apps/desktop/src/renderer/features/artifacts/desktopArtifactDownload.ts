@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { requestDesktopDownload } from '../../api/client'
+import { requestDesktopDownload, requestDesktopOpen } from '../../api/client'
 import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
 
 export interface DesktopDownloadArtifact {
@@ -40,6 +40,15 @@ export function requestArtifactGeoJsonDownload(
   )
 }
 
+/** 将已授权 Artifact 下载到 Main 管理的临时目录，并用系统默认应用打开。 */
+export function requestArtifactOpen(artifact: DesktopDownloadArtifact) {
+  const path = artifact.artifactType === 'geojson'
+    ? geoJsonResourcePath(artifact)
+    : artifact.uri?.trim()
+  if (!path) throw new Error('当前结果没有可用的文件资源。')
+  return requestDesktopOpen(path, suggestedArtifactName(artifact))
+}
+
 function suggestedArtifactName(artifact: DesktopDownloadArtifact): string {
   const stem = artifact.name?.trim()
     || artifact.artifactId?.trim()
@@ -57,10 +66,23 @@ function ensureExtension(value: string, extension: string): string {
 function extensionForArtifactType(artifactType?: string | null): string | null {
   return ({
     audio_mp3: '.mp3',
+    chart_png: '.png',
+    csv: '.csv',
     docx: '.docx',
     geojson: '.geojson',
     npz: '.npz',
+    pdf: '.pdf',
     raster_png: '.png',
+    table: '.csv',
     xlsx: '.xlsx',
   } as Record<string, string>)[artifactType ?? ''] ?? null
+}
+
+function geoJsonResourcePath(
+  artifact: Pick<DesktopDownloadArtifact, 'artifactId'>,
+): string | null {
+  const artifactId = artifact.artifactId?.trim()
+  return artifactId
+    ? `/api/v1/results/${encodeURIComponent(artifactId)}/geojson`
+    : null
 }

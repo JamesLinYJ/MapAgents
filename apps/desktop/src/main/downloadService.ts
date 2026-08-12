@@ -10,7 +10,9 @@
 // --------------------------------------------------------------------------
 
 import path from 'node:path'
-import { BrowserWindow, dialog, net } from 'electron'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dialog, net, shell, type BrowserWindow } from 'electron'
 import {
   PLATFORM_DESKTOP_APP_ORIGIN,
   PRODUCT_CODENAME,
@@ -40,6 +42,38 @@ export class DesktopDownloadService {
     if (choice.canceled || !choice.filePath) {
       return desktopDownloadResultSchema.parse({ canceled: true, displayName: null })
     }
+    const response = await this.fetchArtifact(request)
+    await writeResponseBodyToFile(response, choice.filePath)
+    return desktopDownloadResultSchema.parse({
+      canceled: false,
+      displayName: path.basename(choice.filePath),
+    })
+  }
+
+  /**
+   * 一键打开不向 Renderer 暴露本地路径。Main 先通过已认证的网关将文件
+   * 落到 0700 临时目录，再交给系统默认应用。文件保留一段时间，避免外部
+   * 应用延迟读取时遇到已删除文件。
+   */
+  async open(input: DesktopDownloadRequest): Promise<DesktopDownloadResult> {
+    const request = desktopDownloadRequestSchema.parse(input)
+    const directory = await mkdtemp(path.join(tmpdir(), 'geo-agent-platform-artifact-'))
+    const displayName = sanitizeFileName(request.suggestedName)
+    const filePath = path.join(directory, displayName)
+    try {
+      const response = await this.fetchArtifact(request)
+      await writeResponseBodyToFile(response, filePath)
+      const failure = await shell.openPath(filePath)
+      if (failure) throw new Error(`无法用系统默认应用打开“${displayName}”：${failure}`)
+      scheduleTemporaryArtifactCleanup(directory)
+      return desktopDownloadResultSchema.parse({ canceled: false, displayName })
+    } catch (error) {
+      await rm(directory, { recursive: true, force: true }).catch(() => undefined)
+      throw error
+    }
+  }
+
+  private async fetchArtifact(request: DesktopDownloadRequest): Promise<Response> {
     const headers = new Headers({ accept: '*/*', origin: PLATFORM_DESKTOP_APP_ORIGIN })
     const cookie = this.auth.cookieHeader()
     if (cookie) headers.set('cookie', cookie)
@@ -48,12 +82,17 @@ export class DesktopDownloadService {
       const detail = (await response.text()).trim()
       throw new Error(detail || `下载失败（HTTP ${response.status}）。`)
     }
-    await writeResponseBodyToFile(response, choice.filePath)
-    return desktopDownloadResultSchema.parse({
-      canceled: false,
-      displayName: path.basename(choice.filePath),
-    })
+    return response
   }
+}
+
+const TEMPORARY_ARTIFACT_RETENTION_MS = 6 * 60 * 60 * 1_000
+
+function scheduleTemporaryArtifactCleanup(directory: string): void {
+  const timer = setTimeout(() => {
+    void rm(directory, { recursive: true, force: true })
+  }, TEMPORARY_ARTIFACT_RETENTION_MS)
+  timer.unref()
 }
 
 function sanitizeFileName(value: string): string {

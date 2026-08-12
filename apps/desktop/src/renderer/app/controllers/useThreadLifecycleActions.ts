@@ -120,20 +120,19 @@ export function useThreadLifecycleActions(options: ThreadLifecycleOptions) {
       ])
       if (!isRunSelectionCurrent(selection)) return
       const canonicalItems = transcriptEntriesToConversationItems(historyPage.entries)
-      const runs = threadPayload.runs ?? []
-      if (threadPayload.latestRun?.id) {
-        const hydration = await hydrateRunState(threadPayload.latestRun.id, selection)
+      const latestRunId = threadPayload.thread.latestRunId
+      if (latestRunId) {
+        const hydration = await hydrateRunState(latestRunId, selection)
         if (hydration.status === 'superseded' || !isRunSelectionCurrent(selection)) return
         setActiveThreadId(threadPayload.thread.id)
-        setThreadRuns(runs)
+        setThreadRuns([hydration.run])
         setCanonicalThreadItems(threadPayload.thread.id, canonicalItems)
         if (sessionId) {
-          syncUrl(sessionId, threadPayload.latestRun.id, threadPayload.thread.id)
+          syncUrl(sessionId, latestRunId, threadPayload.thread.id)
         }
         return
       }
       clearActiveRunState()
-      setThreadRuns(runs)
       setActiveThreadId(threadPayload.thread.id)
       setCanonicalThreadItems(threadPayload.thread.id, canonicalItems)
       if (sessionId) syncUrl(sessionId, undefined, threadPayload.thread.id)

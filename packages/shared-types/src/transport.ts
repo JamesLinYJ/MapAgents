@@ -83,9 +83,7 @@ export const threadHistoryPageSchema = z.object({
 export const threadDetailSnapshotSchema = z.object({
   thread: agentThreadRecordSchema,
   manifest: threadManifestSchema,
-  runs: z.array(analysisRunSchema),
-  latestRun: analysisRunSchema.nullable().optional(),
-})
+}).strict()
 
 export const runItemCursorSchema = z.object({
   sequence: z.number().int().nonnegative(),

@@ -353,11 +353,12 @@ export class LocalAgentSession {
         || this.projectionGeneration !== generation
         || this.state.threadId !== threadId
       ) return
-      if (detail.latestRun) {
+      const latestRunId = detail.thread.latestRunId
+      if (latestRunId) {
         this.runStream = new RunStreamProjection()
         this.runStream.beginSnapshot()
-        const identity = this.selectRunProjection(client, detail.latestRun.id)
-        const snapshot = await client.send('run:subscribe', { runId: detail.latestRun.id }, runSnapshotSchema)
+        const identity = this.selectRunProjection(client, latestRunId)
+        const snapshot = await client.send('run:subscribe', { runId: latestRunId }, runSnapshotSchema)
         if (this.isCurrentRunProjection(identity, snapshot.run.id)) {
           this.absorbSnapshot(snapshot, identity)
         }

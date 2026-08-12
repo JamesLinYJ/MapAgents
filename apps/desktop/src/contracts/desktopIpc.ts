@@ -39,6 +39,9 @@ import {
 export const DESKTOP_IPC_VERSION = 1 as const
 export const DESKTOP_CONTROL_FRAME_MAX_BYTES = 64 * 1024
 export const DESKTOP_CONTROL_DECOMPRESSED_MAX_BYTES = 4 * 1024 * 1024
+// Renderer 只能发送 64 KiB 的小型命令。Main 返回的只读快照先 gzip，
+// 再受独立的压缩载荷上限约束；不得复用请求帧的 64 KiB 上限。
+export const DESKTOP_COMPRESSED_RESPONSE_MAX_BYTES = 6 * 1024 * 1024
 export const DESKTOP_API_RESPONSE_MAX_BYTES = 16 * 1024 * 1024
 export const DESKTOP_CLIPBOARD_TEXT_MAX_BYTES = 4 * 1024 * 1024
 export const DESKTOP_TEXT_FILE_MAX_BYTES = 48 * 1024
@@ -477,11 +480,11 @@ export const desktopCompressedControlResponseSchema = z.object({
   requestId: z.string().uuid(),
   encoding: z.literal('gzip-base64'),
   uncompressedBytes: z.number().int().min(1).max(DESKTOP_CONTROL_DECOMPRESSED_MAX_BYTES),
-  payload: z.string().min(1).max(DESKTOP_CONTROL_FRAME_MAX_BYTES).regex(
+  payload: z.string().min(1).max(DESKTOP_COMPRESSED_RESPONSE_MAX_BYTES).regex(
     /^[A-Za-z0-9+/]+={0,2}$/u,
     '压缩控制响应必须是标准 Base64。',
   ),
-}).strict().superRefine(enforceDesktopControlFrameSize)
+}).strict()
 
 export const desktopControlResponseTransportSchema = z.union([
   desktopControlResponseSchema,
@@ -527,6 +530,7 @@ export const DESKTOP_IPC_CHANNELS = {
   apiRequest: `${PLATFORM_IPC_CHANNEL_PREFIX}:api:request`,
   apiUpload: `${PLATFORM_IPC_CHANNEL_PREFIX}:api:upload`,
   apiDownload: `${PLATFORM_IPC_CHANNEL_PREFIX}:api:download`,
+  apiOpen: `${PLATFORM_IPC_CHANNEL_PREFIX}:api:open`,
   authRequest: `${PLATFORM_IPC_CHANNEL_PREFIX}:auth:request`,
   clipboardWrite: `${PLATFORM_IPC_CHANNEL_PREFIX}:clipboard:write`,
   controlRequest: `${PLATFORM_IPC_CHANNEL_PREFIX}:control:request`,

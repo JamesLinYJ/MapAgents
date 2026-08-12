@@ -330,6 +330,13 @@ export function requestDesktopDownload(
   return requireDesktopBridge().api.download({ path, suggestedName })
 }
 
+export function requestDesktopOpen(
+  path: string,
+  suggestedName: string,
+) {
+  return requireDesktopBridge().api.open({ path, suggestedName })
+}
+
 function desktopBridge() {
   return typeof window === 'undefined' ? undefined : window.platformDesktop
 }
