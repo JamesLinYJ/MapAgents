@@ -162,6 +162,20 @@ test('manifest 签名只信任部署侧公钥', () => {
   }), /信任根不一致/u)
 })
 
+test('runtime 制品携带首次启动必需的系统图层 seed', async () => {
+  const creator = await readFile(
+    path.join(repositoryRoot, 'scripts', 'create-runtime-service-artifact.mjs'),
+    'utf8',
+  )
+  const verifier = await readFile(
+    path.join(repositoryRoot, 'scripts', 'verify-runtime-service-artifact.mjs'),
+    'utf8',
+  )
+  assert.match(creator, /\['infra\/seeds\/layers', 'infra\/seeds\/layers', 'directory'\]/u)
+  assert.match(verifier, /infra\/seeds\/layers\/catalog\.json/u)
+  assert.match(verifier, /infra\/seeds\/layers\/hangzhou_districts\.geojson/u)
+})
+
 test('verifier 拒绝 manifest 未声明的额外文件', () => {
   assert.doesNotThrow(() => assertArtifactFileSet(
     ['package.json', 'runtime-service-manifest.json'],

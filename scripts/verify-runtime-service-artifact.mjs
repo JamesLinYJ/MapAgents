@@ -240,6 +240,8 @@ function requiredRuntimePaths(entryPaths) {
     'packages/operations-supervisor/dist/cli.js',
     'packages/gis-meteorology/pyproject.toml',
     'infra/migrations/000_schema_migrations.sql',
+    'infra/seeds/layers/catalog.json',
+    'infra/seeds/layers/hangzhou_districts.geojson',
     'deploy/systemd/geo-agent-platform-supervisor.service',
     'deploy/systemd/geo-agent-platform-supervisor.user.service',
     'deploy/bin/geo-agent-platform',

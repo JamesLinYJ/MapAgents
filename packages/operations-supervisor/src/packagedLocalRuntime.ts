@@ -242,6 +242,7 @@ async function buildRuntimeEnvironment(input: {
     GEO_AGENT_PLATFORM_ROOT: input.projectRoot,
     GEO_AGENT_PLATFORM_RELEASE_ID: input.releaseId,
     RUNTIME_ROOT: input.runtimeRoot,
+    SEED_LAYERS_DIR: path.join(input.projectRoot, 'infra', 'seeds', 'layers'),
     GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE: input.supervisorTokenFile,
     GEO_AGENT_PLATFORM_LOCAL_ROOT_SECRET_FILE: input.rootSecretFile,
     POSTGIS_PORT: String(ports.postgres),
@@ -348,6 +349,8 @@ async function assertBundledRuntime(projectRoot: string): Promise<void> {
     'packages/operations-supervisor/dist/cli.js',
     'python-packages/cfgrib/__init__.py',
     'python-packages/docx/__init__.py',
+    'infra/seeds/layers/catalog.json',
+    'infra/seeds/layers/hangzhou_districts.geojson',
     'node_modules/.package-lock.json',
   ]) {
     const metadata = await stat(path.join(projectRoot, relativePath)).catch(() => null)

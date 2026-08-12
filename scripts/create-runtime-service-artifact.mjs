@@ -89,6 +89,7 @@ const sources = [
   ['packages/gis-meteorology/pyproject.toml', 'packages/gis-meteorology/pyproject.toml', 'file'],
   ['packages/gis-meteorology/src', 'packages/gis-meteorology/src', 'directory'],
   ['infra/migrations', 'infra/migrations', 'directory'],
+  ['infra/seeds/layers', 'infra/seeds/layers', 'directory'],
   ['deploy', 'deploy', 'directory'],
   ['scripts/run-worker.ps1', 'scripts/run-worker.ps1', 'file'],
   ['scripts/run-worker.sh', 'scripts/run-worker.sh', 'file'],

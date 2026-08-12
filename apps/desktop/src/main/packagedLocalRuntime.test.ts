@@ -59,6 +59,13 @@ describe('packaged Linux local runtime', () => {
     expect(source).toContain('POSTGIS_PORT="54321"')
     expect(source).toContain('WORKER_PYTHON="/usr/bin/python3"')
     expect(source).toContain('/python-packages')
+    expect(source).toContain(`SEED_LAYERS_DIR="${path.join(
+      resourcesPath,
+      'runtime-service',
+      'infra',
+      'seeds',
+      'layers',
+    )}"`)
     expect(source).not.toContain('docker')
     expect((await stat(environmentFile)).mode & 0o777).toBe(0o600)
     expect((await stat(resolution!.runtimeManifestPath)).mode & 0o777).toBe(0o600)
@@ -184,6 +191,8 @@ async function createBundledRuntime(resourcesPath: string, releaseId: string): P
     'packages/operations-supervisor/dist/cli.js',
     'python-packages/cfgrib/__init__.py',
     'python-packages/docx/__init__.py',
+    'infra/seeds/layers/catalog.json',
+    'infra/seeds/layers/hangzhou_districts.geojson',
     'node_modules/.package-lock.json',
   ]
   for (const relativePath of files) {
