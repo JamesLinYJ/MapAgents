@@ -29,7 +29,7 @@ import {
   PRODUCT_DESKTOP_NAME,
   PRODUCT_EXECUTABLE_BASENAME,
 } from '@geo-agent-platform/shared-types/product-identity'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -41,8 +41,12 @@ const windowsIconPath = fileURLToPath(new URL('./assets/desktop.ico', import.met
 const linuxIconPath = fileURLToPath(new URL('./assets/desktop.png', import.meta.url))
 const windowsSigningOptions = resolveWindowsSigningOptions(process.env)
 const unsignedTestBuild = windowsSigningOptions === undefined
+const desktopVersion = JSON.parse(readFileSync(
+  new URL('./package.json', import.meta.url),
+  'utf8',
+)).version
 const executableFilename = `${PRODUCT_EXECUTABLE_BASENAME}.exe`
-const setupFilename = `${PRODUCT_EXECUTABLE_BASENAME}-0.1.0-Setup.exe`
+const setupFilename = `${PRODUCT_EXECUTABLE_BASENAME}-${desktopVersion}-Setup.exe`
 const linuxRuntimeServicePath = fileURLToPath(new URL('../../artifacts/runtime-service', import.meta.url))
 
 export default {
@@ -91,7 +95,7 @@ export default {
         noMsi: true,
         setupIcon: windowsIconPath,
         setupExe: unsignedTestBuild
-          ? `${PRODUCT_EXECUTABLE_BASENAME}-0.1.0-UNSIGNED-TEST-Setup.exe`
+          ? `${PRODUCT_EXECUTABLE_BASENAME}-${desktopVersion}-UNSIGNED-TEST-Setup.exe`
           : setupFilename,
         title: PRODUCT_CODENAME,
         vendorDirectory: squirrelVendorDirectory,
