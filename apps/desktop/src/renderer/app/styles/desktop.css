@@ -201,6 +201,94 @@ select {
   }
 }
 
+.desktop-startup-card {
+  width: min(520px, calc(100vw - 64px));
+}
+
+.desktop-startup-card h1 {
+  margin: 18px 0 8px;
+  font-size: 24px;
+}
+
+.desktop-startup-card > p {
+  max-width: 410px;
+  margin: 0;
+  color: var(--gf-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.desktop-startup-error {
+  width: 34px;
+  height: 34px;
+  border: 3px solid #e4b8b8;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--gf-danger) 0 4px, transparent 5px);
+}
+
+.desktop-startup-services {
+  display: grid;
+  width: 100%;
+  box-sizing: border-box;
+  gap: 7px;
+  margin: 22px 0 0;
+  padding: 13px 15px;
+  border: 1px solid var(--gf-border);
+  border-radius: 8px;
+  background: var(--gf-surface-subtle);
+  list-style: none;
+}
+
+.desktop-startup-services li {
+  display: grid;
+  grid-template-columns: 8px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.desktop-startup-services li > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--gf-warning);
+}
+
+.desktop-startup-services li[data-state="healthy"] > span {
+  background: var(--gf-healthy);
+}
+
+.desktop-startup-services li[data-state="failed"] > span,
+.desktop-startup-services li[data-state="conflict"] > span {
+  background: var(--gf-danger);
+}
+
+.desktop-startup-services small {
+  color: var(--gf-muted);
+}
+
+.desktop-startup-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.desktop-startup-actions button {
+  padding: 7px 13px;
+  color: #fff;
+  border: 0;
+  border-radius: 5px;
+  background: var(--gf-focus);
+  cursor: pointer;
+}
+
+.desktop-startup-actions button.is-secondary {
+  color: var(--gf-focus);
+  border: 1px solid #b8d2d8;
+  background: #fff;
+}
+
 .desktop-backend-notice {
   position: fixed;
   z-index: 500;

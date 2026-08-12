@@ -55,7 +55,7 @@ export function buildBasemapStyle(basemap?: BasemapDescriptor): StyleSpecificati
       id: 'basemap',
       type: 'raster',
       source: 'basemap',
-      paint: { 'raster-opacity': 0.66 },
+      paint: { 'raster-opacity': 1 },
     })
 
     if (basemap.labelTileUrls.length) {
@@ -69,7 +69,7 @@ export function buildBasemapStyle(basemap?: BasemapDescriptor): StyleSpecificati
         id: 'labels',
         type: 'raster',
         source: 'labels',
-        paint: { 'raster-opacity': 0.78 },
+        paint: { 'raster-opacity': 1 },
       })
     }
   }

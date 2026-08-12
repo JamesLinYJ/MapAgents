@@ -9,12 +9,16 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { buildRuntimeCapabilities, resolveReleaseId } from './releaseCapabilities.js'
+
+const serverPackageVersion = JSON.parse(
+  readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
+) as { version: string }
 
 describe('runtime release capabilities', () => {
   it('uses an explicit release id when a service artifact provides one', () => {
@@ -41,7 +45,7 @@ describe('runtime release capabilities', () => {
     const deploymentRoot = mkdtempSync(path.join(tmpdir(), 'geo-release-manifest-'))
     try {
       expect(resolveReleaseId({ GEO_AGENT_PLATFORM_ROOT: deploymentRoot }))
-        .toBe('geo-agent-platform@0.1.0+workspace')
+        .toBe(`geo-agent-platform@${serverPackageVersion.version}+workspace`)
 
       writeFileSync(path.join(deploymentRoot, 'runtime-service-manifest.json'), '{invalid', 'utf8')
       expect(() => resolveReleaseId({ GEO_AGENT_PLATFORM_ROOT: deploymentRoot })).toThrow()

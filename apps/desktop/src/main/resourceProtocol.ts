@@ -13,7 +13,6 @@ import { net, protocol } from 'electron'
 import {
   PLATFORM_DESKTOP_APP_ORIGIN,
   PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME,
-  PRODUCT_CODENAME,
 } from '@geo-agent-platform/shared-types/product-identity'
 
 import type { DesktopAuthGateway } from './authGateway.js'
@@ -21,8 +20,6 @@ import {
   projectDesktopApiResourceRequest,
   projectMapTileJsonForDesktop,
 } from './mapResourceProtocolProjection.js'
-
-const OSM_TILE_PATH = /^\/osm\/(\d{1,2})\/(\d+)\/(\d+)\.png$/u
 
 export async function installResourceProtocol(
   apiBaseUrl: string,
@@ -35,8 +32,6 @@ export async function installResourceProtocol(
       return new Response('Bad Request', { status: 400 })
     }
     if (url.hostname === 'api') return fetchAuthenticatedApiResource(url, apiBaseUrl, auth)
-    if (url.search) return new Response('Bad Request', { status: 400 })
-    if (url.hostname === 'basemap') return fetchBasemapTile(url.pathname)
     return new Response('Not Found', { status: 404 })
   })
 }
@@ -61,31 +56,6 @@ async function fetchAuthenticatedApiResource(
     { headers },
   )
   return projectAuthenticatedApiResponse(response)
-}
-
-async function fetchBasemapTile(pathname: string): Promise<Response> {
-  const decoded = safeDecodePath(pathname)
-  const match = decoded ? OSM_TILE_PATH.exec(decoded) : null
-  if (!match) return new Response('Not Found', { status: 404 })
-  const [, z, x, y] = match
-  const zoom = Number(z)
-  const coordinateLimit = 2 ** zoom
-  if (
-    !Number.isInteger(zoom)
-    || zoom < 0
-    || zoom > 19
-    || Number(x) >= coordinateLimit
-    || Number(y) >= coordinateLimit
-  ) {
-    return new Response('Bad Request', { status: 400 })
-  }
-  const response = await net.fetch(`https://tile.openstreetmap.org/${z}/${x}/${y}.png`, {
-    headers: {
-      accept: 'image/png',
-      'user-agent': `${PRODUCT_CODENAME} Desktop/1.0 (local GIS workbench)`,
-    },
-  })
-  return withResourceCors(response)
 }
 
 function withResourceCors(response: Response): Response {
@@ -120,21 +90,5 @@ async function projectAuthenticatedApiResponse(response: Response): Promise<Resp
     }))
   } catch {
     return withResourceCors(response)
-  }
-}
-
-function safeDecodePath(pathname: string): string | null {
-  try {
-    const decoded = decodeURIComponent(pathname)
-    if (
-      decoded.includes('\0')
-      || decoded.includes('\\')
-      || /(^|\/)\.\.?($|\/)/u.test(decoded)
-    ) {
-      return null
-    }
-    return decoded
-  } catch {
-    return null
   }
 }

@@ -28,6 +28,8 @@ export interface DesktopLoginVisibilityInput {
   hasAuthenticatedIdentity: boolean
 }
 
+export type ManagedDesktopStartupInput = DesktopLoginVisibilityInput
+
 interface DesktopWorkspaceAccessInput {
   authStatus: AuthStatus
   backendAvailability: DesktopBackendAvailability
@@ -64,6 +66,15 @@ export function shouldShowDesktopLogin(input: DesktopLoginVisibilityInput): bool
     && input.backendAvailability === 'online'
     && input.authStatus === 'unauthenticated'
     && !input.hasAuthenticatedIdentity
+}
+
+/**
+ * 本机托管模式下，服务健康只是启动的中间状态。只有服务端身份
+ * 投影也完成后才能呈现工作台，避免用户进入半成功界面。
+ */
+export function shouldShowManagedDesktopStartup(input: ManagedDesktopStartupInput): boolean {
+  if (input.backendAvailability !== 'online' || input.hasAuthenticatedIdentity) return false
+  return input.authMode === 'unknown' || input.authMode === 'local_auto'
 }
 
 function describeUnavailableReason(input: DesktopWorkspaceAccessInput): string | undefined {

@@ -69,6 +69,42 @@ describe('DesktopApiGateway authorization', () => {
     expect(auth.requireAuthorizationContext).not.toHaveBeenCalled()
   })
 
+  it('projects the server-owned Tianditu tile routes into the controlled desktop protocol', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify([{
+      basemapKey: 'tianditu-vector',
+      name: '天地图',
+      provider: '国家地理信息公共服务平台',
+      kind: 'raster',
+      attribution: '© 天地图',
+      tileUrls: ['/api/v1/map/basemaps/tianditu-vector/tiles/vector/{z}/{x}/{y}'],
+      labelTileUrls: ['/api/v1/map/basemaps/tianditu-vector/tiles/labels/{z}/{x}/{y}'],
+      available: true,
+      isDefault: true,
+    }]), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+    const gateway = new DesktopApiGateway('http://127.0.0.1:8000', fakeAuthorization())
+
+    const response = await gateway.request({
+      method: 'GET',
+      path: '/api/v1/map/basemaps',
+      body: null,
+      headers: {},
+    })
+
+    const catalog = JSON.parse(response.body) as Array<{
+      tileUrls: string[]
+      labelTileUrls: string[]
+    }>
+    expect(catalog[0]?.tileUrls).toEqual([
+      'geo-agent-platform-resource://api/api/v1/map/basemaps/tianditu-vector/tiles/vector/{z}/{x}/{y}',
+    ])
+    expect(catalog[0]?.labelTileUrls).toEqual([
+      'geo-agent-platform-resource://api/api/v1/map/basemaps/tianditu-vector/tiles/labels/{z}/{x}/{y}',
+    ])
+  })
+
   it('invalidates Main authorization when the server rejects the session', async () => {
     fetchMock.mockResolvedValueOnce(new Response('Unauthorized', { status: 401 }))
     const auth = fakeAuthorization()

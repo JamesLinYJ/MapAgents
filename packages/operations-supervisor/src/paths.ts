@@ -12,6 +12,7 @@
 import { execFile } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { chmod, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 
@@ -56,20 +57,39 @@ export async function resolveOperationsPaths(input: {
   const operationsRoot = path.join(runtimeRoot, 'ops')
   await mkdir(operationsRoot, { recursive: true })
   const workspaceId = createHash('sha256').update(`${projectRoot}\0${input.profile}`).digest('hex').slice(0, 24)
+  const endpoint = process.platform === 'win32'
+    ? `\\\\.\\pipe\\geo-agent-platform-operations-${workspaceId}`
+    : await resolveUnixEndpoint(workspaceId)
   return {
     projectRoot,
     runtimeRoot,
     operationsRoot,
     workspaceId,
-    endpoint: process.platform === 'win32'
-      ? `\\\\.\\pipe\\geo-agent-platform-operations-${workspaceId}`
-      : path.join(operationsRoot, `supervisor-${workspaceId}.sock`),
+    endpoint,
     tokenFile: path.resolve(input.tokenFile ?? path.join(operationsRoot, 'supervisor.token')),
     rootSecretFile: path.resolve(input.rootSecretFile ?? path.join(operationsRoot, 'local-root.secret')),
     lockTarget: path.join(operationsRoot, `supervisor-${workspaceId}.lock-target`),
     leaseFile: path.join(operationsRoot, `supervisor-${workspaceId}.leases.json`),
     systemLogFile: path.join(operationsRoot, `supervisor-${workspaceId}.jsonl`),
   }
+}
+
+async function resolveUnixEndpoint(workspaceId: string): Promise<string> {
+  // Unix Socket 是当前登录会话的短生命 IPC，不是项目数据。按 XDG Base
+  // Directory 契约统一放入 $XDG_RUNTIME_DIR：登出后由系统清理，不会
+  // 受仓库路径长度或 UTF-8 字节数影响。数据、日志和密钥仍留在
+  // runtimeRoot，Supervisor/CLI/Desktop 通过同一 workspaceId 确定性解析同一 endpoint。
+  const runtimeBase = process.env.XDG_RUNTIME_DIR?.trim()
+    ? path.resolve(process.env.XDG_RUNTIME_DIR)
+    : path.join(os.tmpdir(), `geo-agent-platform-${process.getuid?.() ?? 'user'}`)
+  const endpointRoot = path.join(runtimeBase, 'geo-agent-platform')
+  await mkdir(endpointRoot, { recursive: true, mode: 0o700 })
+  if (process.platform !== 'win32') await chmod(endpointRoot, 0o700)
+  const endpoint = path.join(endpointRoot, `${workspaceId}.sock`)
+  if (Buffer.byteLength(endpoint, 'utf8') > 100) {
+    throw new Error('本机运行时目录过长，无法创建 Supervisor IPC。')
+  }
+  return endpoint
 }
 
 export async function ensureSecretFile(filePath: string, allowCreate: boolean): Promise<string> {

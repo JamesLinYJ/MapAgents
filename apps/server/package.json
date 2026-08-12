@@ -1,12 +1,12 @@
 {
   "name": "geo-agent-server",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "scripts": {
     "predev": "npm run build:dev --workspace @geo-agent-platform/db",
     "dev": "tsx watch src/main.ts",
-    "dev:supervised": "tsx src/main.ts",
+    "dev:supervised": "tsx watch --clear-screen=false src/main.ts",
     "build": "npm run build --workspace @geo-agent-platform/db && node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
     "start": "node dist/main.js",
     "pretest": "npm run build:dev --workspace @geo-agent-platform/db",

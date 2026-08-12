@@ -81,9 +81,12 @@ function createBrokerProcess(): {
 describe('LocalDesktopIdentityBroker', () => {
   it('通过结构化 Utility Process 消息取得授权', async () => {
     const harness = createBrokerProcess()
-    const broker = new LocalDesktopIdentityBroker(runtime, harness.factory)
+    const broker = new LocalDesktopIdentityBroker(runtime, harness.factory, {
+      fetch: healthyRuntimeFetch,
+    })
     const opening = broker.open()
 
+    await vi.waitFor(() => expect(harness.fork).toHaveBeenCalledOnce())
     harness.process.emit('message', authorization)
 
     await expect(opening).resolves.toEqual(authorization)
@@ -102,8 +105,10 @@ describe('LocalDesktopIdentityBroker', () => {
     const environmentFile = '/home/tester/.config/geo-agent-platform/runtime.env'
     const broker = new LocalDesktopIdentityBroker(runtime, harness.factory, {
       serviceEnvironmentFile: environmentFile,
+      fetch: healthyRuntimeFetch,
     })
     const opening = broker.open()
+    await vi.waitFor(() => expect(harness.fork).toHaveBeenCalledOnce())
     harness.process.emit('message', authorization)
     await opening
 
@@ -120,8 +125,11 @@ describe('LocalDesktopIdentityBroker', () => {
 
   it('关闭时发送有 schema 的控制消息并等待 Broker 确认', async () => {
     const harness = createBrokerProcess()
-    const broker = new LocalDesktopIdentityBroker(runtime, harness.factory)
+    const broker = new LocalDesktopIdentityBroker(runtime, harness.factory, {
+      fetch: healthyRuntimeFetch,
+    })
     const opening = broker.open()
+    await vi.waitFor(() => expect(harness.fork).toHaveBeenCalledOnce())
     harness.process.emit('message', authorization)
     await opening
 
@@ -135,12 +143,53 @@ describe('LocalDesktopIdentityBroker', () => {
 
   it('拒绝结构不匹配的 Broker 消息并结束子进程', async () => {
     const harness = createBrokerProcess()
-    const broker = new LocalDesktopIdentityBroker(runtime, harness.factory)
+    const broker = new LocalDesktopIdentityBroker(runtime, harness.factory, {
+      fetch: healthyRuntimeFetch,
+    })
     const opening = broker.open()
 
+    await vi.waitFor(() => expect(harness.fork).toHaveBeenCalledOnce())
     harness.process.emit('message', 'not-a-structured-message')
 
     await expect(opening).rejects.toThrow(/无效消息/u)
     expect(harness.process.kill).toHaveBeenCalledOnce()
   })
+
+  it('后端冷启动完成后才开始 Broker 授权计时', async () => {
+    const harness = createBrokerProcess()
+    let healthChecks = 0
+    const broker = new LocalDesktopIdentityBroker(runtime, harness.factory, {
+      fetch: vi.fn(async () => {
+        healthChecks += 1
+        if (healthChecks < 3) throw new Error('connect ECONNREFUSED')
+        return healthyRuntimeResponse()
+      }),
+      readinessTimeoutMs: 2_000,
+      readinessPollIntervalMs: 1,
+    })
+
+    const opening = broker.open()
+    expect(harness.fork).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(harness.fork).toHaveBeenCalledOnce())
+    expect(healthChecks).toBe(3)
+    harness.process.emit('message', authorization)
+    await expect(opening).resolves.toEqual(authorization)
+  })
 })
+
+const healthyRuntimeFetch = vi.fn(async () => healthyRuntimeResponse())
+
+function healthyRuntimeResponse(): Response {
+  return new Response(JSON.stringify({
+    status: 'ok',
+    checks: {
+      instanceLock: { ok: true },
+      database: { ok: true },
+      postgis: { ok: true },
+      worker: { ok: true },
+    },
+  }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })
+}

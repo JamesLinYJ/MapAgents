@@ -95,12 +95,14 @@ import { shouldLoadToolingDiagnostics } from './controllers/toolingController'
 import { useBackendAvailabilityStore } from './stores/backendAvailabilityStore'
 import {
   deriveDesktopWorkspaceAccess,
+  shouldShowManagedDesktopStartup,
   shouldShowDesktopLogin,
 } from './workspaceAccess'
 import {
   type WorkspaceInspectorDetailsInput,
 } from './workspaceInspectorDetails'
 import { useProductIdentity } from './ProductIdentityContext'
+import { AutoAuthScreen } from './auth/AutoAuthScreen'
 
 function useVoidCallback<Args extends unknown[]>(fn: (...args: Args) => Promise<void>): (...args: Args) => void {
   return useCallback((...args: Args) => { void fn(...args) }, [fn])
@@ -617,6 +619,12 @@ function AppShell() {
     backendAvailability,
     hasAuthenticatedIdentity: Boolean(authMe),
   })
+  const showManagedStartup = shouldShowManagedDesktopStartup({
+    authMode,
+    authStatus,
+    backendAvailability,
+    hasAuthenticatedIdentity: Boolean(authMe),
+  })
 
   const handleSelectHistoryRun = useCallback((runId: string) => {
     const selection = beginRunSelection()
@@ -681,6 +689,16 @@ function AppShell() {
     sessionId: session?.id,
     threadId: currentThreadId,
     setPanelMode,
+  }
+
+  if (showManagedStartup) {
+    return (
+      <AutoAuthScreen
+        isChecking={authStatus === 'checking'}
+        errorMessage={authStatus === 'error' ? uiError : undefined}
+        onRetry={retryAuth}
+      />
+    )
   }
 
   return (

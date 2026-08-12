@@ -21,7 +21,7 @@ interface BasemapState {
 
 export const useBasemapStore = create<BasemapState>(set => ({
   basemaps: [DEFAULT_BASEMAP],
-  selectedBasemapKey: 'osm',
+  selectedBasemapKey: DEFAULT_BASEMAP.basemapKey,
   setBasemaps: basemaps => set({ basemaps }),
   setSelectedBasemapKey: selectedBasemapKey => set({ selectedBasemapKey }),
 }))

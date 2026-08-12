@@ -33,16 +33,16 @@ describe('DesktopBackendMonitor', () => {
     })
   })
 
-  it('mounts the renderer content before backend services become healthy', () => {
+  it('keeps the workbench unmounted until backend services become healthy', () => {
     const html = renderToStaticMarkup(
       <DesktopBackendMonitor>
         <main data-testid="desktop-workbench">独立桌面工作台</main>
       </DesktopBackendMonitor>,
     )
 
-    expect(html).toContain('独立桌面工作台')
-    expect(html).toContain('正在检查本机服务')
-    expect(html).toContain('工作台已启动')
+    expect(html).not.toContain('独立桌面工作台')
+    expect(html).toContain('工作台正在启动')
+    expect(html).toContain('完成后将直接进入工作台')
   })
 
   it('keeps the renderer content visible while showing a recoverable offline state', () => {

@@ -29,7 +29,7 @@ export function AutoAuthScreen({
           <span aria-hidden="true">{productName.slice(0, 1).toLocaleUpperCase()}</span>
           <div>
             <strong>{productName} GIS 工作台</strong>
-            <small>本机演示环境</small>
+            <small>本机工作台</small>
           </div>
         </div>
 
@@ -40,12 +40,12 @@ export function AutoAuthScreen({
 
         <div className="dc-auto-auth-copy">
           <h1 id="auto-auth-title">
-            {isChecking ? '正在自动认证' : '自动认证暂不可用'}
+            {isChecking ? '正在准备工作台' : '工作台尚未就绪'}
           </h1>
           <p>
             {isChecking
-              ? '正在通过 Electron 主进程建立 Better Auth 会话，并由服务端校验平台权限。'
-              : '登录表单已在本机演示模式中隐藏；恢复后台后可以重新建立会话。'}
+              ? '正在连接本机服务并恢复你的工作区，完成后将自动进入。'
+              : '本机工作区未能完成初始化，可重试或打开系统日志查看详情。'}
           </p>
         </div>
 
@@ -55,13 +55,13 @@ export function AutoAuthScreen({
 
         <div className="dc-auto-auth-boundary">
           <Sparkles size={17} aria-hidden="true" />
-          <span>凭据不会进入 Renderer；所有管理权限仍由服务端 RBAC 决定。</span>
+          <span>应用会自动恢复本机会话，不需要额外登录或填写连接参数。</span>
         </div>
 
         {!isChecking ? (
           <button type="button" className="dc-auto-auth-retry" onClick={onRetry}>
             <RefreshCw size={16} aria-hidden="true" />
-            重新认证
+            重新启动
           </button>
         ) : null}
       </section>

@@ -9,11 +9,12 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { Database } from '../db/connection.js'
 import { parseEnv } from '../framework/env.js'
 import { BetterAuthService } from './authService.js'
+import { deriveLocalConsoleCredential } from './localConsolePrincipal.js'
 import type { PlatformIdentityService } from './platformIdentityService.js'
 
 describe('BetterAuthService local admin boundary', () => {
@@ -99,11 +100,72 @@ describe('BetterAuthService local admin boundary', () => {
     expect(service.isTrustedOrigin('com.geo-agent-platform.desktop.evil:/')).toBe(false)
     expect(service.isTrustedOrigin('https://com.geo-agent-platform.desktop')).toBe(false)
   })
+
+  it('repairs a legacy unverified machine principal before signing in', async () => {
+    const rootSecret = 'unit-test-local-root-secret-at-least-32-bytes'
+    const credential = deriveLocalConsoleCredential(rootSecret)
+    const updateValues = vi.fn()
+    const db = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => [{ id: 'console-user', emailVerified: false }],
+          }),
+        }),
+      }),
+      update: () => ({
+        set: (values: unknown) => {
+          updateValues(values)
+          return { where: async () => undefined }
+        },
+      }),
+    } as unknown as Database
+    const service = createService(db)
+    const createUser = vi.spyOn(service.auth.api, 'createUser')
+    vi.spyOn(service.auth.api, 'signInEmail').mockResolvedValue(new Response(null, {
+      status: 200,
+      headers: { 'set-cookie': 'better-auth.session_token=local-test; Path=/; HttpOnly' },
+    }) as never)
+    vi.spyOn(service.auth.api, 'getSession').mockResolvedValue({
+      session: {
+        id: 'session',
+        userId: 'console-user',
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+      user: {
+        id: 'console-user',
+        email: credential.email,
+        emailVerified: true,
+        name: 'Local Console',
+        role: 'admin',
+        banned: false,
+      },
+    } as never)
+    vi.spyOn(service.auth.api, 'listUsers').mockResolvedValue({
+      users: [{
+        id: 'console-user',
+        email: credential.email,
+        emailVerified: true,
+        name: 'Local Console',
+        role: 'admin',
+        banned: false,
+      }],
+      total: 1,
+    } as never)
+    vi.spyOn(service.auth.api, 'signOut').mockResolvedValue({ success: true } as never)
+
+    await service.withLocalConsoleAuthorization(rootSecret, async authorization => {
+      expect(authorization.headers.get('cookie')).toContain('better-auth.session_token=local-test')
+    })
+
+    expect(updateValues).toHaveBeenCalledWith(expect.objectContaining({ emailVerified: true }))
+    expect(createUser).not.toHaveBeenCalled()
+  })
 })
 
-function createService(): BetterAuthService {
+function createService(db: Database = {} as Database): BetterAuthService {
   return new BetterAuthService({
-    db: {} as Database,
+    db,
     env: parseEnv({
       API_PORT: '8000',
       API_HOST: '127.0.0.1',

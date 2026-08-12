@@ -183,9 +183,7 @@ function rewriteDesktopResourcePayload(pathname: string, body: string, headers: 
       const basemaps = z.array(basemapDescriptorSchema).parse(payload)
       return JSON.stringify(basemaps.map(basemap => ({
         ...basemap,
-        tileUrls: basemap.basemapKey === 'osm'
-          ? [`${PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME}://basemap/osm/{z}/{x}/{y}.png`]
-          : basemap.tileUrls.map(rewriteResourceUrl),
+        tileUrls: basemap.tileUrls.map(rewriteResourceUrl),
         labelTileUrls: basemap.labelTileUrls.map(rewriteResourceUrl),
       })))
     }
@@ -198,9 +196,6 @@ function rewriteDesktopResourcePayload(pathname: string, body: string, headers: 
 function rewriteResourceUrl(value: string): string {
   if (/^\/api\/v1\/(?:map|results|artifacts)\//u.test(value)) {
     return `${PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME}://api${value}`
-  }
-  if (value === 'https://tile.openstreetmap.org/{z}/{x}/{y}.png') {
-    return `${PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME}://basemap/osm/{z}/{x}/{y}.png`
   }
   return value
 }

@@ -24,6 +24,7 @@ import { ToolRegistry } from '../framework/registry.js'
 import { ManagedLayerService } from '../gis/managedLayers/managedLayerService.js'
 import { LocalRasterTileRenderer } from '../map/localRasterTileRenderer.js'
 import { MapTileGateway } from '../map/mapTileGateway.js'
+import { TiandituBasemapGateway } from '../map/tiandituBasemapGateway.js'
 import { PostgisVectorTileSource } from '../map/postgisVectorTileSource.js'
 import { seedLayersFromDirectory } from '../gis/seedLayers.js'
 import { ModelAdapterRegistry } from '../model/registry.js'
@@ -89,6 +90,7 @@ export interface AppContainer {
   artifactRepository: ArtifactPublicationRepository
   mapStore: MapStore
   mapTileGateway: MapTileGateway
+  tiandituBasemapGateway: TiandituBasemapGateway
   auditStore: AuditStore
   toolRegistry: ToolRegistry
   modelRegistry: ModelAdapterRegistry
@@ -146,6 +148,7 @@ export async function createAppContainer(input: {
       timeoutMs: env.MAP_TILE_TIMEOUT_MS,
     }),
   )
+  const tiandituBasemapGateway = new TiandituBasemapGateway(env.TIANDITU_API_KEY)
   const auditStore = new AuditStore(db)
   const userRepository = new PlatformUserRepository(db)
   const workspaceRepository = new WorkspaceRepository(db)
@@ -313,6 +316,7 @@ export async function createAppContainer(input: {
     artifactRepository,
     mapStore,
     mapTileGateway,
+    tiandituBasemapGateway,
     auditStore,
     toolRegistry,
     modelRegistry,

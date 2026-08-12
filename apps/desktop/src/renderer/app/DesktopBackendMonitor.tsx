@@ -29,6 +29,7 @@ import {
 } from './stores/backendAvailabilityStore'
 import { desktopMenuCommandSchema } from '../../contracts/desktopIpc'
 import { ensureRuntimeCompatibility } from './runtimeCompatibility'
+import { useProductIdentity } from './ProductIdentityContext'
 
 const BACKGROUND_RECHECK_INTERVAL_MS = 5_000
 const SystemLogViewer = lazy(() => import('../features/operations/SystemLogViewer').then(module => ({
@@ -36,6 +37,7 @@ const SystemLogViewer = lazy(() => import('../features/operations/SystemLogViewe
 })))
 
 export function DesktopBackendMonitor({ children }: { children: ReactNode }) {
+  const { productName } = useProductIdentity()
   const availability = useBackendAvailabilityStore(state => state.availability)
   const snapshot = useBackendAvailabilityStore(state => state.snapshot)
   const errorMessage = useBackendAvailabilityStore(state => state.errorMessage)
@@ -122,22 +124,74 @@ export function DesktopBackendMonitor({ children }: { children: ReactNode }) {
 
   return (
     <>
-      {children}
-      {availability !== 'online' ? (
-        <BackendStatusNotice
+      {availability === 'online' ? children : (
+        <BackendStartupGate
+          productName={productName}
           availability={availability}
           snapshot={snapshot}
           errorMessage={errorMessage}
           onRetry={retry}
           onOpenLogs={() => setLogsOpen(true)}
         />
-      ) : null}
+      )}
       {logsOpen ? (
         <Suspense fallback={null}>
           <SystemLogViewer open onClose={() => setLogsOpen(false)} />
         </Suspense>
       ) : null}
     </>
+  )
+}
+
+export function BackendStartupGate({
+  productName,
+  availability,
+  snapshot,
+  errorMessage,
+  onRetry,
+  onOpenLogs,
+}: {
+  productName: string
+  availability: Exclude<DesktopBackendAvailability, 'online'>
+  snapshot: OperationsSnapshot | null
+  errorMessage: string | null
+  onRetry: () => void
+  onOpenLogs: () => void
+}) {
+  const busy = availability === 'checking' || availability === 'starting'
+  const services = snapshot?.services ?? []
+  return (
+    <main className="dc-auto-auth-screen" aria-live="polite">
+      <section className="dc-auto-auth-card desktop-startup-card">
+        <div className="dc-auto-auth-brand">
+          <span aria-hidden="true">G</span>
+          <div>
+            <strong>{productName} GIS 工作台</strong>
+            <small>正在准备本机服务</small>
+          </div>
+        </div>
+        <span className={busy ? 'dc-auto-auth-spinner' : 'desktop-startup-error'} aria-hidden="true" />
+        <h1>{busy ? '工作台正在启动' : '工作台尚未就绪'}</h1>
+        <p>{errorMessage ?? (busy
+          ? '首次启动会自动初始化数据库与科学计算环境，完成后将直接进入工作台。'
+          : '请查看系统日志中的具体原因，修复后可立即重试。')}</p>
+        {services.length > 0 ? (
+          <ul className="desktop-startup-services">
+            {services.map(service => (
+              <li key={service.serviceId} data-state={service.state}>
+                <span aria-hidden="true" />
+                <strong>{service.displayName}</strong>
+                <small>{serviceStateLabel(service.state)}</small>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        <div className="desktop-startup-actions">
+          <button type="button" className="is-secondary" onClick={onOpenLogs}>系统日志</button>
+          {!busy ? <button type="button" onClick={onRetry}>重新启动</button> : null}
+        </div>
+      </section>
+    </main>
   )
 }
 

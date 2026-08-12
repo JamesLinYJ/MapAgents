@@ -9,18 +9,41 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { assertProductionSecretPermissions, ensureSecretFile } from './paths.js'
+import {
+  assertProductionSecretPermissions,
+  ensureSecretFile,
+  resolveOperationsPaths,
+} from './paths.js'
 
 const cleanupPaths: string[] = []
 
 afterEach(async () => {
   await Promise.all(cleanupPaths.splice(0).map(directory => rm(directory, { recursive: true, force: true })))
+})
+
+describe('operations IPC endpoint', () => {
+  it('always uses the per-user XDG runtime directory instead of the data directory', async () => {
+    if (process.platform === 'win32') return
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-long-root-'))
+    cleanupPaths.push(directory)
+    const projectRoot = path.join(directory, '长路径'.repeat(24))
+    await mkdir(projectRoot, { recursive: true })
+
+    const paths = await resolveOperationsPaths({ projectRoot, profile: 'development' })
+
+    expect(Buffer.byteLength(paths.endpoint, 'utf8')).toBeLessThanOrEqual(100)
+    expect(paths.endpoint).not.toContain(projectRoot)
+    if (process.env.XDG_RUNTIME_DIR?.trim()) {
+      expect(paths.endpoint).toContain(path.resolve(process.env.XDG_RUNTIME_DIR))
+    }
+    expect(paths.operationsRoot).toContain(projectRoot)
+  })
 })
 
 describe('operations secret files', () => {

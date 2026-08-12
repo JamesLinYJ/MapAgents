@@ -127,6 +127,7 @@ app.route('/', desktopExportRoutes({
 app.route('/', mapRoutes({
   mapStore: container.mapStore,
   tileGateway: container.mapTileGateway,
+  tiandituBasemapGateway: container.tiandituBasemapGateway,
   security: container.security,
 }))
 app.route('/', meteorologyRoutes(container.runtimeRoot, container.fileLifecycle, container.store, container.security, env))

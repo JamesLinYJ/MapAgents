@@ -42,7 +42,7 @@ describe('desktop packaging contract', () => {
       await readFile(path.resolve(process.cwd(), '..', '..', 'package.json'), 'utf8'),
     ) as unknown)
 
-    expect(desktopPackage.version).toBe('0.1.1')
+    expect(desktopPackage.version).toBe('0.1.2')
     expect(desktopPackage.version).toBe(rootPackage.version)
     expect(desktopPackage.productName).toBeUndefined()
     expect(desktopPackage.engines.node).toBe('^22.13.0 || >=24.0.0')

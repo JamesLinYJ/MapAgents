@@ -13,6 +13,7 @@ import { betterAuth } from 'better-auth'
 import { electron } from '@better-auth/electron'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
 import { admin } from 'better-auth/plugins'
+import { eq } from 'drizzle-orm'
 import { createHmac } from 'node:crypto'
 import { z } from 'zod'
 import {
@@ -62,6 +63,7 @@ const betterAuthSessionProjectionSchema = z.object({
 const localAuthUserSchema = z.object({
   id: z.string().min(1),
   email: z.string().email(),
+  emailVerified: z.boolean(),
   name: z.string().min(1),
   role: z.string().nullable().optional(),
   banned: z.boolean().optional(),
@@ -146,10 +148,12 @@ export type LocalAuthRole = 'admin' | 'user'
 
 export class BetterAuthService {
   readonly auth: BetterAuthRuntime
+  private readonly db: Database
   private readonly env: Env
   private readonly identity: PlatformIdentityService
 
   constructor(input: { db: Database; env: Env; identity: PlatformIdentityService }) {
+    this.db = input.db
     this.env = input.env
     this.identity = input.identity
     this.auth = createBetterAuthRuntime(input.db, input.env, [...this.trustedOrigins()])
@@ -173,18 +177,23 @@ export class BetterAuthService {
     const credential = deriveLocalConsoleCredential(rootSecret)
     let authorization: LocalConsoleAuthorization | null = null
     try {
-      authorization = await this.signInLocalConsole(credential).catch(async () => {
-        // Better Auth 官方 Admin createUser 在无 request/headers 的服务器调用中允许引导首个主体。
+      const existing = await this.findReservedAuthUser(credential.email)
+      if (existing) {
+        await this.markReservedAuthUserVerified(existing.id, existing.emailVerified)
+      } else {
+        // 保留邮箱被公共认证入口硬拒绝，因此本地 Broker 是唯一能引导
+        // 机器主体的边界。机器主体没有邮箱收件人，创建时必须直接记为已验证。
         await this.auth.api.createUser({
           body: {
             email: credential.email,
             password: credential.password,
             name: `${PRODUCT_CODENAME} Local Console`,
             role: 'admin',
+            data: { emailVerified: true },
           },
         })
-        return this.signInLocalConsole(credential)
-      })
+      }
+      authorization = await this.signInLocalConsole(credential)
       await this.removeRotatedConsolePrincipals(authorization)
       return await action(authorization)
     } finally {
@@ -210,8 +219,15 @@ export class BetterAuthService {
           password: credential.password,
           name: `${PRODUCT_CODENAME} Local Agent`,
           role: 'user',
+          data: { emailVerified: true },
         },
       })).user
+      if (existing && !existing.emailVerified) {
+        await this.auth.api.adminUpdateUser({
+          headers: consoleAuthorization.headers,
+          body: { userId: authUser.id, data: { emailVerified: true } },
+        })
+      }
       await this.auth.api.setRole({
         headers: consoleAuthorization.headers,
         body: { userId: authUser.id, role: 'user' },
@@ -266,8 +282,15 @@ export class BetterAuthService {
           password: credential.password,
           name: `${PRODUCT_CODENAME} Local Desktop`,
           role: 'user',
+          data: { emailVerified: true },
         },
       })).user
+      if (existing && !existing.emailVerified) {
+        await this.auth.api.adminUpdateUser({
+          headers: consoleAuthorization.headers,
+          body: { userId: authUser.id, data: { emailVerified: true } },
+        })
+      }
       await this.auth.api.setRole({
         headers: consoleAuthorization.headers,
         body: { userId: authUser.id, role: 'user' },
@@ -376,6 +399,29 @@ export class BetterAuthService {
       if (user.id === current.authUserId || !isLocalConsoleEmail(user.email)) continue
       await this.auth.api.removeUser({ headers: current.headers, body: { userId: user.id } })
     }
+  }
+
+  private async findReservedAuthUser(email: string): Promise<{
+    id: string
+    emailVerified: boolean
+  } | null> {
+    const [user] = await this.db
+      .select({ id: authUser.id, emailVerified: authUser.emailVerified })
+      .from(authUser)
+      .where(eq(authUser.email, email.trim().toLowerCase()))
+      .limit(1)
+    return user ?? null
+  }
+
+  private async markReservedAuthUserVerified(
+    userId: string,
+    alreadyVerified: boolean,
+  ): Promise<void> {
+    if (alreadyVerified) return
+    await this.db
+      .update(authUser)
+      .set({ emailVerified: true, updatedAt: new Date() })
+      .where(eq(authUser.id, userId))
   }
 
   private async findLocalAgentUser(

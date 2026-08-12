@@ -18,6 +18,7 @@ import {
   buildTileJson,
 } from '../map/mapTileDescriptor.js'
 import { MapTileGateway } from '../map/mapTileGateway.js'
+import { TiandituBasemapGateway, type TiandituTileKind } from '../map/tiandituBasemapGateway.js'
 import type { SecurityServices } from '../security/routes.js'
 import { requireAuth } from '../security/routes.js'
 import { MapStore } from '../store/postgres/mapStore.js'
@@ -33,30 +34,36 @@ const featureQuerySchema = z.object({
   offset: z.coerce.number().int().nonnegative().default(0),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 })
-
-const BASEMAPS = [
-  {
-    basemapKey: 'osm',
-    name: 'OpenStreetMap',
-    provider: 'OpenStreetMap',
-    kind: 'raster',
-    attribution: '© OpenStreetMap contributors',
-    tileUrls: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-    labelTileUrls: [],
-    available: true,
-    isDefault: true,
-  },
-]
+const basemapTileParamsSchema = z.object({
+  kind: z.enum(['labels', 'vector']),
+  z: z.coerce.number().int().min(0).max(18),
+  x: z.coerce.number().int().nonnegative(),
+  y: z.coerce.number().int().nonnegative(),
+})
 
 export function mapRoutes(deps: {
   mapStore: MapStore
   tileGateway: MapTileGateway
+  tiandituBasemapGateway: TiandituBasemapGateway
   security: SecurityServices
 }) {
-  const { mapStore, tileGateway, security } = deps
+  const { mapStore, tileGateway, tiandituBasemapGateway, security } = deps
   const app = new Hono()
 
-  app.get('/api/v1/map/basemaps', c => c.json(BASEMAPS))
+  app.get('/api/v1/map/basemaps', c => c.json(tiandituBasemapGateway.catalog()))
+
+  app.get('/api/v1/map/basemaps/tianditu-vector/tiles/:kind/:z/:x/:y', async c => {
+    const params = basemapTileParamsSchema.parse(c.req.param())
+    const tileUrl = tiandituBasemapGateway.tileRedirectUrl(
+      params.kind as TiandituTileKind,
+      params.z,
+      params.x,
+      params.y,
+    )
+    // 天地图浏览器端 Key 必须由浏览器网络栈使用。服务端只在认证与坐标校验后
+    // 生成重定向，不伪造 User-Agent，也不把 Key 写入底图目录或 Renderer 状态。
+    return c.redirect(tileUrl, 307)
+  })
 
   app.get('/api/v1/map/scenes/:threadId', async c => {
     const threadId = parseId(c.req.param('threadId'), 'threadId')

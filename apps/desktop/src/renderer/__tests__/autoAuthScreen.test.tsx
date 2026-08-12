@@ -20,7 +20,7 @@ describe('AutoAuthScreen', () => {
       <AutoAuthScreen isChecking errorMessage="后台暂不可用" onRetry={() => undefined} />,
     )
 
-    expect(html).toContain('正在自动认证')
+    expect(html).toContain('正在准备工作台')
     expect(html).toContain('后台暂不可用')
     expect(html).not.toContain('<form')
     expect(html).not.toContain('type="password"')
@@ -31,7 +31,7 @@ describe('AutoAuthScreen', () => {
       <AutoAuthScreen isChecking={false} errorMessage="连接失败" onRetry={() => undefined} />,
     )
 
-    expect(html).toContain('自动认证暂不可用')
-    expect(html).toContain('重新认证')
+    expect(html).toContain('工作台尚未就绪')
+    expect(html).toContain('重新启动')
   })
 })

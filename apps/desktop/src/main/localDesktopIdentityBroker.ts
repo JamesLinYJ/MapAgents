@@ -50,7 +50,13 @@ export interface DesktopBrokerProcessFactory {
 
 export interface LocalDesktopIdentityBrokerOptions {
   serviceEnvironmentFile?: string
+  fetch?: typeof globalThis.fetch
+  readinessTimeoutMs?: number
+  readinessPollIntervalMs?: number
 }
+
+const DEFAULT_READINESS_TIMEOUT_MS = 90_000
+const DEFAULT_READINESS_POLL_INTERVAL_MS = 250
 
 /**
  * Electron Main 只持有 Broker 签发的短期 Cookie。根密钥、派生凭据和 Better Auth
@@ -76,10 +82,52 @@ export class LocalDesktopIdentityBroker implements DesktopManagedIdentityPort {
   open(): Promise<LocalDesktopAuthorization> {
     if (this.authorization) return Promise.resolve(this.authorization)
     if (this.opening) return this.opening
-    this.opening = this.spawnBroker().finally(() => {
+    this.opening = this.openWhenReady().finally(() => {
       this.opening = null
     })
     return this.opening
+  }
+
+  private async openWhenReady(): Promise<LocalDesktopAuthorization> {
+    await this.waitForRuntimeReadiness()
+    return this.spawnBroker()
+  }
+
+  /**
+   * RPM 冷启动时 Supervisor、PostgreSQL、Worker 与 Renderer 会并行起动。
+   * Broker 只有在完整本机运行时就绪后才能建立 DB 连接；授权超时不能
+   * 包含后端冷启动时间，否则较慢的首次启动会被确定性误判为认证失败。
+   */
+  private async waitForRuntimeReadiness(): Promise<void> {
+    const fetchApi = this.options.fetch ?? globalThis.fetch
+    const timeoutMs = this.options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS
+    const pollIntervalMs = this.options.readinessPollIntervalMs
+      ?? DEFAULT_READINESS_POLL_INTERVAL_MS
+    const deadline = Date.now() + timeoutMs
+    const healthUrl = new URL('/health', `${this.runtime.apiBaseUrl}/`).toString()
+    let lastFailure = '本机运行时尚未就绪。'
+
+    while (Date.now() < deadline) {
+      try {
+        const remainingMs = Math.max(1, deadline - Date.now())
+        const response = await fetchApi(healthUrl, {
+          method: 'GET',
+          headers: { accept: 'application/json' },
+          redirect: 'error',
+          signal: AbortSignal.timeout(Math.min(2_000, remainingMs)),
+        })
+        if (response.ok && await isHealthyRuntimeResponse(response)) return
+        lastFailure = `本机运行时健康检查返回 HTTP ${response.status}。`
+      } catch (error) {
+        lastFailure = error instanceof Error && error.message.trim()
+          ? error.message.trim()
+          : '无法连接本机运行时。'
+      }
+      const remainingMs = deadline - Date.now()
+      if (remainingMs <= 0) break
+      await delay(Math.min(pollIntervalMs, remainingMs))
+    }
+    throw new Error(`本机运行时启动超时：${lastFailure}`)
   }
 
   async close(): Promise<void> {
@@ -219,4 +267,25 @@ export class LocalDesktopIdentityBroker implements DesktopManagedIdentityPort {
     this.opening = null
     this.closeResponse = null
   }
+}
+
+async function isHealthyRuntimeResponse(response: Response): Promise<boolean> {
+  const body = await response.text()
+  if (Buffer.byteLength(body, 'utf8') > 64 * 1024) return false
+  try {
+    const value = JSON.parse(body) as {
+      status?: unknown
+      checks?: Record<string, { ok?: unknown }>
+    }
+    return value.status === 'ok'
+      && value.checks !== undefined
+      && Object.values(value.checks).length > 0
+      && Object.values(value.checks).every(check => check?.ok === true)
+  } catch {
+    return false
+  }
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds))
 }

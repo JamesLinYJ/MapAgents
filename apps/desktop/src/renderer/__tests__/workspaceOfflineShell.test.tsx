@@ -22,6 +22,7 @@ import {
 } from '../app/layout/WorkspaceRestrictedPanels'
 import {
   deriveDesktopWorkspaceAccess,
+  shouldShowManagedDesktopStartup,
   shouldShowDesktopLogin,
 } from '../app/workspaceAccess'
 
@@ -58,7 +59,7 @@ describe('offline desktop workspace', () => {
         canAccessAccount={false}
         canAccessDiagnostics={false}
         canAccessSecurity={false}
-        contentsSlot={<WorkspaceRestrictedContents basemapName="OpenStreetMap" reason={offlineReason} />}
+        contentsSlot={<WorkspaceRestrictedContents basemapName="天地图" reason={offlineReason} />}
         currentThreadId={undefined}
         workspaceLayoutKey="offline-workspace"
         dataReferenceCount={0}
@@ -75,7 +76,7 @@ describe('offline desktop workspace', () => {
         onSidebarItemClick={() => undefined}
         onWorkspaceModeChange={() => undefined}
         providerLabel="本机离线"
-        selectedBasemapName="OpenStreetMap"
+        selectedBasemapName="天地图"
         sessionThreads={[]}
         toolsSlot={<WorkspaceRestrictedDocument title="工具与自动化" reason={offlineReason} />}
         topBar={(
@@ -140,6 +141,33 @@ describe('offline desktop workspace', () => {
       backendAvailability: 'online',
       hasAuthenticatedIdentity: false,
     })).toBe(true)
+  })
+
+  it('keeps local managed startup full-screen until the verified identity projection exists', () => {
+    expect(shouldShowManagedDesktopStartup({
+      authMode: 'unknown',
+      authStatus: 'checking',
+      backendAvailability: 'online',
+      hasAuthenticatedIdentity: false,
+    })).toBe(true)
+    expect(shouldShowManagedDesktopStartup({
+      authMode: 'local_auto',
+      authStatus: 'error',
+      backendAvailability: 'online',
+      hasAuthenticatedIdentity: false,
+    })).toBe(true)
+    expect(shouldShowManagedDesktopStartup({
+      authMode: 'local_auto',
+      authStatus: 'authenticated',
+      backendAvailability: 'online',
+      hasAuthenticatedIdentity: true,
+    })).toBe(false)
+    expect(shouldShowManagedDesktopStartup({
+      authMode: 'interactive',
+      authStatus: 'unauthenticated',
+      backendAvailability: 'online',
+      hasAuthenticatedIdentity: false,
+    })).toBe(false)
   })
 })
 
