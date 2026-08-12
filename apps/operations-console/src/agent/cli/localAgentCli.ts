@@ -186,6 +186,8 @@ export function localAgentHelpText(): string {
     `${PRODUCT_CODENAME} 本机 Agent`,
     '',
     '用法：',
+    '  geoforge',
+    '  geoforge --prompt "杭州明天会下雨吗？"',
     '  .\\dev.ps1 agent',
     '  .\\dev.ps1 agent --prompt "杭州明天会下雨吗？"',
     '  npm run agent --workspace @geo-agent-platform/operations-console -- --prompt "杭州明天会下雨吗？" --json',

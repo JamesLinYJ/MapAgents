@@ -42,7 +42,7 @@ describe('desktop packaging contract', () => {
       await readFile(path.resolve(process.cwd(), '..', '..', 'package.json'), 'utf8'),
     ) as unknown)
 
-    expect(desktopPackage.version).toBe('0.1.2')
+    expect(desktopPackage.version).toBe('0.1.3')
     expect(desktopPackage.version).toBe(rootPackage.version)
     expect(desktopPackage.productName).toBeUndefined()
     expect(desktopPackage.engines.node).toBe('^22.13.0 || >=24.0.0')
@@ -148,6 +148,8 @@ describe('desktop packaging contract', () => {
     expect(rpmSpecSource).toContain('%global __brp_mangle_shebangs %{nil}')
     expect(rpmSpecSource).toContain('%global __os_install_post_python %{nil}')
     expect(rpmSpecSource).toContain('/usr/lib/systemd/user/geo-agent-platform-supervisor.service')
+    expect(rpmSpecSource).toContain('resources/runtime-service/deploy/bin/geoforge')
+    expect(rpmSpecSource).toContain('/usr/bin/geoforge')
     expect(zipMakerSource).toContain('new ZipArchive(')
     expect(zipMakerSource).toContain('await rm(destinationPath, { force: true })')
     expect(zipMakerSource).not.toContain('fs.rmdir')

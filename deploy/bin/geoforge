@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+exec /usr/bin/node \
+  /usr/lib/geo-agent-platform-desktop/resources/runtime-service/apps/operations-console/dist/installedCliEntry.js \
+  "$@"

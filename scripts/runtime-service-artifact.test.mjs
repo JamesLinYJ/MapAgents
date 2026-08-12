@@ -93,10 +93,12 @@ test('runtime package 和 lock 只保留生产 workspace', () => {
         dependencies: { pino: '1.0.0' },
         devDependencies: { vitest: '1.0.0' },
       },
+      'apps/operations-console': { name: 'console', version: '1.0.0' },
       'apps/desktop': { name: 'desktop', version: '1.0.0' },
       'node_modules/desktop': { resolved: 'apps/desktop', link: true },
       'packages/db': { name: 'db', version: '1.0.0' },
       'packages/shared-types': { name: 'shared', version: '1.0.0' },
+      'packages/conversation-presentation': { name: 'presentation', version: '1.0.0' },
       'packages/operations-supervisor': { name: 'supervisor', version: '1.0.0' },
     },
   }, runtimePackage)

@@ -17,13 +17,16 @@ export const RUNTIME_SERVICE_KIND = 'geo-agent-runtime-service'
 export const RUNTIME_OUTPUT_MARKER = '.geo-agent-runtime-service-output.json'
 export const RUNTIME_WORKSPACE_PATHS = [
   'apps/server',
+  'apps/operations-console',
   'packages/db',
   'packages/shared-types',
+  'packages/conversation-presentation',
   'packages/operations-supervisor',
 ]
 export const RUNTIME_NPM_ROOTS = [
   '',
   'apps/server',
+  'apps/operations-console',
   'packages/operations-supervisor',
 ]
 

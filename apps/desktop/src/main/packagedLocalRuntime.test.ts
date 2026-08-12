@@ -138,6 +138,7 @@ async function createBundledRuntime(resourcesPath: string, releaseId: string): P
   const projectRoot = path.join(resourcesPath, 'runtime-service')
   const files = [
     'apps/server/dist/main.js',
+    'apps/operations-console/dist/installedCliEntry.js',
     'packages/operations-supervisor/dist/cli.js',
     'python-packages/cfgrib/__init__.py',
     'python-packages/docx/__init__.py',

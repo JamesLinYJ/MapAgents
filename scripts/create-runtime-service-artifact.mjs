@@ -46,9 +46,11 @@ if (args.build) {
   if (!executable) throw new Error('Runtime Service 编译需要可用的 ComSpec。')
   for (const workspace of [
     '@geo-agent-platform/shared-types',
+    '@geo-agent-platform/conversation-presentation',
     '@geo-agent-platform/operations-supervisor',
     '@geo-agent-platform/db',
     'geo-agent-server',
+    '@geo-agent-platform/operations-console',
   ]) {
     const npmArguments = ['run', 'build', '--workspace', workspace]
     const commandArguments = process.platform === 'win32'
@@ -69,8 +71,12 @@ const sources = [
   ['.node-version', '.node-version', 'file'],
   ['apps/server/dist', 'apps/server/dist', 'directory'],
   ['apps/server/package.json', 'apps/server/package.json', 'file'],
+  ['apps/operations-console/dist', 'apps/operations-console/dist', 'directory'],
+  ['apps/operations-console/package.json', 'apps/operations-console/package.json', 'file'],
   ['packages/db/dist', 'packages/db/dist', 'directory'],
   ['packages/db/package.json', 'packages/db/package.json', 'file'],
+  ['packages/conversation-presentation/dist', 'packages/conversation-presentation/dist', 'directory'],
+  ['packages/conversation-presentation/package.json', 'packages/conversation-presentation/package.json', 'file'],
   ['packages/operations-supervisor/dist', 'packages/operations-supervisor/dist', 'directory'],
   ['packages/operations-supervisor/package.json', 'packages/operations-supervisor/package.json', 'file'],
   ['packages/shared-types/dist', 'packages/shared-types/dist', 'directory'],

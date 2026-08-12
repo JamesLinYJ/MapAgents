@@ -17,6 +17,7 @@ export * from './ipcServer.js'
 export * from './jsonl.js'
 export * from './logBuffer.js'
 export * from './metrics.js'
+export * from './packagedLocalRuntime.js'
 export * from './paths.js'
 export * from './supervisor.js'
 export {
