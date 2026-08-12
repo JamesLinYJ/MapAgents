@@ -21,7 +21,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { AppIcon } from '../../shared/components/AppIcon'
 import { buildFadeUpMotion } from '../../shared/motion'
 import type { DataReferenceSummary } from '../../shared/constants'
-import type { DecisionRequest } from '@geo-agent-platform/shared-types'
+import type { ArtifactRef, DecisionRequest } from '@geo-agent-platform/shared-types'
 import type { ConversationEntry } from '@geo-agent-platform/conversation-presentation'
 import type { ChatPanelProps } from './types'
 import { ConversationEntryView } from './ConversationEntry'
@@ -36,6 +36,7 @@ import { fmtElapsed } from './useConversation'
 
 interface ConversationTimelineProps {
   conversation: ConversationEntry[]
+  artifacts: ArtifactRef[]
   activeDecision: DecisionRequest | null
   isSubmitting: boolean
   errorMessage?: string
@@ -58,6 +59,7 @@ interface ConversationTimelineProps {
 
 export function ConversationTimeline({
   conversation,
+  artifacts,
   activeDecision,
   isSubmitting,
   errorMessage,
@@ -220,6 +222,7 @@ export function ConversationTimeline({
                 >
                   <ConversationEntryView
                     entry={entry}
+                    artifacts={artifacts}
                     entryVariants={entryVariants}
                     reducedMotion={reducedMotion}
                     expandedIds={expandedIds}

@@ -9,6 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
+import type { ArtifactRef } from '@geo-agent-platform/shared-types'
 import type { ConversationEntry } from '@geo-agent-platform/conversation-presentation'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
@@ -54,6 +55,42 @@ describe('conversation tool rendering', () => {
     expect(html).toContain('工具调用')
     expect(html).not.toContain('query_public_weather')
   })
+
+  it('renders authorized Artifact references as named blue links instead of internal ids', () => {
+    const html = renderToStaticMarkup(
+      <ConversationEntryView
+        entry={{
+          id: 'message_delivery',
+          kind: 'message',
+          role: 'assistant',
+          timestamp: '2026-08-12T00:00:00.000Z',
+          title: '回答',
+          body: [
+            '风险区划图（PNG）：artifact_risk_png',
+            '区划图层（GeoJSON）：artifact_risk_geojson',
+            '未授权引用：artifact_unknown',
+          ].join('\n'),
+          status: 'completed',
+          details: { artifactIds: ['artifact_risk_png', 'artifact_risk_geojson'] },
+        }}
+        artifacts={deliveryArtifacts}
+        entryVariants={{}}
+        reducedMotion
+        expandedIds={new Set()}
+        onToggleExpanded={() => undefined}
+        onSelectArtifact={() => undefined}
+      />,
+    )
+
+    expect(html).toContain('href="#artifact/artifact_risk_png"')
+    expect(html).toContain('href="#artifact/artifact_risk_geojson"')
+    expect(html).toContain('class="cc-artifact-link"')
+    expect(html).toContain('杭州短时强降水风险区划图.png')
+    expect(html).toContain('杭州 13 区县风险分级.geojson')
+    expect(html).not.toContain('：artifact_risk_png')
+    expect(html).not.toContain('：artifact_risk_geojson')
+    expect(html).toContain('：artifact_unknown')
+  })
 })
 
 const weatherEntry: ConversationEntry = {
@@ -77,3 +114,23 @@ const weatherEntry: ConversationEntry = {
     },
   }],
 }
+
+const deliveryArtifacts: ArtifactRef[] = [{
+  artifactId: 'artifact_risk_png',
+  runId: 'run_delivery',
+  artifactType: 'chart_png',
+  name: '杭州短时强降水风险区划图.png',
+  uri: '/api/v1/results/artifact_risk_png/file',
+  display: { surfaces: ['download'], primarySurface: 'download', map: null },
+  metadata: {},
+  isIntermediate: false,
+}, {
+  artifactId: 'artifact_risk_geojson',
+  runId: 'run_delivery',
+  artifactType: 'geojson',
+  name: '杭州 13 区县风险分级.geojson',
+  uri: '/api/v1/results/artifact_risk_geojson/file',
+  display: { surfaces: ['download'], primarySurface: 'download', map: null },
+  metadata: {},
+  isIntermediate: false,
+}]

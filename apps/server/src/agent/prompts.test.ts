@@ -156,6 +156,14 @@ describe('system prompt', () => {
     expect(prompt).toContain('用户限定步骤数量、负责人或交付形式时不得擅自扩展')
   })
 
+  it('keeps internal Artifact identifiers out of user-visible delivery text', () => {
+    const prompt = buildSystemPrompt(defaultRuntimeConfig(), null, '', '', '')
+
+    expect(prompt).toContain('只用人类可读的产物名称')
+    expect(prompt).toContain('不得向用户显示 `artifact_` 开头的内部 ID')
+    expect(prompt).toContain('已授权的结构化 Artifact 引用生成可点击链接')
+  })
+
   it('treats current tool and automation schemas as authoritative over memory', () => {
     const state = agentStateSchema.parse({ sessionId: 'session_1', userQuery: '测试', planMode: true })
     const prompt = buildSystemPrompt(defaultRuntimeConfig(), state, '', '', '')

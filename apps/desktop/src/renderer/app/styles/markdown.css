@@ -75,6 +75,10 @@
   @apply text-[#24292f] underline underline-offset-2 decoration-[0.5px] transition-colors hover:text-[#111820];
 }
 
+.markdown-renderer a.cc-artifact-link {
+  @apply font-medium text-[#0969da] decoration-[#0969da]/60 hover:text-[#0550ae];
+}
+
 .markdown-renderer blockquote {
   @apply my-2 border-l-[3px] border-black/20 bg-white/[0.18] px-3.5 py-2 text-[14px] text-[#3a3a3c] italic;
   border-radius: 0 10px 10px 0;

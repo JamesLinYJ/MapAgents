@@ -330,6 +330,13 @@ function AppShell() {
     () => buildDataReferences({ layers, uploadReferences, files: allFiles, artifacts, threadRuns, currentThreadId }),
     [allFiles, artifacts, currentThreadId, layers, threadRuns, uploadReferences],
   )
+
+  const handleSelectConversationArtifact = useCallback((artifactId: string) => {
+    setSelectedArtifactId(artifactId)
+    setActiveNav('analysis')
+    setPanelMode('summary')
+  }, [setActiveNav, setPanelMode, setSelectedArtifactId])
+
   const handleLayerZoomTo = useCallback((mapLayerId: string) => {
     const target = mapScene.layers.find(layer => layer.manifest.mapLayerId === mapLayerId)
     if (target?.manifest.artifactId) setSelectedArtifactId(target.manifest.artifactId)
@@ -866,6 +873,7 @@ function AppShell() {
                   },
                   conversation: {
                     artifactCount: artifacts.length,
+                    artifacts,
                     runStatus: run?.status,
                     providerLabel,
                     query,
@@ -894,7 +902,7 @@ function AppShell() {
                       void handleUploadFiles(files)
                     },
                     onAttachImage: handleUploadComposerAttachment,
-                    onSelectArtifact: setSelectedArtifactId,
+                    onSelectArtifact: handleSelectConversationArtifact,
                     onSelectTask: onSelectTaskAction,
                     onRenameTask: onRenameTaskAction,
                     onDeleteTask: onDeleteTaskAction,

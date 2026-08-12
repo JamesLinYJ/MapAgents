@@ -10,7 +10,7 @@
 // --------------------------------------------------------------------------
 
 import { useMemo } from 'react'
-import ReactMarkdown, { type Components } from 'react-markdown'
+import ReactMarkdown, { type Components, type Options } from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 
@@ -19,10 +19,11 @@ export interface MarkdownProps {
   className?: string
   components?: Components
   openExternalLinksInNewTab?: boolean
+  remarkPlugins?: Options['remarkPlugins']
   streaming?: boolean
 }
 
-const remarkPlugins = [remarkGfm, remarkBreaks]
+const defaultRemarkPlugins = [remarkGfm, remarkBreaks]
 
 function classNames(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ')
@@ -62,6 +63,7 @@ export function Markdown({
   className,
   components,
   openExternalLinksInNewTab = true,
+  remarkPlugins,
   streaming = false,
 }: MarkdownProps) {
   const rendererComponents = useMemo(
@@ -79,7 +81,7 @@ export function Markdown({
     >
       <ReactMarkdown
         components={rendererComponents}
-        remarkPlugins={remarkPlugins}
+        remarkPlugins={[...defaultRemarkPlugins, ...(remarkPlugins ?? [])]}
         skipHtml
       >
         {children}

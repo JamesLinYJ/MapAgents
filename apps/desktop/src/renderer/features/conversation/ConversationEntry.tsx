@@ -21,10 +21,19 @@ import { Markdown } from '../../shared/components/Markdown'
 import { VoiceBar } from './VoiceBar'
 import { ToolMiniAppResult } from '../tools/ToolMiniApp'
 import { miniAppKindForTool } from '../tools/toolMiniAppModel'
+import type { ArtifactRef } from '@geo-agent-platform/shared-types'
 import type { ConversationCommand, ConversationEntry } from '@geo-agent-platform/conversation-presentation'
+import {
+  artifactLabel,
+  artifactLinkHref,
+  createArtifactMarkdownComponents,
+  createArtifactReferenceRemarkPlugin,
+  resolveConversationEntryArtifacts,
+} from './artifactMessageLinks'
 
 interface ConversationEntryViewProps {
   entry: ConversationEntry
+  artifacts?: ReadonlyArray<ArtifactRef>
   entryVariants: Variants
   reducedMotion: boolean
   expandedIds: Set<string>
@@ -36,6 +45,7 @@ interface ConversationEntryViewProps {
 
 export function ConversationEntryView({
   entry,
+  artifacts = [],
   entryVariants,
   reducedMotion,
   expandedIds,
@@ -74,6 +84,14 @@ export function ConversationEntryView({
     const isThought = isThoughtEntry(entry)
     const thoughtExpanded = isThought && expandedIds.has(entry.id)
     const sourceEntryId = transcriptEntryId(entry)
+    const entryArtifacts = resolveConversationEntryArtifacts(entry, artifacts)
+    const unmentionedArtifacts = entryArtifacts.filter(artifact => !entry.body.includes(artifact.artifactId))
+    const artifactMarkdown = entryArtifacts.length
+      ? {
+          components: createArtifactMarkdownComponents(onSelectArtifact),
+          remarkPlugins: [createArtifactReferenceRemarkPlugin(entryArtifacts)],
+        }
+      : undefined
     // 思考与回答走普通 DOM 渲染，不参与列表入场位移动画。
     //
     // 流式回答一到就直接占位显示，避免思考折叠完成后正文再“弹入”。
@@ -94,16 +112,46 @@ export function ConversationEntryView({
               <AnimatePresence initial={false}>
                 {thoughtExpanded && (
                   <m.div className="cc-assistant-copy cc-assistant-copy--thought" {...buildFadeMotion(reducedMotion)}>
-                    <Markdown streaming={entry.status === 'running'}>{entry.body}</Markdown>
+                    <Markdown
+                      components={artifactMarkdown?.components}
+                      remarkPlugins={artifactMarkdown?.remarkPlugins}
+                      streaming={entry.status === 'running'}
+                    >
+                      {entry.body}
+                    </Markdown>
                   </m.div>
                 )}
               </AnimatePresence>
             </>
           ) : (
             <div className="cc-assistant-copy">
-              <Markdown streaming={entry.status === 'running'}>{entry.body}</Markdown>
+              <Markdown
+                components={artifactMarkdown?.components}
+                remarkPlugins={artifactMarkdown?.remarkPlugins}
+                streaming={entry.status === 'running'}
+              >
+                {entry.body}
+              </Markdown>
             </div>
           )}
+          {unmentionedArtifacts.length > 0 ? (
+            <div className="cc-answer-artifacts" aria-label="结果文件">
+              <span>结果文件</span>
+              {unmentionedArtifacts.map(artifact => (
+                <a
+                  key={artifact.artifactId}
+                  className="cc-artifact-link"
+                  href={artifactLinkHref(artifact.artifactId)}
+                  onClick={(event) => {
+                    event.preventDefault()
+                    onSelectArtifact(artifact.artifactId)
+                  }}
+                >
+                  {artifactLabel(artifact)}
+                </a>
+              ))}
+            </div>
+          ) : null}
           {entry.artifactId && (
             <button className="cc-mini-button mt-2" onClick={() => onSelectArtifact(entry.artifactId!)}>
               在地图中查看

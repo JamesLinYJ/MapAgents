@@ -551,6 +551,29 @@
   padding: 6px 8px;
 }
 
+.cc-answer-artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 8px;
+  color: #66707a;
+  font-size: 12px;
+}
+
+.cc-answer-artifacts .cc-artifact-link {
+  color: #0969da;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: rgb(9 105 218 / 55%);
+  text-underline-offset: 2px;
+}
+
+.cc-answer-artifacts .cc-artifact-link:hover {
+  color: #0550ae;
+}
+
 .cc-empty--chat {
   width: min(100%, 620px);
   margin: auto;

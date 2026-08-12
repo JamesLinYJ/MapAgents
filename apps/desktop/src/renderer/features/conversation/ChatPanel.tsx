@@ -49,6 +49,7 @@ const ConversationTimeline = lazy(() => import('./ConversationTimeline').then(mo
 export function ChatPanel(props: ChatPanelProps) {
   const {
     artifactCount,
+    artifacts,
     currentRunId,
     currentThreadId,
     currentThreadTitle,
@@ -347,6 +348,7 @@ export function ChatPanel(props: ChatPanelProps) {
                   <ConversationTimeline
                     key={`chat-${currentRunId ?? 'idle'}`}
                     conversation={conversation}
+                    artifacts={artifacts}
                     activeDecision={activeServerDecision}
                     isSubmitting={isSubmitting}
                     errorMessage={errorMessage}

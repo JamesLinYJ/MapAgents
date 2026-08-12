@@ -16,6 +16,7 @@
 
 import type {
   AgentRuntimeConfig,
+  ArtifactRef,
   AgentExecutionMode,
   AgentRunProfile,
   AgentWorkflow,
@@ -50,6 +51,7 @@ export type ActiveDecision = DecisionRequest & {
 
 export interface ChatPanelProps {
   artifactCount: number
+  artifacts: ArtifactRef[]
   currentRunId?: string
   currentThreadId?: string
   currentThreadTitle?: string
