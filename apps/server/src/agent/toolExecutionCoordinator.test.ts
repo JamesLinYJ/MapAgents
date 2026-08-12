@@ -21,8 +21,10 @@ import { formatToolResultForModel, ToolExecutionCoordinator, validateAgentWorkfl
 import { RunEventSink } from './turnRunner.js'
 import {
   advanceAgentWorkflowObjectiveRevision,
+  completeAgentWorkflowStep,
   createAgentWorkflow,
   reviseAgentWorkflow,
+  startAgentWorkflowStep,
 } from './agentWorkflowState.js'
 
 describe('formatToolResultForModel', () => {
@@ -799,6 +801,69 @@ describe('ToolExecutionCoordinator', () => {
       .toContain('可以调用已注册的无副作用读取工具诊断原因')
     expect(coordinator.formatUnavailableToolForModel('meteorological_inspect'))
       .toContain('只能使用已注册的无副作用读取工具诊断')
+  })
+
+  it('keeps a completed plan open for read-only delivery verification and explicit revision', async () => {
+    const provider = testProvider()
+    const inspect = provider.tools()[0]
+    if (!inspect) throw new Error('测试工具缺失')
+    const revise = {
+      ...inspect,
+      name: 'revise_agent_workflow',
+      label: '调整智能体工作流',
+    }
+    const write = {
+      ...inspect,
+      name: 'publish_result',
+      label: '发布结果',
+      isReadOnly: false,
+    }
+    const planned = createAgentWorkflow({
+      goal: '检查数据并交付',
+      steps: [{
+        stepId: 'step_1',
+        title: '检查数据集',
+        kind: 'tool',
+        toolName: 'inspect_dataset',
+        ownerAgentId: 'supervisor',
+        args: { datasetId: 'dataset_1' },
+        reason: '验证数据',
+        dependsOn: [],
+      }],
+    })
+    const completed = completeAgentWorkflowStep(
+      startAgentWorkflowStep(planned, { stepId: 'step_1' }),
+      { stepId: 'step_1', resultSummary: '检查完成' },
+    )
+    const definitions = [inspect, revise, write]
+    const { coordinator, getState } = coordinatorHarness({
+      ...provider,
+      manifest: {
+        ...provider.manifest,
+        tools: definitions.map(tool => ({
+          name: tool.name,
+          label: tool.label,
+          description: tool.description,
+          group: tool.group,
+          tags: tool.tags,
+          isReadOnly: tool.isReadOnly,
+          isDestructive: tool.isDestructive,
+          jsonSchema: tool.jsonSchema!,
+        })),
+      },
+      tools: () => definitions,
+    }, false, [], completed)
+
+    expect(coordinator.isToolEnabled('inspect_dataset')).toBe(true)
+    expect(coordinator.isToolEnabled('revise_agent_workflow')).toBe(true)
+    expect(coordinator.isToolEnabled('publish_result')).toBe(false)
+    await expect(coordinator.executeDirect('inspect_dataset', { datasetId: 'dataset_1' }))
+      .resolves.toMatchObject({ resultId: 'result_1' })
+    expect(getState().agentWorkflow?.status).toBe('completed')
+    await expect(coordinator.executeDirect('publish_result', { datasetId: 'dataset_1' }))
+      .rejects.toThrow('请先调用 revise_agent_workflow')
+    expect(coordinator.formatUnavailableToolForModel('publish_result'))
+      .toContain('处于交付前验证阶段')
   })
 
   it('binds reverse and concurrent same-tool calls to explicit workflow step ids', async () => {

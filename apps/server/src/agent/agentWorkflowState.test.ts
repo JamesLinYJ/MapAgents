@@ -205,6 +205,35 @@ describe('agentWorkflowState', () => {
     expect(completed.completedAt).toEqual(expect.any(String))
   })
 
+  it('reopens a completed plan when delivery verification requires an explicit revision', () => {
+    const completed = completeAgentWorkflowStep(
+      startAgentWorkflowStep(
+        createAgentWorkflow({ goal: '生成风险图', steps: [step('render', 'render_risk_map')] }),
+        { stepId: 'render' },
+      ),
+      { stepId: 'render', resultSummary: '风险图已生成' },
+    )
+
+    const revised = reviseAgentWorkflow(completed, {
+      goal: '生成风险图并补充面雨量表',
+      changeReason: '交付前验证发现需要补充可核验表格',
+      steps: [
+        step('render', 'render_risk_map'),
+        step('table', 'generate_area_rainfall_table', ['render']),
+      ],
+    })
+
+    expect(revised).toMatchObject({
+      revision: 2,
+      status: 'running',
+      completedAt: null,
+      steps: [
+        expect.objectContaining({ stepId: 'render', status: 'completed' }),
+        expect.objectContaining({ stepId: 'table', status: 'pending' }),
+      ],
+    })
+  })
+
   it('does not let an in-flight step from an older objective revision restore workflow completion', () => {
     const running = startAgentWorkflowStep(
       createAgentWorkflow({ goal: '交付结论', steps: [step('answer', 'answer')] }, 1),

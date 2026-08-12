@@ -55,8 +55,10 @@ export function reviseAgentWorkflow(
 ): AgentWorkflow {
   const revision = agentWorkflowRevisionSchema.parse(input)
   assertValidDependencyGraph(revision)
-  if (current.status === 'completed' || current.status === 'cancelled') {
-    throw new Error('已结束的智能体工作流不能再调整。')
+  // completed 只表示当前计划步骤已完成。Run 在最终交付提交前仍可能需要
+  // 追加验证或修订执行契约；只有显式取消才是不可恢复的工作流终态。
+  if (current.status === 'cancelled') {
+    throw new Error('已取消的智能体工作流不能再调整。')
   }
   const now = nowUtc()
   const previous = new Map(current.steps.map(step => [step.stepId, step]))

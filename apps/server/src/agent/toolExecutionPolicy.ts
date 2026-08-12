@@ -53,9 +53,11 @@ export class ToolExecutionPolicy {
     const state = this.dependencies.state()
     if (state.planMode) return tool.isReadOnly && !tool.isDestructive
     if (!state.agentWorkflow) return true
-    if (state.agentWorkflow.status === 'completed' || state.agentWorkflow.status === 'cancelled') return false
+    if (state.agentWorkflow.status === 'cancelled') return false
     if (ACTIVE_WORKFLOW_CONTROL_TOOLS.has(toolName)) return true
-    if (state.agentWorkflow.status === 'adjusting') return tool.isReadOnly && !tool.isDestructive
+    if (state.agentWorkflow.status === 'adjusting' || state.agentWorkflow.status === 'completed') {
+      return tool.isReadOnly && !tool.isDestructive
+    }
     return this.hasReadyWorkflowStep(toolName, 'supervisor')
   }
 

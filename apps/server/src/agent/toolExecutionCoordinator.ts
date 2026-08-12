@@ -167,6 +167,13 @@ export class ToolExecutionCoordinator {
         '当前智能体工作流正在调整；只能使用已注册的无副作用读取工具诊断，或更新工作流、请求澄清。',
       ].join(' ')
     }
+    if (workflow?.status === 'completed') {
+      return [
+        `工具 '${toolName}' 不在当前可用工具列表中。`,
+        '当前计划步骤已完成，处于交付前验证阶段；可继续使用无副作用读取工具。',
+        '如果需要新的写入、产出或外部操作，请先调用 revise_agent_workflow 显式补充执行步骤。',
+      ].join(' ')
+    }
     return `工具 '${toolName}' 不在当前可用工具列表中。请只使用本轮公开的确切工具名；不存在合适能力时如实说明限制。`
   }
 
@@ -610,12 +617,13 @@ export class ToolExecutionCoordinator {
       const updated = await this.options.store.mutateRunState(this.options.runId, state => {
         const workflow = state.agentWorkflow
         if (!workflow) return {}
-        if (workflow.status === 'adjusting') {
+        if (workflow.status === 'adjusting' || workflow.status === 'completed') {
           const tool = this.options.registry.get(toolName)
           if (tool?.isReadOnly && !tool.isDestructive) return {}
-          throw new Error('智能体工作流正在等待调整。请先调用 revise_agent_workflow，再执行后续工具。')
+          const phase = workflow.status === 'completed' ? '已完成当前计划步骤' : '正在等待调整'
+          throw new Error(`智能体工作流${phase}。请先调用 revise_agent_workflow，再执行新的写入或外部操作。`)
         }
-        if (workflow.status === 'completed' || workflow.status === 'cancelled' || workflow.status === 'failed') {
+        if (workflow.status === 'cancelled' || workflow.status === 'failed') {
           throw new Error(`智能体工作流已经处于 ${workflow.status} 状态，不能继续调用工具。`)
         }
         const claimed = this.activeClaimedWorkflowStepIds(workflow)
