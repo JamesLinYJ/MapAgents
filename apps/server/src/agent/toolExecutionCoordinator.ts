@@ -78,6 +78,7 @@ interface ClaimedWorkflowStep {
 // 都先落盘再推进，未知副作用状态不会被包装成成功结果。
 export class ToolExecutionCoordinator {
   private readonly preparedCalls = new Set<string>()
+  private readonly preparingCalls = new Map<string, Promise<void>>()
   private readonly callItems = new Map<string, string>()
   private readonly claimedWorkflowSteps = new Map<string, ClaimedWorkflowStep>()
   private readonly externalAgentCalls = new Map<string, string>()
@@ -254,6 +255,25 @@ export class ToolExecutionCoordinator {
 
   async prepare(toolName: string, args: Record<string, unknown>, callId: string): Promise<void> {
     if (this.preparedCalls.has(callId)) return
+    const preparing = this.preparingCalls.get(callId)
+    if (preparing) {
+      await preparing
+      return
+    }
+    const operation = this.preparePlatformToolCall(toolName, args, callId)
+    this.preparingCalls.set(callId, operation)
+    try {
+      await operation
+    } finally {
+      if (this.preparingCalls.get(callId) === operation) this.preparingCalls.delete(callId)
+    }
+  }
+
+  private async preparePlatformToolCall(
+    toolName: string,
+    args: Record<string, unknown>,
+    callId: string,
+  ): Promise<void> {
     const tool = this.options.registry.get(toolName)
     if (!tool) throw new Error(`工具 '${toolName}' 未注册`)
     const invocation = splitWorkflowStepIdentity(args)

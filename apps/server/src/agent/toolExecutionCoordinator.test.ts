@@ -290,6 +290,75 @@ describe('ToolExecutionCoordinator', () => {
     expect(conversationItems[0]?.metadata).toMatchObject({ toolLabel: '检查数据集' })
   })
 
+  it('prepares one canonical tool call when Session and tool invoke race', async () => {
+    const transcriptWrites: Array<Record<string, unknown>> = []
+    const transcriptRead = deferredSignal()
+    let reads = 0
+    const store = {
+      runtimeRoot: '/tmp/runtime',
+      activeTranscript: vi.fn(async () => {
+        reads += 1
+        if (reads === 1) await transcriptRead.promise
+        return []
+      }),
+      appendTranscript: vi.fn(async (input: Record<string, unknown>) => {
+        transcriptWrites.push(input)
+        return { entryId: `entry_${transcriptWrites.length}` }
+      }),
+      saveRunCheckpoint: vi.fn(async () => undefined),
+      getRun: vi.fn(() => ({
+        workspaceId: 'workspace_1',
+        state: {
+          objectiveRevision: 1,
+          planMode: false,
+          agentWorkflow: null,
+          todos: [],
+          artifacts: [],
+          warnings: [],
+          errors: [],
+        },
+      })),
+    } as unknown as ToolExecutionStore
+    const registry = new ToolRegistry()
+    registry.register(testProvider())
+    const coordinator = new ToolExecutionCoordinator({
+      store,
+      resultCommitService: new ToolResultCommitService(store),
+      registry,
+      adapter: null,
+      runId: 'run_1',
+      sessionId: 'session_1',
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      inlineToolResultMaxChars: 4_000,
+      eventSink: new RunEventSink(async () => undefined, 'run_1', 'thread_1'),
+      itemSink: new ItemSink(() => undefined, 'run_1', 'thread_1'),
+      valueState: new Map(),
+      signal: new AbortController().signal,
+    })
+
+    const sessionPreparation = coordinator.prepare(
+      'inspect_dataset',
+      { datasetId: 'dataset_1' },
+      'call_race',
+    )
+    await Promise.resolve()
+    const invokePreparation = coordinator.prepare(
+      'inspect_dataset',
+      { datasetId: 'dataset_1' },
+      'call_race',
+    )
+    transcriptRead.resolve()
+    await Promise.all([sessionPreparation, invokePreparation])
+
+    expect(store.activeTranscript).toHaveBeenCalledTimes(1)
+    expect(transcriptWrites).toHaveLength(1)
+    expect(transcriptWrites[0]).toMatchObject({
+      kind: 'tool_call',
+      payload: { callId: 'call_race', name: 'inspect_dataset', ledgerStatus: 'prepared' },
+    })
+  })
+
   it('persists a failed platform tool result immediately with its real label', async () => {
     const transcriptWrites: Array<Record<string, unknown>> = []
     let warnings: string[] = []

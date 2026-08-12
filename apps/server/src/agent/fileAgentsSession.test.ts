@@ -17,6 +17,46 @@ import { describe, expect, it } from 'vitest'
 import { FileAgentsSession } from './fileAgentsSession.js'
 
 describe('FileAgentsSession', () => {
+  it('serializes concurrent SDK persistence callbacks in invocation order', async () => {
+    const projected: string[] = []
+    let releaseFirst!: () => void
+    const firstBlocked = new Promise<void>(resolve => {
+      releaseFirst = resolve
+    })
+    let firstStarted!: () => void
+    const firstStartedPromise = new Promise<void>(resolve => {
+      firstStarted = resolve
+    })
+    const session = new FileAgentsSession('test-session', [], async items => {
+      const item = items[0]
+      if (!item || item.type !== 'function_call') throw new Error('测试项类型错误')
+      projected.push(item.callId)
+      if (item.callId === 'call_1') {
+        firstStarted()
+        await firstBlocked
+      }
+    })
+    const call = (callId: string): AgentInputItem => ({
+      type: 'function_call',
+      name: 'query_layer',
+      callId,
+      arguments: '{}',
+      status: 'completed',
+    })
+
+    const first = session.addItems([call('call_1')])
+    await firstStartedPromise
+    const second = session.addItems([call('call_2')])
+    await Promise.resolve()
+    expect(projected).toEqual(['call_1'])
+    releaseFirst()
+    await Promise.all([first, second])
+
+    expect(projected).toEqual(['call_1', 'call_2'])
+    expect((await session.getItems()).map(item => 'callId' in item ? item.callId : null))
+      .toEqual(['call_1', 'call_2'])
+  })
+
   it('does not persist provider reasoning as replayable session history', async () => {
     const projected: AgentInputItem[][] = []
     const session = new FileAgentsSession('test-session', [], async items => {
@@ -58,13 +98,13 @@ describe('FileAgentsSession', () => {
       },
     } satisfies AgentInputItem
 
-    session.retainRunInputs([runInput])
-    session.retainRunInputs([structuredClone(runInput)])
+    await session.retainRunInputs([runInput])
+    await session.retainRunInputs([structuredClone(runInput)])
     await session.addItems([structuredClone(runInput)])
 
     expect(projected).toEqual([])
     expect(await session.getItems()).toEqual([runInput])
-    await expect(async () => session.retainRunInputs([{
+    await expect(session.retainRunInputs([{
       ...runInput,
       content: '同 sequence 的不同内容',
     }])).rejects.toThrow('内容不一致')

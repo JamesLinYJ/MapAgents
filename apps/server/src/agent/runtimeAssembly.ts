@@ -65,6 +65,7 @@ import {
   errorMessage,
   isAssistantMessage,
   modelSettings,
+  parseArguments,
   sdkNativeLedgerStatus,
   toolResultText,
 } from './runtimeSdkProjection.js'
@@ -546,8 +547,17 @@ export class RuntimeAssemblyFactory {
                 label,
                 itemObjectiveRevision,
               )
-            } else if (transcriptProjector.isPlatformManagedTool(item.name, currentAssembly)) {
-              throw new Error(`SDK Session 收到未准备的工具调用 '${item.callId}'`)
+            } else if (toolRegistry.get(item.name)) {
+              // SDK Session 与工具 invoke 的持久化回调没有先后契约。恢复或快模型
+              // 路径中 Session 可能先看到 function_call；统一进入 coordinator 的
+              // 单航班 prepare，不能把正常的回调反序当成损坏状态。
+              await coordinator.prepare(
+                item.name,
+                parseArguments(item.arguments),
+                item.callId,
+              )
+            } else if (currentAssembly.subAgentToolNames.has(item.name)) {
+              throw new Error(`SDK Session 收到未准备的子智能体调用 '${item.callId}'`)
             } else {
               await transcriptProjector.appendSdkNativeToolCallTranscript(
                 options.runId,

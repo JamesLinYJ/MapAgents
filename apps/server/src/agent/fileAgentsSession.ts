@@ -20,6 +20,7 @@ export type SessionItemProjector = (items: AgentInputItem[]) => Promise<void>
 export class FileAgentsSession implements Session {
   private readonly appended: AgentInputItem[] = []
   private readonly retainedRunInputs = new Map<string, string>()
+  private mutation: Promise<void> = Promise.resolve()
 
   constructor(
     private readonly sessionId: string,
@@ -37,17 +38,25 @@ export class FileAgentsSession implements Session {
   }
 
   async getItems(limit?: number): Promise<AgentInputItem[]> {
+    await this.mutation
     const items = [...this.history, ...this.appended]
     const selected = typeof limit === 'number' ? items.slice(-Math.max(0, limit)) : items
     return structuredClone(selected)
   }
 
   async addItems(items: AgentInputItem[]): Promise<void> {
+    const input = structuredClone(items)
+    const operation = this.mutation.then(() => this.addItemsOnce(input))
+    this.mutation = operation.catch(() => undefined)
+    return operation
+  }
+
+  private async addItemsOnce(items: AgentInputItem[]): Promise<void> {
     const replayableItems = items.filter(isReplayableSessionItem)
     const projectable: AgentInputItem[] = []
     for (const item of replayableItems) {
       if (platformRunInputKey(item)) {
-        this.retainRunInputs([item])
+        this.retainRunInputsOnce([item])
       } else {
         projectable.push(item)
       }
@@ -60,7 +69,16 @@ export class FileAgentsSession implements Session {
   // run_input 已由 PostgreSQL/transcript 原子持久化，不能再次投影；但 SDK
   // 每个外层 Runner 只持久化一次初始输入。显式保留到 Session，确保在同一
   // run 后续 Runner/repair 仍可重放，且 marker 让重复 addItems 保持幂等。
-  retainRunInputs(items: readonly AgentInputItem[]): void {
+  async retainRunInputs(items: readonly AgentInputItem[]): Promise<void> {
+    const input = structuredClone(items)
+    const operation = this.mutation.then(() => {
+      this.retainRunInputsOnce(input)
+    })
+    this.mutation = operation.catch(() => undefined)
+    await operation
+  }
+
+  private retainRunInputsOnce(items: readonly AgentInputItem[]): void {
     for (const item of items) {
       const key = platformRunInputKey(item)
       if (!key) throw new Error('FileAgentsSession 只能显式保留带 platform marker 的 run input')
@@ -76,11 +94,21 @@ export class FileAgentsSession implements Session {
   }
 
   async popItem(): Promise<AgentInputItem | undefined> {
-    return this.appended.pop()
+    let item: AgentInputItem | undefined
+    const operation = this.mutation.then(() => {
+      item = this.appended.pop()
+    })
+    this.mutation = operation.catch(() => undefined)
+    await operation
+    return item
   }
 
   async clearSession(): Promise<void> {
-    this.appended.length = 0
+    const operation = this.mutation.then(() => {
+      this.appended.length = 0
+    })
+    this.mutation = operation.catch(() => undefined)
+    await operation
   }
 }
 

@@ -148,7 +148,7 @@ export class RuntimeSdkExecutor {
                   options.runId,
                   delivery.items,
                 )
-                assembly.session.retainRunInputs(delivery.items)
+                await assembly.session.retainRunInputs(delivery.items)
                 pendingInputLeaseId = delivery.leaseId
               }
               assembly.coordinator.bindModelInputObjectiveRevision(delivery.objectiveRevision)
