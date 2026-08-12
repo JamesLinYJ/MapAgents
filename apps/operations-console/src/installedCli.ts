@@ -57,6 +57,7 @@ export async function runInstalledCli(
   argv: readonly string[],
   dependencies: InstalledCliDependencies = productionDependencies(),
 ): Promise<number> {
+  assertProductNodeRuntime(process.versions.node)
   const command = parseInstalledCli(argv)
   if (command.kind === 'help') {
     dependencies.stdout.write(installedCliHelpText())
@@ -122,6 +123,13 @@ export async function runInstalledCli(
         'localAgentConsoleEntry.js',
       )
   return dependencies.runChild(process.execPath, [entry, ...command.arguments], dependencies.environment)
+}
+
+export function assertProductNodeRuntime(version: string): void {
+  const major = Number(version.split('.')[0])
+  if (!Number.isInteger(major) || major < 24) {
+    throw new Error(`安装版需要内置 Node 24+，当前误用了 Node ${version}。请修复安装后重试。`)
+  }
 }
 
 export function parseInstalledCli(argv: readonly string[]): InstalledCliCommand {

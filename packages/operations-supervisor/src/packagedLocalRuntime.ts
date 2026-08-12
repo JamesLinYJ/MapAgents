@@ -289,6 +289,7 @@ async function assertBundledRuntime(projectRoot: string): Promise<void> {
   for (const relativePath of [
     'apps/server/dist/main.js',
     'apps/operations-console/dist/installedCliEntry.js',
+    'node-runtime/bin/node',
     'packages/operations-supervisor/dist/cli.js',
     'python-packages/cfgrib/__init__.py',
     'python-packages/docx/__init__.py',

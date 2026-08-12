@@ -139,6 +139,7 @@ async function createBundledRuntime(resourcesPath: string, releaseId: string): P
   const files = [
     'apps/server/dist/main.js',
     'apps/operations-console/dist/installedCliEntry.js',
+    'node-runtime/bin/node',
     'packages/operations-supervisor/dist/cli.js',
     'python-packages/cfgrib/__init__.py',
     'python-packages/docx/__init__.py',

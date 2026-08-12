@@ -11,7 +11,11 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { installedCliHelpText, parseInstalledCli } from './installedCli.js'
+import {
+  assertProductNodeRuntime,
+  installedCliHelpText,
+  parseInstalledCli,
+} from './installedCli.js'
 
 describe('installed CLI', () => {
   it('uses the interactive Agent as the zero-configuration default', () => {
@@ -47,5 +51,10 @@ describe('installed CLI', () => {
     expect(help).toContain('自动启动后端')
     expect(help).toContain('无需 Docker')
     expect(help).not.toContain('dev.sh')
+  })
+
+  it('rejects a system Node 22 before terminal rendering can enter the crashing V8 path', () => {
+    expect(() => assertProductNodeRuntime('22.23.1')).toThrow(/内置 Node 24\+/u)
+    expect(() => assertProductNodeRuntime('24.14.1')).not.toThrow()
   })
 })

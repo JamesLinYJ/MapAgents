@@ -116,7 +116,6 @@ export default {
         license: 'UNLICENSED',
         requires: [
           'bash',
-          'nodejs >= 22',
           'postgresql-server',
           'postgresql-contrib',
           'postgis',

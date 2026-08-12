@@ -137,6 +137,17 @@ describe('desktop packaging contract', () => {
       expect(forgeSource, requiredMetadata).toContain(requiredMetadata)
     }
     expect(forgeSource).not.toContain("'postgresql-private-devel'")
+    expect(forgeSource).not.toContain("'nodejs >=")
+    expect(rpmSpecSource).toContain('/usr/bin/geo-agent-platform')
+    expect(await readFile(path.resolve(process.cwd(), '..', '..', 'deploy/bin/geo-agent-platform'), 'utf8'))
+      .toContain('runtime-service/node-runtime/bin/node')
+    expect(await readFile(path.resolve(
+      process.cwd(),
+      '..',
+      '..',
+      'deploy/systemd/geo-agent-platform-supervisor.user.service',
+    ), 'utf8'))
+      .toContain('runtime-service/node-runtime/bin/node')
     expect(PLATFORM_DESKTOP_APPLICATION_ID).not.toContain(PRODUCT_CODENAME)
     expect(PLATFORM_DESKTOP_PROTOCOL_SCHEME).not.toContain(PRODUCT_CODENAME.toLowerCase())
     expect(PLATFORM_MACHINE_ID).not.toContain(PRODUCT_CODENAME.toLowerCase())

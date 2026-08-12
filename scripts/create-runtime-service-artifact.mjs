@@ -11,6 +11,8 @@
 
 import { createHash, createPrivateKey, sign } from 'node:crypto'
 import {
+  chmod,
+  copyFile,
   cp,
   mkdir,
   readFile,
@@ -240,6 +242,8 @@ async function materializeLinuxRuntime(artifactRoot) {
     throw new Error('--materialize-linux 当前只支持 Linux x64 构建主机。')
   }
 
+  await materializeNodeRuntime(artifactRoot)
+
   runRequired('npm', [
     'ci',
     '--omit=dev',
@@ -282,7 +286,7 @@ async function materializeLinuxRuntime(artifactRoot) {
       'import worker_app.sidecar',
     ].join('; '),
   ], { cwd: artifactRoot, environment: { PYTHONPATH: pythonPath } })
-  runRequired(process.execPath, [
+  runRequired(path.join(artifactRoot, 'node-runtime', 'bin', 'node'), [
     '--input-type=module',
     '--eval',
     "await import('sharp'); await import('@geo-agent-platform/operations-supervisor')",
@@ -294,7 +298,37 @@ async function materializeLinuxRuntime(artifactRoot) {
     pythonRuntime: 'system',
     minimumPythonVersion: '3.11',
     privatePythonPackages: privateRequirements.map(value => value.split(' ')[0]),
-    nodeRuntime: 'system',
+    nodeRuntime: 'bundled',
+    nodeVersion: process.version,
+  }, null, 2)}\n`, 'utf8')
+}
+
+async function materializeNodeRuntime(artifactRoot) {
+  const major = Number(process.versions.node.split('.')[0])
+  if (!Number.isInteger(major) || major < 24) {
+    throw new Error(`Linux 发布必须由 Node 24+ 构建，当前为 ${process.version}。`)
+  }
+  const compatibilityProbe = spawnSync(process.execPath, [
+    '-e',
+    "const s=new Intl.Segmenter(undefined,{granularity:'grapheme'});if([...s.segment('中A')].length!==2)process.exit(2)",
+  ], { encoding: 'utf8' })
+  if (compatibilityProbe.error || compatibilityProbe.status !== 0) {
+    throw new Error(`构建机 Node 的 Intl.Segmenter 不可用（${process.version}），拒绝生成运行时。`)
+  }
+
+  const destination = path.join(artifactRoot, 'node-runtime', 'bin', 'node')
+  await mkdir(path.dirname(destination), { recursive: true })
+  await copyFile(process.execPath, destination)
+  await chmod(destination, 0o755)
+  const version = spawnSync(destination, ['--version'], { encoding: 'utf8' })
+  if (version.error || version.status !== 0 || version.stdout.trim() !== process.version) {
+    throw new Error('复制后的 Node 运行时版本校验失败。')
+  }
+  await writeFile(path.join(artifactRoot, 'node-runtime-version.json'), `${JSON.stringify({
+    schemaVersion: 1,
+    version: process.version,
+    platform: process.platform,
+    arch: process.arch,
   }, null, 2)}\n`, 'utf8')
 }
 

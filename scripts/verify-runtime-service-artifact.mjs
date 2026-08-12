@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
 import { lstat, readFile, readdir, readlink, realpath } from 'node:fs/promises'
 import path from 'node:path'
 
@@ -49,6 +50,8 @@ for (const entry of manifest.entries) {
 for (const requiredPath of requiredRuntimePaths(entryPaths)) {
   if (!entryPaths.has(requiredPath)) throw new Error(`运行服务制品缺少必需文件：${requiredPath}`)
 }
+
+if (entryPaths.has('linux-runtime-bundle.json')) verifyBundledNode(artifactRoot)
 
 const runtimePackage = JSON.parse(await readFile(path.join(artifactRoot, 'package.json'), 'utf8'))
 const runtimeLock = JSON.parse(await readFile(path.join(artifactRoot, 'package-lock.json'), 'utf8'))
@@ -247,6 +250,8 @@ function requiredRuntimePaths(entryPaths) {
   ]
   if (entryPaths.has('linux-runtime-bundle.json')) {
     paths.push(
+      'node-runtime/bin/node',
+      'node-runtime-version.json',
       'node_modules/.package-lock.json',
       'python-private-requirements.lock',
       'python-packages/cfgrib/__init__.py',
@@ -254,4 +259,15 @@ function requiredRuntimePaths(entryPaths) {
     )
   }
   return paths
+}
+
+function verifyBundledNode(artifactRoot) {
+  const executable = path.join(artifactRoot, 'node-runtime', 'bin', 'node')
+  const probe = spawnSync(executable, [
+    '-e',
+    "const major=+process.versions.node.split('.')[0];const s=new Intl.Segmenter(undefined,{granularity:'grapheme'});if(major<24||[...s.segment('中A')].length!==2)process.exit(2)",
+  ], { encoding: 'utf8', timeout: 10_000 })
+  if (probe.error || probe.status !== 0 || probe.signal) {
+    throw new Error('运行服务内置 Node 24+ 兼容性探针失败。')
+  }
 }
