@@ -14,7 +14,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { preparePackagedLocalRuntime } from './packagedLocalRuntime.js'
+import {
+  preparePackagedLocalRuntime,
+  readPackagedLocalRuntimeUserSettings,
+  updatePackagedLocalRuntimeUserSettings,
+} from './packagedLocalRuntime.js'
 
 const temporaryDirectories: string[] = []
 
@@ -125,6 +129,43 @@ describe('packaged Linux local runtime', () => {
       },
     })).resolves.toBeNull()
     expect(commands).toEqual([])
+  })
+
+  it('stores a user-supplied Tianditu server key only in the protected runtime environment', async () => {
+    const root = await createTemporaryDirectory()
+    const resourcesPath = path.join(root, 'resources')
+    const homeDirectory = path.join(root, 'home')
+    await createBundledRuntime(resourcesPath, 'release-1')
+    const resolution = await preparePackagedLocalRuntime({
+      platform: 'linux',
+      resourcesPath,
+      homeDirectory,
+      environment: {},
+      ownerUid: process.getuid?.(),
+      systemRuntimeManifestPath: path.join(root, 'missing-system-manifest.json'),
+      isPortAvailable: async () => true,
+      runSystemctl: async arguments_ => arguments_.includes('is-active') ? 3 : 0,
+    })
+    const commands: string[][] = []
+
+    await expect(readPackagedLocalRuntimeUserSettings({
+      serviceEnvironmentFile: resolution!.serviceEnvironmentFile,
+      ownerUid: process.getuid?.(),
+    })).resolves.toEqual({ tiandituConfigured: false })
+    await expect(updatePackagedLocalRuntimeUserSettings({
+      serviceEnvironmentFile: resolution!.serviceEnvironmentFile,
+      ownerUid: process.getuid?.(),
+      tiandituApiKey: 'server-key-fixture-1234',
+      runSystemctl: async arguments_ => {
+        commands.push([...arguments_])
+        return 0
+      },
+    })).resolves.toEqual({ tiandituConfigured: true })
+
+    const environmentSource = await readFile(resolution!.serviceEnvironmentFile, 'utf8')
+    expect(environmentSource).toContain('TIANDITU_API_KEY="server-key-fixture-1234"')
+    expect((await stat(resolution!.serviceEnvironmentFile)).mode & 0o777).toBe(0o600)
+    expect(commands).toEqual([['--user', 'restart', 'geo-agent-platform-supervisor.service']])
   })
 })
 

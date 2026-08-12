@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6
 // --------------------------------------------------------------------------
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { TiandituBasemapGateway } from './tiandituBasemapGateway.js'
 
@@ -34,19 +34,33 @@ describe('TiandituBasemapGateway', () => {
     expect(new TiandituBasemapGateway(undefined).catalog()[0]?.available).toBe(false)
   })
 
-  it('injects the browser-scoped key only into a validated Tianditu redirect', () => {
-    const gateway = new TiandituBasemapGateway('local-secret-fixture')
+  it('uses the server-scoped key upstream and returns bounded image bytes without exposing it', async () => {
+    const fetch = vi.fn(async () => new Response(new Uint8Array([137, 80, 78, 71]), {
+      status: 200,
+      headers: { 'content-type': 'image/png', etag: 'tile-v1' },
+    }))
+    const gateway = new TiandituBasemapGateway('local-secret-fixture', fetch)
 
-    const requestedUrl = new URL(gateway.tileRedirectUrl('labels', 4, 13, 6))
+    const tile = await gateway.fetchTile('labels', 4, 13, 6)
+    const requestedUrl = new URL(String(fetch.mock.calls[0]?.[0]))
 
     expect(requestedUrl.origin).toMatch(/^https:\/\/t[0-7]\.tianditu\.gov\.cn$/u)
     expect(requestedUrl.searchParams.get('T')).toBe('cva_w')
     expect(requestedUrl.searchParams.get('tk')).toBe('local-secret-fixture')
+    expect(fetch.mock.calls[0]?.[1]).toMatchObject({
+      redirect: 'error',
+      headers: expect.objectContaining({ 'user-agent': 'GeoAgentPlatform-Server/1' }),
+    })
+    expect(tile).toMatchObject({ contentType: 'image/png', etag: 'tile-v1' })
+    expect(new Uint8Array(tile.body)).toEqual(new Uint8Array([137, 80, 78, 71]))
+    expect(JSON.stringify(tile)).not.toContain('local-secret-fixture')
   })
 
-  it('rejects invalid coordinates before contacting Tianditu', () => {
-    const gateway = new TiandituBasemapGateway('local-secret-fixture')
+  it('rejects invalid coordinates before contacting Tianditu', async () => {
+    const fetch = vi.fn()
+    const gateway = new TiandituBasemapGateway('local-secret-fixture', fetch)
 
-    expect(() => gateway.tileRedirectUrl('vector', 2, 4, 0)).toThrow('超出当前层级范围')
+    await expect(gateway.fetchTile('vector', 2, 4, 0)).rejects.toThrow('超出当前层级范围')
+    expect(fetch).not.toHaveBeenCalled()
   })
 })

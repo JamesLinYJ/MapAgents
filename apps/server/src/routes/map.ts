@@ -54,15 +54,14 @@ export function mapRoutes(deps: {
 
   app.get('/api/v1/map/basemaps/tianditu-vector/tiles/:kind/:z/:x/:y', async c => {
     const params = basemapTileParamsSchema.parse(c.req.param())
-    const tileUrl = tiandituBasemapGateway.tileRedirectUrl(
+    const tile = await tiandituBasemapGateway.fetchTile(
       params.kind as TiandituTileKind,
       params.z,
       params.x,
       params.y,
+      c.req.raw.signal,
     )
-    // 天地图浏览器端 Key 必须由浏览器网络栈使用。服务端只在认证与坐标校验后
-    // 生成重定向，不伪造 User-Agent，也不把 Key 写入底图目录或 Renderer 状态。
-    return c.redirect(tileUrl, 307)
+    return tileResponse(tile, tile.cacheControl)
   })
 
   app.get('/api/v1/map/scenes/:threadId', async c => {

@@ -17,7 +17,6 @@ import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-csp-worker.js?url'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
 import type { BasemapDescriptor, MapSceneLayer } from '@geo-agent-platform/shared-types'
-import { DEFAULT_BASEMAP } from '../../shared/constants'
 import { releaseDesktopFileHandle, stageDesktopImageBlob } from '../../api/desktopFiles'
 import {
   buildBasemapStyle,
@@ -98,7 +97,7 @@ export function MapCanvas({
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<Map | null>(null)
   const layersRef = useRef(layers)
-  const activeBasemapRef = useRef<BasemapDescriptor>(DEFAULT_BASEMAP)
+  const activeBasemapRef = useRef<BasemapDescriptor | undefined>(undefined)
   const onSelectArtifactRef = useRef(onSelectArtifact)
   const popupRef = useRef<maplibregl.Popup | null>(null)
   const hoverPopupRef = useRef<maplibregl.Popup | null>(null)
@@ -130,7 +129,10 @@ export function MapCanvas({
   const activeBasemap = availableBasemaps.find(item => item.basemapKey === selectedBasemapKey)
     ?? availableBasemaps.find(item => item.isDefault)
     ?? availableBasemaps[0]
-    ?? DEFAULT_BASEMAP
+  const basemapConfigurationWarning = availableBasemaps.length === 0
+    && basemaps.some(item => item.available === false)
+    ? '天地图服务端 Key 尚未配置或不可用。请打开“帮助 → 服务连接设置”完成配置。'
+    : null
   const selectedLayer = layers.find(layer => layer.manifest.mapLayerId === selectedMapLayerId)
     ?? layers.find(layer => layer.manifest.artifactId === selectedArtifactId)
     ?? layers.find(layer => layer.scene.visible)
@@ -164,7 +166,7 @@ export function MapCanvas({
         maxPitch: 70,
       })
       mapRef.current = map
-      appliedBasemapKeyRef.current = initialBasemap.basemapKey
+      appliedBasemapKeyRef.current = initialBasemap?.basemapKey ?? null
       waitingForSize?.disconnect()
 
       map.addControl(new runtime.ScaleControl({ maxWidth: 132, unit: 'metric' }), 'bottom-left')
@@ -351,8 +353,9 @@ export function MapCanvas({
 
   useEffect(() => {
     const map = mapRef.current
-    if (!map || !map.isStyleLoaded() || appliedBasemapKeyRef.current === activeBasemap.basemapKey) return
-    appliedBasemapKeyRef.current = activeBasemap.basemapKey
+    const nextBasemapKey = activeBasemap?.basemapKey ?? null
+    if (!map || !map.isStyleLoaded() || appliedBasemapKeyRef.current === nextBasemapKey) return
+    appliedBasemapKeyRef.current = nextBasemapKey
     basemapTileLoadedRef.current = false
     map.setStyle(buildBasemapStyle(activeBasemap))
   }, [activeBasemap])
@@ -442,12 +445,12 @@ export function MapCanvas({
       layerErrors={layerErrors}
       layers={layers}
       mapReady={mapReadyVersion > 0}
-      basemapRendered={renderedBasemapKey === activeBasemap.basemapKey}
+      basemapRendered={activeBasemap !== undefined && renderedBasemapKey === activeBasemap.basemapKey}
       mapError={mapError ?? sceneError}
       measureMode={measureMode}
       measurementLabel={formatMeasurementDistance(measurePoints)}
       reducedMotion={reducedMotion}
-      resourceWarning={resourceWarning}
+      resourceWarning={basemapConfigurationWarning ?? resourceWarning}
       sceneLoading={sceneLoading}
       selectedLayerId={selectedLayer?.manifest.mapLayerId}
       selectedLayerName={selectedLayer?.manifest.title ?? selectedArtifactName}

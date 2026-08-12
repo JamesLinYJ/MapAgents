@@ -13,7 +13,11 @@
 // 两个入口生成不兼容的端口、密钥或 systemd 配置。
 export {
   preparePackagedLocalRuntime,
+  readPackagedLocalRuntimeUserSettings,
+  updatePackagedLocalRuntimeUserSettings,
   type PackagedLocalRuntimeOptions,
   type PackagedLocalRuntimeResolution,
   type PackagedRuntimeManifestProtectionOptions,
+  type PackagedLocalRuntimeUserSettings,
+  type PackagedLocalRuntimeUserSettingsOptions,
 } from '@geo-agent-platform/operations-supervisor/packaged-local-runtime'

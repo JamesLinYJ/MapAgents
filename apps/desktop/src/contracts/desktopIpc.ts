@@ -161,6 +161,7 @@ export const desktopProductSetupStatusSchema = z.discriminatedUnion('state', [
     deploymentMode: z.enum(['local_managed', 'remote']),
     suggestedApiBaseUrl: z.string().url(),
     suggestedProductName: z.string().trim().min(1).max(80),
+    canConfigureMapService: z.boolean(),
   }).strict(),
   z.object({
     state: z.literal('configured'),
@@ -168,12 +169,17 @@ export const desktopProductSetupStatusSchema = z.discriminatedUnion('state', [
     apiBaseUrl: z.string().url(),
     productName: z.string().trim().min(1).max(80),
     canReset: z.boolean(),
+    canConfigureMapService: z.boolean(),
   }).strict(),
 ])
 
 export const desktopProductSetupConnectionSchema = z.object({
   apiBaseUrl: z.string().trim().min(1).max(2_048),
   productName: z.string().trim().min(1).max(80),
+  // 只允许 Renderer 向 Main 提交新值；状态响应永不回传凭据。
+  tiandituApiKey: z.string().trim().min(16).max(256)
+    .regex(/^[A-Za-z0-9_-]+$/u, '天地图 API KEY 格式无效。')
+    .optional(),
 }).strict().superRefine(enforceDesktopControlFrameSize)
 
 export const desktopProductSetupTestResultSchema = z.object({

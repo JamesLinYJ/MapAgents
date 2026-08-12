@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6
 // --------------------------------------------------------------------------
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { MapTileGateway } from '../map/mapTileGateway.js'
 import { TiandituBasemapGateway } from '../map/tiandituBasemapGateway.js'
@@ -18,11 +18,15 @@ import type { MapStore } from '../store/postgres/mapStore.js'
 import { mapRoutes } from './map.js'
 
 describe('map basemap routes', () => {
-  it('parses the complete y coordinate and redirects an authenticated tile route to Tianditu', async () => {
+  it('parses the complete y coordinate and proxies a server-key tile without exposing the key', async () => {
+    const fetch = vi.fn(async () => new Response(new Uint8Array([137, 80, 78, 71]), {
+      status: 200,
+      headers: { 'content-type': 'image/png' },
+    }))
     const app = mapRoutes({
       mapStore: {} as MapStore,
       tileGateway: {} as MapTileGateway,
-      tiandituBasemapGateway: new TiandituBasemapGateway('browser-key-fixture'),
+      tiandituBasemapGateway: new TiandituBasemapGateway('server-key-fixture', fetch),
       security: {} as SecurityServices,
     })
 
@@ -30,13 +34,16 @@ describe('map basemap routes', () => {
       '/api/v1/map/basemaps/tianditu-vector/tiles/vector/4/13/6',
     )
 
-    expect(response.status).toBe(307)
-    const location = new URL(response.headers.get('location') ?? '')
-    expect(location.hostname).toMatch(/^t[0-7]\.tianditu\.gov\.cn$/u)
-    expect(location.searchParams.get('T')).toBe('vec_w')
-    expect(location.searchParams.get('x')).toBe('13')
-    expect(location.searchParams.get('y')).toBe('6')
-    expect(location.searchParams.get('l')).toBe('4')
-    expect(location.searchParams.get('tk')).toBe('browser-key-fixture')
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('image/png')
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([137, 80, 78, 71]))
+    const upstream = new URL(String(fetch.mock.calls[0]?.[0]))
+    expect(upstream.hostname).toMatch(/^t[0-7]\.tianditu\.gov\.cn$/u)
+    expect(upstream.searchParams.get('T')).toBe('vec_w')
+    expect(upstream.searchParams.get('x')).toBe('13')
+    expect(upstream.searchParams.get('y')).toBe('6')
+    expect(upstream.searchParams.get('l')).toBe('4')
+    expect(response.headers.get('location')).toBeNull()
+    expect(JSON.stringify([...response.headers])).not.toContain('server-key-fixture')
   })
 })

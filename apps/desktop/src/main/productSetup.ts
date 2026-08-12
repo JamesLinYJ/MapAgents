@@ -5,7 +5,8 @@
 //   文件:       productSetup.ts
 //
 //   说明:       本机受管运行时优先；普通安装包在没有系统清单时改为连接
-//               用户指定的服务端。用户配置只保存显示名称和服务地址，不保存凭据。
+//               用户指定的服务端。显示名称保存到产品设置；本机地图 Key 仅交给
+//               受保护的 runtime.env 管理，不进入产品设置 JSON。
 // --------------------------------------------------------------------------
 
 import { randomUUID } from 'node:crypto'
@@ -75,6 +76,7 @@ export type DesktopProductSetupResolution =
       deploymentMode: 'local_managed' | 'remote'
       suggestedApiBaseUrl: string
       suggestedProductName: string
+      canConfigureMapService: boolean
       runtime: DesktopRuntimeConfig | null
     }
   | {
@@ -83,6 +85,7 @@ export type DesktopProductSetupResolution =
       apiBaseUrl: string
       productName: string
       canReset: false
+      canConfigureMapService: boolean
       runtime: DesktopRuntimeConfig
     }
   | {
@@ -91,6 +94,7 @@ export type DesktopProductSetupResolution =
       apiBaseUrl: string
       productName: string
       canReset: true
+      canConfigureMapService: false
       runtime: null
     }
 
@@ -103,6 +107,10 @@ export interface DesktopProductSetupOptions {
   runtimeManifestPath?: string
   manifestProtection?: RuntimeManifestProtectionOptions
   fetch: (input: string, init?: RequestInit) => Promise<Response>
+  localRuntimeSettings?: {
+    read(): Promise<{ tiandituConfigured: boolean }>
+    update(input: { tiandituApiKey: string }): Promise<void>
+  }
   now?: () => number
 }
 
@@ -117,7 +125,11 @@ export class DesktopProductSetupService {
         applicationPath: this.options.applicationPath,
         platform: this.options.platform,
       })
-      return localResolution(runtime, configured?.productName ?? PRODUCT_CODENAME)
+      return localResolution(
+        runtime,
+        configured?.productName ?? PRODUCT_CODENAME,
+        Boolean(this.options.localRuntimeSettings),
+      )
     }
 
     const runtimeManifestPath = this.options.runtimeManifestPath
@@ -136,10 +148,15 @@ export class DesktopProductSetupService {
           deploymentMode: 'local_managed',
           suggestedApiBaseUrl: runtime.apiBaseUrl,
           suggestedProductName: PRODUCT_CODENAME,
+          canConfigureMapService: Boolean(this.options.localRuntimeSettings),
           runtime,
         }
       }
-      return localResolution(runtime, configured.productName)
+      return localResolution(
+        runtime,
+        configured.productName,
+        Boolean(this.options.localRuntimeSettings),
+      )
     }
 
     if (configured?.mode === 'remote') {
@@ -149,6 +166,7 @@ export class DesktopProductSetupService {
         apiBaseUrl: configured.apiBaseUrl,
         productName: configured.productName,
         canReset: true,
+        canConfigureMapService: false,
         runtime: null,
       }
     }
@@ -157,6 +175,7 @@ export class DesktopProductSetupService {
       deploymentMode: 'remote',
       suggestedApiBaseUrl: 'http://127.0.0.1:8000',
       suggestedProductName: configured?.productName ?? PRODUCT_CODENAME,
+      canConfigureMapService: false,
       runtime: null,
     }
   }
@@ -221,6 +240,20 @@ export class DesktopProductSetupService {
     const productName = desktopProductNameSchema.parse(input.productName)
     const current = await this.resolve()
     if (current.deploymentMode === 'local_managed') {
+      const tiandituApiKey = input.tiandituApiKey?.trim()
+      if (tiandituApiKey) {
+        if (!this.options.localRuntimeSettings) {
+          throw new Error('当前本机部署不允许由桌面应用修改地图服务配置。')
+        }
+        await this.validateTiandituApiKey(tiandituApiKey)
+        await this.options.localRuntimeSettings.update({ tiandituApiKey })
+      } else if (
+        current.state === 'required'
+        && this.options.localRuntimeSettings
+        && !(await this.options.localRuntimeSettings?.read())?.tiandituConfigured
+      ) {
+        throw new Error('首次使用前请填写天地图服务端 API KEY。')
+      }
       await this.writeUserSetup({
         kind: USER_SETUP_KIND,
         schemaVersion: USER_SETUP_SCHEMA_VERSION,
@@ -306,6 +339,41 @@ export class DesktopProductSetupService {
       await rm(temporaryPath, { force: true })
     }
   }
+
+  private async validateTiandituApiKey(apiKey: string): Promise<void> {
+    const url = new URL('https://t0.tianditu.gov.cn/DataServer')
+    url.searchParams.set('T', 'vec_w')
+    url.searchParams.set('x', '6')
+    url.searchParams.set('y', '3')
+    url.searchParams.set('l', '3')
+    url.searchParams.set('tk', apiKey)
+    let response: Response
+    try {
+      response = await this.options.fetch(url.toString(), {
+        method: 'GET',
+        headers: {
+          accept: 'image/png,image/*;q=0.8',
+          'user-agent': 'GeoAgentPlatform-Server/1',
+        },
+        redirect: 'error',
+        signal: AbortSignal.timeout(SETUP_REQUEST_TIMEOUT_MS),
+      })
+    } catch {
+      throw new Error('无法连接天地图，请检查当前网络后重试。')
+    }
+    try {
+      const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
+      if (!response.ok || !contentType.startsWith('image/')) {
+        throw new Error(
+          response.status === 403
+            ? '天地图拒绝了该 Key。请填写服务端 API KEY，并检查其来源限制。'
+            : `天地图 Key 校验失败（HTTP ${response.status}）。`,
+        )
+      }
+    } finally {
+      await response.body?.cancel().catch(() => undefined)
+    }
+  }
 }
 
 export function parseDesktopApiBaseUrl(input: string): string {
@@ -334,6 +402,7 @@ export function parseDesktopApiBaseUrl(input: string): string {
 function localResolution(
   runtime: DesktopRuntimeConfig,
   productName: string,
+  canConfigureMapService: boolean,
 ): DesktopProductSetupResolution {
   return {
     state: 'configured',
@@ -341,6 +410,7 @@ function localResolution(
     apiBaseUrl: runtime.apiBaseUrl,
     productName: desktopProductNameSchema.parse(productName),
     canReset: false,
+    canConfigureMapService,
     runtime,
   }
 }
@@ -352,6 +422,7 @@ function publicStatus(resolution: DesktopProductSetupResolution): DesktopProduct
       deploymentMode: resolution.deploymentMode,
       suggestedApiBaseUrl: resolution.suggestedApiBaseUrl,
       suggestedProductName: resolution.suggestedProductName,
+      canConfigureMapService: resolution.canConfigureMapService,
     }
   }
   return {
@@ -360,6 +431,7 @@ function publicStatus(resolution: DesktopProductSetupResolution): DesktopProduct
     apiBaseUrl: resolution.apiBaseUrl,
     productName: resolution.productName,
     canReset: resolution.canReset,
+    canConfigureMapService: resolution.canConfigureMapService,
   }
 }
 

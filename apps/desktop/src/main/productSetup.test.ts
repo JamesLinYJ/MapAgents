@@ -34,6 +34,7 @@ describe('DesktopProductSetupService', () => {
       deploymentMode: 'remote',
       suggestedApiBaseUrl: 'http://127.0.0.1:8000',
       suggestedProductName: PRODUCT_CODENAME,
+      canConfigureMapService: false,
     })
   })
 
@@ -74,6 +75,7 @@ describe('DesktopProductSetupService', () => {
         apiBaseUrl: 'http://127.0.0.1:8000',
         productName: '山河工作台',
         canReset: true,
+        canConfigureMapService: false,
       })
 
     const saved = await readFile(fixture.userSetupPath, 'utf8')
@@ -127,6 +129,7 @@ describe('DesktopProductSetupService', () => {
       apiBaseUrl: 'https://geo.example.com',
       productName: PRODUCT_CODENAME,
       canReset: true,
+      canConfigureMapService: false,
     })
     await expect(service.save({
       apiBaseUrl: 'https://geo.example.com',
@@ -167,23 +170,60 @@ describe('DesktopProductSetupService', () => {
       allowedEnvironmentOverrides: [],
     }), 'utf8')
 
-    const local = fixture.service(vi.fn())
+    const updateLocalRuntime = vi.fn(async () => undefined)
+    const local = fixture.service(
+      vi.fn(async () => new Response(new Uint8Array([137, 80, 78, 71]), {
+        status: 200,
+        headers: { 'content-type': 'image/png' },
+      })),
+      undefined,
+      {
+        read: vi.fn(async () => ({ tiandituConfigured: false })),
+        update: updateLocalRuntime,
+      },
+    )
     await expect(local.status()).resolves.toEqual({
       state: 'required',
       deploymentMode: 'local_managed',
       suggestedApiBaseUrl: 'http://127.0.0.1:9000',
       suggestedProductName: PRODUCT_CODENAME,
+      canConfigureMapService: true,
     })
+    const rejectedUpdate = vi.fn(async () => undefined)
+    const browserKeyOnly = fixture.service(
+      vi.fn(async () => new Response('{"detail":"wrong key type"}', {
+        status: 403,
+        headers: { 'content-type': 'application/json' },
+      })),
+      undefined,
+      {
+        read: vi.fn(async () => ({ tiandituConfigured: false })),
+        update: rejectedUpdate,
+      },
+    )
+    await expect(browserKeyOnly.save({
+      apiBaseUrl: 'http://127.0.0.1:9000',
+      productName: '本机地理工作台',
+      tiandituApiKey: 'browser-key-fixture-123',
+    })).rejects.toThrow('请填写服务端 API KEY')
+    expect(rejectedUpdate).not.toHaveBeenCalled()
+
     await expect(local.save({
       apiBaseUrl: 'http://127.0.0.1:9000',
       productName: '本机地理工作台',
+      tiandituApiKey: 'server-key-fixture-1234',
     })).resolves.toEqual({
       state: 'configured',
       deploymentMode: 'local_managed',
       apiBaseUrl: 'http://127.0.0.1:9000',
       productName: '本机地理工作台',
       canReset: false,
+      canConfigureMapService: true,
     })
+    expect(updateLocalRuntime).toHaveBeenCalledWith({
+      tiandituApiKey: 'server-key-fixture-1234',
+    })
+    expect(await readFile(fixture.userSetupPath, 'utf8')).not.toContain('server-key-fixture-1234')
   })
 })
 
@@ -207,7 +247,14 @@ async function createFixture() {
     directory,
     userSetupPath,
     runtimeManifestPath,
-    service(fetch: (input: string, init?: RequestInit) => Promise<Response>, times?: number[]) {
+    service(
+      fetch: (input: string, init?: RequestInit) => Promise<Response>,
+      times?: number[],
+      localRuntimeSettings?: {
+        read(): Promise<{ tiandituConfigured: boolean }>
+        update(input: { tiandituApiKey: string }): Promise<void>
+      },
+    ) {
       const readings = [...(times ?? [])]
       return new DesktopProductSetupService({
         profile: 'production',
@@ -218,6 +265,7 @@ async function createFixture() {
         runtimeManifestPath,
         manifestProtection: { expectedOwnerUid: process.getuid?.() ?? 0 },
         fetch,
+        localRuntimeSettings,
         now: times ? () => readings.shift() ?? times.at(-1) ?? 0 : undefined,
       })
     },

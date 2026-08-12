@@ -39,6 +39,7 @@ export const DEFAULT_BASEMAP: BasemapDescriptor = {
   attribution: '© 天地图',
   tileUrls: [`${PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME}://api/api/v1/map/basemaps/tianditu-vector/tiles/vector/{z}/{x}/{y}`],
   labelTileUrls: [`${PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME}://api/api/v1/map/basemaps/tianditu-vector/tiles/labels/{z}/{x}/{y}`],
-  available: true,
+  // 目录加载前保持不可用，避免在服务端明确缺少 Key 时继续盲目请求瓦片。
+  available: false,
   isDefault: true,
 }

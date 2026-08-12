@@ -26,14 +26,16 @@ export function useBasemapResources() {
   )
 
   const loadBasemaps = useCallback(async () => {
-    const available = (await listBasemaps()).filter(item => item.available)
-    if (!available.length) throw new Error('底图目录没有可用条目。')
+    const catalog = await listBasemaps()
+    if (!catalog.length) throw new Error('底图目录没有条目。')
+    const available = catalog.filter(item => item.available)
     const defaultBasemap = available.find(item => item.isDefault) ?? available[0]
-    if (!defaultBasemap) throw new Error('底图目录没有默认条目。')
-    setBasemaps(available)
+    setBasemaps(catalog)
     const currentKey = useBasemapStore.getState().selectedBasemapKey
     setSelectedBasemapKey(
-      available.some(item => item.basemapKey === currentKey) ? currentKey : defaultBasemap.basemapKey,
+      available.some(item => item.basemapKey === currentKey)
+        ? currentKey
+        : defaultBasemap?.basemapKey ?? catalog[0]!.basemapKey,
     )
   }, [setBasemaps, setSelectedBasemapKey])
 

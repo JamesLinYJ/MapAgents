@@ -69,6 +69,17 @@ export interface PackagedLocalRuntimeOptions {
   runSystemctl?: (arguments_: readonly string[]) => Promise<number>
 }
 
+export interface PackagedLocalRuntimeUserSettings {
+  tiandituConfigured: boolean
+}
+
+export interface PackagedLocalRuntimeUserSettingsOptions {
+  serviceEnvironmentFile: string
+  ownerUid?: number
+  tiandituApiKey?: string
+  runSystemctl?: (arguments_: readonly string[]) => Promise<number>
+}
+
 /**
  * RPM 只安装不可变程序和系统依赖。首次启动在当前用户边界内生成密钥、私有
  * PostgreSQL 数据目录和 systemd user 配置；升级复用数据与密钥，仅切换制品路径。
@@ -158,6 +169,50 @@ export async function preparePackagedLocalRuntime(
     manifestProtection: { platform: 'linux', ...(ownerUid === undefined ? {} : { expectedOwnerUid: ownerUid }) },
     serviceEnvironmentFile: environmentFile,
   }
+}
+
+/**
+ * 读取可由桌面设置修改的本机运行时状态。凭据本身永不返回给 Renderer，
+ * 只投影是否已经配置。
+ */
+export async function readPackagedLocalRuntimeUserSettings(
+  options: Pick<PackagedLocalRuntimeUserSettingsOptions, 'serviceEnvironmentFile' | 'ownerUid'>,
+): Promise<PackagedLocalRuntimeUserSettings> {
+  const values = await readOptionalProtectedEnvironment(
+    path.resolve(options.serviceEnvironmentFile),
+    options.ownerUid,
+  )
+  return {
+    tiandituConfigured: Boolean(values?.get('TIANDITU_API_KEY')?.trim()),
+  }
+}
+
+/**
+ * 原子更新 RPM 用户运行时的地图凭据，并只在值改变时重启后台服务。
+ * runtime.env 始终保持 0600；调用者只传用户主动填写的新值。
+ */
+export async function updatePackagedLocalRuntimeUserSettings(
+  options: PackagedLocalRuntimeUserSettingsOptions,
+): Promise<PackagedLocalRuntimeUserSettings> {
+  const environmentFile = path.resolve(options.serviceEnvironmentFile)
+  const values = await readOptionalProtectedEnvironment(environmentFile, options.ownerUid)
+  if (!values) throw new Error('本机运行时配置尚未初始化。')
+
+  const apiKey = normalizeTiandituApiKey(options.tiandituApiKey)
+  const changed = values.get('TIANDITU_API_KEY') !== apiKey
+  if (changed) {
+    values.set('TIANDITU_API_KEY', apiKey)
+    await writeProtectedFileIfChanged(
+      environmentFile,
+      serializeEnvironment(values),
+      options.ownerUid,
+    )
+    await requireSystemctl(
+      options.runSystemctl ?? defaultRunSystemctl,
+      ['--user', 'restart', USER_SERVICE_NAME],
+    )
+  }
+  return { tiandituConfigured: true }
 }
 
 async function buildRuntimeEnvironment(input: {
@@ -458,6 +513,14 @@ function requiredValue(values: Map<string, string>, name: string): string {
 
 function randomSecret(): string {
   return randomBytes(32).toString('base64url')
+}
+
+function normalizeTiandituApiKey(value: string | undefined): string {
+  const normalized = value?.trim() ?? ''
+  if (!/^[A-Za-z0-9_-]{16,256}$/u.test(normalized)) {
+    throw new Error('天地图 API KEY 格式无效。')
+  }
+  return normalized
 }
 
 async function pathExists(candidate: string): Promise<boolean> {

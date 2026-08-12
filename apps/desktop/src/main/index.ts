@@ -30,7 +30,11 @@ import { DesktopDiagnosticExportService } from './diagnosticExportService.js'
 import { LocalDesktopIdentityBroker } from './localDesktopIdentityBroker.js'
 import { MicrophonePermissionGate } from './microphonePermissionGate.js'
 import { installNativeApplicationMenu } from './nativeMenus.js'
-import { preparePackagedLocalRuntime } from './packagedLocalRuntime.js'
+import {
+  preparePackagedLocalRuntime,
+  readPackagedLocalRuntimeUserSettings,
+  updatePackagedLocalRuntimeUserSettings,
+} from './packagedLocalRuntime.js'
 import { installResourceProtocol } from './resourceProtocol.js'
 import { DesktopProductSetupService } from './productSetup.js'
 import { installDesktopProductSetupIpcHandlers } from './productSetupIpc.js'
@@ -98,6 +102,19 @@ async function startDesktop(logger: DesktopSystemLogger): Promise<void> {
       ? {
           runtimeManifestPath: packagedLocalRuntime.runtimeManifestPath,
           manifestProtection: packagedLocalRuntime.manifestProtection,
+          localRuntimeSettings: {
+            read: () => readPackagedLocalRuntimeUserSettings({
+              serviceEnvironmentFile: packagedLocalRuntime.serviceEnvironmentFile,
+              ownerUid: process.getuid?.(),
+            }),
+            update: async ({ tiandituApiKey }: { tiandituApiKey: string }) => {
+              await updatePackagedLocalRuntimeUserSettings({
+                serviceEnvironmentFile: packagedLocalRuntime.serviceEnvironmentFile,
+                ownerUid: process.getuid?.(),
+                tiandituApiKey,
+              })
+            },
+          },
         }
       : {}),
     fetch: (input, init) => net.fetch(input, init),
