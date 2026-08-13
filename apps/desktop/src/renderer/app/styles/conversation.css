@@ -29,6 +29,7 @@
 }
 
 .cc-panel {
+  container-name: conversation-panel;
   height: 100%;
   min-height: 0;
   display: flex;
@@ -1006,6 +1007,7 @@
 
 .cc-composer {
   container-type: inline-size;
+  container-name: conversation-composer;
   flex: 0 0 auto;
   position: sticky;
   bottom: 0;

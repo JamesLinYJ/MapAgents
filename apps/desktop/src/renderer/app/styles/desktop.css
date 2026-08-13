@@ -1439,6 +1439,7 @@ select {
 }
 
 .gf-assistant-body .cc-panel {
+  padding: 0;
   background: #fff;
 }
 
@@ -1461,8 +1462,116 @@ select {
 }
 
 .gf-assistant-body .cc-composer {
+  width: calc(100% - 14px);
   margin: 0 7px 7px;
   border-radius: 6px;
+}
+
+/*
+ * The assistant dock can be narrow even when the Electron window is wide.
+ * Respond to the dock itself instead of viewport media queries, otherwise
+ * page-level spacing and single-row controls compete for the same 320px.
+ */
+@container conversation-panel (max-width: 360px) {
+  .gf-assistant-body .cc-panel-header {
+    gap: 6px;
+    padding-inline: 7px;
+  }
+
+  .gf-assistant-body .cc-header-actions {
+    gap: 2px;
+  }
+
+  .gf-assistant-body .cc-icon-button {
+    width: 29px;
+    min-width: 29px;
+    height: 29px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .gf-assistant-body .cc-icon-button span {
+    display: none;
+  }
+
+  .gf-assistant-body .cc-jump-rail {
+    display: none;
+  }
+
+  .gf-assistant-body .cc-timeline {
+    padding: 10px 7px 16px;
+    --cc-rail-col: 18px;
+    --cc-user-prompt-max: min(calc(100% - var(--cc-rail-col) - 18px), 32rem);
+  }
+
+  .gf-assistant-body .cc-timeline-item {
+    column-gap: 7px;
+  }
+
+  .gf-assistant-body .cc-user-prompt {
+    margin-right: 0;
+  }
+
+  .gf-assistant-body .cc-tool-row-title {
+    flex: 0 1 auto;
+    max-width: 52%;
+  }
+
+  .gf-assistant-body .cc-tool-row-subtitle {
+    flex: 1 1 auto;
+  }
+
+  .gf-assistant-body .cc-tool-row-mini-entry {
+    display: none;
+  }
+}
+
+@container conversation-composer (max-width: 370px) {
+  .gf-assistant-body .cc-composer-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+    padding: 4px 9px 8px;
+  }
+
+  .gf-assistant-body .cc-composer-toolbar__primary,
+  .gf-assistant-body .cc-composer-toolbar__secondary {
+    width: 100%;
+    gap: 5px;
+  }
+
+  .gf-assistant-body .cc-composer-toolbar__primary {
+    justify-content: flex-start;
+  }
+
+  .gf-assistant-body .cc-composer-toolbar__secondary {
+    justify-content: flex-end;
+    border-top: 1px solid rgb(15 23 42 / 0.06);
+    padding-top: 3px;
+  }
+
+  .gf-assistant-body .cc-composer-tool {
+    width: 32px;
+    height: 32px;
+  }
+
+  .gf-assistant-body .cc-mode-trigger {
+    width: 34px;
+    min-width: 34px;
+    max-width: 34px;
+    height: 32px;
+    gap: 5px;
+    padding: 0;
+  }
+
+  .gf-assistant-body .cc-mode-trigger__label {
+    display: none;
+  }
+
+  .gf-assistant-body .cc-composer-tool--send {
+    width: 36px;
+    height: 36px;
+  }
 }
 
 .gf-document-unavailable {
