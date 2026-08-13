@@ -92,7 +92,6 @@ export function ConversationTimeline({
     () => new Map(conversation.map((entry, index) => [entry.id, index])),
     [conversation],
   )
-  // eslint-disable-next-line react-hooks/incompatible-library -- 已由 use no memo 明确隔离在本组件内。
   const virtualizer = useVirtualizer({
     count: conversation.length,
     getScrollElement: () => timelineRef.current,

@@ -671,7 +671,7 @@ function AppShell() {
     selectedArtifactId,
     onSelectArtifact: setSelectedArtifactId,
     onDownloadArtifact: () => { void handleDownloadArtifact() },
-    onExportResults: () => { void handleExportResults() },
+    onExportResults: handleExportResults,
     onToggleArtifactVisibility: handleToggleArtifactVisibility,
     onChangeArtifactOpacity: handleArtifactOpacityChange,
     currentRunId: run?.id,
@@ -769,9 +769,7 @@ function AppShell() {
                   onContentsModeChange: mode => {
                     layerManager.setActiveView(mode === 'sources' ? 'sources' : 'drawOrder')
                   },
-                  onExportResults: () => {
-                    void handleExportResults()
-                  },
+                  onExportResults: handleExportResults,
                   backendActionDisabledReason: workspaceAccess.unavailableReason,
                   canAccessAccount: workspaceAccess.canAccessAccount,
                   canAccessDiagnostics: workspaceAccess.canAccessDiagnostics,

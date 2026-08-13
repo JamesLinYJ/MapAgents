@@ -25,7 +25,7 @@ export async function installResourceProtocol(
   apiBaseUrl: string,
   auth: DesktopAuthGateway,
 ): Promise<void> {
-  await protocol.handle(PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME, async (request) => {
+  protocol.handle(PLATFORM_DESKTOP_RESOURCE_PROTOCOL_SCHEME, async (request) => {
     if (request.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
     const url = new URL(request.url)
     if (url.username || url.password || url.hash) {

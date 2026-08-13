@@ -11,9 +11,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useReducedMotion } from 'framer-motion'
-import type maplibregl from 'maplibre-gl/dist/maplibre-gl-csp'
-import type { Map } from 'maplibre-gl/dist/maplibre-gl-csp'
-import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-csp-worker.js?url'
+import type { GeoJSONSource, Map, Popup } from 'maplibre-gl'
+import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
 import type { BasemapDescriptor, MapSceneLayer } from '@geo-agent-platform/shared-types'
@@ -50,14 +49,14 @@ import {
   MapSourceReadinessTracker,
 } from './mapScreenshot'
 
-type MapLibreRuntime = typeof import('maplibre-gl/dist/maplibre-gl-csp').default
+type MapLibreRuntime = typeof import('maplibre-gl')
 
 let mapLibreRuntimePromise: Promise<MapLibreRuntime> | null = null
 
 function loadMapLibreRuntime(): Promise<MapLibreRuntime> {
-  mapLibreRuntimePromise ??= import('maplibre-gl/dist/maplibre-gl-csp').then(module => {
-    module.default.setWorkerUrl(mapLibreWorkerUrl)
-    return module.default
+  mapLibreRuntimePromise ??= import('maplibre-gl').then(module => {
+    module.setWorkerUrl(mapLibreWorkerUrl)
+    return module
   })
   return mapLibreRuntimePromise
 }
@@ -99,10 +98,9 @@ export function MapCanvas({
   const layersRef = useRef(layers)
   const activeBasemapRef = useRef<BasemapDescriptor | undefined>(undefined)
   const onSelectArtifactRef = useRef(onSelectArtifact)
-  const popupRef = useRef<maplibregl.Popup | null>(null)
-  const hoverPopupRef = useRef<maplibregl.Popup | null>(null)
+  const popupRef = useRef<Popup | null>(null)
+  const hoverPopupRef = useRef<Popup | null>(null)
   const hoverTimerRef = useRef<number | null>(null)
-  const resizeObserverRef = useRef<ResizeObserver | null>(null)
   const firstSceneFitRef = useRef(false)
   const appliedBasemapKeyRef = useRef<string | null>(null)
   const handledFocusRequestRef = useRef<number | null>(null)
@@ -155,7 +153,7 @@ export function MapCanvas({
       const runtime = await loadMapLibreRuntime()
       if (disposed || mapRef.current) return
       const initialBasemap = activeBasemapRef.current
-      const map = new runtime.Map({
+      const map: Map = new runtime.Map({
         container: target,
         style: buildBasemapStyle(initialBasemap),
         center: [105, 35],
@@ -164,6 +162,9 @@ export function MapCanvas({
         dragRotate: true,
         touchPitch: true,
         maxPitch: 70,
+        // MapLibre 自带节流与 redraw 的 ResizeObserver。不要再为容器注册
+        // 第二个同步 map.resize()，否则拖动面板分隔线时会反复清空 WebGL 画布。
+        trackResize: true,
       })
       mapRef.current = map
       appliedBasemapKeyRef.current = initialBasemap?.basemapKey ?? null
@@ -288,9 +289,6 @@ export function MapCanvas({
           .setHTML(buildFeaturePopupHtml(feature, layer?.manifest.title))
           .addTo(map)
       })
-
-      resizeObserverRef.current = new ResizeObserver(() => map.resize())
-      resizeObserverRef.current.observe(target)
     }
 
     void createMap().catch(error => {
@@ -303,7 +301,6 @@ export function MapCanvas({
     return () => {
       disposed = true
       waitingForSize?.disconnect()
-      resizeObserverRef.current?.disconnect()
       if (hoverTimerRef.current) window.clearTimeout(hoverTimerRef.current)
       hoverPopupRef.current?.remove()
       popupRef.current?.remove()
@@ -342,10 +339,16 @@ export function MapCanvas({
         map.fitBounds(result.bounds, { padding: 64, duration: reducedMotion ? 0 : 700, maxZoom: 13 })
       }
       ensureMeasureLayers(map)
-      const pointSource = map.getSource('measure-points') as maplibregl.GeoJSONSource | undefined
-      const lineSource = map.getSource('measure-line') as maplibregl.GeoJSONSource | undefined
-      pointSource?.setData(buildMeasurePointsCollection(measurePoints))
-      lineSource?.setData(buildMeasureLineCollection(measurePoints))
+      const pointSource = map.getSource('measure-points') as GeoJSONSource | undefined
+      const lineSource = map.getSource('measure-line') as GeoJSONSource | undefined
+      void Promise.all([
+        pointSource?.setData(buildMeasurePointsCollection(measurePoints)),
+        lineSource?.setData(buildMeasureLineCollection(measurePoints)),
+      ]).catch(error => {
+        setResourceWarning(formatMapResourceWarning(
+          error instanceof Error ? error.message : '地图量测数据更新失败',
+        ))
+      })
     }
     if (map.isStyleLoaded()) apply()
     else map.once('styledata', apply)

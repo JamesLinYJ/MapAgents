@@ -37,7 +37,7 @@ export class SecureAuthStorage implements Storage {
     }
   }
 
-  getItem(name: string): unknown | null {
+  getItem(name: string): unknown {
     const encrypted = this.store.get(name)
     if (encrypted === undefined) return null
     try {

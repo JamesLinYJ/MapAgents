@@ -285,7 +285,7 @@ export class OperationsClient extends EventEmitter {
     return response.payload
   }
 
-  private processData(chunk: Uint8Array): void {
+  private processData(chunk: string | Uint8Array): void {
     try {
       for (const frame of this.decoder.push(chunk)) {
         const value: unknown = JSON.parse(frame)

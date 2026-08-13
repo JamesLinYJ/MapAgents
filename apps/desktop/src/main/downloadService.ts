@@ -96,14 +96,13 @@ function scheduleTemporaryArtifactCleanup(directory: string): void {
 }
 
 function sanitizeFileName(value: string): string {
-  const printableValue = [...value]
-    .map(character => {
-      const codePoint = character.codePointAt(0)
-      return codePoint !== undefined && (codePoint < 0x20 || codePoint === 0x7f)
-        ? '-'
-        : character
-    })
-    .join('')
+  let printableValue = ''
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)
+    printableValue += codePoint !== undefined && (codePoint < 0x20 || codePoint === 0x7f)
+      ? '-'
+      : character
+  }
 
   return printableValue
     .replace(/[<>:"/\\|?*]/gu, '-')

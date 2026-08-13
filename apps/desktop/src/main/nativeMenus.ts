@@ -225,7 +225,7 @@ function applicationMenuTemplate(
           label: `关于 ${productName}`,
           click: (_item, window) => {
             const target = window instanceof BrowserWindow ? window : BrowserWindow.getFocusedWindow()
-            void app.showAboutPanel()
+            app.showAboutPanel()
             target?.focus()
           },
         },

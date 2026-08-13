@@ -263,7 +263,7 @@ export function ChatPanel(props: ChatPanelProps) {
     }
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !composing) {
       event.preventDefault()
-      handleSubmit()
+      void handleSubmit()
     }
   }
   const handleInterrupt = () => {

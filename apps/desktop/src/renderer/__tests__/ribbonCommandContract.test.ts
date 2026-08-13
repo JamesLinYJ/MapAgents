@@ -11,7 +11,8 @@
 
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
-import ts from 'typescript'
+import { parseSync, Visitor } from 'oxc-parser'
+import type { JSXOpeningElement } from 'oxc-parser'
 import { describe, expect, it } from 'vitest'
 
 describe('desktop ribbon command contract', () => {
@@ -34,31 +35,27 @@ describe('desktop ribbon command contract', () => {
       path.resolve('src/renderer/app/layout/WorkspaceLayout.tsx'),
       'utf8',
     )
-    const sourceFile = ts.createSourceFile(
-      'WorkspaceLayout.tsx',
-      source,
-      ts.ScriptTarget.Latest,
-      true,
-      ts.ScriptKind.TSX,
-    )
-    const actions: ts.JsxSelfClosingElement[] = []
-    const visit = (node: ts.Node) => {
-      if (
-        ts.isJsxSelfClosingElement(node)
-        && ts.isIdentifier(node.tagName)
-        && node.tagName.text === 'RibbonAction'
-      ) {
-        actions.push(node)
-      }
-      ts.forEachChild(node, visit)
-    }
-    visit(sourceFile)
+    const parsed = parseSync('WorkspaceLayout.tsx', source)
+    expect(parsed.errors).toEqual([])
+    const actions: JSXOpeningElement[] = []
+    new Visitor({
+      JSXOpeningElement(node) {
+        if (
+          node.selfClosing
+          && node.name.type === 'JSXIdentifier'
+          && node.name.name === 'RibbonAction'
+        ) {
+          actions.push(node)
+        }
+      },
+    }).visit(parsed.program)
 
     expect(actions.length).toBeGreaterThan(10)
     for (const action of actions) {
-      expect(action.attributes.properties.some(attribute => (
-        ts.isJsxAttribute(attribute)
-        && attribute.name.getText(sourceFile) === 'onClick'
+      expect(action.attributes.some(attribute => (
+        attribute.type === 'JSXAttribute'
+        && attribute.name.type === 'JSXIdentifier'
+        && attribute.name.name === 'onClick'
       ))).toBe(true)
     }
   })

@@ -14,7 +14,7 @@ export const OPERATIONS_MAX_FRAME_BYTES = 64 * 1024
 export class JsonlFrameDecoder {
   private pending = Buffer.alloc(0)
 
-  push(chunk: Uint8Array): string[] {
+  push(chunk: string | Uint8Array): string[] {
     this.pending = Buffer.concat([this.pending, Buffer.from(chunk)])
     const frames: string[] = []
     while (true) {

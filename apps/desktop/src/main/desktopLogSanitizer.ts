@@ -63,16 +63,19 @@ export function sanitizeDesktopLogValue(
 }
 
 export function sanitizeDesktopLogText(value: string, secrets: readonly string[]): string {
-  let sanitized = [...value]
-    .filter(character => {
-      const codePoint = character.codePointAt(0)
-      return codePoint === undefined
-        || codePoint === 0x09
-        || codePoint === 0x0a
-        || codePoint === 0x0d
-        || (codePoint >= 0x20 && codePoint !== 0x7f)
-    })
-    .join('')
+  let sanitized = ''
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)
+    if (
+      codePoint === undefined
+      || codePoint === 0x09
+      || codePoint === 0x0a
+      || codePoint === 0x0d
+      || (codePoint >= 0x20 && codePoint !== 0x7f)
+    ) {
+      sanitized += character
+    }
+  }
   for (const secret of secrets) sanitized = sanitized.split(secret).join('[REDACTED]')
   sanitized = redactDesktopLocalPaths(sanitized)
   sanitized = sanitized

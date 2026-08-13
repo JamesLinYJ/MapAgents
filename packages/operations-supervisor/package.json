@@ -22,21 +22,21 @@
   },
   "dependencies": {
     "@geo-agent-platform/shared-types": "file:../shared-types",
-    "concurrently": "10.0.3",
+    "concurrently": "10.0.4",
     "dotenv": "17.4.2",
     "pino": "10.3.1",
     "proper-lockfile": "4.1.2",
     "rotating-file-stream": "3.2.9",
     "strip-ansi": "7.2.0",
-    "systeminformation": "5.33.0",
+    "systeminformation": "5.33.1",
     "tree-kill": "1.2.2",
-    "zod": "^4.3.6"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^24.12.2",
+    "@types/node": "^26.2.0",
     "@types/proper-lockfile": "^4.1.4",
-    "tsx": "^4.19.0",
-    "typescript": "~6.0.2",
-    "vitest": "^4.0.8"
+    "tsx": "^4.23.12",
+    "typescript": "~7.0.2",
+    "vitest": "^4.1.10"
   }
 }

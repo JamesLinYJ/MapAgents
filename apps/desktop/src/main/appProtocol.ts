@@ -44,7 +44,7 @@ export function registerPrivilegedAppScheme(): void {
 
 export async function installAppProtocol(): Promise<void> {
   const rendererRoot = path.resolve(app.getAppPath(), 'out', 'renderer')
-  await protocol.handle(PLATFORM_DESKTOP_PROTOCOL_SCHEME, (request) => {
+  protocol.handle(PLATFORM_DESKTOP_PROTOCOL_SCHEME, (request) => {
     const url = new URL(request.url)
     if (url.hostname !== 'app') return new Response('Not Found', { status: 404 })
     const relativePath = decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname)

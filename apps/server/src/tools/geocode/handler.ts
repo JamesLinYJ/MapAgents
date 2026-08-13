@@ -8,7 +8,7 @@
 //   作者:       JamesLinYJ
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
-import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity';
+import { PLATFORM_TECHNICAL_ID } from '@geo-agent-platform/shared-types/product-identity';
 import { makeId } from '../../utils/ids.js';
 import type { ToolDef } from '../../framework/types.js';
 import { GEOCODE_PLACE_PROMPT } from './prompt.js';
@@ -46,7 +46,7 @@ export const geocodePlaceTool: ToolDef = {
         let response: Response;
         try {
             response = await fetch(url, {
-                headers: { 'User-Agent': `${PRODUCT_CODENAME}/0.1 geocode` },
+                headers: { 'User-Agent': `${PLATFORM_TECHNICAL_ID}/0.1 geocode` },
                 signal: AbortSignal.any([context.signal, timeoutSignal]),
             });
         } catch (error) {

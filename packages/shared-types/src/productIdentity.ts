@@ -15,7 +15,7 @@
  */
 // 编译期只提供中性的缺省身份。实际展示名称由首次设置向导写入用户配置，
 // 后续可在设置中修改；稳定协议、包名和 CLI 不绑定任何可变品牌名。
-export const PRODUCT_CODENAME = 'Geo Agent Platform'
+export const PRODUCT_CODENAME = '我的工作台'
 export const PRODUCT_CODENAME_UPPER = PRODUCT_CODENAME.toLocaleUpperCase('en-US')
 export const PRODUCT_PLATFORM_NAME = '地理智能平台'
 export const PRODUCT_DESKTOP_NAME = 'GIS 工作台'

@@ -203,7 +203,7 @@ async function readRepositoryFile(relativePath: string): Promise<string> {
 }
 
 function isInside(
-  pathApi: typeof path.win32 | typeof path.posix,
+  pathApi: Pick<typeof path, 'relative' | 'isAbsolute' | 'sep'>,
   root: string,
   candidate: string,
 ): boolean {

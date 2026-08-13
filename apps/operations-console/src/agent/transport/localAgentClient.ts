@@ -18,7 +18,10 @@ import {
   type WsControlRequest,
   type WsRunPush,
 } from '@geo-agent-platform/shared-types/transport'
-import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
+import {
+  PLATFORM_TECHNICAL_ID,
+  PRODUCT_CODENAME,
+} from '@geo-agent-platform/shared-types/product-identity'
 import WebSocket from 'ws'
 import { z } from 'zod'
 
@@ -97,7 +100,7 @@ export class LocalAgentClient {
       origin: options.origin,
       headers: {
         cookie,
-        'user-agent': `${PRODUCT_CODENAME}-Local-Agent/1`,
+        'user-agent': `${PLATFORM_TECHNICAL_ID}-local-agent/1`,
       },
       maxPayload: MAX_RESPONSE_BYTES,
       perMessageDeflate: false,
