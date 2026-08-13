@@ -14,6 +14,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const styleRoot = path.resolve(process.cwd(), 'src', 'renderer', 'app', 'styles')
+const conversationRoot = path.resolve(process.cwd(), 'src', 'renderer', 'features', 'conversation')
 
 describe('窄宽对话面板布局', () => {
   it('按面板宽度而不是 Electron 窗口宽度重排对话内容', async () => {
@@ -45,5 +46,15 @@ describe('窄宽对话面板布局', () => {
     expect(desktopCss).toMatch(
       /\.gf-assistant-body \.cc-composer-toolbar__secondary\s*\{[^}]*justify-content:\s*flex-end;/s,
     )
+  })
+
+  it('执行方式菜单通过顶层 Portal 渲染，不受停靠面板裁剪边界影响', async () => {
+    const composerSource = await readFile(path.join(conversationRoot, 'Composer.tsx'), 'utf8')
+    const conversationCss = await readFile(path.join(styleRoot, 'conversation.css'), 'utf8')
+
+    expect(composerSource).toContain('<Popover.Portal>')
+    expect(composerSource).toContain('collisionPadding={10}')
+    expect(conversationCss).not.toMatch(/\.cc-mode-menu\s*\{[^}]*right:\s*-\d+/s)
+    expect(conversationCss).not.toMatch(/\.cc-mode-menu\s*\{[^}]*bottom:\s*calc/s)
   })
 })

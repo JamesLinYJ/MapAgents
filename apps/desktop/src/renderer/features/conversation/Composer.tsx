@@ -9,8 +9,9 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
+import { useEffect, useMemo, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
 import { Check, ChevronDown, ClipboardList, FolderUp, Hand, LoaderCircle, Mic, MicOff, ShieldOff, Sparkles, Square, Target, Upload, X, Zap } from 'lucide-react'
+import * as Popover from '@radix-ui/react-popover'
 import type { RunAttachmentInput, SpeechLanguageOption } from '@geo-agent-platform/shared-types'
 import type { DesktopFileSelectionHandle } from '../../../contracts/desktopIpc'
 import { AppIcon } from '../../shared/components/AppIcon'
@@ -120,7 +121,6 @@ export function Composer({
   const speechEnabled = Boolean(onStartSpeechRecognition && onStopSpeechRecognition)
   const speechBusy = speechStatus === 'authorizing' || speechStatus === 'stopping'
   const speechActive = speechStatus === 'recognizing' || speechBusy
-  const modePickerRef = useRef<HTMLDivElement | null>(null)
   const [goalPanelOpen, setGoalPanelOpen] = useState(false)
   const uploadCards = useMemo(() => visibleUploadCards(uploadReferences), [uploadReferences])
 
@@ -130,29 +130,6 @@ export function Composer({
     input.style.height = 'auto'
     input.style.height = `${Math.min(input.scrollHeight, 168)}px`
   }, [composerInputRef, query])
-
-  useEffect(() => {
-    if (!modeMenuOpen) return
-
-    const closeOnPointerDown = (event: PointerEvent) => {
-      if (!modePickerRef.current?.contains(event.target as Node)) {
-        onModeMenuOpenChange(false)
-      }
-    }
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.stopPropagation()
-        onModeMenuOpenChange(false)
-      }
-    }
-
-    document.addEventListener('pointerdown', closeOnPointerDown)
-    window.addEventListener('keydown', closeOnEscape)
-    return () => {
-      document.removeEventListener('pointerdown', closeOnPointerDown)
-      window.removeEventListener('keydown', closeOnEscape)
-    }
-  }, [modeMenuOpen, onModeMenuOpenChange])
 
   const handlePaste = async (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
     if (!onAttachPastedImage) return
@@ -278,67 +255,79 @@ export function Composer({
             {providerLabel}
           </span>
 
-          <div className="cc-mode-picker" ref={modePickerRef}>
-            <button
-              className={`cc-mode-trigger cc-mode-trigger--${composerMode}`}
-              type="button"
-              aria-haspopup="menu"
-              aria-expanded={modeMenuOpen}
-              aria-label={`切换执行方式，当前为${mode.label}`}
-              onClick={() => onModeMenuOpenChange(!modeMenuOpen)}
-            >
-              <ComposerModeIcon mode={mode.id} className="cc-mode-trigger__icon" size={14} />
-              <span className="cc-mode-trigger__label">{modeShortLabel}</span>
-              <ChevronDown size={13} />
-            </button>
-            {modeMenuOpen ? (
-              <div className="cc-mode-menu" role="menu" aria-label="切换执行方式">
-                <div className="cc-mode-menu__head">
-                  <span>执行方式</span>
-                  <span className="cc-mode-menu__shortcut" aria-hidden="true">
-                    <kbd>Shift</kbd>
-                    <span>+</span>
-                    <kbd>Tab</kbd>
-                    <span>切换</span>
-                  </span>
-                </div>
-                <div className="cc-mode-list">
-                  {COMPOSER_MODES.map((item) => {
-                    const selected = item.id === composerMode
-                    const disabled = 'disabled' in item && item.disabled
-                    const disabledReason = 'disabledReason' in item ? item.disabledReason : undefined
-                    return (
-                      <button
-                        key={item.id}
-                        className={`cc-mode-option${selected ? ' cc-mode-option--selected' : ''}${disabled ? ' cc-mode-option--disabled' : ''}`}
-                        type="button"
-                        data-mode={item.id}
-                        role="menuitemradio"
-                        aria-checked={selected}
-                        aria-disabled={disabled || undefined}
-                        disabled={disabled}
-                        title={disabledReason}
-                        onClick={() => {
-                          if (!isSelectableComposerMode(item.id)) return
-                          onComposerModeChange(item.id)
-                          onModeMenuOpenChange(false)
-                        }}
-                      >
-                        <span className="cc-mode-option__icon"><ComposerModeIcon mode={item.id} size={18} /></span>
-                        <span className="cc-mode-option__copy">
-                          <strong>{item.label}</strong>
-                          <small>{item.description}</small>
-                          {disabledReason ? <em>{disabledReason}</em> : null}
-                        </span>
-                        <span className="cc-mode-option__check" aria-hidden="true">
-                          {selected ? <Check size={18} /> : null}
-                        </span>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            ) : null}
+          <div className="cc-mode-picker">
+            <Popover.Root open={modeMenuOpen} onOpenChange={onModeMenuOpenChange}>
+              <Popover.Trigger asChild>
+                <button
+                  className={`cc-mode-trigger cc-mode-trigger--${composerMode}`}
+                  type="button"
+                  aria-haspopup="menu"
+                  aria-expanded={modeMenuOpen}
+                  aria-label={`切换执行方式，当前为${mode.label}`}
+                >
+                  <ComposerModeIcon mode={mode.id} className="cc-mode-trigger__icon" size={14} />
+                  <span className="cc-mode-trigger__label">{modeShortLabel}</span>
+                  <ChevronDown size={13} />
+                </button>
+              </Popover.Trigger>
+              <Popover.Portal>
+                <Popover.Content
+                  className="cc-mode-menu"
+                  role="menu"
+                  aria-label="切换执行方式"
+                  side="top"
+                  align="end"
+                  sideOffset={12}
+                  collisionPadding={10}
+                  onOpenAutoFocus={(event) => event.preventDefault()}
+                >
+                  <div className="cc-mode-menu__head">
+                    <span>执行方式</span>
+                    <span className="cc-mode-menu__shortcut" aria-hidden="true">
+                      <kbd>Shift</kbd>
+                      <span>+</span>
+                      <kbd>Tab</kbd>
+                      <span>切换</span>
+                    </span>
+                  </div>
+                  <div className="cc-mode-list">
+                    {COMPOSER_MODES.map((item) => {
+                      const selected = item.id === composerMode
+                      const disabled = 'disabled' in item && item.disabled
+                      const disabledReason = 'disabledReason' in item ? item.disabledReason : undefined
+                      return (
+                        <button
+                          key={item.id}
+                          className={`cc-mode-option${selected ? ' cc-mode-option--selected' : ''}${disabled ? ' cc-mode-option--disabled' : ''}`}
+                          type="button"
+                          data-mode={item.id}
+                          role="menuitemradio"
+                          aria-checked={selected}
+                          aria-disabled={disabled || undefined}
+                          disabled={disabled}
+                          title={disabledReason}
+                          onClick={() => {
+                            if (!isSelectableComposerMode(item.id)) return
+                            onComposerModeChange(item.id)
+                            onModeMenuOpenChange(false)
+                          }}
+                        >
+                          <span className="cc-mode-option__icon"><ComposerModeIcon mode={item.id} size={18} /></span>
+                          <span className="cc-mode-option__copy">
+                            <strong>{item.label}</strong>
+                            <small>{item.description}</small>
+                            {disabledReason ? <em>{disabledReason}</em> : null}
+                          </span>
+                          <span className="cc-mode-option__check" aria-hidden="true">
+                            {selected ? <Check size={18} /> : null}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </Popover.Content>
+              </Popover.Portal>
+            </Popover.Root>
           </div>
 
           <button
