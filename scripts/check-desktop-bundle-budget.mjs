@@ -35,8 +35,10 @@ for (const forbidden of ['maplibre', 'MapCanvas', 'DebugPage', 'ToolManagementPa
 const assets = await readdir(path.join(dist, 'assets'))
 const workspaceApplication = assets.find(name => /^DesktopWorkspaceApplication-.*\.js$/u.test(name))
 const mapShell = assets.find(name => /^MapCanvas-.*\.js$/u.test(name))
-const mapRuntime = assets.find(name => /^maplibre-gl-csp-(?!worker).*\.js$/u.test(name))
-const mapWorker = assets.find(name => /^maplibre-gl-csp-worker-.*\.js$/u.test(name))
+// MapLibre 6 移除了旧 CSP 子路径的产物名；同时接受升级前后的命名，
+// 预算检查只关心运行时与 Worker 是否仍然拆包，而不绑定依赖的内部入口名。
+const mapRuntime = assets.find(name => /^maplibre-gl(?:-csp)?-(?!worker-).*\.js$/u.test(name))
+const mapWorker = assets.find(name => /^maplibre-gl(?:-csp)?-worker-.*\.js$/u.test(name))
 if (!workspaceApplication || !mapShell || !mapRuntime || !mapWorker) {
   throw new Error('没有找到桌面工作区、地图壳、MapLibre 运行时或地图 Worker 异步构建产物')
 }
@@ -45,7 +47,9 @@ assertBudget('桌面工作区异步包', await gzipSize(`assets/${workspaceAppli
 // 地图壳会立即突破这个基于当前 12 KiB 实测值留有余量的预算。
 assertBudget('地图壳异步包', await gzipSize(`assets/${mapShell}`), 24 * 1024)
 assertBudget('MapLibre 运行时异步包', await gzipSize(`assets/${mapRuntime}`), 310 * 1024)
-assertBudget('MapLibre Worker 异步包', await gzipSize(`assets/${mapWorker}`), 140 * 1024)
+// MapLibre 6 Worker 当前 gzip 约 141 KiB；保留约 6% 回归余量，仍以独立预算
+// 阻止它被并回首屏或在后续升级中无界增长。
+assertBudget('MapLibre Worker 异步包', await gzipSize(`assets/${mapWorker}`), 150 * 1024)
 
 console.log(JSON.stringify({
   initialJsGzip,
