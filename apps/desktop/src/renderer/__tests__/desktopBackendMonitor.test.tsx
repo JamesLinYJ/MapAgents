@@ -41,7 +41,8 @@ describe('DesktopBackendMonitor', () => {
     )
 
     expect(html).not.toContain('独立桌面工作台')
-    expect(html).toContain('工作台正在启动')
+    expect(html).toContain('class="dc-startup"')
+    expect(html).toContain('正在准备工作台')
     expect(html).toContain('完成后将直接进入工作台')
   })
 

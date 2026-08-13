@@ -11,6 +11,7 @@
 
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { reportClientDiagnostic } from '../utils/clientDiagnostics'
+import { StartupScreen } from '../../app/StartupScreen'
 
 interface ErrorBoundaryProps {
   children: ReactNode
@@ -34,22 +35,25 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   render() {
     if (!this.state.error) return this.props.children
     return (
-      <div className="dc-route-loading" role="alert">
-        <div className="empty-state">
-          <h3>页面遇到问题</h3>
-          <p>{this.state.error.message || '未知错误'}</p>
+      <StartupScreen
+        stage="界面恢复"
+        title="工作台界面需要重新加载"
+        description="本机服务和数据不会因此停止；重新加载后会恢复当前工作区。"
+        busy={false}
+        errorMessage={this.state.error.message || '界面遇到未知错误。'}
+        actions={(
           <button
-            className="pill text-xs mt-3 cursor-pointer"
             onClick={() => {
               this.setState({ error: null })
               window.location.reload()
             }}
             type="button"
           >
-            刷新页面
+            重新加载
           </button>
-        </div>
-      </div>
+        )}
+        footer="如果问题重复出现，可从管理菜单打开系统日志。"
+      />
     )
   }
 }

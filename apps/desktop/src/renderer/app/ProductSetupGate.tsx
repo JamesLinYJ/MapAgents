@@ -34,6 +34,7 @@ import type {
 import { desktopMenuCommandSchema } from '../../contracts/desktopIpc'
 import { BootScreen } from './AppLoader'
 import { ProductIdentityProvider } from './ProductIdentityProvider'
+import { StartupScreen } from './StartupScreen'
 import './styles/product-setup.css'
 
 export function ProductSetupGate({ children }: { children: ReactNode }) {
@@ -619,14 +620,15 @@ function ConnectionSettings({
 
 function SetupLoadFailure({ message, onRetry }: { message: string; onRetry: () => Promise<void> }) {
   return (
-    <main className="product-setup product-setup--failure">
-      <section>
-        <X size={28} />
-        <h1>无法读取桌面设置</h1>
-        <p>{message}</p>
-        <button type="button" onClick={() => void onRetry()}><RefreshCw size={16} /> 重试</button>
-      </section>
-    </main>
+    <StartupScreen
+      stage="桌面设置"
+      title="工作台尚未就绪"
+      description="无法读取本机桌面设置，可以立即重试。"
+      busy={false}
+      errorMessage={message}
+      actions={<button type="button" onClick={() => void onRetry()}>重新启动</button>}
+      footer="本机配置不会因为重新加载而丢失。"
+    />
   )
 }
 

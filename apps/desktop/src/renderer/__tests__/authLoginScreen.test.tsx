@@ -28,8 +28,9 @@ describe('LoginScreen', () => {
     const html = renderToStaticMarkup(<BootScreen />)
 
     expect(html).toContain('正在准备工作台')
-    expect(html).toContain('连接认证、工具目录、地图引擎和会话运行时')
-    expect(html).toContain('启动阶段只加载轻量壳层')
+    expect(html).toContain('正在加载工作区、地图引擎和本机运行环境')
+    expect(html).toContain('启动过程只加载必要组件')
+    expect(html).toContain('class="dc-startup"')
   })
 
   it('renders the email-first Microsoft-style flow without tabs', () => {

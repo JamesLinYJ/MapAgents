@@ -104,215 +104,243 @@
   }
 }
 
-@keyframes dc-boot-progress {
-  0% { transform: translateX(-100%); }
-  58% { transform: translateX(-18%); }
-  100% { transform: translateX(100%); }
+@keyframes dc-startup-orbit {
+  to { transform: rotate(360deg); }
 }
 
-/* AppShell 下载期间的稳定首屏；只使用基础 CSS，不依赖地图、图标或动画库。 */
-.dc-boot {
+@keyframes dc-startup-breathe {
+  0%, 100% { transform: scale(.88); opacity: .62; }
+  50% { transform: scale(1.08); opacity: 1; }
+}
+
+/* 唯一启动壳：入口级同步 CSS，不能依赖懒加载的 AppShell。 */
+.dc-startup {
+  --startup-ink: #142a31;
+  --startup-muted: #637981;
+  --startup-accent: #087f98;
   box-sizing: border-box;
-  min-height: 100vh;
   display: grid;
+  min-width: 320px;
+  min-height: 100vh;
   place-items: center;
   padding: 24px;
+  color: var(--startup-ink);
   background:
-    linear-gradient(180deg, rgb(255 255 255 / 0.18), rgb(255 255 255 / 0.04) 48%, rgb(255 255 255 / 0.16)),
-    url("./assets/backgrounds/liquid-map-background.webp") center / cover no-repeat,
-    #eef4f8;
-  color: #151d24;
+    radial-gradient(circle at 20% 12%, rgb(48 163 179 / 16%), transparent 34%),
+    radial-gradient(circle at 82% 82%, rgb(73 138 112 / 12%), transparent 32%),
+    linear-gradient(145deg, #e9f2f4 0%, #f8fafb 52%, #edf4f5 100%);
 }
 
-.dc-boot__shell {
-  width: min(920px, 100%);
-  min-height: min(680px, calc(100vh - 48px));
-  border-radius: 34px;
-  border: 1px solid rgb(255 255 255 / 70%);
-  background:
-    radial-gradient(circle at 16% -10%, rgb(255 255 255 / 78%), transparent 36%),
-    linear-gradient(145deg, rgb(255 255 255 / 58%), rgb(255 255 255 / 24%) 58%, rgb(255 255 255 / 34%));
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 86%),
-    inset 0 -1px 0 rgb(37 55 64 / 8%),
-    0 28px 82px rgb(35 74 88 / 16%);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  padding: 32px;
+.dc-startup,
+.dc-startup * {
+  box-sizing: border-box;
+}
+
+.dc-startup__shell {
+  display: grid;
+  width: min(460px, calc(100vw - 48px));
+  min-height: 410px;
+  justify-items: center;
+  padding: 30px 34px 26px;
   overflow: hidden;
-  position: relative;
-}
-
-.dc-boot__shell::before {
-  content: "";
-  position: absolute;
-  inset: auto -18% -40% 18%;
-  height: 420px;
-  pointer-events: none;
+  border: 1px solid rgb(184 202 208 / 82%);
+  border-radius: 20px;
   background:
-    radial-gradient(circle at 24% 44%, rgb(42 154 164 / 22%), transparent 34%),
-    radial-gradient(circle at 68% 34%, rgb(71 116 218 / 14%), transparent 36%);
-  filter: blur(24px);
+    linear-gradient(150deg, rgb(255 255 255 / 96%), rgb(250 253 253 / 88%));
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 92%),
+    0 26px 70px rgb(30 67 79 / 16%);
+  text-align: center;
 }
 
-.dc-boot__brand {
+.dc-startup__brand {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 11px;
+  text-align: left;
+}
+
+.dc-startup__brand > span {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 11px;
+  color: #fff;
+  background: linear-gradient(145deg, #17343d, #1f7d89);
+  box-shadow: 0 10px 22px rgb(17 91 103 / 20%);
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.dc-startup__brand div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.dc-startup__brand strong {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 720;
+  letter-spacing: -.015em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dc-startup__brand small {
+  color: var(--startup-muted);
+  font-size: 10px;
+  letter-spacing: .04em;
+}
+
+.dc-startup__indicator {
   position: relative;
-  z-index: 1;
+  display: grid;
+  width: 74px;
+  height: 74px;
+  margin-top: 48px;
+  place-items: center;
+  border-radius: 50%;
+  background: rgb(224 243 246 / 82%);
+  box-shadow: inset 0 0 0 1px rgb(67 153 166 / 18%);
+}
+
+.dc-startup__indicator > span {
+  position: absolute;
+  inset: -7px;
+  border: 2px solid rgb(89 168 181 / 24%);
+  border-top-color: var(--startup-accent);
+  border-right-color: var(--startup-accent);
+  border-radius: 50%;
+  animation: dc-startup-orbit .9s linear infinite;
+}
+
+.dc-startup__indicator > i {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--startup-accent);
+  box-shadow: 0 0 0 8px rgb(8 127 152 / 10%);
+  animation: dc-startup-breathe 1.3s ease-in-out infinite;
+}
+
+.dc-startup[data-state='error'] .dc-startup__indicator {
+  background: #fff0f0;
+  box-shadow: inset 0 0 0 1px rgb(185 59 59 / 18%);
+}
+
+.dc-startup[data-state='error'] .dc-startup__indicator > span {
+  inset: 9px 34px;
+  border: 0;
+  border-radius: 999px;
+  background: #b93b3b;
+  animation: none;
+  transform: rotate(45deg);
+}
+
+.dc-startup[data-state='error'] .dc-startup__indicator > span::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: inherit;
+  content: '';
+  transform: rotate(90deg);
+}
+
+.dc-startup[data-state='error'] .dc-startup__indicator > i {
+  display: none;
+}
+
+.dc-startup__copy {
+  margin-top: 25px;
+}
+
+.dc-startup__copy h1 {
+  margin: 0;
+  font-size: 25px;
+  font-weight: 720;
+  letter-spacing: -.035em;
+}
+
+.dc-startup__copy p {
+  max-width: 360px;
+  margin: 10px 0 0;
+  color: var(--startup-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.dc-startup__error {
+  width: 100%;
+  margin: 18px 0 0;
+  padding: 10px 12px;
+  overflow-wrap: anywhere;
+  border: 1px solid #e4b6b6;
+  border-radius: 8px;
+  color: #8f3030;
+  background: #fff5f5;
+  font-size: 11px;
+  line-height: 1.55;
+  text-align: left;
+}
+
+.dc-startup__actions {
+  display: flex;
+  justify-content: center;
+  gap: 9px;
+  margin-top: 20px;
+}
+
+.dc-startup__actions button {
+  min-width: 104px;
+  padding: 8px 15px;
+  border: 1px solid var(--startup-accent);
+  border-radius: 7px;
+  color: #fff;
+  background: var(--startup-accent);
+  cursor: pointer;
+}
+
+.dc-startup__actions button.is-secondary {
+  color: var(--startup-accent);
+  border-color: #b8d2d8;
+  background: #fff;
+}
+
+.dc-startup__actions button:hover {
+  filter: brightness(.94);
+}
+
+.dc-startup__status {
   display: flex;
   align-items: center;
-  gap: 12px;
+  align-self: end;
+  gap: 7px;
+  margin: 28px 0 0;
+  color: #72858c;
+  font-size: 10px;
+  line-height: 1.5;
 }
 
-.dc-boot__brand > span {
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  border-radius: 16px;
-  color: white;
-  font-weight: 800;
-  background:
-    radial-gradient(circle at 32% 18%, rgb(255 255 255 / 62%), transparent 32%),
-    linear-gradient(145deg, #17343d, #1f6872);
-  box-shadow: 0 13px 30px rgb(14 73 86 / 22%);
+.dc-startup__status > span {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #2c9b70;
 }
 
-.dc-boot__brand strong {
-  font-size: 24px;
-  letter-spacing: -0.03em;
-}
-
-.dc-boot__brand small {
-  color: #667b83;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.dc-boot__copy {
-  position: relative;
-  z-index: 1;
-  margin-top: 92px;
-  max-width: 640px;
-}
-
-.dc-boot__copy h1 {
-  margin: 0;
-  color: #08131a;
-  font-size: clamp(42px, 7vw, 74px);
-  line-height: .98;
-  letter-spacing: -0.055em;
-}
-
-.dc-boot__copy p {
-  margin: 22px 0 0;
-  color: #60757c;
-  font-size: 18px;
-  line-height: 1.8;
-}
-
-.dc-boot__progress {
-  position: relative;
-  z-index: 1;
-  margin-top: 34px;
-  height: 10px;
-  max-width: 520px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgb(255 255 255 / 46%);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 72%);
-}
-
-.dc-boot__progress span {
-  display: block;
-  width: 64%;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, #1f6872, #2f9af0, #37a574);
-  animation: dc-boot-progress 1.8s cubic-bezier(.16, 1, .3, 1) infinite;
-}
-
-.dc-boot__deck {
-  position: relative;
-  z-index: 1;
-  margin-top: 42px;
-  display: grid;
-  grid-template-columns: .85fr 1.4fr .78fr;
-  gap: 14px;
-  min-height: 190px;
-}
-
-.dc-boot__card {
-  min-width: 0;
-  border: 1px solid rgb(255 255 255 / 58%);
-  border-radius: 24px;
-  background: rgb(255 255 255 / 30%);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 70%);
-}
-
-.dc-boot__card--conversation {
-  background:
-    linear-gradient(#25464f 0 0) 22px 28px / 42% 10px no-repeat,
-    linear-gradient(#8ba2a9 0 0) 22px 52px / 62% 8px no-repeat,
-    linear-gradient(#8ba2a9 0 0) 22px 74px / 52% 8px no-repeat,
-    rgb(255 255 255 / 30%);
-}
-
-.dc-boot__card--map {
-  background:
-    radial-gradient(circle at 34% 38%, rgb(47 154 240 / 32%), transparent 24%),
-    radial-gradient(circle at 62% 58%, rgb(55 165 116 / 24%), transparent 26%),
-    linear-gradient(90deg, rgb(255 255 255 / 26%) 1px, transparent 1px),
-    linear-gradient(0deg, rgb(255 255 255 / 30%) 1px, transparent 1px),
-    rgb(221 238 241 / 44%);
-  background-size: auto, auto, 32px 32px, 32px 32px, auto;
-}
-
-.dc-boot__card--result {
-  background:
-    linear-gradient(#25464f 0 0) 20px 28px / 48% 10px no-repeat,
-    linear-gradient(#d9e4e8 0 0) 20px 58px / calc(100% - 40px) 12px no-repeat,
-    linear-gradient(#d9e4e8 0 0) 20px 88px / calc(100% - 40px) 12px no-repeat,
-    linear-gradient(#d9e4e8 0 0) 20px 118px / calc(100% - 40px) 12px no-repeat,
-    rgb(255 255 255 / 30%);
-}
-
-.dc-boot__status {
-  position: relative;
-  z-index: 1;
-  margin: 24px 0 0;
-  color: #667b83;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.7;
+.dc-startup[data-state='error'] .dc-startup__status > span {
+  background: #b98222;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .dc-entry-preview__pulse,
-  .dc-boot__progress span {
+  .dc-startup__indicator > span,
+  .dc-startup__indicator > i {
     animation: none;
-  }
-}
-
-@media (max-width: 900px) {
-  .dc-boot {
-    padding: 16px;
-  }
-
-  .dc-boot__shell {
-    min-height: calc(100vh - 32px);
-    padding: 24px;
-    border-radius: 28px;
-  }
-
-  .dc-boot__copy {
-    margin-top: 72px;
-  }
-
-  .dc-boot__deck {
-    grid-template-columns: 1fr;
-  }
-
-  .dc-boot__card {
-    min-height: 78px;
   }
 }

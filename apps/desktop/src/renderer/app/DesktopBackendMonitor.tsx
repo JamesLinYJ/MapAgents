@@ -30,6 +30,7 @@ import {
 import { desktopMenuCommandSchema } from '../../contracts/desktopIpc'
 import { ensureRuntimeCompatibility } from './runtimeCompatibility'
 import { useProductIdentity } from './ProductIdentityContext'
+import { StartupScreen } from './StartupScreen'
 
 const BACKGROUND_RECHECK_INTERVAL_MS = 5_000
 const SystemLogViewer = lazy(() => import('../features/operations/SystemLogViewer').then(module => ({
@@ -39,7 +40,6 @@ const SystemLogViewer = lazy(() => import('../features/operations/SystemLogViewe
 export function DesktopBackendMonitor({ children }: { children: ReactNode }) {
   const { productName } = useProductIdentity()
   const availability = useBackendAvailabilityStore(state => state.availability)
-  const snapshot = useBackendAvailabilityStore(state => state.snapshot)
   const errorMessage = useBackendAvailabilityStore(state => state.errorMessage)
   const setAvailability = useBackendAvailabilityStore(state => state.setAvailability)
   const automaticStartAttempted = useRef(false)
@@ -128,7 +128,6 @@ export function DesktopBackendMonitor({ children }: { children: ReactNode }) {
         <BackendStartupGate
           productName={productName}
           availability={availability}
-          snapshot={snapshot}
           errorMessage={errorMessage}
           onRetry={retry}
           onOpenLogs={() => setLogsOpen(true)}
@@ -146,52 +145,37 @@ export function DesktopBackendMonitor({ children }: { children: ReactNode }) {
 export function BackendStartupGate({
   productName,
   availability,
-  snapshot,
   errorMessage,
   onRetry,
   onOpenLogs,
 }: {
   productName: string
   availability: Exclude<DesktopBackendAvailability, 'online'>
-  snapshot: OperationsSnapshot | null
   errorMessage: string | null
   onRetry: () => void
   onOpenLogs: () => void
 }) {
   const busy = availability === 'checking' || availability === 'starting'
-  const services = snapshot?.services ?? []
   return (
-    <main className="dc-auto-auth-screen" aria-live="polite">
-      <section className="dc-auto-auth-card desktop-startup-card">
-        <div className="dc-auto-auth-brand">
-          <span aria-hidden="true">G</span>
-          <div>
-            <strong>{productName} GIS 工作台</strong>
-            <small>正在准备本机服务</small>
-          </div>
-        </div>
-        <span className={busy ? 'dc-auto-auth-spinner' : 'desktop-startup-error'} aria-hidden="true" />
-        <h1>{busy ? '工作台正在启动' : '工作台尚未就绪'}</h1>
-        <p>{errorMessage ?? (busy
-          ? '首次启动会自动初始化数据库与科学计算环境，完成后将直接进入工作台。'
-          : '请查看系统日志中的具体原因，修复后可立即重试。')}</p>
-        {services.length > 0 ? (
-          <ul className="desktop-startup-services">
-            {services.map(service => (
-              <li key={service.serviceId} data-state={service.state}>
-                <span aria-hidden="true" />
-                <strong>{service.displayName}</strong>
-                <small>{serviceStateLabel(service.state)}</small>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        <div className="desktop-startup-actions">
+    <StartupScreen
+      productName={productName}
+      stage="本机服务"
+      title={busy ? '正在准备工作台' : '工作台尚未就绪'}
+      description={busy
+        ? '首次启动会自动初始化数据库与科学计算环境，完成后将直接进入工作台。'
+        : '本机服务没有全部就绪。查看具体原因后，可以在这里立即重新启动。'}
+      busy={busy}
+      errorMessage={errorMessage}
+      actions={!busy ? (
+        <>
           <button type="button" className="is-secondary" onClick={onOpenLogs}>系统日志</button>
-          {!busy ? <button type="button" onClick={onRetry}>重新启动</button> : null}
-        </div>
-      </section>
-    </main>
+          <button type="button" onClick={onRetry}>重新启动</button>
+        </>
+      ) : null}
+      footer={busy
+        ? '数据库、科学计算与平台 API 会按依赖顺序自动启动。'
+        : '设置和本地数据保持不变，重新启动只恢复后台服务。'}
+    />
   )
 }
 

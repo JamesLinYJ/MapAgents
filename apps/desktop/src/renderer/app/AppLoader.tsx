@@ -10,6 +10,7 @@
 // --------------------------------------------------------------------------
 
 import { lazy, Suspense } from 'react'
+import { StartupScreen } from './StartupScreen'
 
 const DesktopWorkspaceApplication = lazy(() => import('./DesktopWorkspaceApplication'))
 
@@ -23,27 +24,12 @@ export function AppLoader() {
 
 export function BootScreen() {
   return (
-    <main className="dc-boot" aria-label="正在加载地理智能工作台">
-      <section className="dc-boot__shell">
-        <div className="dc-boot__brand">
-          <span aria-hidden="true">G</span>
-          <strong>地理智能工作台</strong>
-          <small>气象空间智能平台</small>
-        </div>
-        <div className="dc-boot__copy">
-          <h1>正在准备工作台</h1>
-          <p>连接认证、工具目录、地图引擎和会话运行时。</p>
-        </div>
-        <div className="dc-boot__progress" aria-hidden="true">
-          <span />
-        </div>
-        <div className="dc-boot__deck" aria-hidden="true">
-          <span className="dc-boot__card dc-boot__card--conversation" />
-          <span className="dc-boot__card dc-boot__card--map" />
-          <span className="dc-boot__card dc-boot__card--result" />
-        </div>
-        <p className="dc-boot__status">启动阶段只加载轻量壳层；地图和重型工具会在工作台就绪后按需加载。</p>
-      </section>
-    </main>
+    <StartupScreen
+      stage="应用加载"
+      title="正在准备工作台"
+      description="正在加载工作区、地图引擎和本机运行环境，完成后会直接进入。"
+      busy
+      footer="启动过程只加载必要组件；地图和分析工具将在就绪后按需启用。"
+    />
   )
 }
