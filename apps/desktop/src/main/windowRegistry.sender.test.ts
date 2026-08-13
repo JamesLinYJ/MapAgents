@@ -36,7 +36,7 @@ vi.mock('electron', () => ({
     isDestroyed = () => this.destroyed
     isMinimized = () => false
     isFullScreen = () => false
-    isMaximized = () => false
+    isMaximized = vi.fn(() => false)
     restore = vi.fn()
     show = vi.fn()
     focus = vi.fn()
@@ -126,6 +126,36 @@ describe('WorkspaceWindowRegistry IPC ownership', () => {
 
     expect((window as { setTitle: ReturnType<typeof vi.fn> }).setTitle)
       .toHaveBeenCalledWith('测试工作区 — 团队地理工作台')
+  })
+
+  it('keeps a maximized window unchanged when the same workspace metadata is rebound', () => {
+    const registry = new WorkspaceWindowRegistry({
+      releaseForWebContents: vi.fn(),
+    } as never)
+    const window = registry.openBootstrap() as unknown as {
+      isMaximized: ReturnType<typeof vi.fn>
+      setSize: ReturnType<typeof vi.fn>
+      unmaximize: ReturnType<typeof vi.fn>
+    }
+
+    registry.bind(window as never, {
+      workspaceId: 'workspace_1',
+      workspaceName: '测试工作区',
+      sessionId: 'session_1',
+      threadId: 'thread_1',
+    })
+    expect(window.setSize).toHaveBeenCalledOnce()
+
+    window.isMaximized.mockReturnValue(true)
+    registry.bind(window as never, {
+      workspaceId: 'workspace_1',
+      workspaceName: '测试工作区',
+      sessionId: 'session_1',
+      threadId: 'thread_2',
+    })
+
+    expect(window.setSize).toHaveBeenCalledOnce()
+    expect(window.unmaximize).not.toHaveBeenCalled()
   })
 })
 

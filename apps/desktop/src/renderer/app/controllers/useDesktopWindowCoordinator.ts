@@ -90,6 +90,11 @@ export function useDesktopWindowCoordinator({
   defaultWorkspace,
   visibleWorkspaces = [],
 }: DesktopWindowCoordinatorOptions) {
+  const sessionId = session?.id
+  const sessionWorkspaceId = session?.workspaceId
+  const defaultWorkspaceId = defaultWorkspace?.workspaceId
+  const defaultWorkspaceName = defaultWorkspace?.name
+
   useEffect(() => {
     void requireDesktopBridge().window.command({
       action: 'set-taskbar-progress',
@@ -109,14 +114,26 @@ export function useDesktopWindowCoordinator({
   }, [])
 
   useEffect(() => {
-    if (!session) return
+    if (!sessionId || !sessionWorkspaceId) return
     void requireDesktopBridge().window.command({
       action: 'bind-workspace',
-      workspace: resolveWorkspaceBinding(session, threadId, defaultWorkspace),
+      workspace: resolveWorkspaceBinding(
+        { id: sessionId, workspaceId: sessionWorkspaceId },
+        threadId,
+        defaultWorkspaceId && defaultWorkspaceName
+          ? { workspaceId: defaultWorkspaceId, name: defaultWorkspaceName }
+          : null,
+      ),
     }).catch(error => {
       reportNonBlockingError('workspaceBinding', error)
     })
-  }, [defaultWorkspace, session, threadId])
+  }, [
+    defaultWorkspaceId,
+    defaultWorkspaceName,
+    sessionId,
+    sessionWorkspaceId,
+    threadId,
+  ])
 
   const openWorkspace = useCallback(async (workspaceId: string) => {
     await requireDesktopBridge().window.command({

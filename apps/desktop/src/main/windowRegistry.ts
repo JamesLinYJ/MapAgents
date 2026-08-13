@@ -91,11 +91,16 @@ export class WorkspaceWindowRegistry {
       sourceWindow.close()
       return existing
     }
+    let alreadyBoundToWorkspace = false
     for (const [workspaceId, window] of this.windows.entries()) {
-      if (window === sourceWindow && workspaceId !== workspace.workspaceId) this.windows.delete(workspaceId)
+      if (window !== sourceWindow) continue
+      if (workspaceId === workspace.workspaceId) alreadyBoundToWorkspace = true
+      else this.windows.delete(workspaceId)
     }
     this.windows.set(workspace.workspaceId, sourceWindow)
-    this.restoreWorkspaceWindowState(sourceWindow, workspace.workspaceId)
+    if (!alreadyBoundToWorkspace) {
+      this.restoreWorkspaceWindowState(sourceWindow, workspace.workspaceId)
+    }
     const title = `${workspace.workspaceName} — ${this.productName}`
     this.windowTitles.set(sourceWindow, title)
     sourceWindow.setTitle(title)
