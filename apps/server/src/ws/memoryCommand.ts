@@ -26,6 +26,8 @@ import {
   writeMemory,
 } from '../memory/service.js'
 import { memoryScopeSchema, memoryTypeSchema } from '../memory/schemas.js'
+import { scopeRuntimeConfigToPrincipal } from '../security/runtimePrincipalScope.js'
+import type { AuthContext } from '../security/types.js'
 import type { ClientMsg } from './protocol.js'
 import type { WsDependencies } from './dependencies.js'
 import type { WsCommandRegistry } from './commandRegistry.js'
@@ -96,7 +98,7 @@ export function registerMemoryCommands(registry: WsCommandRegistry): void {
         type,
         requireMemoryPayload(payload),
         context.dependencies,
-        context.auth?.defaultWorkspaceId,
+        requireMemoryAuth(context.auth),
       ),
     })
   }
@@ -121,16 +123,27 @@ function requireMemoryPayload(payload: unknown): Record<string, unknown> {
   return payload
 }
 
+function requireMemoryAuth(auth: AuthContext | null): AuthContext {
+  if (!auth) throw new Error('记忆命令需要登录。')
+  return auth
+}
+
 export async function handleMemoryCommand(
   command: ClientMsg['type'],
   payload: Record<string, unknown>,
   dependencies: WsDependencies,
-  workspaceId?: string,
+  auth: AuthContext,
 ): Promise<unknown> {
   const { store, modelRegistry } = dependencies
-  const cached = dependencies.modelCompletions && workspaceId
-    ? { service: dependencies.modelCompletions, workspaceId }
+  const cached = dependencies.modelCompletions
+    ? { service: dependencies.modelCompletions, workspaceId: auth.defaultWorkspaceId }
     : undefined
+
+  const resolveScopedConfig = async () => scopeRuntimeConfigToPrincipal(
+    store.runtimeRoot,
+    await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig),
+    auth,
+  )
 
   switch (command) {
     case 'thread:memory:get':
@@ -143,7 +156,7 @@ export async function handleMemoryCommand(
       )
     case 'thread:memory:rebuild': {
       const threadId = requiredString(payload, 'threadId')
-      const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
+      const config = await resolveScopedConfig()
       return rebuildSessionMemory(
         store,
         threadId,
@@ -153,14 +166,14 @@ export async function handleMemoryCommand(
       )
     }
     case 'memory:list': {
-      const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
+      const config = await resolveScopedConfig()
       const runtimeMemory = createMemoryRuntime(store.runtimeRoot, config.context)
       const scope = optionalString(payload.scope)
       const records = await listMemories(runtimeMemory, scope ? memoryScopeSchema.parse(scope) : undefined)
       return { records, total: records.length }
     }
     case 'memory:read': {
-      const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
+      const config = await resolveScopedConfig()
       return readMemory(
         createMemoryRuntime(store.runtimeRoot, config.context),
         memoryScopeSchema.parse(requiredString(payload, 'scope')),
@@ -168,7 +181,7 @@ export async function handleMemoryCommand(
       )
     }
     case 'memory:write': {
-      const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
+      const config = await resolveScopedConfig()
       return writeMemory(createMemoryRuntime(store.runtimeRoot, config.context), {
         scope: memoryScopeSchema.parse(requiredString(payload, 'scope')),
         type: memoryTypeSchema.parse(requiredString(payload, 'type')),
@@ -179,7 +192,7 @@ export async function handleMemoryCommand(
       })
     }
     case 'memory:delete': {
-      const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
+      const config = await resolveScopedConfig()
       return deleteMemory(
         createMemoryRuntime(store.runtimeRoot, config.context),
         memoryScopeSchema.parse(requiredString(payload, 'scope')),
@@ -187,7 +200,7 @@ export async function handleMemoryCommand(
       )
     }
     case 'memory:search': {
-      const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
+      const config = await resolveScopedConfig()
       const selector = makeOptionalStructuredSelector(
         modelRegistry,
         config,
@@ -204,7 +217,7 @@ export async function handleMemoryCommand(
     }
     case 'memory:extract': {
       const threadId = requiredString(payload, 'threadId')
-      const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
+      const config = await resolveScopedConfig()
       const runId = optionalString(payload.runId) ?? store.listRunsForThread(threadId)[0]?.id
       if (!runId) throw new Error('memory:extract 需要 runId 或已有线程运行')
       const records = await extractMemoriesFromThread(
@@ -222,7 +235,7 @@ export async function handleMemoryCommand(
       return { records, total: records.length }
     }
     case 'memory:dream': {
-      const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
+      const config = await resolveScopedConfig()
       return dreamMemories(
         createMemoryRuntime(store.runtimeRoot, config.context),
         makeOptionalMemoryDreamer(
@@ -238,7 +251,7 @@ export async function handleMemoryCommand(
       return store.getThreadMemory(requiredString(payload, 'threadId'))
     case 'memory:session:rebuild': {
       const threadId = requiredString(payload, 'threadId')
-      const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
+      const config = await resolveScopedConfig()
       return rebuildSessionMemory(
         store,
         threadId,
@@ -248,7 +261,7 @@ export async function handleMemoryCommand(
       )
     }
     case 'memory:instructions:list': {
-      const config = await resolveRuntimeConfig(store.runtimeConfiguration, dependencies.defaultRuntimeConfig)
+      const config = await resolveScopedConfig()
       return {
         enabled: config.context.instructionMemoryEnabled,
         entrypointName: config.context.instructionEntrypointName,

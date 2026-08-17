@@ -17,6 +17,7 @@ import {
 } from '../schemas/types.js'
 import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import type { AuthContext } from '../security/types.js'
+import { scopeRuntimeConfigToPrincipal } from '../security/runtimePrincipalScope.js'
 import type { UsageStatsService } from '../usage/usageStatsService.js'
 import type { ModelAdapterRegistry } from '../model/registry.js'
 import type { RunTaskCompletionTarget, RunTaskManager } from '../agent/runTaskManager.js'
@@ -47,7 +48,7 @@ export interface StartRunInput {
   beforeLaunch: (run: AnalysisRun) => void
 }
 
-type StartRunStore = Pick<PlatformPersistenceFacade, 'createThread' | 'getThread' | 'createRun'>
+type StartRunStore = Pick<PlatformPersistenceFacade, 'createThread' | 'getThread' | 'createRun' | 'runtimeRoot'>
   & Pick<PlatformPersistenceFacade, 'runtimeConfiguration'>
 
 export class StartRunService {
@@ -69,9 +70,14 @@ export class StartRunService {
     }
 
     this.dependencies.usageStats.assertWorkspaceCanStartModelRun(input.auth)
-    const runtimeConfig = await resolveRuntimeConfig(
+    const resolvedRuntimeConfig = await resolveRuntimeConfig(
       this.dependencies.store.runtimeConfiguration,
       this.dependencies.defaultRuntimeConfig,
+    )
+    const runtimeConfig = scopeRuntimeConfigToPrincipal(
+      this.dependencies.store.runtimeRoot,
+      resolvedRuntimeConfig,
+      input.auth,
     )
     const selectedProvider = input.provider
       ?? input.modelProvider

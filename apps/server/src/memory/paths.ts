@@ -9,6 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
+import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { lstat, realpath } from 'node:fs/promises'
 import path from 'node:path'
@@ -32,6 +33,11 @@ export interface MemoryPathConfig {
   teamDir: string
 }
 
+export interface MemoryPrincipal {
+  workspaceId: string
+  userId: string
+}
+
 export function createMemoryPathConfig(
   runtimeRoot: string,
   config: AgentRuntimeConfig['context'],
@@ -52,6 +58,39 @@ export function createMemoryPathConfig(
     runtimeRoot: path.resolve(runtimeRoot),
     privateDir: ensureTrailingSeparator(path.resolve(privateDir)),
     teamDir: ensureTrailingSeparator(path.resolve(teamDir)),
+  }
+}
+
+/**
+ * Resolve one principal's durable memory roots from the administrator-configured
+ * base directories. The operation is idempotent so an already scoped run
+ * snapshot can be revalidated at a later tool boundary without creating nested
+ * tenant directories.
+ */
+export function scopeMemoryContextConfig(
+  runtimeRoot: string,
+  config: AgentRuntimeConfig['context'],
+  principal: MemoryPrincipal,
+  projectRoot = process.cwd(),
+): AgentRuntimeConfig['context'] {
+  if (!principal.workspaceId.trim() || !principal.userId.trim()) {
+    throw new MemoryPathError('记忆主体必须同时包含 workspaceId 和 userId')
+  }
+  const roots = createMemoryPathConfig(runtimeRoot, config, projectRoot)
+  const workspaceKey = stablePrincipalKey(principal.workspaceId)
+  const userKey = stablePrincipalKey(principal.userId)
+  const privateSuffix = path.join('principals', workspaceKey, userKey)
+  const teamSuffix = path.join('workspaces', workspaceKey)
+  const privateRoot = stripTrailingSeparator(roots.privateDir)
+  const teamRoot = stripTrailingSeparator(roots.teamDir)
+  return {
+    ...config,
+    privateMemoryDir: hasPathSuffix(privateRoot, privateSuffix)
+      ? privateRoot
+      : path.join(privateRoot, privateSuffix),
+    teamMemoryDir: hasPathSuffix(teamRoot, teamSuffix)
+      ? teamRoot
+      : path.join(teamRoot, teamSuffix),
   }
 }
 
@@ -118,11 +157,33 @@ function stableProjectKey(projectRoot: string): string {
   return normalized.replace(/^-+|-+$/gu, '') || 'workspace'
 }
 
+function stablePrincipalKey(value: string): string {
+  return createHash('sha256').update(value.trim(), 'utf8').digest('hex').slice(0, 32)
+}
+
 function resolveConfiguredBase(value: string, runtimeRoot: string): string {
   if (value.startsWith('~/') || value.startsWith('~\\')) {
     return path.join(homedir(), value.slice(2))
   }
   return path.isAbsolute(value) ? value : path.join(runtimeRoot, value)
+}
+
+function stripTrailingSeparator(value: string): string {
+  return value.endsWith(path.sep) ? value.slice(0, -1) : value
+}
+
+function hasPathSuffix(value: string, suffix: string): boolean {
+  const candidate = path.resolve(value)
+  const suffixParts = suffix.split(path.sep)
+  const candidateParts = candidate.split(path.sep)
+  if (candidateParts.length < suffixParts.length) return false
+  return suffixParts.every((part, index) => {
+    const candidatePart = candidateParts[candidateParts.length - suffixParts.length + index]
+    if (candidatePart === undefined) return false
+    return process.platform === 'win32'
+      ? candidatePart.toLowerCase() === part.toLowerCase()
+      : candidatePart === part
+  })
 }
 
 function ensureTrailingSeparator(value: string): string {
