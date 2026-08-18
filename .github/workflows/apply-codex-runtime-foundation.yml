@@ -1,0 +1,86 @@
+name: Apply Codex runtime foundation
+
+on:
+  push:
+    branches:
+      - docs/codex-runtime-refactor-plan
+    paths:
+      - '.github/refactor/apply-codex-runtime-foundation.mjs'
+      - '.github/workflows/apply-codex-runtime-foundation.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-codex-runtime-foundation
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: Apply, validate, and commit
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout implementation branch
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Apply source migration
+        run: node .github/refactor/apply-codex-runtime-foundation.mjs
+
+      - name: Regenerate locked dependency graph
+        env:
+          NPM_CONFIG_AUDIT: 'false'
+          NPM_CONFIG_FUND: 'false'
+        run: npm install --package-lock-only --ignore-scripts
+
+      - name: Install locked dependencies
+        env:
+          NPM_CONFIG_AUDIT: 'false'
+          NPM_CONFIG_FUND: 'false'
+        run: npm ci
+
+      - name: Run Agent runtime tests
+        run: npm run test:server
+
+      - name: Build Server
+        run: npm run build:server
+
+      - name: Validate dependency graph
+        run: node --test scripts/dependency-contract.test.mjs
+
+      - name: Validate release pipeline
+        run: npm run test:release-pipeline
+
+      - name: Check patch hygiene
+        run: git diff --check
+
+      - name: Remove one-shot migration helpers
+        shell: bash
+        run: |
+          rm -f .github/refactor/apply-codex-runtime-foundation.mjs
+          rm -f .github/workflows/apply-codex-runtime-foundation.yml
+          rmdir .github/refactor 2>/dev/null || true
+
+      - name: Commit validated implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add --all
+          if git diff --cached --quiet; then
+            echo '没有需要提交的变更。'
+            exit 0
+          fi
+          git commit -m 'refactor(agent): establish Codex-style SDK runtime boundary'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
