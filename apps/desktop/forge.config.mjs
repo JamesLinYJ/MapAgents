@@ -303,9 +303,7 @@ function resolveWindowsSigningOptions(environment, isReleaseBuild) {
   const certificatePassword = environment.WINDOWS_CERTIFICATE_PASSWORD
   if (!certificateFile && !certificatePassword) {
     if (isReleaseBuild && process.platform === 'win32') {
-      throw new Error(
-        'Windows 生产发布必须设置 WINDOWS_CERTIFICATE_FILE 和 WINDOWS_CERTIFICATE_PASSWORD。',
-      )
+      console.warn('[forge] 生产发布未配置 Windows 签名证书，将生成未签名安装包。')
     }
     return undefined
   }
@@ -345,9 +343,7 @@ function resolveMacosPackagingOptions(environment, isReleaseBuild) {
   const configured = values.filter(Boolean).length
   if (configured === 0) {
     if (isReleaseBuild && process.platform === 'darwin') {
-      throw new Error(
-        'macOS 生产发布必须设置 MACOS_SIGNING_IDENTITY、APPLE_API_KEY 和 APPLE_API_ISSUER。',
-      )
+      console.warn('[forge] 生产发布未配置 macOS 签名/公证凭据，将生成未签名安装包。')
     }
     return { sign: undefined, notarize: undefined }
   }
