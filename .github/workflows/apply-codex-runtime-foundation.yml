@@ -67,7 +67,7 @@ jobs:
           NPM_CONFIG_FUND: 'false'
         run: npm ci
 
-      - name: Build workspace contracts
+      - name: Build runtime test contracts
         shell: bash
         run: |
           npm run build --workspace @geo-agent-platform/db
@@ -86,8 +86,8 @@ jobs:
       - name: Run Agent runtime tests
         run: npm run test:server
 
-      - name: Build Server
-        run: npm run build:server
+      - name: Build all workspaces
+        run: npm run build
 
       - name: Validate dependency graph
         run: node --test scripts/dependency-contract.test.mjs
