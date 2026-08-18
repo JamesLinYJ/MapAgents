@@ -9,7 +9,7 @@ on:
       - reopened
       - synchronize
     paths:
-      - '.github/refactor/apply-codex-runtime-foundation.mjs'
+      - '.github/refactor/**'
       - '.github/workflows/apply-codex-runtime-foundation.yml'
 
 permissions:
@@ -41,6 +41,9 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: package-lock.json
+
+      - name: Normalize source migration helper
+        run: node .github/refactor/fix-codex-runtime-foundation-helper.mjs
 
       - name: Apply source migration
         run: node .github/refactor/apply-codex-runtime-foundation.mjs
@@ -76,6 +79,7 @@ jobs:
         shell: bash
         run: |
           rm -f .github/refactor/apply-codex-runtime-foundation.mjs
+          rm -f .github/refactor/fix-codex-runtime-foundation-helper.mjs
           rm -f .github/workflows/apply-codex-runtime-foundation.yml
           rmdir .github/refactor 2>/dev/null || true
 
