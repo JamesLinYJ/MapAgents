@@ -70,6 +70,16 @@ jobs:
       - name: Build shared contracts
         run: npm run build --workspace @geo-agent-platform/shared-types
 
+      - name: Diagnose Agent runtime startup
+        env:
+          LOG_LEVEL: error
+        shell: bash
+        run: |
+          cd apps/server
+          node scripts/run-vitest-with-env.mjs run src/agent/runtime.test.ts \
+            -t 'rebuilds the visible transcript after restart and sends the current user message once' \
+            --maxWorkers=1
+
       - name: Run Agent runtime tests
         run: npm run test:server
 
