@@ -157,8 +157,17 @@ test('repository workflows declare all native release and required security boun
     'actions/attest@v4',
     'SHA256SUMS',
     'Create immutable release tag',
-    "needs.validate.outputs.create_tag != 'true'",
+    'Detect signing credentials',
+    "needs.validate.outputs.win_signing == 'yes'",
+    'create-release-tag',
   ]) assert.ok(packages.includes(required), `package workflow missing ${required}`)
+  // 手动发布由 dispatch run 一次性完成 打标签+打包+发布：GITHUB_TOKEN 推送的标签
+  // 不会触发新的 workflow 运行，因此 package job 不再以 create_tag 为门槛。
+  assert.doesNotMatch(
+    packages,
+    /if: needs\.validate\.outputs\.create_tag != 'true'/u,
+    'package job 必须不再依赖 create_tag 门槛',
+  )
   assert.doesNotMatch(publishScript, /git\s+tag\s+--annotate/u)
   const enableDependencyGraphAt = governanceScript.indexOf(
     "await request(`${repositoryPath}/vulnerability-alerts`",
