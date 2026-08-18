@@ -41,7 +41,12 @@ jobs:
           fi
 
           message="$(jq -r '.message // empty' "${response_file}" 2>/dev/null || true)"
-          if [[ ( "${status}" == '403' || "${status}" == '404' ) \
+          if [[ "${status}" == '404' ]]; then
+            echo 'enabled=false' >> "${GITHUB_OUTPUT}"
+            echo "::warning::仓库 Dependency Graph/SBOM 接口不可用（HTTP 404）。Dependency Review 已跳过；启用 Dependency Graph 后会自动恢复漏洞门禁。"
+            exit 0
+          fi
+          if [[ "${status}" == '403' \
             && "${message,,}" == *'dependency graph'* \
             && "${message,,}" == *'not enabled'* ]]; then
             echo 'enabled=false' >> "${GITHUB_OUTPUT}"
@@ -63,4 +68,4 @@ jobs:
 
       - name: Report unavailable dependency review
         if: steps.dependency-graph.outputs.enabled != 'true'
-        run: echo 'Dependency Graph 未启用；本次没有运行依赖差异漏洞分析。'
+        run: echo 'Dependency Graph 未启用或 SBOM 接口不可用；本次没有运行依赖差异漏洞分析。'
