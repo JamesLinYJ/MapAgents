@@ -67,8 +67,11 @@ jobs:
           NPM_CONFIG_FUND: 'false'
         run: npm ci
 
-      - name: Build shared contracts
-        run: npm run build --workspace @geo-agent-platform/shared-types
+      - name: Build workspace contracts
+        shell: bash
+        run: |
+          npm run build --workspace @geo-agent-platform/db
+          npm run build --workspace @geo-agent-platform/shared-types
 
       - name: Diagnose Agent runtime startup
         env:
