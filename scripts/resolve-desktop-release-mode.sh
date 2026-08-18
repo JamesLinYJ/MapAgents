@@ -21,9 +21,9 @@ elif [[ "${REQUESTED_PUBLISH:-false}" == 'true' ]]; then
   fi
   release_tag="v${REQUESTED_VERSION}"
   node scripts/validate-release-version.mjs "${release_tag}"
-  # Manual publication only creates the immutable version tag. The tag push is
-  # the sole production-build trigger so two signed matrices can never race on
-  # the same GitHub Release.
+  # 手动发布：本次运行完成 打标签 + 生产打包 + 发布 全流程。
+  # GITHUB_TOKEN 推送的标签不会触发新的 workflow 运行，因此不再依赖标签事件。
+  production=true
   create_tag=true
 fi
 
