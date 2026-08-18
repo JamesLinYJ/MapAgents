@@ -232,9 +232,9 @@ export default {
         )))
         return
       }
-      if (packageResult.platform === 'darwin') {
+      if (packageResult.platform === 'darwin' && hasMacosSigningCredentials(process.env)) {
         await Promise.all(packageResult.outputPaths.map(verifySignedMacApplication))
-      } else if (packageResult.platform === 'win32') {
+      } else if (packageResult.platform === 'win32' && hasWindowsSigningCredentials(process.env)) {
         await Promise.all(packageResult.outputPaths.map(verifySignedWindowsApplication))
       }
     },
@@ -383,6 +383,17 @@ async function writeTestBuildMarker(outputPath, platform) {
   )
 }
 
+
+function hasWindowsSigningCredentials(environment) {
+  return Boolean(environment.WINDOWS_CERTIFICATE_FILE?.trim())
+    && Boolean(environment.WINDOWS_CERTIFICATE_PASSWORD)
+}
+
+function hasMacosSigningCredentials(environment) {
+  return Boolean(environment.MACOS_SIGNING_IDENTITY?.trim())
+    && Boolean(environment.APPLE_API_KEY?.trim())
+    && Boolean(environment.APPLE_API_ISSUER?.trim())
+}
 
 function verifySignedWindowsApplication(outputPath) {
   const application = path.join(outputPath, executableFilename)
