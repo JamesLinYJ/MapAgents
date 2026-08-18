@@ -1,9 +1,13 @@
 name: Apply Codex runtime foundation
 
 on:
-  push:
+  pull_request:
     branches:
-      - docs/codex-runtime-refactor-plan
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
     paths:
       - '.github/refactor/apply-codex-runtime-foundation.mjs'
       - '.github/workflows/apply-codex-runtime-foundation.yml'
@@ -12,18 +16,22 @@ permissions:
   contents: write
 
 concurrency:
-  group: apply-codex-runtime-foundation
+  group: apply-codex-runtime-foundation-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
   apply:
     name: Apply, validate, and commit
-    if: github.actor != 'github-actions[bot]'
+    if: >-
+      github.actor != 'github-actions[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout implementation branch
+      - name: Checkout PR head branch
         uses: actions/checkout@v7
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
           persist-credentials: true
 
@@ -83,4 +91,4 @@ jobs:
             exit 0
           fi
           git commit -m 'refactor(agent): establish Codex-style SDK runtime boundary'
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
