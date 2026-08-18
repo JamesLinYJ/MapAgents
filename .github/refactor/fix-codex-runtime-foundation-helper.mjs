@@ -36,6 +36,34 @@ source = replaceExactCount(
   'runtimeAssembly 模型错误契约',
 )
 
+source = replaceExactCount(
+  source,
+  [
+    'sdkExecutor = removeRange(',
+    '  sdkExecutor,',
+    "  '// callModelInputFilter 新增的 item 只影响当次 HTTP 请求',",
+    "  'function goalBoundaryReason(',",
+    "  'runtimeSdkExecutor local state mutation',",
+    ')',
+  ].join('\n'),
+  [
+    'sdkExecutor = removeRange(',
+    '  sdkExecutor,',
+    "  '// callModelInputFilter 新增的 item 只影响当次 HTTP 请求',",
+    "  'function deferred<T>():',",
+    "  'runtimeSdkExecutor private steering mutation',",
+    ')',
+    'sdkExecutor = removeRange(',
+    '  sdkExecutor,',
+    "  'function runInputMarker(',",
+    "  'function goalBoundaryReason(',",
+    "  'runtimeSdkExecutor duplicated marker parser',",
+    ')',
+  ].join('\n'),
+  1,
+  'runtimeSdkExecutor 删除范围',
+)
+
 await writeFile(helperPath, source, 'utf8')
 
 function replaceExactCount(sourceText, oldValue, newValue, expectedCount, label) {
