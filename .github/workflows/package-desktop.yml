@@ -117,7 +117,6 @@ jobs:
 
   package:
     name: Package ${{ matrix.label }}
-    if: needs.validate.outputs.create_tag != 'true'
     needs: validate
     strategy:
       fail-fast: false
@@ -275,6 +274,7 @@ jobs:
     if: needs.validate.outputs.production == 'true'
     needs:
       - validate
+      - create-release-tag
       - package
     runs-on: ubuntu-24.04
     permissions:
