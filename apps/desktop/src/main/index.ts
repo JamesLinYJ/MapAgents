@@ -28,6 +28,7 @@ import { FileHandleRegistry } from './fileHandleRegistry.js'
 import { installDesktopIpcHandlers } from './ipcHandlers.js'
 import { DesktopDiagnosticExportService } from './diagnosticExportService.js'
 import { LocalDesktopIdentityBroker } from './localDesktopIdentityBroker.js'
+import { configureLinuxPasswordStore } from './linuxPasswordStore.js'
 import { MicrophonePermissionGate } from './microphonePermissionGate.js'
 import { installNativeApplicationMenu } from './nativeMenus.js'
 import {
@@ -46,6 +47,12 @@ import { DesktopSupervisorGateway } from './supervisorGateway.js'
 import { defaultDesktopRuntimeManifestPath } from './runtimeConfig.js'
 import { DesktopTypedConfirmationWindow } from './typedConfirmationWindow.js'
 import { WorkspaceWindowRegistry } from './windowRegistry.js'
+
+configureLinuxPasswordStore({
+  platform: process.platform,
+  environment: process.env,
+  appendSwitch: (name, value) => app.commandLine.appendSwitch(name, value),
+})
 
 const isSquirrelLifecycle = handleSquirrelLifecycle({
   platform: process.platform,

@@ -30,6 +30,13 @@ import { parse as parseDotEnv } from 'dotenv'
 const USER_SERVICE_NAME = 'geo-agent-platform-supervisor.service'
 const SYSTEM_RUNTIME_MANIFEST = '/etc/geo-agent-platform/runtime-manifest.v1.json'
 const SUPERVISOR_READY_TIMEOUT_MS = 30_000
+const DESKTOP_EARLY_EXIT_WINDOW_MS = 1_500
+const DESKTOP_MANIFEST_CONTROLLED_ENVIRONMENT = [
+  'GEO_AGENT_PLATFORM_ROOT',
+  'RUNTIME_ROOT',
+  'APP_BASE_URL',
+  'GEO_AGENT_PLATFORM_SUPERVISOR_TOKEN_FILE',
+] as const
 
 export type InstalledCliCommand =
   | { kind: 'agent'; arguments: string[] }
@@ -48,7 +55,7 @@ export interface InstalledCliDependencies {
   stdout: Pick<NodeJS.WriteStream, 'write'>
   stderr: Pick<NodeJS.WriteStream, 'write'>
   runChild: (executable: string, arguments_: readonly string[], environment: NodeJS.ProcessEnv) => Promise<number>
-  launchDesktop: () => Promise<void>
+  launchDesktop: (environment: NodeJS.ProcessEnv) => Promise<void>
   now: () => number
   delay: (milliseconds: number) => Promise<void>
 }
@@ -76,7 +83,13 @@ export async function runInstalledCli(
     return 0
   }
   if (command.kind === 'desktop') {
-    await dependencies.launchDesktop()
+    assertGraphicalDesktopSession(dependencies.environment)
+    await launchInstalledDesktop({
+      ensureBackend: () => ensureInstalledBackend(dependencies),
+      launchDesktop: () => dependencies.launchDesktop(
+        createDesktopLaunchEnvironment(dependencies.environment),
+      ),
+    })
     return 0
   }
 
@@ -159,13 +172,71 @@ export function installedCliHelpText(): string {
     '  geo-agent-platform start                   部署并启动本机后端',
     '  geo-agent-platform status                  查看后端状态',
     '  geo-agent-platform logs [服务]             查看后端日志',
-    '  geo-agent-platform desktop                 打开桌面工作台',
+    '  geo-agent-platform desktop                 启动后端并打开桌面工作台',
     '  geo-agent-platform --version               显示版本',
     '',
     '首次运行会自动创建当前用户的 PostgreSQL、Worker、API 配置并启动 systemd 用户服务。',
     '无需 Docker，也无需进入源码目录。',
     '',
   ].join('\n')
+}
+
+export async function launchInstalledDesktop(input: {
+  ensureBackend: () => Promise<void>
+  launchDesktop: () => Promise<void>
+}): Promise<void> {
+  await input.ensureBackend()
+  await input.launchDesktop()
+}
+
+export function assertGraphicalDesktopSession(
+  environment: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (platform !== 'linux') return
+  if (!environment.DISPLAY?.trim() && !environment.WAYLAND_DISPLAY?.trim()) {
+    throw new Error('当前终端未连接图形会话；请从桌面终端运行，或从应用菜单打开工作台。')
+  }
+  if (!environment.DBUS_SESSION_BUS_ADDRESS?.trim() && !environment.XDG_RUNTIME_DIR?.trim()) {
+    throw new Error('当前终端缺少用户会话总线；请在已登录的桌面会话中运行。')
+  }
+}
+
+/**
+ * 安装版桌面以受保护的 runtime manifest 为唯一运行时事实源。
+ * CLI 会为后端加载 runtime.env，但这些值不能继承到 Electron，
+ * 否则会被误判为用户尝试绕过 manifest 覆盖生产配置。
+ */
+export function createDesktopLaunchEnvironment(
+  environment: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const desktopEnvironment = { ...environment }
+  for (const name of DESKTOP_MANIFEST_CONTROLLED_ENVIRONMENT) {
+    delete desktopEnvironment[name]
+  }
+  return desktopEnvironment
+}
+
+async function ensureInstalledBackend(dependencies: InstalledCliDependencies): Promise<void> {
+  // 后端运行时环境只在这条启动链内有效；不污染随后启动的桌面进程。
+  const backendDependencies: InstalledCliDependencies = {
+    ...dependencies,
+    environment: { ...dependencies.environment },
+  }
+  const environmentFile = await prepareInstalledRuntime(backendDependencies)
+  Object.assign(
+    backendDependencies.environment,
+    parseDotEnv(await readFile(environmentFile, 'utf8')),
+  )
+  backendDependencies.environment.NODE_ENV = 'production'
+  backendDependencies.environment.GEO_AGENT_PLATFORM_ROOT = dependencies.runtimeRoot
+
+  const supervisor = await connectSupervisor(backendDependencies)
+  try {
+    await startApi(supervisor)
+  } finally {
+    supervisor.close()
+  }
 }
 
 async function prepareInstalledRuntime(dependencies: InstalledCliDependencies): Promise<string> {
@@ -252,15 +323,31 @@ function productionDependencies(): InstalledCliDependencies {
         else resolve(code ?? 1)
       })
     }),
-    launchDesktop: () => new Promise<void>((resolve, reject) => {
+    launchDesktop: environment => new Promise<void>((resolve, reject) => {
       const child = spawn('/usr/bin/geo-agent-platform-desktop', [], {
         detached: true,
+        env: environment,
         stdio: 'ignore',
       })
-      child.once('error', reject)
+      let settled = false
+      child.once('error', error => {
+        if (settled) return
+        settled = true
+        reject(error)
+      })
+      child.once('exit', (code, signal) => {
+        if (settled) return
+        settled = true
+        const outcome = signal ? `信号 ${signal}` : `退出码 ${code ?? 1}`
+        reject(new Error(`桌面进程启动后立即终止（${outcome}）。`))
+      })
       child.once('spawn', () => {
-        child.unref()
-        resolve()
+        setTimeout(() => {
+          if (settled) return
+          settled = true
+          child.unref()
+          resolve()
+        }, DESKTOP_EARLY_EXIT_WINDOW_MS)
       })
     }),
     now: Date.now,
