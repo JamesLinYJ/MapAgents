@@ -254,6 +254,18 @@ describe('desktop visual system guards', () => {
     expect(unreachable).toEqual([])
   })
 
+  it('keeps fullscreen chrome on one viewport grid', async () => {
+    const desktopSource = await readRendererFile('app/styles/desktop.css')
+    const titlebarRule = desktopSource.match(/\.gf-titlebar-region \.workbench-chrome\s*\{(?<body>[^}]+)\}/u)?.groups?.body ?? ''
+
+    expect(titlebarRule).toContain('width: 100%')
+    expect(titlebarRule).toContain('max-width: none')
+    expect(titlebarRule).toContain('margin: 0')
+    expect(titlebarRule).toContain('var(--gf-shell-inline-gutter)')
+    expect(desktopSource).toContain('.gf-panel-separator::before')
+    expect(desktopSource).toContain('cursor: col-resize')
+  })
+
   it('keeps shared overlays on the same surface contract', async () => {
     const [dialogSource, popoverSource] = await Promise.all([
       readRendererFile('shared/components/GlassDialog.tsx'),

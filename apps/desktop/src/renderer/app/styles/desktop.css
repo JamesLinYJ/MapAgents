@@ -604,6 +604,8 @@ select {
 }
 
 .gf-desktop-shell {
+  --gf-shell-inline-gutter: 8px;
+  --gf-window-controls-reserve: 142px;
   display: grid;
   grid-template-rows: 34px 86px minmax(0, 1fr) 25px;
   width: 100%;
@@ -631,9 +633,12 @@ select {
   box-sizing: border-box;
   grid-template-columns: minmax(0, 1fr) minmax(230px, 300px) minmax(0, 1fr);
   column-gap: 12px;
+  width: 100%;
+  max-width: none;
   height: 34px;
   min-height: 34px;
-  padding: 0 142px 0 8px;
+  margin: 0;
+  padding: 0 var(--gf-window-controls-reserve) 0 var(--gf-shell-inline-gutter);
   border: 0;
   border-bottom: 1px solid #dce3e6;
   border-radius: 0;
@@ -779,7 +784,7 @@ select {
   display: flex;
   align-items: end;
   gap: 1px;
-  padding: 0 10px;
+  padding: 0 var(--gf-shell-inline-gutter);
   border-bottom: 1px solid #dde4e7;
 }
 
@@ -820,7 +825,7 @@ select {
   min-width: 0;
   height: 55px;
   box-sizing: border-box;
-  padding: 3px 8px 2px;
+  padding: 3px var(--gf-shell-inline-gutter) 2px;
   overflow: hidden;
 }
 
@@ -943,8 +948,25 @@ select {
   position: relative;
   z-index: 15;
   width: 4px;
+  cursor: col-resize;
+  touch-action: none;
   background: #dce4e7;
   transition: background-color 120ms ease;
+}
+
+.gf-panel-separator::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 2px;
+  height: 38px;
+  border-radius: 999px;
+  content: "";
+  pointer-events: none;
+  background: #76909a;
+  opacity: 0.22;
+  transform: translate(-50%, -50%);
+  transition: height 120ms ease, opacity 120ms ease;
 }
 
 .gf-panel-separator::after {
@@ -956,6 +978,13 @@ select {
 .gf-panel-separator:hover,
 .gf-panel-separator[data-separator="active"] {
   background: var(--gf-focus);
+}
+
+.gf-panel-separator:hover::before,
+.gf-panel-separator[data-separator="active"]::before {
+  height: 54px;
+  background: #fff;
+  opacity: 0.9;
 }
 
 .gf-dock,
@@ -1748,7 +1777,7 @@ select {
   min-width: 0;
   align-items: center;
   gap: 0;
-  padding: 0 7px;
+  padding: 0 var(--gf-shell-inline-gutter);
   color: #53666e;
   border-top: 1px solid var(--gf-border-strong);
   background: #f4f7f8;
