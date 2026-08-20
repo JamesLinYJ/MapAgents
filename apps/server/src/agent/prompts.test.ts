@@ -98,6 +98,14 @@ describe('system prompt', () => {
     expect(prompt).toContain('复核当地官方预警')
   })
 
+  it('treats Hangzhou boundaries as an on-demand layer instead of default context', () => {
+    const prompt = buildSystemPrompt(defaultRuntimeConfig(), null, '', '', '')
+
+    expect(prompt).toContain('不得“以防万一”预加载任何行政边界')
+    expect(prompt).toContain('系统内置的杭州行政区划只是按需可选事实源')
+    expect(prompt).toContain('通用短临问答按气象序列自身覆盖范围分析')
+  })
+
   it('matches structured-workflow instructions to the dynamically visible tool set', () => {
     const state = agentStateSchema.parse({
       sessionId: 'session_1',

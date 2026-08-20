@@ -1522,9 +1522,10 @@ describe('platform architecture', () => {
     await expect(stat(dedicatedRunner)).rejects.toMatchObject({ code: 'ENOENT' })
     expect(runtimeSource).not.toContain('shouldRunDeterministicNowcast')
     expect(runtimeSource).not.toContain('runDeterministicNowcast')
-    expect(automation.revision).toBe(7)
+    expect(automation.revision).toBe(8)
     expect(automation.defaultParameters.horizonMinutes).toBe(180)
-    expect(automation.defaultParameters.regionLayerKey).toBe('hangzhou_districts')
+    expect(automation.defaultParameters).not.toHaveProperty('regionLayerKey')
+    expect(automation.requiredTools).not.toContain('query_layer')
     expect(automation.agentInvocation.enabled).toBe(true)
     expect(automation.agentInvocation.requirements).toEqual([{
       resource: 'meteorological_files',
@@ -1537,13 +1538,8 @@ describe('platform architecture', () => {
     const files = automation.graph.nodes.find(node => node.nodeId === 'list_files')
     if (!files || files.type !== 'tool') throw new Error('短临 Automation 缺少气象文件目录节点')
     expect(files.config.arguments.scope).toEqual({ source: 'literal', value: 'thread' })
-    const scope = automation.graph.nodes.find(node => node.nodeId === 'query_scope')
-    expect(scope?.type === 'tool' && scope.config.toolName === 'query_layer').toBe(true)
-    if (!scope || scope.type !== 'tool') throw new Error('短临 Automation 缺少完整区划查询节点')
-    expect(scope.config.arguments).toMatchObject({
-      layerKey: { source: 'input', path: 'parameters.regionLayerKey' },
-      requireComplete: { source: 'literal', value: true },
-    })
+    expect(automation.graph.nodes.some(node => node.nodeId === 'query_scope')).toBe(false)
+    expect(automation.graph.nodes.some(node => node.type === 'tool' && node.config.toolName === 'query_layer')).toBe(false)
     const sequence = automation.graph.nodes.find(node => node.nodeId === 'create_sequence')
     if (!sequence || sequence.type !== 'tool') throw new Error('短临 Automation 缺少序列创建节点')
     expect(sequence.config.arguments.horizon_minutes).toEqual({
@@ -1552,11 +1548,12 @@ describe('platform architecture', () => {
     })
     const nowcast = automation.graph.nodes.find(node => node.nodeId === 'nowcast')
     if (!nowcast || nowcast.type !== 'tool') throw new Error('短临 Automation 缺少降水分析节点')
-    expect(nowcast.config.arguments.scope_ref).toMatchObject({
-      source: 'value_ref',
-      nodeId: 'query_scope',
-      kind: 'feature_collection',
-    })
+    expect(nowcast.config.arguments).not.toHaveProperty('scope_ref')
+    expect(automation.graph.edges).toContainEqual(expect.objectContaining({
+      edgeId: 'list-create',
+      sourceNodeId: 'list_files',
+      targetNodeId: 'create_sequence',
+    }))
     const output = automation.graph.nodes.find(node => node.type === 'output')
     expect(output?.type === 'output' && Object.hasOwn(output.config.outputs, 'answer')).toBe(true)
     expect(output?.type === 'output' && Object.hasOwn(output.config.outputs, 'warnings')).toBe(true)
