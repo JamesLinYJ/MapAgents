@@ -16,6 +16,7 @@ export interface DesktopWorkspaceAccess {
   backendActionsEnabled: boolean
   canAccessAccount: boolean
   canAccessDiagnostics: boolean
+  canManageRuntimeConfiguration: boolean
   canAccessSecurity: boolean
   statusLabel: string
   unavailableReason?: string
@@ -31,6 +32,7 @@ export interface DesktopLoginVisibilityInput {
 export type ManagedDesktopStartupInput = DesktopLoginVisibilityInput
 
 interface DesktopWorkspaceAccessInput {
+  authMode?: 'interactive' | 'local_auto' | 'unknown'
   authStatus: AuthStatus
   backendAvailability: DesktopBackendAvailability
   backendError?: string | null
@@ -50,11 +52,13 @@ export function deriveDesktopWorkspaceAccess(
   const backendActionsEnabled = unavailableReason === undefined
   const platformAdmin = backendActionsEnabled
     && Boolean(input.platformRoles?.includes('platform_admin'))
+  const managedLocalConfiguration = backendActionsEnabled && input.authMode === 'local_auto'
 
   return {
     backendActionsEnabled,
     canAccessAccount: backendActionsEnabled,
     canAccessDiagnostics: platformAdmin,
+    canManageRuntimeConfiguration: platformAdmin || managedLocalConfiguration,
     canAccessSecurity: platformAdmin,
     statusLabel: backendActionsEnabled ? '工作台就绪' : statusLabelFor(input),
     ...(unavailableReason ? { unavailableReason } : {}),

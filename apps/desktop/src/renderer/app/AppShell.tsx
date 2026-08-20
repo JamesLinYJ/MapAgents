@@ -437,6 +437,7 @@ function AppShell() {
   const backendAvailability = useBackendAvailabilityStore(state => state.availability)
   const backendError = useBackendAvailabilityStore(state => state.errorMessage)
   const workspaceAccess = useMemo(() => deriveDesktopWorkspaceAccess({
+    authMode,
     authStatus,
     backendAvailability,
     backendError,
@@ -445,6 +446,7 @@ function AppShell() {
     platformRoles: authMe?.platformRoles,
   }), [
     authMe,
+    authMode,
     authStatus,
     backendAvailability,
     backendError,
@@ -730,7 +732,7 @@ function AppShell() {
                 onProviderChange={handleProviderChange}
                 onModelChange={setModel}
                 onOpenAccount={() => setActiveDesktopDocument('account')}
-                canManageProviders={workspaceAccess.canAccessSecurity}
+                canManageProviders={workspaceAccess.canManageRuntimeConfiguration}
                 onProviderCatalogChanged={applyProviders}
               />
             )}
@@ -816,6 +818,7 @@ function AppShell() {
                     isAutomationSubmitting,
                     isToolCatalogSubmitting,
                     isRuntimeConfigSubmitting,
+                    canManageRuntimeConfiguration: workspaceAccess.canManageRuntimeConfiguration,
                     onRunTool: (tool, args) => {
                       void handleRunTool(tool, args)
                     },

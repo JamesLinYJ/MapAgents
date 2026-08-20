@@ -31,5 +31,8 @@ describe('local Desktop principal', () => {
   it('rejects an undersized local root secret', () => {
     expect(() => deriveLocalDesktopCredential('too-short')).toThrow('本机根密钥长度不足')
   })
-})
 
+  it('does not grant local Desktop identity semantics to another local-domain address', () => {
+    expect(isLocalDesktopEmail('other@local-desktop.geo-agent-platform.invalid')).toBe(false)
+  })
+})

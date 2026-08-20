@@ -49,12 +49,12 @@ export class AuthorizationService {
     object: RbacObject,
     action: RbacAction,
     scope: AuthorizationScope = {},
+    metadata: Record<string, unknown> = {},
   ): Promise<void> {
     const allowed = await this.can(auth, object, action, scope)
-    await this.audit(auth, object, action, scope, allowed ? 'allowed' : 'denied')
+    await this.audit(auth, object, action, scope, allowed ? 'allowed' : 'denied', metadata)
     if (!allowed) {
-      const resource = scope.resourceId ? ` '${scope.resourceId}'` : ''
-      throw new AuthorizationError(`无权限对 ${object}${resource} 执行 ${action}。`)
+      throw new AuthorizationError(formatAuthorizationDeniedMessage(object, action, scope.resourceId))
     }
   }
 
@@ -141,4 +141,46 @@ export class AuthorizationService {
 export function actionMatch(requestAction: unknown, policyAction: unknown): boolean {
   if (typeof requestAction !== 'string' || typeof policyAction !== 'string') return false
   return policyAction === '*' || policyAction.split('|').map(item => item.trim()).includes(requestAction)
+}
+
+export function formatAuthorizationDeniedMessage(
+  object: RbacObject,
+  action: RbacAction,
+  resourceId?: string | null,
+): string {
+  if (object === 'admin' && action === 'admin') {
+    return '当前身份没有执行平台管理操作的权限。'
+  }
+  const objectLabel = RBAC_OBJECT_LABELS[object]
+  const actionLabel = RBAC_ACTION_LABELS[action]
+  const resource = resourceId ? `“${resourceId}”` : ''
+  return `当前身份没有${actionLabel}${resource}${objectLabel}的权限。`
+}
+
+const RBAC_OBJECT_LABELS: Record<RbacObject, string> = {
+  workspace: '工作区',
+  session: '会话',
+  thread: '对话',
+  run: '运行',
+  artifact: '结果文件',
+  dataset: '数据集',
+  layer: '图层',
+  tool: '工具',
+  runtime_config: '运行配置',
+  memory: '记忆',
+  speech: '语音服务',
+  automation: '自动化',
+  scheduled_task: '定时任务',
+  admin: '平台管理',
+  system: '系统',
+}
+
+const RBAC_ACTION_LABELS: Record<RbacAction, string> = {
+  read: '查看',
+  create: '创建',
+  update: '修改',
+  delete: '删除',
+  execute: '执行',
+  approve: '审批',
+  admin: '管理',
 }

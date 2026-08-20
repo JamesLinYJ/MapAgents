@@ -35,7 +35,17 @@ import {
 const execFileAsync = promisify(execFile)
 const USER_SERVICE_NAME = 'geo-agent-platform-supervisor.service'
 const RUNTIME_SERVICE_KIND = 'geo-agent-runtime-service'
-const TOOL_PROVIDERS = [
+const PACKAGED_TOOL_PROVIDERS = [
+  'geo-platform-chart',
+  'geo-platform-geocode',
+  'geo-platform-plan',
+  'geo-platform-spatial',
+  'geo-platform-meteorology',
+  'geo-platform-public-weather',
+  'geo-platform-memory',
+  'geo-platform-scheduled-wake-up',
+].join(',')
+const LEGACY_PACKAGED_TOOL_PROVIDERS = [
   'geo-platform-chart',
   'geo-platform-geocode',
   'geo-platform-plan',
@@ -271,7 +281,7 @@ async function buildRuntimeEnvironment(input: {
     TRUSTED_ORIGINS: `${PLATFORM_DESKTOP_APP_ORIGIN},${PLATFORM_DESKTOP_AUTH_CALLBACK_URL}`,
     BETTER_AUTH_SECRET: previous?.get('BETTER_AUTH_SECRET') ?? randomSecret(),
     WORKER_SHARED_SECRET: previous?.get('WORKER_SHARED_SECRET') ?? randomSecret(),
-    ENABLED_TOOL_PROVIDERS: previous?.get('ENABLED_TOOL_PROVIDERS') ?? TOOL_PROVIDERS,
+    ENABLED_TOOL_PROVIDERS: resolvePackagedToolProviders(previous),
     LOG_LEVEL: previous?.get('LOG_LEVEL') ?? 'info',
   }
   for (const [name, value] of Object.entries(assignments)) values.set(name, value)
@@ -281,6 +291,17 @@ async function buildRuntimeEnvironment(input: {
     }
   }
   return values
+}
+
+export function resolvePackagedToolProviders(previous?: ReadonlyMap<string, string> | null): string {
+  const configured = previous?.get('ENABLED_TOOL_PROVIDERS')
+  if (!configured) return PACKAGED_TOOL_PROVIDERS
+  // 旧版安装器默认启用了依赖 Azure 凭据的媒体 Provider，导致每次正常启动
+  // 都产生一条误导性降级警告。只迁移精确的旧默认值；用户自定义列表不改写。
+  if (configured === LEGACY_PACKAGED_TOOL_PROVIDERS && !previous?.get('AZURE_SPEECH_KEY')) {
+    return PACKAGED_TOOL_PROVIDERS
+  }
+  return configured
 }
 
 async function chooseInitialPorts(

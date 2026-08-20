@@ -115,6 +115,9 @@ describe('OperationsLogBuffer', () => {
         name: 'http',
         traceId: 'trace_1',
         runId: 'run_1',
+        providerId: 'openai-compatible',
+        wsCommand: 'tool-catalog:upsert',
+        wsRequestId: 'ws_request_1',
         durationMs: 12_000,
         timeToResponseStartedMs: 11_000,
         timeToFirstTextDeltaMs: 11_800,
@@ -144,8 +147,11 @@ describe('OperationsLogBuffer', () => {
       correlation: {
         traceId: 'trace_1',
         runId: 'run_1',
+        requestId: 'ws_request_1',
       },
       attributes: {
+        provider: 'openai-compatible',
+        wsCommand: 'tool-catalog:upsert',
         durationMs: 12_000,
         timeToResponseStartedMs: 11_000,
         timeToFirstTextDeltaMs: 11_800,

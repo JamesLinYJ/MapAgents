@@ -13,7 +13,11 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { Database } from '../db/connection.js'
 import type { AuditStore } from '../store/postgres/auditStore.js'
-import { actionMatch, AuthorizationService } from './authorizationService.js'
+import {
+  actionMatch,
+  AuthorizationService,
+  formatAuthorizationDeniedMessage,
+} from './authorizationService.js'
 import type { AuthContext } from './types.js'
 
 /**
@@ -104,5 +108,21 @@ describe('AuthorizationService audit workspace boundary', () => {
       workspaceId: 'workspace_owned',
       metadata: {},
     }))
+  })
+})
+
+describe('AuthorizationService user-facing denial messages', () => {
+  it('does not expose internal admin/admin policy names', () => {
+    const message = formatAuthorizationDeniedMessage('admin', 'admin')
+
+    expect(message).toBe('当前身份没有执行平台管理操作的权限。')
+    expect(message).not.toContain('admin')
+  })
+
+  it('describes the requested resource and action in product language', () => {
+    expect(formatAuthorizationDeniedMessage('runtime_config', 'update'))
+      .toBe('当前身份没有修改运行配置的权限。')
+    expect(formatAuthorizationDeniedMessage('layer', 'delete', 'hangzhou_districts'))
+      .toBe('当前身份没有删除“hangzhou_districts”图层的权限。')
   })
 })

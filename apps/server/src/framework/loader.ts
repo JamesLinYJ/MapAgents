@@ -24,7 +24,7 @@ import { createPublicWeatherProvider } from '../tools/publicWeather/index.js'
 import { createSpatialProvider } from '../tools/spatial/index.js'
 import { createRoutingProvider } from '../tools/routing/index.js'
 import { createScheduledWakeUpProvider } from '../tools/scheduledWakeUp/index.js'
-import { logger } from '../observability/logger.js'
+import { errorLogPayload, logger } from '../observability/logger.js'
 import type { ScheduledTaskService } from '../automations/scheduledTaskService.js'
 
 const LEGACY_METEOROLOGY_PROVIDER_ID = ['wea', 'ther'].join('')
@@ -77,28 +77,47 @@ export async function discoverAndLoad(
     const provider = builtinProviders.get(providerId)
     if (!provider) {
       registry.markUnavailable(providerId, 'Provider 不在显式内置目录中')
-      logger.warn({ providerId }, 'provider not found in built-in directory')
+      logger.warn({
+        event: 'tool.provider.unavailable',
+        category: 'tool',
+        retention: 'operational',
+        provider: providerId,
+        failureCode: 'provider_not_found',
+      }, '已启用的工具 Provider 不在内置目录中。')
       continue
     }
     const missing = requiredDependencies(provider).filter(key => !config[key])
     if (missing.length) {
       const reason = `缺少依赖：${missing.join(', ')}`
       registry.markUnavailable(providerId, reason)
-      logger.warn({ providerId, reason }, 'provider unavailable')
+      logger.warn({
+        event: 'tool.provider.unavailable',
+        category: 'tool',
+        retention: 'operational',
+        provider: providerId,
+        failureCode: 'missing_required_dependency',
+      }, '已启用的工具 Provider 缺少必需配置。')
       continue
     }
     try {
       const ctx: InstallContext = {
         config,
         state: new Map(),
-        log: (level, message) => logger[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info']({ providerId }, message),
+        log: (level, message) => logger[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info']({ provider: providerId }, message),
       }
       await provider.onInstall?.(ctx)
       registry.register(provider)
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
       registry.markUnavailable(providerId, reason)
-      logger.warn({ providerId, reason }, 'provider unavailable')
+      logger.warn({
+        event: 'tool.provider.unavailable',
+        category: 'tool',
+        retention: 'operational',
+        provider: providerId,
+        failureCode: 'provider_install_failed',
+        error: errorLogPayload(error),
+      }, '工具 Provider 初始化失败。')
     }
   }
 

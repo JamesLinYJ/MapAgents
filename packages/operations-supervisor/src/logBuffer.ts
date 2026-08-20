@@ -40,6 +40,7 @@ const STRUCTURED_ATTRIBUTE_KEYS = new Set([
   'model',
   'modelProvider',
   'modelName',
+  'wsCommand',
   'purpose',
   'attempt',
   'failureSource',
@@ -59,6 +60,7 @@ const STRUCTURED_ATTRIBUTE_ALIASES = [
   ['durationMs', 'duration_ms'],
   ['statusCode', 'status_code'],
   ['failureCode', 'failure_code'],
+  ['provider', 'providerId'],
 ] as const
 
 export class OperationsLogBuffer {
@@ -553,6 +555,10 @@ function projectCorrelation(
   for (const [target, camel, snake] of aliases) {
     const value = record[camel] ?? record[snake]
     if (typeof value === 'string' && value.trim()) correlation[target] = sanitize(value.trim()).slice(0, 160)
+  }
+  const wsRequestId = record.wsRequestId
+  if (!correlation.requestId && typeof wsRequestId === 'string' && wsRequestId.trim()) {
+    correlation.requestId = sanitize(wsRequestId.trim()).slice(0, 160)
   }
   return correlation
 }

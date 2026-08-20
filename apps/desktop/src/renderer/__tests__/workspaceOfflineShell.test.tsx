@@ -43,6 +43,7 @@ describe('offline desktop workspace', () => {
       backendActionsEnabled: false,
       canAccessAccount: false,
       canAccessDiagnostics: false,
+      canManageRuntimeConfiguration: false,
       canAccessSecurity: false,
       statusLabel: '离线工作台',
       unavailableReason: offlineReason,
@@ -110,6 +111,7 @@ describe('offline desktop workspace', () => {
   it('only exposes sensitive documents after an online verified platform-admin projection', () => {
     const access = deriveDesktopWorkspaceAccess({
       authStatus: 'authenticated',
+      authMode: 'interactive',
       backendAvailability: 'online',
       hasAuthenticatedIdentity: true,
       platformRoles: ['platform_admin'],
@@ -118,8 +120,24 @@ describe('offline desktop workspace', () => {
     expect(access.backendActionsEnabled).toBe(true)
     expect(access.canAccessAccount).toBe(true)
     expect(access.canAccessDiagnostics).toBe(true)
+    expect(access.canManageRuntimeConfiguration).toBe(true)
     expect(access.canAccessSecurity).toBe(true)
     expect(access.unavailableReason).toBeUndefined()
+  })
+
+  it('grants a verified local managed desktop only the narrow runtime configuration capability', () => {
+    const access = deriveDesktopWorkspaceAccess({
+      authMode: 'local_auto',
+      authStatus: 'authenticated',
+      backendAvailability: 'online',
+      hasAuthenticatedIdentity: true,
+      platformRoles: ['analyst'],
+    })
+
+    expect(access.backendActionsEnabled).toBe(true)
+    expect(access.canManageRuntimeConfiguration).toBe(true)
+    expect(access.canAccessDiagnostics).toBe(false)
+    expect(access.canAccessSecurity).toBe(false)
   })
 
   it('hides login in local auto-auth and offline modes but preserves the online interactive entry', () => {

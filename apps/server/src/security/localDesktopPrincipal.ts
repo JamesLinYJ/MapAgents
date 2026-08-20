@@ -34,7 +34,7 @@ export function deriveLocalDesktopCredential(rootSecret: string): LocalDesktopCr
 }
 
 export function isLocalDesktopEmail(email: string): boolean {
-  return email.trim().toLowerCase().endsWith(`@${LOCAL_DESKTOP_EMAIL_DOMAIN}`)
+  return email.trim().toLowerCase() === LOCAL_DESKTOP_EMAIL
 }
 
 function derive(rootSecret: string, purpose: string): string {
@@ -42,4 +42,3 @@ function derive(rootSecret: string, purpose: string): string {
     .update(`geo-agent-platform-local-desktop:${purpose}:v1`)
     .digest('base64url')
 }
-

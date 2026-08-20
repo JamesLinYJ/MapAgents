@@ -145,7 +145,27 @@ export function createWsHandler(server: Server, dependencies: WsDependencies) {
               const code = error instanceof StoreNotFoundError ? 'not_found'
                 : error instanceof AuthorizationError ? 'forbidden'
                 : 'command_failed'
-              logger.warn({ error: errorLogPayload(error), code }, 'ws command failed')
+              const failureContext = {
+                error: errorLogPayload(error),
+                failureCode: code,
+                wsCommand: msg.type,
+                wsRequestId: msg.id,
+              }
+              if (error instanceof AuthorizationError) {
+                logger.info({
+                  ...failureContext,
+                  event: 'security.authorization.denied',
+                  category: 'security',
+                  retention: 'operational',
+                }, 'WebSocket 命令被权限策略拒绝。')
+              } else {
+                logger.warn({
+                  ...failureContext,
+                  event: 'request.ws.failed',
+                  category: 'request',
+                  retention: 'operational',
+                }, 'WebSocket 命令执行失败。')
+              }
               deliverResponse(failure(msg.id, code, formatError(error)))
               wsMessagesTotal.inc({ type: msg.type, direction: 'outbound' })
             }

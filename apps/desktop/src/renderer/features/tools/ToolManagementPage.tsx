@@ -105,6 +105,7 @@ export interface ToolManagementPageProps {
   isToolCatalogSubmitting?: boolean
   isRuntimeConfigSubmitting?: boolean
   isSkillSearching?: boolean
+  canManageRuntimeConfiguration?: boolean
   onRunTool: (tool: ToolDescriptor, args: Record<string, unknown>) => void
   onUpsertToolCatalogEntry: (tool: ToolDescriptor, payload: Record<string, unknown>, sortOrder?: number) => void
   onDeleteToolCatalogEntry: (tool: ToolDescriptor) => void
@@ -156,6 +157,7 @@ export function ToolManagementPage({
   isToolCatalogSubmitting,
   isRuntimeConfigSubmitting,
   isSkillSearching,
+  canManageRuntimeConfiguration = false,
   onRunTool,
   onUpsertToolCatalogEntry,
   onDeleteToolCatalogEntry,
@@ -443,14 +445,20 @@ export function ToolManagementPage({
                 />
               </div>
               <div className="panel__section">
-                <StatefulToolCatalogEditor
-                  key={`${selectedTool.toolKind}:${selectedTool.name}:${selectedToolCatalogEntry?.sortOrder ?? 'new'}`}
-                  tool={selectedTool}
-                  entry={selectedToolCatalogEntry}
-                  isSubmitting={Boolean(isToolCatalogSubmitting)}
-                  onSave={onUpsertToolCatalogEntry}
-                  onDelete={onDeleteToolCatalogEntry}
-                />
+                {canManageRuntimeConfiguration ? (
+                  <StatefulToolCatalogEditor
+                    key={`${selectedTool.toolKind}:${selectedTool.name}:${selectedToolCatalogEntry?.sortOrder ?? 'new'}`}
+                    tool={selectedTool}
+                    entry={selectedToolCatalogEntry}
+                    isSubmitting={Boolean(isToolCatalogSubmitting)}
+                    onSave={onUpsertToolCatalogEntry}
+                    onDelete={onDeleteToolCatalogEntry}
+                  />
+                ) : (
+                  <p className="panel__muted">
+                    当前身份可以查看目录配置；修改配置需要平台管理员或本机托管工作台权限。
+                  </p>
+                )}
                 <p className="panel__muted">
                   Override 只改变目录展示、排序和管理元数据；工具的 handler、schema 和审批边界仍来自 in-repo Provider。
                 </p>
@@ -511,7 +519,9 @@ export function ToolManagementPage({
           isSaving={isRuntimeConfigSubmitting}
           isSkillSearching={isSkillSearching}
           onRefreshMemories={onRefreshMemories}
-          onSaveRuntimeConfig={onSaveRuntimeConfig}
+          {...(canManageRuntimeConfiguration && onSaveRuntimeConfig
+            ? { onSaveRuntimeConfig }
+            : {})}
           onSearchSkills={onSearchSkills}
         />
       )}

@@ -16,6 +16,7 @@
 
 import { StoreNotFoundError } from '../store/storeErrors.js'
 import type { AuthContext } from '../security/types.js'
+import { isLocalDesktopEmail } from '../security/localDesktopPrincipal.js'
 import { assertDirectToolRunAllowed } from '../security/toolExecutionPolicy.js'
 import type { WsCommandContext, WsCommandRegistry } from './commandRegistry.js'
 import type { WsDependencies } from './dependencies.js'
@@ -77,15 +78,15 @@ export function registerWsAuthorizationPolicies(registry: WsCommandRegistry): vo
   set('skill:search', workspaceRead)
   set('runtime-config:get', workspaceRead)
   set('provider:list', workspaceRead)
-  set('provider:custom:list', admin)
-  set('provider:credential:stage', admin)
-  set('provider:custom:upsert', admin)
-  set('provider:custom:delete', admin)
+  set('provider:custom:list', runtimeConfigurationRead)
+  set('provider:credential:stage', runtimeConfigurationUpdate)
+  set('provider:custom:upsert', runtimeConfigurationUpdate)
+  set('provider:custom:delete', runtimeConfigurationUpdate)
   set('system:get', workspaceRead)
   set('usage:summary', workspaceRead)
-  set('tool-catalog:upsert', admin)
-  set('tool-catalog:delete', admin)
-  set('runtime-config:update', admin)
+  set('tool-catalog:upsert', runtimeConfigurationUpdate)
+  set('tool-catalog:delete', runtimeConfigurationUpdate)
+  set('runtime-config:update', runtimeConfigurationUpdate)
   set('speech:authorization', (_payload, context, auth) => context.dependencies.security.authorization.enforce(auth, 'speech', 'execute', { workspaceId: auth.defaultWorkspaceId }))
   set('memory:list', memoryRead)
   set('memory:read', memoryRead)
@@ -186,8 +187,49 @@ function runExecute(payload: Record<string, unknown>, context: WsCommandContext,
   return authorizeRun(context.dependencies, auth, requiredString(payload, 'runId'), 'execute')
 }
 
-async function admin(_payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {
-  await context.dependencies.security.authorization.enforce(auth, 'admin', 'admin', { workspaceId: auth.defaultWorkspaceId })
+function runtimeConfigurationRead(
+  _payload: Record<string, unknown>,
+  context: WsCommandContext,
+  auth: AuthContext,
+): Promise<void> {
+  return authorizeRuntimeConfiguration(context, auth, 'read')
+}
+
+function runtimeConfigurationUpdate(
+  _payload: Record<string, unknown>,
+  context: WsCommandContext,
+  auth: AuthContext,
+): Promise<void> {
+  return authorizeRuntimeConfiguration(context, auth, 'update')
+}
+
+async function authorizeRuntimeConfiguration(
+  context: WsCommandContext,
+  auth: AuthContext,
+  action: 'read' | 'update',
+): Promise<void> {
+  const scope = { workspaceId: auth.defaultWorkspaceId }
+  const metadata = { wsCommand: context.msg.type }
+  // 本机 Desktop 身份由操作系统保护的根密钥派生，只在 loopback Broker
+  // 中可用。它获得本机运行配置的窄权限，但不获得用户、成员或审计管理权。
+  if (isLocalDesktopEmail(auth.email)) {
+    await context.dependencies.security.authorization.audit(
+      auth,
+      'runtime_config',
+      action,
+      scope,
+      'allowed',
+      { ...metadata, principalType: 'local_desktop' },
+    )
+    return
+  }
+  await context.dependencies.security.authorization.enforce(
+    auth,
+    'runtime_config',
+    action,
+    scope,
+    metadata,
+  )
 }
 
 async function memoryRead(_payload: Record<string, unknown>, context: WsCommandContext, auth: AuthContext): Promise<void> {

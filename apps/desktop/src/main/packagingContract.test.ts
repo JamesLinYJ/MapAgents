@@ -50,7 +50,9 @@ describe('desktop packaging contract', () => {
     expect(desktopPackage.scripts['make:linux']).toContain('make:linux:from-runtime')
     expect(desktopPackage.scripts['make:linux:from-runtime']).toContain('run verify:runtime')
     expect(desktopPackage.scripts['make:linux:from-runtime']).toContain('--platform linux --arch x64')
-    expect(desktopPackage.scripts['make:linux:rpm']).toBe('npm run make:linux')
+    expect(desktopPackage.scripts['make:linux:rpm']).toContain('run release:runtime:linux')
+    expect(desktopPackage.scripts['make:linux:rpm']).toContain('make:linux:rpm:from-runtime')
+    expect(desktopPackage.scripts['make:linux:rpm:from-runtime']).toContain('--targets desktop-rpm')
     expect(rootPackage.scripts['test:release-pipeline']).toBe(
       'node --test scripts/release-pipeline.test.mjs',
     )
