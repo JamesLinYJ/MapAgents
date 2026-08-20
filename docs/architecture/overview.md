@@ -71,12 +71,13 @@ Provider/WS registry、Worker catalog 和 Desktop IPC command schema，用于发
 
 ### Agent
 
-1. 用户消息进入 canonical Thread/Run。
-2. `@openai/agents` Runner 是单次运行的编排状态机，RunState 是审批中断和恢复载荷。
-3. 地理智能平台 负责工作流、权限、工具注册、`valueRef`、数据库事实、审计与分层记忆。
-4. DeepSeek 使用专属 OpenAI-compatible Chat Completions Model 适配器；Provider descriptor 限定可选模型和真实能力。
-5. ToolProvider 经过 manifest/schema 一致性校验后才可注册。Python 工具契约以 Pydantic catalog 为事实源。
-6. Desktop Chat 与本机 Agent CLI 都从 `packages/conversation-presentation` 获取消息分类、工具调用配对和公开展示标识；DOM Markdown 与终端 Markdown 只是两个最终渲染目标，不得各自重建业务投影。
+1. 用户消息进入 canonical Thread/Run 和持久输入邮箱。
+2. 地理智能平台 RunEngine 拥有持久 Run/Turn/Runner segment、目标版本、审批等待、终态竞争和 child Run 生命周期。
+3. `@openai/agents` Runner 只拥有单个 segment 内的模型—工具—handoff 微循环；公开 RunState 是该 segment 的审批中断和恢复载荷。
+4. 地理智能平台 负责工作流、权限、工具注册、`valueRef`、数据库事实、审计与分层记忆；不得解析 SDK checkpoint 的内部 JSON 布局。
+5. DeepSeek 使用专属 OpenAI-compatible Chat Completions Model 适配器；Provider descriptor 限定可选模型和真实能力。
+6. ToolProvider 经过 manifest/schema 一致性校验后才可注册。Python 工具契约以 Pydantic catalog 为事实源。
+7. Desktop Chat 与本机 Agent CLI 都从 `packages/conversation-presentation` 获取消息分类、工具调用配对和公开展示标识；DOM Markdown 与终端 Markdown 只是两个最终渲染目标，不得各自重建业务投影。
 
 ### 科学计算
 

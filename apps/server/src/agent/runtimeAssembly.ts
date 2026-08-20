@@ -47,7 +47,11 @@ import {
   compactThreadIfNeeded,
 } from './contextManager.js'
 import { createAgentsTools, type AgentsExecutionContext } from './agentsToolBridge.js'
-import { agentsSdkVersion, runtimeConfigDigest } from './agentsRuntimeMetadata.js'
+import {
+  agentsSdkVersion,
+  assertAgentsSdkVersionSupported,
+  runtimeConfigDigest,
+} from './agentsRuntimeMetadata.js'
 import { FileAgentsSession } from './fileAgentsSession.js'
 import { createHandoffAgents } from './handoffAgentFactory.js'
 import { buildPlanningCapabilityCatalog, buildSystemPrompt } from './prompts.js'
@@ -142,6 +146,8 @@ export class RuntimeAssemblyFactory {
     }
     const selectedModel = options.modelName ?? adapter.defaultModel
     if (!selectedModel) throw new Error(`模型 provider '${adapter.provider}' 未配置模型名称`)
+    const sdkVersion = await agentsSdkVersion()
+    assertAgentsSdkVersionSupported(sdkVersion)
     const modelCapabilities = resolveAdapterModelCapabilities(adapter, selectedModel)
     assertAgentRuntimeCapabilities(adapter, modelCapabilities, options.runtimeConfig)
     const model = protectModelTransportFromRunInputMarkers(adapter.createAgentModel(selectedModel))
@@ -688,7 +694,7 @@ export class RuntimeAssemblyFactory {
       sdkIntegration,
       modelInput,
       configDigest: runtimeConfigDigest(options.runtimeConfig),
-      sdkVersion: await agentsSdkVersion(),
+      sdkVersion,
       threadId,
       turnId,
       subAgentToolNames: new Set(subAgentConfigs

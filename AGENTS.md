@@ -480,8 +480,10 @@ WS 控制面必须使用命令注册表，而不是单个 `handleMessage()` 大�
 
 ### 6.1 核心原则
 
-- OpenAI Agents SDK `Runner` 是单次 run 内唯一的 Agent 编排状态机。不得在平台层复制 turn loop、handoff loop、工具并发调度或创建并行 Runner
-- SDK `RunState` 是唯一恢复载荷；`AgentState` 只保存平台工作流、审批、UI 和审计投影，不能反向驱动一套重复的 Agent 状态机
+- 地理智能平台 `RunEngine` 是持久 Run、Turn、Runner segment、输入邮箱、终态竞争和 child Run 生命周期的唯一控制面；这些领域事实写入 PostgreSQL，不从 SDK Session 或 UI 反推
+- OpenAI Agents SDK `Runner` 是单个 Runner segment 内唯一的模型、工具、handoff 与 Agent-as-tool 微循环。平台不得复制原始 Responses/function-call loop
+- 同一 Run 任一时刻最多有一个活动 Runner segment；不同持久 child Run 只能在根控制面的深度、并发和预算限制内并行
+- SDK `RunState` 只保存单个 Runner segment 的公开恢复载荷；`AgentState`/后续 reducer snapshot 保存平台工作流、审批、UI 和审计状态，不得解析 SDK checkpoint 的内部 JSON 布局
 - PostgreSQL Transcript Entry、Conversation Item、Run Event、Run Input、Workflow、Approval 与 Tool Value 是运行历史事实；内存索引和前端状态都是可重建投影
 - 内容寻址存储中的 SDK checkpoint 只保存恢复载荷；checkpoint 的 run 归属、schema 版本、SDK 版本、运行配置摘要和状态必须由 PostgreSQL 记录约束
 - 运行时入口是 facade。SDK 装配、SDK 执行、上下文预算和平台投影必须保持独立职责，调用方不得穿透这些边界
@@ -529,7 +531,8 @@ WS 控制面必须使用命令注册表，而不是单个 `handleMessage()` 大�
 
 ### 6.6 多智能体与工具并发
 
-- 返回主智能体的子智能体使用 SDK `Agent.asTool()`，转交所有权使用 SDK `handoff()`；不得增加自定义 batch 工具、手动并行 Runner 或第二套工具调度队列
+- 短小且同步返回父智能体的任务使用 SDK `Agent.asTool()`，同一 Run 内的对话所有权转移使用 SDK `handoff()`；需要独立追问、取消、恢复、预算或并行的长任务使用持久 child Run
+- 同一 Run 禁止并行启动多个 Runner；不同 child Run 的 Runner 由根控制面统一限额，父子通信必须经过持久消息与输入邮箱，不共享可变 RunState
 - 无副作用、非破坏、免审批的只读工具默认进入共享并发通道；确有线程不安全实现时用 `parallelSafe=false` 显式退出。写工具、审批工具和无法证明只读的能力进入独占通道
 - 写工具、审批工具、MCP 工具和不能证明安全的子智能体始终独占执行；安全声明不是对权限、审批和审计的豁免
 - 并发数量由 SDK Runner 的工具并发上限约束；地理智能平台 执行闸门只实施业务安全约束，不负责重新调度模型返回的调用
