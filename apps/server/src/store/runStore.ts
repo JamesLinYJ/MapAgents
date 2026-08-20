@@ -27,7 +27,10 @@ import type {
   RunSummary,
   ToolValueRef,
 } from '../schemas/types.js'
-import { AGENTS_SDK_STATE_SCHEMA_VERSION } from '../schemas/types.js'
+import {
+  AGENTS_SDK_STATE_SCHEMA_VERSION,
+  agentStateSchema,
+} from '../schemas/types.js'
 import {
   isConversationItemWrite,
   type AppendConversationItemBody,
@@ -161,13 +164,13 @@ export class RunStore {
         ...run,
         status,
         updatedAt,
-        state: {
+        state: agentStateSchema.parse({
           ...run.state,
           warnings: run.state.warnings.includes(reason)
             ? run.state.warnings
             : [...run.state.warnings, reason],
           runLifecycle: { status, reason, updatedAt },
-        },
+        }),
       }
       await this.repository.saveRunWithCheckpoint(next, {
         pendingToolCallIds: checkpoint.pendingToolCallIds,
@@ -209,7 +212,7 @@ export class RunStore {
       updatedAt: now,
       conversationPath: opts?.threadId ? `conversations/sessions/${sessionId}/threads/${opts.threadId}/runs` : null,
       runtimeConfigSnapshot: opts?.runtimeConfigSnapshot ?? null,
-      state: {
+      state: agentStateSchema.parse({
         sessionId,
         threadId: opts?.threadId ?? null,
         userQuery: query,
@@ -264,7 +267,7 @@ export class RunStore {
         } : null,
         failedStepId: null,
         failedTool: null,
-      },
+      }),
     }
     const persisted = await this.repository.createRunLifecycle(run)
     this.payloadStore.registerRun(persisted.run)
@@ -290,7 +293,11 @@ export class RunStore {
     await this.serializeStateMutation(runId, async () => {
       const run = this.get(runId)
       const updates = mutation(run.state)
-      const next = { ...run, state: { ...run.state, ...updates }, updatedAt: nowUtc() }
+      const next = {
+        ...run,
+        state: agentStateSchema.parse({ ...run.state, ...updates }),
+        updatedAt: nowUtc(),
+      }
       committed = await this.repository.commitToolResult(next, resultId, values, artifacts)
       if (!committed) return
       this.index.setRun(next)
@@ -309,7 +316,11 @@ export class RunStore {
     return this.serializeStateMutation(runId, async () => {
       const run = this.get(runId)
       const updates = mutation(run.state)
-      const next = { ...run, state: { ...run.state, ...updates }, updatedAt: nowUtc() }
+      const next = {
+        ...run,
+        state: agentStateSchema.parse({ ...run.state, ...updates }),
+        updatedAt: nowUtc(),
+      }
       await this.repository.saveRun(next)
       this.index.setRun(next)
       this.events.runBus.publish(runId, structuredClone(next))

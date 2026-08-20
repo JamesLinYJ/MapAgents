@@ -15,15 +15,31 @@ import { platformEventOutbox, platformRuns, platformToolResultCommits } from '..
 import type { AnalysisRun, ArtifactRef, ToolValueRef } from '../../schemas/types.js'
 import { currentLogContext } from '../../observability/logger.js'
 import { makeId } from '../../utils/ids.js'
-import { toRunInsertValues, toRunUpdateValues } from './conversationRowMappers.js'
+import type { RunMutationQueue } from '../runMutationQueue.js'
+import {
+  assertRunDomainCheckpointProjection,
+  assertRunDomainProjection,
+  buildRunTransitionEvents,
+  toRunDomainCheckpoint,
+} from '../runDomainProjection.js'
+import {
+  mapAnalysisRunRow,
+  toRunInsertValues,
+  toRunUpdateValues,
+} from './conversationRowMappers.js'
 import { ArtifactPublicationRepository } from './artifactPublicationRepository.js'
 import { RunRecordAppender } from './runRecordAppender.js'
+import type { PostgresRunDomainJournalRepository } from './runDomainJournalRepository.js'
 
 export class PostgresToolResultCommitRepository {
   private readonly artifactPublication: ArtifactPublicationRepository
   private readonly runRecords = new RunRecordAppender()
 
-  constructor(private readonly db: Database) {
+  constructor(
+    private readonly db: Database,
+    private readonly runMutations: RunMutationQueue,
+    private readonly domainJournal: PostgresRunDomainJournalRepository,
+  ) {
     this.artifactPublication = new ArtifactPublicationRepository(db)
   }
 
@@ -33,14 +49,14 @@ export class PostgresToolResultCommitRepository {
     values: readonly ToolValueRef[],
     artifacts: readonly ArtifactRef[],
   ): Promise<boolean> {
-    return this.db.transaction(async tx => {
+    return this.runMutations.run(run.id, () => this.db.transaction(async tx => {
       const claimed = await tx.insert(platformToolResultCommits).values({
         runId: run.id,
         resultId,
       }).onConflictDoNothing().returning({ resultId: platformToolResultCommits.resultId })
       if (!claimed[0]) return false
 
-      const runRows = await tx.select({ threadId: platformRuns.threadId })
+      const runRows = await tx.select()
         .from(platformRuns)
         .where(eq(platformRuns.runId, run.id))
         .for('update')
@@ -51,9 +67,28 @@ export class PostgresToolResultCommitRepository {
         throw new Error(`运行 '${run.id}' 的 threadId 与内存状态不一致`)
       }
 
-      await tx.update(platformRuns)
+      const currentSnapshot = await this.domainJournal.requireSnapshotInTransaction(tx, run.id)
+      const updatedRows = await tx.update(platformRuns)
         .set(toRunUpdateValues(toRunInsertValues(run)))
         .where(eq(platformRuns.runId, run.id))
+        .returning()
+      const updatedRow = updatedRows[0]
+      if (!updatedRow) throw new Error(`运行 '${run.id}' 不存在`)
+      const persistedAfter = mapAnalysisRunRow(updatedRow)
+      const domainEvents = buildRunTransitionEvents({
+        before: mapAnalysisRunRow(persistedRun),
+        after: persistedAfter,
+        expectedSequence: currentSnapshot.sequence,
+        reason: 'tool_result_committed',
+        resultId,
+      })
+      const domainSnapshot = await this.domainJournal.appendInTransaction(tx, {
+        runId: run.id,
+        expectedSequence: currentSnapshot.sequence,
+        events: domainEvents,
+      })
+      assertRunDomainProjection(domainSnapshot, persistedAfter)
+      assertRunDomainCheckpointProjection(domainSnapshot, toRunDomainCheckpoint(updatedRow))
 
       const traceId = stringContextValue('traceId')
       await this.runRecords.append(
@@ -87,7 +122,7 @@ export class PostgresToolResultCommitRepository {
         await this.artifactPublication.persistInTransaction(tx, artifact, owner)
       }
       return true
-    })
+    }))
   }
 }
 

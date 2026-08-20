@@ -9,19 +9,34 @@
 // --------------------------------------------------------------------------
 
 import { and, asc, desc, eq, gt, isNull, sql } from 'drizzle-orm'
-import type { Database } from '../../db/connection.js'
+import type { Database, DatabaseTransaction } from '../../db/connection.js'
 import {
   platformConversationEntries,
   platformRunInputs,
   platformRuns,
   platformThreads,
 } from '../../db/schema.js'
-import { runSteeringRecordSchema, type RunSteeringRecord } from '../../schemas/types.js'
+import {
+  runSteeringRecordSchema,
+  type RunDomainEvent,
+  type RunDomainSnapshot,
+  type RunSteeringRecord,
+} from '../../schemas/types.js'
 import { currentLogContext } from '../../observability/logger.js'
 import { estimateTokens } from '../conversationEncoding.js'
 import type { RunMutationQueue } from '../runMutationQueue.js'
+import {
+  assertRunDomainCheckpointProjection,
+  assertRunDomainInputProjection,
+  assertRunDomainProjection,
+  buildCheckpointChangedEvent,
+  buildInputTransitionEvent,
+  toRunDomainCheckpoint,
+} from '../runDomainProjection.js'
 import type { EnqueueRunInput, RunInputRepository } from './conversationPersistencePorts.js'
 import type { RunInputDeliveryRecorder } from './runInputDeliveryRecorder.js'
+import { mapAnalysisRunRow } from './conversationRowMappers.js'
+import type { PostgresRunDomainJournalRepository } from './runDomainJournalRepository.js'
 
 /** 运行中用户引导消息的幂等入队、lease 和恢复事实源。 */
 export class PostgresRunInputRepository implements RunInputRepository {
@@ -29,6 +44,7 @@ export class PostgresRunInputRepository implements RunInputRepository {
     private readonly db: Database,
     private readonly mutations: RunMutationQueue,
     private readonly inputDelivery: RunInputDeliveryRecorder,
+    private readonly domainJournal: PostgresRunDomainJournalRepository,
   ) {}
 
   async enqueueRunInput(input: EnqueueRunInput): Promise<RunSteeringRecord> {
@@ -50,6 +66,7 @@ export class PostgresRunInputRepository implements RunInputRepository {
         .where(eq(platformRuns.runId, input.runId)).for('update').limit(1)
       const run = runRows[0]
       if (!run) throw new Error(`运行 '${input.runId}' 不存在`)
+      const currentSnapshot = await this.domainJournal.requireSnapshotInTransaction(tx, input.runId)
       if (run.status !== 'running') throw new Error(`运行 '${input.runId}' 已结束接收引导消息`)
       if (!run.threadId) throw new Error(`运行 '${input.runId}' 缺少 threadId`)
       const inputSequence = run.nextInputSequence
@@ -112,8 +129,9 @@ export class PostgresRunInputRepository implements RunInputRepository {
       }).where(and(
         eq(platformRuns.runId, run.runId),
         eq(platformRuns.nextInputSequence, inputSequence),
-      )).returning({ runId: platformRuns.runId })
-      if (!sequenceClaim[0]) throw new Error(`运行 '${run.runId}' 的 input sequence CAS 失败`)
+      )).returning()
+      const afterRow = sequenceClaim[0]
+      if (!afterRow) throw new Error(`运行 '${run.runId}' 的 input sequence CAS 失败`)
       const record = runSteeringRecordSchema.parse({
         schemaVersion: 2,
         steeringId: input.inputId,
@@ -130,6 +148,13 @@ export class PostgresRunInputRepository implements RunInputRepository {
         ackedAt: null,
       })
       await this.inputDelivery.recordTransition(tx, 'queued', run.runId, run.threadId, [record])
+      await this.appendInputProjection(
+        tx,
+        currentSnapshot,
+        afterRow,
+        'input.queued',
+        [record],
+      )
       return record
     }))
   }
@@ -137,17 +162,11 @@ export class PostgresRunInputRepository implements RunInputRepository {
   async leaseRunInputs(runId: string, leaseId: string): Promise<RunSteeringRecord[]> {
     if (!leaseId.trim()) throw new Error('run input leaseId 不能为空')
     return this.mutations.run(runId, () => this.db.transaction(async tx => {
-      const runRows = await tx.select({
-        threadId: platformRuns.threadId,
-        checkpointInputCursor: platformRuns.checkpointInputCursor,
-        nextInputSequence: platformRuns.nextInputSequence,
-        activeInputLeaseId: platformRuns.activeInputLeaseId,
-        activeInputLeaseFrom: platformRuns.activeInputLeaseFrom,
-        activeInputLeaseTo: platformRuns.activeInputLeaseTo,
-      }).from(platformRuns)
+      const runRows = await tx.select().from(platformRuns)
         .where(eq(platformRuns.runId, runId)).for('update').limit(1)
       const run = runRows[0]
       if (!run) throw new Error(`运行 '${runId}' 不存在`)
+      const currentSnapshot = await this.domainJournal.requireSnapshotInTransaction(tx, runId)
       if (run.activeInputLeaseId) {
         if (run.activeInputLeaseId !== leaseId) {
           throw new Error(`运行 '${runId}' 已有活动输入 lease '${run.activeInputLeaseId}'`)
@@ -169,7 +188,9 @@ export class PostgresRunInputRepository implements RunInputRepository {
           run.activeInputLeaseTo - run.activeInputLeaseFrom + 1,
           runId,
         )
-        return existingLease.map(mapRunSteeringRow)
+        const records = existingLease.map(mapRunSteeringRow)
+        this.assertUnchangedProjection(currentSnapshot, run, records)
+        return records
       }
 
       const rows = await tx.select().from(platformRunInputs)
@@ -185,6 +206,7 @@ export class PostgresRunInputRepository implements RunInputRepository {
         if (expectedCount !== 0) {
           throw new Error(`运行 '${runId}' 的 input cursor 与 queued 连续前缀不一致`)
         }
+        this.assertUnchangedProjection(currentSnapshot, run, [])
         return []
       }
       assertContiguousInputPrefix(rows, run.checkpointInputCursor + 1, expectedCount, runId)
@@ -204,8 +226,9 @@ export class PostgresRunInputRepository implements RunInputRepository {
           eq(platformRuns.checkpointInputCursor, run.checkpointInputCursor),
           isNull(platformRuns.activeInputLeaseId),
         ))
-        .returning({ runId: platformRuns.runId })
-      if (!claimed[0]) throw new Error(`运行 '${runId}' 的输入 lease CAS 失败`)
+        .returning()
+      const afterRow = claimed[0]
+      if (!afterRow) throw new Error(`运行 '${runId}' 的输入 lease CAS 失败`)
       const leasedRows = await tx.update(platformRunInputs)
         .set({ status: 'leased', leaseId, leasedAt, ackedAt: null })
         .where(and(
@@ -224,6 +247,13 @@ export class PostgresRunInputRepository implements RunInputRepository {
         run.threadId ?? rows[0]!.threadId,
         records,
       )
+      await this.appendInputProjection(
+        tx,
+        currentSnapshot,
+        afterRow,
+        'input.leased',
+        records,
+      )
       return records
     }))
   }
@@ -240,18 +270,16 @@ export class PostgresRunInputRepository implements RunInputRepository {
 
   async requeueLeasedRunInputs(runId: string): Promise<RunSteeringRecord[]> {
     return this.mutations.run(runId, () => this.db.transaction(async tx => {
-      const runRows = await tx.select({
-        threadId: platformRuns.threadId,
-        checkpointInputCursor: platformRuns.checkpointInputCursor,
-        activeInputLeaseId: platformRuns.activeInputLeaseId,
-        activeInputLeaseFrom: platformRuns.activeInputLeaseFrom,
-        activeInputLeaseTo: platformRuns.activeInputLeaseTo,
-      }).from(platformRuns)
+      const runRows = await tx.select().from(platformRuns)
         .where(eq(platformRuns.runId, runId)).for('update').limit(1)
       const run = runRows[0]
       if (!run) throw new Error(`运行 '${runId}' 不存在`)
+      const currentSnapshot = await this.domainJournal.requireSnapshotInTransaction(tx, runId)
       const activeLeaseId = run.activeInputLeaseId
-      if (!activeLeaseId) return []
+      if (!activeLeaseId) {
+        this.assertUnchangedProjection(currentSnapshot, run, [])
+        return []
+      }
       if (run.activeInputLeaseFrom !== run.checkpointInputCursor + 1 || run.activeInputLeaseTo === null) {
         throw new Error(`运行 '${runId}' 的活动输入 lease 范围不合法`)
       }
@@ -288,14 +316,22 @@ export class PostgresRunInputRepository implements RunInputRepository {
           eq(platformRuns.runId, runId),
           eq(platformRuns.activeInputLeaseId, activeLeaseId),
         ))
-        .returning({ runId: platformRuns.runId })
-      if (!released[0]) throw new Error(`运行 '${runId}' 的输入 lease 恢复 CAS 失败`)
+        .returning()
+      const afterRow = released[0]
+      if (!afterRow) throw new Error(`运行 '${runId}' 的输入 lease 恢复 CAS 失败`)
       const records = requeuedRows.map(mapRunSteeringRow)
       await this.inputDelivery.recordTransition(
         tx,
         'requeued',
         runId,
         run.threadId ?? rows[0]!.threadId,
+        records,
+      )
+      await this.appendInputProjection(
+        tx,
+        currentSnapshot,
+        afterRow,
+        'input.requeued',
         records,
       )
       return records
@@ -307,6 +343,48 @@ export class PostgresRunInputRepository implements RunInputRepository {
       .where(eq(platformRunInputs.runId, runId))
       .orderBy(asc(platformRunInputs.inputSequence))
     return rows.map(mapRunSteeringRow)
+  }
+
+  private async appendInputProjection(
+    tx: DatabaseTransaction,
+    currentSnapshot: RunDomainSnapshot,
+    afterRow: typeof platformRuns.$inferSelect,
+    type: 'input.queued' | 'input.leased' | 'input.requeued',
+    records: readonly RunSteeringRecord[],
+  ): Promise<void> {
+    const run = mapAnalysisRunRow(afterRow)
+    const checkpoint = toRunDomainCheckpoint(afterRow)
+    const events: RunDomainEvent[] = [
+      buildInputTransitionEvent({
+        run,
+        expectedSequence: currentSnapshot.sequence,
+        type,
+        records,
+      }),
+      buildCheckpointChangedEvent({
+        run,
+        expectedSequence: currentSnapshot.sequence + 1,
+        checkpoint,
+      }),
+    ]
+    const snapshot = await this.domainJournal.appendInTransaction(tx, {
+      runId: run.id,
+      expectedSequence: currentSnapshot.sequence,
+      events,
+    })
+    assertRunDomainProjection(snapshot, run)
+    assertRunDomainCheckpointProjection(snapshot, checkpoint)
+    assertRunDomainInputProjection(snapshot, records)
+  }
+
+  private assertUnchangedProjection(
+    snapshot: RunDomainSnapshot,
+    runRow: typeof platformRuns.$inferSelect,
+    records: readonly RunSteeringRecord[],
+  ): void {
+    assertRunDomainProjection(snapshot, mapAnalysisRunRow(runRow))
+    assertRunDomainCheckpointProjection(snapshot, toRunDomainCheckpoint(runRow))
+    if (records.length) assertRunDomainInputProjection(snapshot, records)
   }
 }
 

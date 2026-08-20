@@ -28,9 +28,10 @@ export const REQUIRED_MIGRATIONS = [
   '010_file_ready_source_invariant',
   '011_custom_model_providers',
   '012_run_input_delivery_ack',
+  '013_run_domain_journal',
 ] as const
 
-export const CURRENT_DATABASE_SCHEMA_VERSION = 12
+export const CURRENT_DATABASE_SCHEMA_VERSION = 13
 
 const migrationRowsSchema = z.array(z.object({
   migration_id: z.string().min(1),
@@ -51,7 +52,7 @@ export async function verifyDatabaseSchemaCompatibility(
   if (typeof tableName !== 'string') {
     throw new Error(
       '数据库尚未启用版本跟踪。请重建开发数据库并应用 '
-      + 'infra/migrations/000_schema_migrations.sql 至 012_run_input_delivery_ack.sql '
+      + 'infra/migrations/000_schema_migrations.sql 至 013_run_domain_journal.sql '
       + '后重新启动。',
     )
   }
@@ -100,6 +101,8 @@ export async function verifyDatabaseSchemaCompatibility(
     to_regclass('public.platform_model_result_cache') AS model_result_cache_table,
     to_regclass('public.platform_file_objects') AS file_objects_table,
     to_regclass('public.platform_model_providers') AS model_providers_table,
+    to_regclass('public.platform_run_domain_events') AS run_domain_events_table,
+    to_regclass('public.platform_run_snapshots') AS run_snapshots_table,
     (
       SELECT COUNT(*) = 4
       FROM information_schema.columns
@@ -123,6 +126,8 @@ export async function verifyDatabaseSchemaCompatibility(
       model_result_cache_table?: unknown
       file_objects_table?: unknown
       model_providers_table?: unknown
+      run_domain_events_table?: unknown
+      run_snapshots_table?: unknown
       run_input_delivery_ack?: unknown
     } | undefined
   )?.vector_tile_function
@@ -168,6 +173,18 @@ export async function verifyDatabaseSchemaCompatibility(
     throw new Error(
       '数据库迁移记录与实际能力不一致：Run input sequence/cursor/lease 列不完整。'
       + '请执行 012_run_input_delivery_ack.sql；禁止只补写迁移记录。',
+    )
+  }
+  const runDomainEventsTable = (
+    capabilityResult.rows[0] as { run_domain_events_table?: unknown } | undefined
+  )?.run_domain_events_table
+  const runSnapshotsTable = (
+    capabilityResult.rows[0] as { run_snapshots_table?: unknown } | undefined
+  )?.run_snapshots_table
+  if (typeof runDomainEventsTable !== 'string' || typeof runSnapshotsTable !== 'string') {
+    throw new Error(
+      '数据库迁移记录与实际能力不一致：Run domain journal/snapshot 表不完整。'
+      + '请执行 013_run_domain_journal.sql；禁止只补写迁移记录。',
     )
   }
 }

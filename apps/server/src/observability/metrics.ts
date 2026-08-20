@@ -163,6 +163,12 @@ export const runtimeMutationFailuresTotal = new Counter({
   labelNames: ['scope'],
 })
 
+export const runDomainReplayComparisonsTotal = new Counter({
+  name: 'geo_agent_platform_run_domain_replay_comparisons_total',
+  help: 'Run 领域日志 reducer 与同事务事实的 shadow 比对总数',
+  labelNames: ['scope', 'outcome'],
+})
+
 // Rate limiting
 export const rateLimitHitsTotal = new Counter({
   name: 'geo_agent_platform_rate_limit_hits_total',

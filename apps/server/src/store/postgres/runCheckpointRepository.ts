@@ -9,16 +9,32 @@
 //   来源:       runRepository.ts 的恢复状态与 Agents SDK checkpoint 边界
 // --------------------------------------------------------------------------
 
+import { isDeepStrictEqual } from 'node:util'
+
 import { and, asc, eq, isNull } from 'drizzle-orm'
 
-import { runCheckpointSchema, type RunCheckpoint, type RunSteeringRecord } from '../../schemas/types.js'
-import type { Database } from '../../db/connection.js'
+import {
+  runCheckpointSchema,
+  type RunCheckpoint,
+  type RunDomainSnapshot,
+  type RunSteeringRecord,
+} from '../../schemas/types.js'
+import type { Database, DatabaseTransaction } from '../../db/connection.js'
 import { platformRunInputs, platformRuns } from '../../db/schema.js'
 import type { RunMutationQueue } from '../runMutationQueue.js'
+import {
+  assertRunDomainCheckpointProjection,
+  assertRunDomainInputProjection,
+  assertRunDomainProjection,
+  buildCheckpointChangedEvent,
+  buildInputTransitionEvent,
+  toRunDomainCheckpoint,
+} from '../runDomainProjection.js'
 import type { RunCheckpointRepository } from './conversationPersistencePorts.js'
 import { mapAnalysisRunRow } from './conversationRowMappers.js'
 import type { RunInputDeliveryRecorder } from './runInputDeliveryRecorder.js'
 import { mapRunSteeringRow } from './runInputRepository.js'
+import type { PostgresRunDomainJournalRepository } from './runDomainJournalRepository.js'
 
 /** Run 恢复字段和 Agents SDK 状态引用的唯一持久化边界。 */
 export class PostgresRunCheckpointRepository implements RunCheckpointRepository {
@@ -26,6 +42,7 @@ export class PostgresRunCheckpointRepository implements RunCheckpointRepository 
     private readonly db: Database,
     private readonly runMutations: RunMutationQueue,
     private readonly inputDelivery: RunInputDeliveryRecorder,
+    private readonly domainJournal: PostgresRunDomainJournalRepository,
   ) {}
 
   async saveRunCheckpoint(
@@ -37,10 +54,18 @@ export class PostgresRunCheckpointRepository implements RunCheckpointRepository 
     if (fields.pendingToolCallIds !== undefined) updates.pendingToolCallIds = fields.pendingToolCallIds
     if (fields.recoveryStatus !== undefined) updates.recoveryStatus = fields.recoveryStatus
     await this.runMutations.run(runId, async () => {
-      const rows = await this.db.update(platformRuns).set(updates)
-        .where(eq(platformRuns.runId, runId))
-        .returning({ runId: platformRuns.runId })
-      if (!rows[0]) throw new Error(`运行 '${runId}' 不存在`)
+      await this.db.transaction(async tx => {
+        const beforeRows = await tx.select().from(platformRuns)
+          .where(eq(platformRuns.runId, runId)).for('update').limit(1)
+        if (!beforeRows[0]) throw new Error(`运行 '${runId}' 不存在`)
+        const currentSnapshot = await this.domainJournal.requireSnapshotInTransaction(tx, runId)
+        const rows = await tx.update(platformRuns).set(updates)
+          .where(eq(platformRuns.runId, runId))
+          .returning()
+        const afterRow = rows[0]
+        if (!afterRow) throw new Error(`运行 '${runId}' 不存在`)
+        await this.appendCheckpointProjection(tx, currentSnapshot, afterRow)
+      })
     })
   }
 
@@ -79,17 +104,11 @@ export class PostgresRunCheckpointRepository implements RunCheckpointRepository 
     terminalToolCallIds?: readonly string[]
   }): Promise<RunSteeringRecord[]> {
     return this.runMutations.run(runId, () => this.db.transaction(async tx => {
-      const runRows = await tx.select({
-        threadId: platformRuns.threadId,
-        sdkStateContentHash: platformRuns.sdkStateContentHash,
-        checkpointInputCursor: platformRuns.checkpointInputCursor,
-        activeInputLeaseId: platformRuns.activeInputLeaseId,
-        activeInputLeaseFrom: platformRuns.activeInputLeaseFrom,
-        activeInputLeaseTo: platformRuns.activeInputLeaseTo,
-        pendingToolCallIds: platformRuns.pendingToolCallIds,
-      }).from(platformRuns).where(eq(platformRuns.runId, runId)).for('update').limit(1)
+      const runRows = await tx.select().from(platformRuns)
+        .where(eq(platformRuns.runId, runId)).for('update').limit(1)
       const run = runRows[0]
       if (!run) throw new Error(`运行 '${runId}' 不存在`)
+      const currentSnapshot = await this.domainJournal.requireSnapshotInTransaction(tx, runId)
 
       const updatedAt = new Date()
       const terminalToolCallIds = new Set(input.terminalToolCallIds ?? [])
@@ -120,8 +139,10 @@ export class PostgresRunCheckpointRepository implements RunCheckpointRepository 
             eq(platformRuns.checkpointInputCursor, run.checkpointInputCursor),
             isNull(platformRuns.activeInputLeaseId),
           ))
-          .returning({ runId: platformRuns.runId })
-        if (!rows[0]) throw new Error(`运行 '${runId}' 不存在`)
+          .returning()
+        const afterRow = rows[0]
+        if (!afterRow) throw new Error(`运行 '${runId}' 不存在`)
+        await this.appendCheckpointProjection(tx, currentSnapshot, afterRow)
         return []
       }
 
@@ -153,8 +174,14 @@ export class PostgresRunCheckpointRepository implements RunCheckpointRepository 
             eq(platformRuns.runId, runId),
             eq(platformRuns.sdkStateContentHash, input.contentHash),
             isNull(platformRuns.activeInputLeaseId),
-          )).returning({ runId: platformRuns.runId })
-          if (!rows[0]) throw new Error(`运行 '${runId}' 的工具终态 checkpoint CAS 失败`)
+          )).returning()
+          const afterRow = rows[0]
+          if (!afterRow) throw new Error(`运行 '${runId}' 的工具终态 checkpoint CAS 失败`)
+          await this.appendCheckpointProjection(tx, currentSnapshot, afterRow)
+        } else {
+          const persistedRun = mapAnalysisRunRow(run)
+          assertRunDomainProjection(currentSnapshot, persistedRun)
+          assertRunDomainCheckpointProjection(currentSnapshot, toRunDomainCheckpoint(run))
         }
         return leasedRows.map(mapRunSteeringRow)
       }
@@ -206,8 +233,9 @@ export class PostgresRunCheckpointRepository implements RunCheckpointRepository 
         eq(platformRuns.runId, runId),
         eq(platformRuns.checkpointInputCursor, run.checkpointInputCursor),
         eq(platformRuns.activeInputLeaseId, leaseId),
-      )).returning({ runId: platformRuns.runId })
-      if (!checkpointRows[0]) throw new Error(`运行 '${runId}' 的 checkpoint/input cursor CAS 失败`)
+      )).returning()
+      const afterRow = checkpointRows[0]
+      if (!afterRow) throw new Error(`运行 '${runId}' 的 checkpoint/input cursor CAS 失败`)
 
       await this.inputDelivery.recordAcknowledged(
         tx,
@@ -216,8 +244,51 @@ export class PostgresRunCheckpointRepository implements RunCheckpointRepository 
         ackedRows.map(mapRunSteeringRow),
       )
 
+      await this.appendCheckpointProjection(
+        tx,
+        currentSnapshot,
+        afterRow,
+        ackedRows.map(mapRunSteeringRow),
+      )
+
       return ackedRows.map(mapRunSteeringRow)
     }))
+  }
+
+  private async appendCheckpointProjection(
+    tx: DatabaseTransaction,
+    currentSnapshot: RunDomainSnapshot,
+    afterRow: typeof platformRuns.$inferSelect,
+    acknowledged: readonly RunSteeringRecord[] = [],
+  ): Promise<void> {
+    const run = mapAnalysisRunRow(afterRow)
+    const checkpoint = toRunDomainCheckpoint(afterRow)
+    const events = []
+    if (acknowledged.length) {
+      events.push(buildInputTransitionEvent({
+        run,
+        expectedSequence: currentSnapshot.sequence,
+        type: 'input.checkpointed',
+        records: acknowledged,
+      }))
+    }
+    if (!isDeepStrictEqual(currentSnapshot.checkpoint, checkpoint)) {
+      events.push(buildCheckpointChangedEvent({
+        run,
+        expectedSequence: currentSnapshot.sequence + events.length,
+        checkpoint,
+      }))
+    }
+    const snapshot = events.length
+      ? await this.domainJournal.appendInTransaction(tx, {
+        runId: run.id,
+        expectedSequence: currentSnapshot.sequence,
+        events,
+      })
+      : currentSnapshot
+    assertRunDomainProjection(snapshot, run)
+    assertRunDomainCheckpointProjection(snapshot, checkpoint)
+    if (acknowledged.length) assertRunDomainInputProjection(snapshot, acknowledged)
   }
 }
 

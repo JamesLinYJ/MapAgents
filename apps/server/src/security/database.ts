@@ -76,6 +76,8 @@ const SECURITY_TABLES: Record<string, string[]> = {
   platform_thread_compactions: ['compaction_id', 'thread_id', 'boundary_entry_id', 'summary_entry_id', 'first_compacted_entry_id', 'last_compacted_entry_id', 'preserved_from_entry_id', 'summary', 'strategy', 'pre_tokens', 'post_tokens', 'created_at'],
   platform_run_records: ['record_id', 'run_id', 'thread_id', 'sequence', 'record_type', 'payload_json', 'trace_id', 'created_at'],
   platform_run_inputs: ['input_id', 'run_id', 'thread_id', 'entry_id', 'item_id', 'kind', 'content', 'input_sequence', 'status', 'queued_at', 'lease_id', 'leased_at', 'acked_at'],
+  platform_run_domain_events: ['event_id', 'run_id', 'sequence', 'event_type', 'schema_version', 'objective_revision', 'turn_id', 'step_id', 'causation_id', 'correlation_id', 'actor_kind', 'actor_id', 'payload_json', 'occurred_at'],
+  platform_run_snapshots: ['run_id', 'sequence', 'snapshot_schema_version', 'state_json', 'updated_at'],
   platform_event_outbox: ['outbox_id', 'aggregate_type', 'aggregate_id', 'event_type', 'payload_json', 'trace_id', 'attempt_count', 'created_at', 'published_at'],
   platform_rbac_policies: ['policy_id', 'ptype', 'v0', 'v1', 'v2', 'v3', 'v4', 'v5'],
   platform_audit_events: ['audit_event_id', 'actor_user_id', 'workspace_id', 'action', 'object_type', 'object_id', 'outcome', 'metadata_json', 'created_at'],

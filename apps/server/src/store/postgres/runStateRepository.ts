@@ -9,12 +9,21 @@
 //   来源:       runRepository.ts 的 Run 生命周期与状态事务边界
 // --------------------------------------------------------------------------
 
+import { isDeepStrictEqual } from 'node:util'
 import { and, asc, eq, ne, sql } from 'drizzle-orm'
 
 import type { AnalysisRun, RunCheckpoint } from '../../schemas/types.js'
 import type { Database } from '../../db/connection.js'
 import { platformRuns, platformSessions, platformThreads } from '../../db/schema.js'
 import type { RunMutationQueue } from '../runMutationQueue.js'
+import {
+  assertRunDomainCheckpointProjection,
+  assertRunDomainProjection,
+  buildCheckpointChangedEvent,
+  buildRunCreatedEvents,
+  buildRunTransitionEvents,
+  toRunDomainCheckpoint,
+} from '../runDomainProjection.js'
 import type { RunLifecycleResult, RunStateRepository } from './conversationPersistencePorts.js'
 import {
   assertRunOwnerMatchesSession,
@@ -25,12 +34,14 @@ import {
   toRunInsertValues,
   toRunUpdateValues,
 } from './conversationRowMappers.js'
+import type { PostgresRunDomainJournalRepository } from './runDomainJournalRepository.js'
 
 /** Run 状态事实及创建时 Session/Thread 指针更新的事务边界。 */
 export class PostgresRunStateRepository implements RunStateRepository {
   constructor(
     private readonly db: Database,
     private readonly runMutations: RunMutationQueue,
+    private readonly domainJournal: PostgresRunDomainJournalRepository,
   ) {}
 
   async createRunLifecycle(run: AnalysisRun): Promise<RunLifecycleResult> {
@@ -58,6 +69,15 @@ export class PostgresRunStateRepository implements RunStateRepository {
       const insertedRows = await tx.insert(platformRuns).values(toRunInsertValues(run)).returning()
       const insertedRun = insertedRows[0]
       if (!insertedRun) throw new Error(`运行 '${run.id}' 创建失败`)
+      const persistedRun = mapAnalysisRunRow(insertedRun)
+      const checkpoint = toRunDomainCheckpoint(insertedRun)
+      const domainSnapshot = await this.domainJournal.appendInTransaction(tx, {
+        runId: run.id,
+        expectedSequence: 0,
+        events: buildRunCreatedEvents(persistedRun, checkpoint, 0),
+      })
+      assertRunDomainProjection(domainSnapshot, persistedRun)
+      assertRunDomainCheckpointProjection(domainSnapshot, checkpoint)
 
       let updatedThread: typeof platformThreads.$inferSelect | null = null
       if (thread) {
@@ -82,7 +102,7 @@ export class PostgresRunStateRepository implements RunStateRepository {
       return {
         session: mapSessionRow(updatedSession),
         thread: updatedThread ? mapThreadRow(updatedThread) : null,
-        run: mapAnalysisRunRow(insertedRun),
+        run: persistedRun,
       }
     })
   }
@@ -90,10 +110,34 @@ export class PostgresRunStateRepository implements RunStateRepository {
   async saveRun(run: AnalysisRun): Promise<void> {
     const values = toRunInsertValues(run)
     await this.runMutations.run(run.id, async () => {
-      const rows = await this.db.update(platformRuns).set(toRunUpdateValues(values))
-        .where(eq(platformRuns.runId, run.id))
-        .returning({ runId: platformRuns.runId })
-      if (!rows[0]) throw new Error(`运行 '${run.id}' 不存在`)
+      await this.db.transaction(async tx => {
+        const beforeRows = await tx.select().from(platformRuns)
+          .where(eq(platformRuns.runId, run.id)).for('update').limit(1)
+        const beforeRow = beforeRows[0]
+        if (!beforeRow) throw new Error(`运行 '${run.id}' 不存在`)
+        const currentSnapshot = await this.domainJournal.requireSnapshotInTransaction(tx, run.id)
+        const rows = await tx.update(platformRuns).set(toRunUpdateValues(values))
+          .where(eq(platformRuns.runId, run.id))
+          .returning()
+        const afterRow = rows[0]
+        if (!afterRow) throw new Error(`运行 '${run.id}' 不存在`)
+        const persistedRun = mapAnalysisRunRow(afterRow)
+        const events = buildRunTransitionEvents({
+          before: mapAnalysisRunRow(beforeRow),
+          after: persistedRun,
+          expectedSequence: currentSnapshot.sequence,
+          reason: 'run_state_saved',
+        })
+        const snapshot = events.length
+          ? await this.domainJournal.appendInTransaction(tx, {
+            runId: run.id,
+            expectedSequence: currentSnapshot.sequence,
+            events,
+          })
+          : currentSnapshot
+        assertRunDomainProjection(snapshot, persistedRun)
+        assertRunDomainCheckpointProjection(snapshot, toRunDomainCheckpoint(afterRow))
+      })
     })
   }
 
@@ -107,10 +151,42 @@ export class PostgresRunStateRepository implements RunStateRepository {
     if (fields.pendingToolCallIds !== undefined) updates.pendingToolCallIds = fields.pendingToolCallIds
     if (fields.recoveryStatus !== undefined) updates.recoveryStatus = fields.recoveryStatus
     await this.runMutations.run(run.id, async () => {
-      const rows = await this.db.update(platformRuns).set(updates)
-        .where(eq(platformRuns.runId, run.id))
-        .returning({ runId: platformRuns.runId })
-      if (!rows[0]) throw new Error(`运行 '${run.id}' 不存在`)
+      await this.db.transaction(async tx => {
+        const beforeRows = await tx.select().from(platformRuns)
+          .where(eq(platformRuns.runId, run.id)).for('update').limit(1)
+        const beforeRow = beforeRows[0]
+        if (!beforeRow) throw new Error(`运行 '${run.id}' 不存在`)
+        const currentSnapshot = await this.domainJournal.requireSnapshotInTransaction(tx, run.id)
+        const rows = await tx.update(platformRuns).set(updates)
+          .where(eq(platformRuns.runId, run.id))
+          .returning()
+        const afterRow = rows[0]
+        if (!afterRow) throw new Error(`运行 '${run.id}' 不存在`)
+        const persistedRun = mapAnalysisRunRow(afterRow)
+        const checkpoint = toRunDomainCheckpoint(afterRow)
+        const events = buildRunTransitionEvents({
+          before: mapAnalysisRunRow(beforeRow),
+          after: persistedRun,
+          expectedSequence: currentSnapshot.sequence,
+          reason: 'run_state_and_checkpoint_saved',
+        })
+        if (!isDeepStrictEqual(currentSnapshot.checkpoint, checkpoint)) {
+          events.push(buildCheckpointChangedEvent({
+            run: persistedRun,
+            expectedSequence: currentSnapshot.sequence + events.length,
+            checkpoint,
+          }))
+        }
+        const snapshot = events.length
+          ? await this.domainJournal.appendInTransaction(tx, {
+            runId: run.id,
+            expectedSequence: currentSnapshot.sequence,
+            events,
+          })
+          : currentSnapshot
+        assertRunDomainProjection(snapshot, persistedRun)
+        assertRunDomainCheckpointProjection(snapshot, checkpoint)
+      })
     })
   }
 

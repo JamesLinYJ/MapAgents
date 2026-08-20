@@ -338,6 +338,7 @@ describe('platform architecture', () => {
       '010_file_ready_source_invariant.sql',
       '011_custom_model_providers.sql',
       '012_run_input_delivery_ack.sql',
+      '013_run_domain_journal.sql',
     ])
 
     const operationalSourceFiles = await collectProductionFiles([
@@ -754,11 +755,23 @@ describe('platform architecture', () => {
       path.join(storeRoot, 'postgres/runRecordRepository.ts'),
       'utf8',
     )
+    const runDomainJournalSource = await readFile(
+      path.join(storeRoot, 'postgres/runDomainJournalRepository.ts'),
+      'utf8',
+    )
 
     expect(persistenceSource.includes('new PostgresConversationSnapshotRepository(db)')).toBe(true)
     expect(persistenceSource.includes('new PostgresSessionRepository(db)')).toBe(true)
     expect(persistenceSource.includes('new PostgresThreadRepository(db, this.runMutations)')).toBe(true)
-    expect(persistenceSource.includes('new PostgresRunRepository(db, this.runMutations, this.runRecords, inputDelivery)')).toBe(true)
+    expect(persistenceSource).toContain(
+      'const domainJournal = new PostgresRunDomainJournalRepository(db)',
+    )
+    expect(persistenceSource).toMatch(
+      /new PostgresRunInputRepository\(\s*db,\s*this\.runMutations,\s*inputDelivery,\s*domainJournal,\s*\)/u,
+    )
+    expect(persistenceSource).toMatch(
+      /new PostgresRunRepository\(\s*db,\s*this\.runMutations,\s*this\.runRecords,\s*domainJournal,\s*inputDelivery,\s*\)/u,
+    )
     expect(persistenceSource.includes('new PostgresObjectReferenceRepository(db)')).toBe(true)
     expect(persistenceSource.includes('return this.snapshots.loadSnapshot()')).toBe(true)
     expect(persistenceSource.includes('await this.sessions.saveSession(session)')).toBe(true)
@@ -790,6 +803,10 @@ describe('platform architecture', () => {
     expect(runStateSource.includes('platformEventOutbox')).toBe(false)
     expect(runCheckpointSource.includes('platformRuns')).toBe(true)
     expect(runCheckpointSource.includes('platformEventOutbox')).toBe(false)
+    expect(snapshotSource.includes('platformRunSnapshots')).toBe(false)
+    expect(runDomainJournalSource.includes('platformRunSnapshots')).toBe(true)
+    expect(runDomainJournalSource).toContain('expectedSequence')
+    expect(runDomainJournalSource).toContain('RunDomainSequenceConflictError')
     expect(runRecordSource.includes('platformRunRecords')).toBe(true)
     expect(runRecordSource.includes('platformEventOutbox')).toBe(true)
     expect(await readFile(path.join(storeRoot, 'postgres/objectReferenceRepository.ts'), 'utf8'))

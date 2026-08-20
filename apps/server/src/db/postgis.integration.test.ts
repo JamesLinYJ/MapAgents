@@ -19,6 +19,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createDb, type Database } from './connection.js'
 import { verifyDatabaseSchemaCompatibility } from './schemaCompatibility.js'
 import { ManagedLayerService } from '../gis/managedLayers/managedLayerService.js'
+import {
+  agentStateSchema,
+  replayRunDomainEvents,
+  runDomainEventSchema,
+} from '../schemas/types.js'
+import { PostgresRunDomainJournalRepository } from '../store/postgres/runDomainJournalRepository.js'
+import { RunDomainSequenceConflictError } from '../store/storeErrors.js'
 
 const integrationEnabled = process.env.RUN_POSTGIS_INTEGRATION === '1'
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..')
@@ -91,6 +98,115 @@ describe.skipIf(!integrationEnabled)('真实 PostgreSQL/PostGIS 集成', () => {
     expect(await service.deleteLayer(layer.layerKey)).toBe(true)
     expect(await service.getLayer(layer.layerKey)).toBeNull()
   })
+
+  it('可重入迁移历史 Run 并从 sequence 1 完整重放领域快照', async () => {
+    const sessionId = 'session_domain_backfill'
+    const threadId = 'thread_domain_backfill'
+    const runId = 'run_domain_backfill'
+    const now = new Date('2026-08-20T00:00:00.000Z')
+    const state = agentStateSchema.parse({
+      sessionId,
+      threadId,
+      userQuery: '验证领域日志历史回放',
+      objectiveRevision: 2,
+    })
+
+    try {
+      await client.query(
+        `INSERT INTO platform_sessions
+           (session_id, visibility, status, created_at, updated_at)
+         VALUES ($1, 'private', 'active', $2, $2)`,
+        [sessionId, now],
+      )
+      await client.query(
+        `INSERT INTO platform_threads
+           (thread_id, session_id, visibility, title, next_entry_sequence, created_at, updated_at)
+         VALUES ($1, $2, 'private', '领域日志迁移夹具', 3, $3, $3)`,
+        [threadId, sessionId, now],
+      )
+      await client.query(
+        `INSERT INTO platform_runs
+           (run_id, session_id, thread_id, visibility, user_query, status, state_json,
+            next_input_sequence, checkpoint_input_cursor, created_at, updated_at)
+         VALUES ($1, $2, $3, 'private', '验证领域日志历史回放', 'running', $4, 3, 1, $5, $5)`,
+        [runId, sessionId, threadId, JSON.stringify(state), now],
+      )
+      await client.query(
+        `INSERT INTO platform_conversation_entries
+           (entry_id, session_id, thread_id, run_id, sequence, kind, payload_json, created_at)
+         VALUES
+           ('entry_domain_1', $1, $2, $3, 1, 'user_input', '{}'::jsonb, $4),
+           ('entry_domain_2', $1, $2, $3, 2, 'user_input', '{}'::jsonb, $4)`,
+        [sessionId, threadId, runId, now],
+      )
+      await client.query(
+        `INSERT INTO platform_run_inputs
+           (input_id, run_id, thread_id, entry_id, item_id, content, input_sequence,
+            status, queued_at, lease_id, leased_at, acked_at)
+         VALUES
+           ('input_domain_1', $1, $2, 'entry_domain_1', 'item_domain_1', '第一条输入', 1,
+            'acked', $3, 'lease_domain_1', $3, $3),
+           ('input_domain_2', $1, $2, 'entry_domain_2', 'item_domain_2', '第二条输入', 2,
+            'queued', $3, NULL, NULL, NULL)`,
+        [runId, threadId, now],
+      )
+
+      await applyMigration(client, '013_run_domain_journal.sql')
+      await applyMigration(client, '013_run_domain_journal.sql')
+
+      const repository = new PostgresRunDomainJournalRepository(db)
+      const events = await repository.listRunDomainEvents(runId)
+      const snapshot = await repository.getRunDomainSnapshot(runId)
+
+      expect(events.map(event => event.type)).toEqual([
+        'run.created',
+        'input.queued',
+        'input.checkpointed',
+        'run.checkpoint_changed',
+      ])
+      expect(events.map(event => event.sequence)).toEqual([1, 2, 3, 4])
+      expect(replayRunDomainEvents(events)).toEqual(snapshot)
+      expect(snapshot).toMatchObject({
+        runId,
+        sequence: 4,
+        status: 'running',
+        state: { objectiveRevision: 2 },
+        inputDeliveries: {
+          input_domain_1: { status: 'acked', leaseId: 'lease_domain_1' },
+          input_domain_2: { status: 'queued', leaseId: null },
+        },
+        checkpoint: {
+          nextInputSequence: 3,
+          checkpointInputCursor: 1,
+          activeInputLeaseId: null,
+        },
+      })
+
+      const competingWrites = await Promise.allSettled([
+        repository.appendRunDomainEvents({
+          runId,
+          expectedSequence: snapshot!.sequence,
+          events: [migrationWarningEvent(runId, snapshot!.sequence + 1, 'writer_a')],
+        }),
+        repository.appendRunDomainEvents({
+          runId,
+          expectedSequence: snapshot!.sequence,
+          events: [migrationWarningEvent(runId, snapshot!.sequence + 1, 'writer_b')],
+        }),
+      ])
+      expect(competingWrites.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+      expect(competingWrites.find(result => result.status === 'rejected')).toMatchObject({
+        reason: expect.any(RunDomainSequenceConflictError),
+      })
+      const finalEvents = await repository.listRunDomainEvents(runId)
+      expect(finalEvents.map(event => event.sequence)).toEqual([1, 2, 3, 4, 5])
+      expect(replayRunDomainEvents(finalEvents)).toEqual(
+        await repository.getRunDomainSnapshot(runId),
+      )
+    } finally {
+      await client.query('DELETE FROM platform_sessions WHERE session_id = $1', [sessionId])
+    }
+  })
 })
 
 async function applyMigrations(client: Client): Promise<void> {
@@ -113,4 +229,30 @@ async function applyMigrations(client: Client): Promise<void> {
         application_release = EXCLUDED.application_release
     `, [migrationId, checksum, 'postgis-integration-test'])
   }
+}
+
+async function applyMigration(client: Client, fileName: string): Promise<void> {
+  const content = (await readFile(
+    path.join(repositoryRoot, 'infra', 'migrations', fileName),
+    'utf8',
+  )).replace(/\r\n?/gu, '\n')
+  await client.query(content)
+}
+
+function migrationWarningEvent(runId: string, sequence: number, suffix: string) {
+  return runDomainEventSchema.parse({
+    eventId: `domain_postgis_${suffix}`,
+    runId,
+    sequence,
+    turnId: null,
+    stepId: null,
+    objectiveRevision: 2,
+    causationId: null,
+    correlationId: `domain_postgis_${suffix}`,
+    actor: { kind: 'system', id: null },
+    occurredAt: '2026-08-20T00:00:01.000Z',
+    schemaVersion: 1,
+    type: 'projection.warning',
+    payload: { code: suffix, message: suffix },
+  })
 }

@@ -33,6 +33,7 @@ import type { RunRecordAppender } from './runRecordAppender.js'
 import { PostgresRunRecordRepository } from './runRecordRepository.js'
 import { PostgresRunStateRepository } from './runStateRepository.js'
 import { PostgresToolResultCommitRepository } from './toolResultCommitRepository.js'
+import type { PostgresRunDomainJournalRepository } from './runDomainJournalRepository.js'
 
 /** 组合 Run 状态、checkpoint 和记录流端口，不直接访问数据库表。 */
 export class PostgresRunRepository implements RunRepository {
@@ -45,16 +46,22 @@ export class PostgresRunRepository implements RunRepository {
     db: Database,
     runMutations: RunMutationQueue,
     runRecords: RunRecordAppender,
+    domainJournal: PostgresRunDomainJournalRepository,
     inputDelivery = new RunInputDeliveryRecorder(runRecords),
   ) {
-    this.state = new PostgresRunStateRepository(db, runMutations)
+    this.state = new PostgresRunStateRepository(db, runMutations, domainJournal)
     this.checkpoints = new PostgresRunCheckpointRepository(
       db,
       runMutations,
       inputDelivery,
+      domainJournal,
     )
     this.records = new PostgresRunRecordRepository(db, runMutations, runRecords)
-    this.toolResults = new PostgresToolResultCommitRepository(db)
+    this.toolResults = new PostgresToolResultCommitRepository(
+      db,
+      runMutations,
+      domainJournal,
+    )
   }
 
   createRunLifecycle(run: AnalysisRun): Promise<RunLifecycleResult> {

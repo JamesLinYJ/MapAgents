@@ -8,12 +8,16 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
+import { isDeepStrictEqual } from 'node:util'
+
 import {
   compactionRecordSchema,
   conversationItemSchema,
   runCheckpointSchema,
   runEventSchema,
   runSteeringRecordSchema,
+  reduceRunDomainEvents,
+  runDomainEventSchema,
   threadManifestSchema,
   toolValueRefSchema,
   transcriptEntrySchema,
@@ -23,6 +27,9 @@ import {
   type CompactionRecord,
   type ConversationItem,
   type RunEvent,
+  type RunDomainCheckpoint,
+  type RunDomainEvent,
+  type RunDomainSnapshot,
   type RunCheckpoint,
   type RunSteeringRecord,
   type SessionRecord,
@@ -49,6 +56,17 @@ import { makeId, nowUtc } from '../src/utils/ids.js'
 import { summarizeAssistantText } from '../src/conversation/items.js'
 import { MemoryVersionConflictError } from '../src/store/storeErrors.js'
 import { runInputConversationItem } from '../src/store/runInputConversationItem.js'
+import { RunDomainSequenceConflictError } from '../src/store/storeErrors.js'
+import {
+  assertRunDomainCheckpointProjection,
+  assertRunDomainInputCollection,
+  assertRunDomainInputProjection,
+  assertRunDomainProjection,
+  buildCheckpointChangedEvent,
+  buildInputTransitionEvent,
+  buildRunCreatedEvents,
+  buildRunTransitionEvents,
+} from '../src/store/runDomainProjection.js'
 
 interface ThreadState {
   record: AgentThreadRecord
@@ -84,6 +102,8 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
   private readonly inputs = new Map<string, RunSteeringRecord[]>()
   private readonly memoryVersions = new Map<string, ThreadMemoryVersionReference[]>()
   private readonly compactions = new Map<string, CompactionRecord[]>()
+  private readonly domainEvents = new Map<string, RunDomainEvent[]>()
+  private readonly domainSnapshots = new Map<string, RunDomainSnapshot>()
 
   async loadSnapshot(): Promise<ConversationSnapshot> {
     const activeThreadIds = new Set(
@@ -227,6 +247,8 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
       this.events.delete(runId)
       this.values.delete(runId)
       this.inputs.delete(runId)
+      this.domainEvents.delete(runId)
+      this.domainSnapshots.delete(runId)
     }
     const updatedSession: SessionRecord = {
       ...session,
@@ -252,6 +274,14 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
     }
     this.runs.set(run.id, clone(run))
     this.checkpoints.set(run.id, initialCheckpoint(run.updatedAt))
+    const checkpoint = memoryDomainCheckpoint(this.requireCheckpoint(run.id))
+    const domainSnapshot = this.appendDomainEvents({
+      runId: run.id,
+      expectedSequence: 0,
+      events: buildRunCreatedEvents(run, checkpoint, 0),
+    })
+    assertRunDomainProjection(domainSnapshot, run)
+    assertRunDomainCheckpointProjection(domainSnapshot, checkpoint)
     let updatedThread: AgentThreadRecord | null = null
     if (thread) {
       updatedThread = {
@@ -274,15 +304,28 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
   }
 
   async saveRun(run: AnalysisRun): Promise<void> {
-    this.requireRun(run.id)
+    const before = clone(this.requireRun(run.id))
+    const current = this.requireDomainSnapshot(run.id)
     this.runs.set(run.id, clone(run))
+    const events = buildRunTransitionEvents({
+      before,
+      after: run,
+      expectedSequence: current.sequence,
+      reason: 'run_state_saved',
+    })
+    const snapshot = events.length
+      ? this.appendDomainEvents({ runId: run.id, expectedSequence: current.sequence, events })
+      : current
+    assertRunDomainProjection(snapshot, run)
+    assertRunDomainCheckpointProjection(snapshot, memoryDomainCheckpoint(this.requireCheckpoint(run.id)))
   }
 
   async saveRunWithCheckpoint(
     run: AnalysisRun,
     fields: Partial<Pick<RunCheckpoint, 'activeEntryId' | 'pendingToolCallIds' | 'recoveryStatus'>>,
   ): Promise<void> {
-    this.requireRun(run.id)
+    const before = clone(this.requireRun(run.id))
+    const domainBefore = this.requireDomainSnapshot(run.id)
     const current = this.requireCheckpoint(run.id)
     this.runs.set(run.id, clone(run))
     this.checkpoints.set(run.id, {
@@ -290,6 +333,25 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
       ...clone(fields),
       lastPersistedAt: run.updatedAt,
     })
+    const checkpoint = memoryDomainCheckpoint(this.requireCheckpoint(run.id))
+    const events = buildRunTransitionEvents({
+      before,
+      after: run,
+      expectedSequence: domainBefore.sequence,
+      reason: 'run_state_and_checkpoint_saved',
+    })
+    if (!isDeepStrictEqual(domainBefore.checkpoint, checkpoint)) {
+      events.push(buildCheckpointChangedEvent({
+        run,
+        expectedSequence: domainBefore.sequence + events.length,
+        checkpoint,
+      }))
+    }
+    const snapshot = events.length
+      ? this.appendDomainEvents({ runId: run.id, expectedSequence: domainBefore.sequence, events })
+      : domainBefore
+    assertRunDomainProjection(snapshot, run)
+    assertRunDomainCheckpointProjection(snapshot, checkpoint)
   }
 
   async listRunsForThread(threadId: string): Promise<AnalysisRun[]> {
@@ -309,6 +371,7 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
       ...clone(fields),
       lastPersistedAt: run.updatedAt,
     })
+    this.recordMemoryCheckpoint(runId)
   }
 
   async getRunCheckpoint(runId: string): Promise<RunCheckpoint> {
@@ -326,6 +389,7 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
     inputLeaseId?: string | null
     terminalToolCallIds?: readonly string[]
   }): Promise<RunSteeringRecord[]> {
+    const domainBefore = this.requireDomainSnapshot(runId)
     const current = this.requireCheckpoint(runId)
     const leaseId = input.inputLeaseId ?? null
     const terminalToolCallIds = new Set(input.terminalToolCallIds ?? [])
@@ -354,6 +418,7 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
           pendingToolCallIds,
           recoveryStatus: pendingToolCallIds.length ? 'requires_action' : 'clean',
         })
+        this.recordMemoryCheckpoint(runId, domainBefore)
         return clone(leaseRows)
       }
       if (
@@ -397,6 +462,7 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
       activeInputLeaseFrom: leaseId ? null : current.activeInputLeaseFrom,
       activeInputLeaseTo: leaseId ? null : current.activeInputLeaseTo,
     })
+    this.recordMemoryCheckpoint(runId, domainBefore, acked)
     return clone(acked)
   }
 
@@ -444,14 +510,77 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
     values: readonly ToolValueRef[],
     _artifacts: readonly ArtifactRef[],
   ): Promise<boolean> {
-    this.requireRun(run.id)
+    const before = clone(this.requireRun(run.id))
+    const domainBefore = this.requireDomainSnapshot(run.id)
     const commitKey = `${run.id}:${resultId}`
     if (this.committedToolResults.has(commitKey)) return false
     this.committedToolResults.add(commitKey)
     this.runs.set(run.id, clone(run))
     const current = this.values.get(run.id) ?? []
     this.values.set(run.id, [...current, ...values.map(value => clone(toolValueRefSchema.parse(value)))])
+    const domainEvents = buildRunTransitionEvents({
+      before,
+      after: run,
+      expectedSequence: domainBefore.sequence,
+      reason: 'tool_result_committed',
+      resultId,
+    })
+    const domainSnapshot = this.appendDomainEvents({
+      runId: run.id,
+      expectedSequence: domainBefore.sequence,
+      events: domainEvents,
+    })
+    assertRunDomainProjection(domainSnapshot, run)
+    assertRunDomainCheckpointProjection(
+      domainSnapshot,
+      memoryDomainCheckpoint(this.requireCheckpoint(run.id)),
+    )
     return true
+  }
+
+  async appendRunDomainEvents(input: {
+    runId: string
+    expectedSequence: number
+    events: readonly RunDomainEvent[]
+  }): Promise<RunDomainSnapshot> {
+    const run = this.requireRun(input.runId)
+    const previousEvents = clone(this.domainEvents.get(input.runId) ?? [])
+    const previousSnapshot = clone(this.domainSnapshots.get(input.runId) ?? null)
+    try {
+      const snapshot = this.appendDomainEvents(input)
+      assertRunDomainProjection(snapshot, run)
+      assertRunDomainCheckpointProjection(
+        snapshot,
+        memoryDomainCheckpoint(this.requireCheckpoint(input.runId)),
+      )
+      assertRunDomainInputCollection(
+        snapshot,
+        (this.inputs.get(input.runId) ?? []).map(record => ({
+          inputId: record.steeringId,
+          inputSequence: record.inputSequence,
+          status: record.status,
+          leaseId: record.status === 'queued' ? null : record.leaseId,
+        })),
+      )
+      return clone(snapshot)
+    } catch (error) {
+      this.domainEvents.set(input.runId, previousEvents)
+      if (previousSnapshot) this.domainSnapshots.set(input.runId, previousSnapshot)
+      else this.domainSnapshots.delete(input.runId)
+      throw error
+    }
+  }
+
+  async getRunDomainSnapshot(runId: string): Promise<RunDomainSnapshot | null> {
+    this.requireRun(runId)
+    const snapshot = this.domainSnapshots.get(runId)
+    return snapshot ? clone(snapshot) : null
+  }
+
+  async listRunDomainEvents(runId: string, afterSequence = 0): Promise<RunDomainEvent[]> {
+    this.requireRun(runId)
+    return clone((this.domainEvents.get(runId) ?? [])
+      .filter(event => event.sequence > afterSequence))
   }
 
   async listToolValues(runId: string): Promise<ToolValueRef[]> {
@@ -649,6 +778,7 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
       return clone(existing)
     }
     const run = this.requireRun(input.runId)
+    const domainBefore = this.requireDomainSnapshot(input.runId)
     if (!run.threadId) throw new Error(`运行 '${input.runId}' 缺少 threadId`)
     const content = input.content.trim()
     const entry = await this.appendConversationEntry({
@@ -677,11 +807,13 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
     this.persistRunInputItems([record])
     const checkpoint = this.requireCheckpoint(run.id)
     this.checkpoints.set(run.id, { ...checkpoint, nextInputSequence: checkpoint.nextInputSequence + 1 })
+    this.recordMemoryInputTransition(run.id, domainBefore, 'input.queued', [record])
     return clone(record)
   }
 
   async leaseRunInputs(runId: string, leaseId: string): Promise<RunSteeringRecord[]> {
     this.requireRun(runId)
+    const domainBefore = this.requireDomainSnapshot(runId)
     const checkpoint = this.requireCheckpoint(runId)
     if (checkpoint.activeInputLeaseId) {
       if (checkpoint.activeInputLeaseId === leaseId) {
@@ -727,6 +859,7 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
       activeInputLeaseFrom: leased[0]!.inputSequence,
       activeInputLeaseTo: leased.at(-1)!.inputSequence,
     })
+    this.recordMemoryInputTransition(runId, domainBefore, 'input.leased', leased)
     return clone(leased)
   }
 
@@ -738,6 +871,7 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
 
   async requeueLeasedRunInputs(runId: string): Promise<RunSteeringRecord[]> {
     this.requireRun(runId)
+    const domainBefore = this.requireDomainSnapshot(runId)
     const checkpoint = this.requireCheckpoint(runId)
     const leaseId = checkpoint.activeInputLeaseId
     if (!leaseId) return []
@@ -775,12 +909,106 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
       activeInputLeaseFrom: null,
       activeInputLeaseTo: null,
     })
+    this.recordMemoryInputTransition(runId, domainBefore, 'input.requeued', requeued)
     return clone(requeued)
   }
 
   async listRunInputs(runId: string): Promise<RunSteeringRecord[]> {
     this.requireRun(runId)
     return clone(this.inputs.get(runId) ?? [])
+  }
+
+  private recordMemoryInputTransition(
+    runId: string,
+    domainBefore: RunDomainSnapshot,
+    type: 'input.queued' | 'input.leased' | 'input.requeued',
+    records: readonly RunSteeringRecord[],
+  ): void {
+    const run = this.requireRun(runId)
+    const checkpoint = memoryDomainCheckpoint(this.requireCheckpoint(runId))
+    const events: RunDomainEvent[] = [
+      buildInputTransitionEvent({
+        run,
+        expectedSequence: domainBefore.sequence,
+        type,
+        records,
+      }),
+      buildCheckpointChangedEvent({
+        run,
+        expectedSequence: domainBefore.sequence + 1,
+        checkpoint,
+      }),
+    ]
+    const snapshot = this.appendDomainEvents({
+      runId,
+      expectedSequence: domainBefore.sequence,
+      events,
+    })
+    assertRunDomainProjection(snapshot, run)
+    assertRunDomainCheckpointProjection(snapshot, checkpoint)
+    assertRunDomainInputProjection(snapshot, records)
+  }
+
+  private recordMemoryCheckpoint(
+    runId: string,
+    domainBefore = this.requireDomainSnapshot(runId),
+    acknowledged: readonly RunSteeringRecord[] = [],
+  ): void {
+    const run = this.requireRun(runId)
+    const checkpoint = memoryDomainCheckpoint(this.requireCheckpoint(runId))
+    const events: RunDomainEvent[] = []
+    if (acknowledged.length) {
+      events.push(buildInputTransitionEvent({
+        run,
+        expectedSequence: domainBefore.sequence,
+        type: 'input.checkpointed',
+        records: acknowledged,
+      }))
+    }
+    if (!isDeepStrictEqual(domainBefore.checkpoint, checkpoint)) {
+      events.push(buildCheckpointChangedEvent({
+        run,
+        expectedSequence: domainBefore.sequence + events.length,
+        checkpoint,
+      }))
+    }
+    const snapshot = events.length
+      ? this.appendDomainEvents({ runId, expectedSequence: domainBefore.sequence, events })
+      : domainBefore
+    assertRunDomainProjection(snapshot, run)
+    assertRunDomainCheckpointProjection(snapshot, checkpoint)
+    if (acknowledged.length) assertRunDomainInputProjection(snapshot, acknowledged)
+  }
+
+  private appendDomainEvents(input: {
+    runId: string
+    expectedSequence: number
+    events: readonly RunDomainEvent[]
+  }): RunDomainSnapshot {
+    const current = this.domainSnapshots.get(input.runId) ?? null
+    const currentSequence = current?.sequence ?? 0
+    if (currentSequence !== input.expectedSequence) {
+      throw new RunDomainSequenceConflictError(
+        input.runId,
+        input.expectedSequence,
+        currentSequence,
+      )
+    }
+    const events = input.events.map(event => runDomainEventSchema.parse(event))
+    const next = reduceRunDomainEvents(current, events)
+    if (!next) throw new Error(`run '${input.runId}' 领域日志没有产生 snapshot`)
+    this.domainEvents.set(input.runId, [
+      ...(this.domainEvents.get(input.runId) ?? []),
+      ...clone(events),
+    ])
+    this.domainSnapshots.set(input.runId, clone(next))
+    return next
+  }
+
+  private requireDomainSnapshot(runId: string): RunDomainSnapshot {
+    const snapshot = this.domainSnapshots.get(runId)
+    if (!snapshot) throw new Error(`run '${runId}' 缺少领域日志 snapshot`)
+    return clone(snapshot)
   }
 
   private persistRunInputItems(records: readonly RunSteeringRecord[]): void {
@@ -869,6 +1097,22 @@ function initialCheckpoint(updatedAt: string): CheckpointMetadata {
     activeInputLeaseId: null,
     activeInputLeaseFrom: null,
     activeInputLeaseTo: null,
+  }
+}
+
+function memoryDomainCheckpoint(checkpoint: CheckpointMetadata): RunDomainCheckpoint {
+  return {
+    activeEntryId: checkpoint.activeEntryId,
+    pendingToolCallIds: [...checkpoint.pendingToolCallIds],
+    recoveryStatus: checkpoint.recoveryStatus,
+    orchestrationEngine: checkpoint.orchestrationEngine,
+    sdkStateContentHash: checkpoint.sdkStateContentHash,
+    agentsSdkVersion: checkpoint.agentsSdkVersion,
+    runtimeConfigDigest: checkpoint.runtimeConfigDigest,
+    sdkStateSchemaVersion: checkpoint.sdkStateSchemaVersion,
+    nextInputSequence: checkpoint.nextInputSequence,
+    checkpointInputCursor: checkpoint.checkpointInputCursor,
+    activeInputLeaseId: checkpoint.activeInputLeaseId,
   }
 }
 

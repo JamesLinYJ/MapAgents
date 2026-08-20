@@ -206,6 +206,52 @@ export const platformRuns = pgTable('platform_runs', {
   statusUpdatedIdx: index('idx_platform_runs_status_updated').on(table.status, table.updatedAt),
 }))
 
+// Agent control plane 的 append-only 领域事件与 reducer snapshot。
+// platform_runs.state_json 在 shadow 阶段仍是生产读取事实源；这两张表
+// 只用于回放比对，不能被 UI 或运行时反向修改。
+export const platformRunDomainEvents = pgTable('platform_run_domain_events', {
+  eventId: text('event_id').primaryKey(),
+  runId: text('run_id').notNull().references(() => platformRuns.runId, { onDelete: 'cascade' }),
+  sequence: integer('sequence').notNull(),
+  eventType: text('event_type').notNull(),
+  schemaVersion: integer('schema_version').notNull(),
+  objectiveRevision: integer('objective_revision').notNull(),
+  turnId: text('turn_id'),
+  stepId: text('step_id'),
+  causationId: text('causation_id'),
+  correlationId: text('correlation_id').notNull(),
+  actorKind: text('actor_kind').notNull(),
+  actorId: text('actor_id'),
+  payloadJson: jsonb('payload_json').notNull().$type<Record<string, unknown>>(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+}, (table) => ({
+  runSequenceIdx: uniqueIndex('idx_run_domain_events_run_sequence_unique').on(table.runId, table.sequence),
+  runTypeIdx: index('idx_run_domain_events_run_type').on(table.runId, table.eventType, table.sequence),
+  objectiveRevisionCheck: check(
+    'platform_run_domain_events_objective_revision_check',
+    sql`${table.objectiveRevision} > 0`,
+  ),
+  sequenceCheck: check('platform_run_domain_events_sequence_check', sql`${table.sequence} > 0`),
+  schemaVersionCheck: check(
+    'platform_run_domain_events_schema_version_check',
+    sql`${table.schemaVersion} > 0`,
+  ),
+}))
+
+export const platformRunSnapshots = pgTable('platform_run_snapshots', {
+  runId: text('run_id').primaryKey().references(() => platformRuns.runId, { onDelete: 'cascade' }),
+  sequence: integer('sequence').notNull().default(0),
+  snapshotSchemaVersion: integer('snapshot_schema_version').notNull(),
+  stateJson: jsonb('state_json').notNull().$type<Record<string, unknown>>(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  sequenceCheck: check('platform_run_snapshots_sequence_check', sql`${table.sequence} >= 0`),
+  schemaVersionCheck: check(
+    'platform_run_snapshots_schema_version_check',
+    sql`${table.snapshotSchemaVersion} > 0`,
+  ),
+}))
+
 // 纯辅助模型结果缓存不是对话事实源；删除或过期不会影响 Run/Thread 恢复。
 // 仅保存内容哈希与已校验的小型结果，避免持久化原始提示词。
 export const platformModelResultCache = pgTable('platform_model_result_cache', {

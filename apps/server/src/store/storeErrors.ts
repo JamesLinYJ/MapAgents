@@ -29,3 +29,13 @@ export class MemoryVersionConflictError extends StoreConflictError {
     this.name = 'MemoryVersionConflictError'
   }
 }
+
+export class RunDomainSequenceConflictError extends StoreConflictError {
+  constructor(runId: string, expectedSequence: number, currentSequence: number) {
+    super(
+      `run '${runId}' 领域日志 sequence 冲突：`
+      + `期望 ${expectedSequence}，当前 ${currentSequence}`,
+    )
+    this.name = 'RunDomainSequenceConflictError'
+  }
+}

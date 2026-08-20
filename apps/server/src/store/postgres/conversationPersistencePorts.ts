@@ -15,6 +15,8 @@ import type {
   CompactionRecord,
   ConversationItem,
   RunCheckpoint,
+  RunDomainEvent,
+  RunDomainSnapshot,
   RunEvent,
   RunSteeringRecord,
   SessionRecord,
@@ -180,6 +182,18 @@ export interface RunRecordRepository {
   listToolValues(runId: string): Promise<ToolValueRef[]>
 }
 
+export interface AppendRunDomainEventsInput {
+  runId: string
+  expectedSequence: number
+  events: readonly RunDomainEvent[]
+}
+
+export interface RunDomainJournalRepository {
+  appendRunDomainEvents(input: AppendRunDomainEventsInput): Promise<RunDomainSnapshot>
+  getRunDomainSnapshot(runId: string): Promise<RunDomainSnapshot | null>
+  listRunDomainEvents(runId: string, afterSequence?: number): Promise<RunDomainEvent[]>
+}
+
 export interface RunRepository extends
   RunStateRepository,
   RunCheckpointRepository,
@@ -213,4 +227,5 @@ export interface ConversationPersistence extends
   RunRepository,
   ObjectReferenceRepository,
   RunInputRepository,
-  ToolResultCommitter {}
+  ToolResultCommitter,
+  RunDomainJournalRepository {}

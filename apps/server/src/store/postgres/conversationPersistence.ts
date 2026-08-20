@@ -15,6 +15,8 @@ import {
   type CompactionRecord,
   type ConversationItem,
   type RunCheckpoint,
+  type RunDomainEvent,
+  type RunDomainSnapshot,
   type RunEvent,
   type RunSteeringRecord,
   type SessionRecord,
@@ -34,6 +36,7 @@ import type {
   EnqueueRunInput,
   ObjectReferenceRepository,
   RunInputRepository,
+  RunDomainJournalRepository,
   RunLifecycleResult,
   RunRepository,
   ToolResultCommitter,
@@ -52,6 +55,7 @@ import { PostgresSessionRepository } from './sessionRepository.js'
 import { PostgresThreadRepository } from './threadRepository.js'
 import { PostgresRunRepository } from './runRepository.js'
 import { PostgresObjectReferenceRepository } from './objectReferenceRepository.js'
+import { PostgresRunDomainJournalRepository } from './runDomainJournalRepository.js'
 
 // PostgreSQL 是结构化会话事实源。Repository 只处理数据库语义；Agent 运行时、
 // WS 推送和诊断导出通过更窄的 Service 组合这些原子操作。
@@ -63,15 +67,29 @@ export class PostgresConversationPersistence implements ConversationPersistence 
   private readonly sessions: SessionRepository
   private readonly threads: ThreadRepository
   private readonly runs: RunRepository & ToolResultCommitter
+  private readonly domainJournal: RunDomainJournalRepository
   private readonly objectReferences: ObjectReferenceRepository
 
   constructor(db: Database) {
     const inputDelivery = new RunInputDeliveryRecorder(this.runRecords)
-    this.runInputs = new PostgresRunInputRepository(db, this.runMutations, inputDelivery)
+    const domainJournal = new PostgresRunDomainJournalRepository(db)
+    this.domainJournal = domainJournal
+    this.runInputs = new PostgresRunInputRepository(
+      db,
+      this.runMutations,
+      inputDelivery,
+      domainJournal,
+    )
     this.snapshots = new PostgresConversationSnapshotRepository(db)
     this.sessions = new PostgresSessionRepository(db)
     this.threads = new PostgresThreadRepository(db, this.runMutations)
-    this.runs = new PostgresRunRepository(db, this.runMutations, this.runRecords, inputDelivery)
+    this.runs = new PostgresRunRepository(
+      db,
+      this.runMutations,
+      this.runRecords,
+      domainJournal,
+      inputDelivery,
+    )
     this.objectReferences = new PostgresObjectReferenceRepository(db)
   }
 
@@ -260,6 +278,22 @@ export class PostgresConversationPersistence implements ConversationPersistence 
 
   async listRunInputs(runId: string): Promise<RunSteeringRecord[]> {
     return this.runInputs.listRunInputs(runId)
+  }
+
+  appendRunDomainEvents(input: {
+    runId: string
+    expectedSequence: number
+    events: readonly RunDomainEvent[]
+  }): Promise<RunDomainSnapshot> {
+    return this.domainJournal.appendRunDomainEvents(input)
+  }
+
+  getRunDomainSnapshot(runId: string): Promise<RunDomainSnapshot | null> {
+    return this.domainJournal.getRunDomainSnapshot(runId)
+  }
+
+  listRunDomainEvents(runId: string, afterSequence = 0): Promise<RunDomainEvent[]> {
+    return this.domainJournal.listRunDomainEvents(runId, afterSequence)
   }
 
 

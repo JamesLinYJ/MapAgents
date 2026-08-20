@@ -27,7 +27,21 @@ const migrationIds = [
   '010_file_ready_source_invariant',
   '011_custom_model_providers',
   '012_run_input_delivery_ack',
+  '013_run_domain_journal',
 ] as const
+
+function currentCapabilities(overrides: Record<string, unknown> = {}) {
+  return {
+    vector_tile_function: 'geo_agent_platform_layer_tiles(integer,integer,integer,json)',
+    model_result_cache_table: 'platform_model_result_cache',
+    file_objects_table: 'platform_file_objects',
+    model_providers_table: 'platform_model_providers',
+    run_domain_events_table: 'platform_run_domain_events',
+    run_snapshots_table: 'platform_run_snapshots',
+    run_input_delivery_ack: true,
+    ...overrides,
+  }
+}
 
 function currentMigrations() {
   return migrationIds.map(migration_id => ({ migration_id, checksum: 'a'.repeat(64) }))
@@ -47,13 +61,7 @@ describe('verifyDatabaseSchemaCompatibility', () => {
     const db = databaseWithRows(
       [{ table_name: 'platform_schema_migrations' }],
       currentMigrations(),
-      [{
-        vector_tile_function: 'geo_agent_platform_layer_tiles(integer,integer,integer,json)',
-        model_result_cache_table: 'platform_model_result_cache',
-        file_objects_table: 'platform_file_objects',
-        model_providers_table: 'platform_model_providers',
-        run_input_delivery_ack: true,
-      }],
+      [currentCapabilities()],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never)).resolves.toBeUndefined()
@@ -79,7 +87,7 @@ describe('verifyDatabaseSchemaCompatibility', () => {
   it('拒绝让旧服务连接未来版本数据库', async () => {
     const db = databaseWithRows(
       [{ table_name: 'platform_schema_migrations' }],
-      [...currentMigrations(), { migration_id: '013_future_change', checksum: 'b'.repeat(64) }],
+      [...currentMigrations(), { migration_id: '014_future_change', checksum: 'b'.repeat(64) }],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
@@ -90,13 +98,7 @@ describe('verifyDatabaseSchemaCompatibility', () => {
     const db = databaseWithRows(
       [{ table_name: 'platform_schema_migrations' }],
       currentMigrations(),
-      [{
-        vector_tile_function: null,
-        model_result_cache_table: 'platform_model_result_cache',
-        file_objects_table: 'platform_file_objects',
-        model_providers_table: 'platform_model_providers',
-        run_input_delivery_ack: true,
-      }],
+      [currentCapabilities({ vector_tile_function: null })],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
@@ -119,13 +121,7 @@ describe('verifyDatabaseSchemaCompatibility', () => {
     const db = databaseWithRows(
       [{ table_name: 'platform_schema_migrations' }],
       currentMigrations(),
-      [{
-        vector_tile_function: 'geo_agent_platform_layer_tiles(integer,integer,integer,json)',
-        model_result_cache_table: null,
-        file_objects_table: 'platform_file_objects',
-        model_providers_table: 'platform_model_providers',
-        run_input_delivery_ack: true,
-      }],
+      [currentCapabilities({ model_result_cache_table: null })],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
@@ -136,13 +132,7 @@ describe('verifyDatabaseSchemaCompatibility', () => {
     const db = databaseWithRows(
       [{ table_name: 'platform_schema_migrations' }],
       currentMigrations(),
-      [{
-        vector_tile_function: 'geo_agent_platform_layer_tiles(integer,integer,integer,json)',
-        model_result_cache_table: 'platform_model_result_cache',
-        file_objects_table: 'platform_file_objects',
-        model_providers_table: null,
-        run_input_delivery_ack: true,
-      }],
+      [currentCapabilities({ model_providers_table: null })],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
@@ -153,16 +143,21 @@ describe('verifyDatabaseSchemaCompatibility', () => {
     const db = databaseWithRows(
       [{ table_name: 'platform_schema_migrations' }],
       currentMigrations(),
-      [{
-        vector_tile_function: 'geo_agent_platform_layer_tiles(integer,integer,integer,json)',
-        model_result_cache_table: 'platform_model_result_cache',
-        file_objects_table: 'platform_file_objects',
-        model_providers_table: 'platform_model_providers',
-        run_input_delivery_ack: false,
-      }],
+      [currentCapabilities({ run_input_delivery_ack: false })],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
       .rejects.toThrow(/012_run_input_delivery_ack/u)
+  })
+
+  it('拒绝 Run domain journal 表缺失的半升级数据库', async () => {
+    const db = databaseWithRows(
+      [{ table_name: 'platform_schema_migrations' }],
+      currentMigrations(),
+      [currentCapabilities({ run_domain_events_table: null })],
+    )
+
+    await expect(verifyDatabaseSchemaCompatibility(db as never))
+      .rejects.toThrow(/013_run_domain_journal/u)
   })
 })

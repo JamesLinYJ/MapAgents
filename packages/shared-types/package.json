@@ -22,7 +22,8 @@
     "./local-operations": { "types": "./dist/localOperations.d.ts", "import": "./dist/localOperations.js", "default": "./dist/localOperations.js" },
     "./map": { "types": "./dist/map.d.ts", "import": "./dist/map.js", "default": "./dist/map.js" },
     "./release": { "types": "./dist/release.d.ts", "import": "./dist/release.js", "default": "./dist/release.js" },
-    "./meteorology": { "types": "./dist/meteorology.d.ts", "import": "./dist/meteorology.js", "default": "./dist/meteorology.js" }
+    "./meteorology": { "types": "./dist/meteorology.d.ts", "import": "./dist/meteorology.js", "default": "./dist/meteorology.js" },
+    "./run-domain": { "types": "./dist/runDomain.d.ts", "import": "./dist/runDomain.js", "default": "./dist/runDomain.js" }
   },
   "types": "./dist/index.d.ts",
   "scripts": {
