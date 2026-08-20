@@ -5,6 +5,7 @@
 ## 当前文档
 
 - [架构总览](architecture/overview.md)
+- [Codex 风格 Agents SDK 运行时完整重构计划](architecture/codex-agents-sdk-runtime-refactor-plan.md)
 - [完整项目架构图](architecture/project-architecture-complete.svg)
 - [本地运维台](operations/operations-console.md)
 - [本机 Agent CLI](operations/local-agent-cli.md)

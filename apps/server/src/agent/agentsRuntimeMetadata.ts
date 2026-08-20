@@ -18,12 +18,21 @@ import {
 } from '../schemas/types.js'
 
 export const SDK_STATE_SCHEMA_VERSION = AGENTS_SDK_STATE_SCHEMA_VERSION
+export const SUPPORTED_AGENTS_SDK_VERSION = '0.16.1'
 
 let versionPromise: Promise<string> | null = null
 
 export function agentsSdkVersion(): Promise<string> {
   versionPromise ??= readInstalledVersion()
   return versionPromise
+}
+
+export function assertAgentsSdkVersionSupported(version: string): void {
+  if (version !== SUPPORTED_AGENTS_SDK_VERSION) {
+    throw new Error(
+      `不支持的 @openai/agents 版本 '${version}'；要求 '${SUPPORTED_AGENTS_SDK_VERSION}'`,
+    )
+  }
 }
 
 export function runtimeConfigDigest(config: AgentRuntimeConfig): string {

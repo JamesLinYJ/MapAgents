@@ -12,6 +12,7 @@
 import { Agent, RunContext, RunState } from '@openai/agents'
 
 import type { AgentsExecutionContext } from './agentsToolBridge.js'
+import { toolCallResultIdsFromHistory } from './agentsSdkStateBoundary.js'
 import { SDK_STATE_SCHEMA_VERSION } from './agentsRuntimeMetadata.js'
 import type { RunSteeringRecord } from '../schemas/types.js'
 import type { AgentRuntimeStore } from '../store/runtimePorts.js'
@@ -41,7 +42,7 @@ export class AgentsCheckpointService {
     inputLeaseId: string | null = null,
   ): Promise<AgentsCheckpointCommit> {
     const serializedState = state.toString()
-    const terminalToolCallIds = toolCallResultIdsFromSerializedState(serializedState)
+    const terminalToolCallIds = toolCallResultIdsFromHistory(state.history)
     const acknowledgedInputs = await this.store.saveAgentsSdkState(runId, serializedState, {
       agentsSdkVersion: metadata.sdkVersion,
       runtimeConfigDigest: metadata.configDigest,
@@ -75,37 +76,6 @@ export class AgentsCheckpointService {
     if (!entry?.turnId) throw new Error(`run '${runId}' 缺少可恢复 turnId`)
     return entry.turnId
   }
-}
-
-/**
- * 只有已进入当前可恢复 RunState 的 function_call_result 才能关闭
- * 工具副作用账本。平台 tool result/transcript 先落盘不足以证明 SDK
- * 恢复点不会重放该调用。
- */
-export function toolCallResultIdsFromSerializedState(serializedState: string): string[] {
-  const parsed: unknown = JSON.parse(serializedState)
-  const callIds = new Set<string>()
-  if (isRecord(parsed) && Array.isArray(parsed.generatedItems)) {
-    collectFunctionCallResults(parsed.generatedItems, callIds)
-  }
-  return [...callIds]
-}
-
-function collectFunctionCallResults(value: unknown, callIds: Set<string>): void {
-  if (Array.isArray(value)) {
-    for (const item of value) collectFunctionCallResults(item, callIds)
-    return
-  }
-  if (!isRecord(value)) return
-  if (value.type === 'function_call_result') {
-    const callId = value.callId
-    if (typeof callId === 'string' && callId) callIds.add(callId)
-  }
-  for (const nested of Object.values(value)) collectFunctionCallResults(nested, callIds)
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 export function assertCheckpointCompatibility(
