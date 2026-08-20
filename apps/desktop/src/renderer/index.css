@@ -93,17 +93,6 @@
   }
 }
 
-@keyframes dc-entry-pulse {
-  0%, 100% {
-    transform: scale(0.92);
-    opacity: 0.82;
-  }
-  50% {
-    transform: scale(1.08);
-    opacity: 1;
-  }
-}
-
 @keyframes dc-startup-orbit {
   to { transform: rotate(360deg); }
 }

@@ -321,7 +321,7 @@ export function ModelSettingsPage({
       </section>
 
       {canManageProviders ? (
-        <section className="model-settings__section model-settings__custom" aria-labelledby="custom-provider-title">
+        <section className="model-settings__section" aria-labelledby="custom-provider-title">
           <div className="model-settings__section-heading">
             <div>
               <span className="model-settings__eyebrow">03 · 自定义服务</span>

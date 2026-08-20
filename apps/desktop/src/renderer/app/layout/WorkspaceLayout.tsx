@@ -626,7 +626,7 @@ export function WorkspaceLayout(props: WorkspaceLayoutProps) {
           collapsedSize={0}
           collapsible
         >
-          <aside className="gf-dock gf-assistant-dock" aria-label="智能对话">
+          <aside className="gf-dock" aria-label="智能对话">
             <header className="gf-dock-title">
               <span>
                 <Sparkles size={16} aria-hidden="true" />

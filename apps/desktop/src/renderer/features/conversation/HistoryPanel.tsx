@@ -80,7 +80,7 @@ export function HistoryPanel({
         {showTrash ? (
           trashedThreads.length ? trashedThreads.map(({ thread, deletedAt, purgeAfter }) => (
             <div key={thread.id} className="cc-task-row-wrap cc-task-row-wrap--trash">
-              <div className="cc-task-row cc-task-row--trash">
+              <div className="cc-task-row">
                 <span className="cc-task-row__main"><strong>{formatThreadDisplayTitle(thread)}</strong><small>删除于 {formatDate(deletedAt)} · 保留至 {formatDate(purgeAfter)}</small></span>
               </div>
               <div className="cc-task-actions">

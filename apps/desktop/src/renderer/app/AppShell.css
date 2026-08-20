@@ -512,23 +512,11 @@
   }
 
   .glass,
-  .glass-subtle,
-  .glass-strong,
-  .liquid-panel,
-  .liquid-strong,
-  .liquid-chip,
-  .nav-bar,
-  .app-sidebar,
   .dc-card,
-  .dc-sidebar__metric-card,
-  .dc-workspace-bar__card,
-  .composer-bar,
-  .msg-bot,
   .pill,
   .badge,
   .dc-pill-meta,
   .status-pill,
-  .dc-metric,
   .dc-summary-fact,
   .dc-current-result,
   .dc-keyvalue-row,
@@ -536,7 +524,6 @@
   .dc-panel-item,
   .dc-timeline__item,
   .dc-result-item,
-  .dc-service-item,
   .dc-layer-reference,
   .dc-layer-fields,
   .dc-layer-manager__item,
@@ -544,18 +531,12 @@
   .dc-icon-button,
   .dc-link-button,
   .dc-action-button,
-  .dc-utility--button,
-  .map-tool,
   .dc-map-stage__legend-item,
-  .dc-map-stage__zoom,
-  .dc-map-stage__icon,
-  .dc-map-stage__basemap,
   .dc-map-popup,
   .dc-map-stage__hud,
   .cc-panel,
   .cc-result-card,
   .cc-tool-io-card,
-  .cc-tool-detail,
   .cc-composer,
   .cc-decision-sheet,
   .cc-data-context,
@@ -570,7 +551,6 @@
   .cc-task-row,
   .cc-task-search,
   .cc-mode-trigger,
-  .sidebar-btn-active,
   .alert {
     position: relative;
     isolation: isolate;
@@ -594,23 +574,11 @@
 
   /* 玻璃膜是静态材质层，运行态动画只保留给加载、输入流和明确交互反馈。 */
   .glass::before,
-  .glass-subtle::before,
-  .glass-strong::before,
-  .liquid-panel::before,
-  .liquid-strong::before,
-  .liquid-chip::before,
-  .nav-bar::before,
-  .app-sidebar::before,
   .dc-card::before,
-  .dc-sidebar__metric-card::before,
-  .dc-workspace-bar__card::before,
-  .composer-bar::before,
-  .msg-bot::before,
   .pill::before,
   .badge::before,
   .dc-pill-meta::before,
   .status-pill::before,
-  .dc-metric::before,
   .dc-summary-fact::before,
   .dc-current-result::before,
   .dc-keyvalue-row::before,
@@ -618,25 +586,18 @@
   .dc-panel-item::before,
   .dc-timeline__item::before,
   .dc-result-item::before,
-  .dc-service-item::before,
   .dc-layer-reference::before,
   .dc-layer-manager__item::before,
   .dc-layer-manager__icon::before,
   .dc-icon-button::before,
   .dc-link-button::before,
   .dc-action-button::before,
-  .dc-utility--button::before,
-  .map-tool::before,
   .dc-map-stage__legend-item::before,
-  .dc-map-stage__zoom::before,
-  .dc-map-stage__icon::before,
-  .dc-map-stage__basemap::before,
   .dc-map-popup::before,
   .dc-map-stage__hud::before,
   .cc-panel::before,
   .cc-result-card::before,
   .cc-tool-io-card::before,
-  .cc-tool-detail::before,
   .cc-composer::before,
   .cc-decision-sheet::before,
   .cc-data-context::before,
@@ -651,7 +612,6 @@
   .cc-task-row::before,
   .cc-task-search::before,
   .cc-mode-trigger::before,
-  .sidebar-btn-active::before,
   .alert::before {
     content: "";
     position: absolute;
@@ -669,23 +629,11 @@
   }
 
   .glass::after,
-  .glass-subtle::after,
-  .glass-strong::after,
-  .liquid-panel::after,
-  .liquid-strong::after,
-  .liquid-chip::after,
-  .nav-bar::after,
-  .app-sidebar::after,
   .dc-card::after,
-  .dc-sidebar__metric-card::after,
-  .dc-workspace-bar__card::after,
-  .composer-bar::after,
-  .msg-bot::after,
   .pill::after,
   .badge::after,
   .dc-pill-meta::after,
   .status-pill::after,
-  .dc-metric::after,
   .dc-summary-fact::after,
   .dc-current-result::after,
   .dc-keyvalue-row::after,
@@ -693,25 +641,18 @@
   .dc-panel-item::after,
   .dc-timeline__item::after,
   .dc-result-item::after,
-  .dc-service-item::after,
   .dc-layer-reference::after,
   .dc-layer-manager__item::after,
   .dc-layer-manager__icon::after,
   .dc-icon-button::after,
   .dc-link-button::after,
   .dc-action-button::after,
-  .dc-utility--button::after,
-  .map-tool::after,
   .dc-map-stage__legend-item::after,
-  .dc-map-stage__zoom::after,
-  .dc-map-stage__icon::after,
-  .dc-map-stage__basemap::after,
   .dc-map-popup::after,
   .dc-map-stage__hud::after,
   .cc-panel::after,
   .cc-result-card::after,
   .cc-tool-io-card::after,
-  .cc-tool-detail::after,
   .cc-composer::after,
   .cc-decision-sheet::after,
   .cc-data-context::after,
@@ -726,7 +667,6 @@
   .cc-task-row::after,
   .cc-task-search::after,
   .cc-mode-trigger::after,
-  .sidebar-btn-active::after,
   .alert::after {
     content: "";
     position: absolute;
@@ -747,19 +687,7 @@
 
   :where(
     .glass,
-    .glass-subtle,
-    .glass-strong,
-    .liquid-panel,
-    .liquid-strong,
-    .liquid-chip,
-    .nav-bar,
-    .app-sidebar,
     .dc-card,
-    .dc-sidebar__metric-card,
-    .dc-workspace-bar__card,
-    .composer-bar,
-    .msg-bot,
-    .dc-metric,
     .dc-summary-fact,
     .dc-current-result,
     .dc-keyvalue-row,
@@ -767,16 +695,13 @@
     .dc-panel-item,
     .dc-timeline__item,
     .dc-result-item,
-    .dc-service-item,
     .dc-layer-reference,
     .dc-layer-manager__item,
-    .dc-map-stage__zoom,
     .dc-map-popup,
     .dc-map-stage__hud,
     .cc-panel,
     .cc-result-card,
     .cc-tool-io-card,
-    .cc-tool-detail,
     .cc-composer,
     .cc-decision-sheet,
     .cc-data-context,
@@ -791,33 +716,19 @@
     .cc-task-row,
     .cc-task-search,
     .cc-mode-trigger,
-    .sidebar-btn-active,
     .alert
   ) > * {
     position: relative;
     z-index: 1;
   }
 
-  .glass,
-  .liquid-panel {
+  .glass {
     --liquid-filter: var(--liquid-filter-panel);
     --liquid-alpha: 0.10;
     --liquid-blur: 16px;
   }
 
-  .glass-subtle {
-    --liquid-filter: var(--liquid-filter-panel);
-    --liquid-alpha: 0.065;
-    --liquid-blur: 14px;
-    --liquid-film-opacity: 0.20;
-    --liquid-shadow: 0 10px 28px rgb(15 23 42 / 0.07);
-  }
-
-  .glass-strong,
-  .liquid-strong,
   .dc-card,
-  .dc-sidebar__metric-card,
-  .dc-workspace-bar__card,
   .cc-panel,
   .cc-result-card {
     --liquid-filter: var(--liquid-filter-strong);
@@ -828,18 +739,12 @@
   }
 
   .pill,
-  .liquid-chip,
   .badge,
   .dc-pill-meta,
   .status-pill,
   .dc-link-button,
   .dc-action-button,
-  .dc-utility--button,
-  .map-tool,
   .dc-map-stage__legend-item,
-  .dc-map-stage__zoom,
-  .dc-map-stage__icon,
-  .dc-map-stage__basemap,
   .cc-mini-button,
   .cc-icon-button,
   .cc-mode-trigger {
@@ -850,53 +755,18 @@
     --liquid-shadow: 0 10px 24px rgb(15 23 42 / 0.08);
   }
 
-  .glass-card {
-    @apply rounded-[22px] transition-[transform,box-shadow,background-color] duration-300 ease-out active:scale-[0.985];
-  }
-
-  .nav-bar,
-  .dc-topbar {
-    @apply fixed inset-x-0 top-0 z-50 flex h-16 items-center justify-between gap-4 border-b border-white/35 bg-white/35 px-4 shadow-[0_1px_0_rgb(255_255_255/0.62),0_18px_44px_rgb(15_23_42/0.07)] backdrop-blur-3xl backdrop-saturate-200;
-    padding-top: env(safe-area-inset-top, 0);
-  }
-
-  .nav-title {
-    @apply text-[17px] font-semibold tracking-normal text-[#1c1c1e];
-  }
-
   .btn {
     @apply inline-flex min-h-11 cursor-pointer select-none items-center justify-center gap-1.5 border-0 font-semibold transition-[transform,box-shadow,background-color,opacity,color] duration-200 ease-out active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-40;
     touch-action: manipulation;
-  }
-
-  .btn-primary {
-    @apply rounded-[16px] bg-[linear-gradient(135deg,#1c1c1e,#3a3a3c)] px-5 text-[15px] text-white shadow-[0_10px_26px_rgb(28_28_30/0.18)] hover:-translate-y-0.5 hover:shadow-[0_16px_34px_rgb(28_28_30/0.24)];
-  }
-
-  .btn-ghost {
-    @apply min-h-10 rounded-[15px] bg-black/[0.055] px-4 text-[14px] text-[#1c1c1e] hover:bg-black/[0.09];
   }
 
   .btn-sm {
     @apply min-h-8 rounded-[12px] px-3 text-[13px];
   }
 
-  .btn-xs {
-    @apply min-h-7 rounded-[10px] px-2.5 text-[11px];
-  }
-
-  .btn-icon {
-    @apply grid size-10 cursor-pointer place-items-center rounded-[15px] border-0 bg-transparent text-[#6b7280] transition-[transform,background-color,color] duration-200 hover:bg-black/5 hover:text-[#1c1c1e] active:scale-90;
-    touch-action: manipulation;
-  }
-
   .pill {
     @apply inline-flex min-h-8 cursor-pointer select-none items-center gap-1.5 rounded-full border border-white/38 bg-white/32 px-3.5 text-[13px] font-medium text-[#3a3a3c] shadow-[inset_0_1px_0_rgb(255_255_255/0.62)] backdrop-blur-xl transition-[transform,background-color,color,box-shadow] duration-200 hover:bg-white/48 active:scale-[0.97];
     touch-action: manipulation;
-  }
-
-  .pill-active {
-    @apply border-black/10 bg-white/38 text-[#1c1c1e] shadow-[0_8px_22px_rgb(28_28_30/0.07),inset_0_1px_0_rgb(255_255_255/0.62)];
   }
 
   .badge,
@@ -905,7 +775,6 @@
     @apply inline-flex min-h-5 items-center gap-1.5 rounded-full border border-white/48 bg-black/[0.045] px-2 text-[10px] font-semibold uppercase tracking-normal text-[#6b7280];
   }
 
-  .badge-neutral,
   .status-pill--accent {
     @apply border-black/10 bg-black/[0.055] text-[#3a3a3c];
   }
@@ -925,35 +794,15 @@
     @apply border-white/45 bg-white/28 text-[#28313a];
   }
 
-  .status-pill__dot {
-    @apply size-1.5 rounded-full bg-current;
-  }
-
   .input,
   .dc-field input,
   .dc-field select {
     @apply min-h-11 w-full rounded-[16px] border border-transparent bg-black/[0.035] px-4 text-[15px] font-medium text-[#1c1c1e] outline-none transition-[border-color,box-shadow,background-color] duration-200 placeholder:text-[#8e8e93] focus:border-[#8e8e93] focus:bg-white/52 focus:shadow-[0_0_0_4px_rgb(28_28_30/0.08)];
   }
 
-  .sidebar-btn,
-  .dc-sidebar__item {
-    @apply flex min-h-11 w-full cursor-pointer items-center gap-3 rounded-[15px] border border-transparent bg-transparent px-3 text-left text-[15px] font-medium text-[#3a3a3c] transition-[transform,background-color,border-color,color,box-shadow] duration-200 hover:bg-white/42 hover:text-[#1c1c1e] active:scale-[0.985];
-    touch-action: manipulation;
-  }
-
-  .sidebar-btn-active,
-  .dc-sidebar__item--active {
-    @apply border-white/45 bg-white/42 text-[#1c1c1e] shadow-[0_12px_26px_rgb(15_23_42/0.07),inset_0_1px_0_rgb(255_255_255/0.68)];
-  }
-
-  .detail-label,
   .dc-card__eyebrow,
   .dc-panel-section__title {
     @apply block text-[11px] font-bold uppercase tracking-normal text-[#7b8190];
-  }
-
-  .detail-value {
-    @apply mt-1 block truncate text-[15px] font-semibold leading-snug text-[#1c1c1e];
   }
 
   .dc-detail-column {
@@ -990,8 +839,7 @@
   }
 
   .dc-link-button,
-  .dc-action-button,
-  .dc-utility--button {
+  .dc-action-button {
     @apply inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-full border border-white/42 bg-white/38 px-4 text-center text-[13px] font-semibold text-[#1c1c1e] shadow-[inset_0_1px_0_rgb(255_255_255/0.64)] backdrop-blur-xl transition-[transform,box-shadow,background-color,border-color,color,opacity] duration-200 hover:-translate-y-0.5 hover:bg-white/54 hover:shadow-[0_12px_24px_rgb(15_23_42/0.07)] active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-45;
     touch-action: manipulation;
   }
@@ -1001,14 +849,12 @@
     @apply border-black/10 bg-[#1c1c1e] text-white shadow-[0_12px_28px_rgb(28_28_30/0.20)] hover:bg-[#2c2c2e];
   }
 
-  .dc-metric-grid,
   .dc-summary-grid,
   .dc-keyvalue-list,
   .dc-form-grid {
     @apply mt-4 grid gap-3;
   }
 
-  .dc-metric-grid,
   .dc-summary-grid {
     @apply grid-cols-2;
   }
@@ -1021,7 +867,6 @@
     @apply sm:grid-cols-2;
   }
 
-  .dc-metric,
   .dc-summary-fact,
   .dc-current-result,
   .dc-keyvalue-row,
@@ -1029,28 +874,21 @@
   .dc-panel-item,
   .dc-timeline__item,
   .dc-result-item,
-  .dc-service-item,
   .dc-layer-reference,
   .dc-layer-manager__item {
     @apply rounded-[20px] border border-white/38 bg-white/32 p-4 shadow-[inset_0_1px_0_rgb(255_255_255/0.58)] backdrop-blur-xl;
   }
 
-  .dc-metric span,
   .dc-summary-fact span,
   .dc-current-result span,
   .dc-keyvalue-row span,
   .dc-panel-item span,
-  .dc-service-item span,
   .dc-result-item__copy span,
   .dc-layer-reference span,
   .dc-layer-reference p,
   .dc-layer-manager__main span,
   .dc-empty-copy {
     @apply text-[13px] leading-relaxed text-[#6b7280];
-  }
-
-  .dc-metric strong {
-    @apply mt-1 block text-2xl font-bold text-[#1c1c1e];
   }
 
   .dc-summary-fact strong {
@@ -1069,14 +907,9 @@
     @apply mt-1 text-[13px] leading-relaxed text-[#6b7280];
   }
 
-  .dc-metric__accent {
-    @apply text-[#1f7a3a];
-  }
-
   .dc-result-list,
   .dc-advice-list,
   .dc-panel-list,
-  .dc-service-list,
   .dc-layer-manager,
   .dc-layer-reference-list,
   .dc-timeline {
@@ -1084,8 +917,7 @@
   }
 
   .dc-result-item,
-  .dc-panel-item,
-  .dc-service-item {
+  .dc-panel-item {
     @apply flex w-full cursor-pointer items-center justify-between gap-3 text-left transition-[transform,box-shadow,border-color,background-color] duration-200 hover:-translate-y-0.5 hover:border-black/10 hover:bg-white/44 hover:shadow-[0_14px_30px_rgb(15_23_42/0.07)] active:scale-[0.985];
     touch-action: manipulation;
   }
@@ -1114,7 +946,6 @@
 
   .dc-result-item__copy strong,
   .dc-panel-item strong,
-  .dc-service-item strong,
   .dc-advice__title strong,
   .dc-keyvalue-row strong,
   .dc-layer-reference strong,
@@ -1127,8 +958,7 @@
   .dc-layer-manager__top,
   .dc-layer-reference__top,
   .dc-layer-reference__meta,
-  .dc-layer-manager__meta,
-  .dc-panel-item__actions {
+  .dc-layer-manager__meta {
     @apply flex items-center gap-2;
   }
 
@@ -1186,10 +1016,6 @@
     @apply grid gap-1 rounded-[14px] border border-white/30 bg-white/24 p-3 text-[12px] leading-relaxed text-[#596273];
   }
 
-  .dc-layer-import {
-    @apply mt-3 w-full;
-  }
-
   .dc-keyvalue-row {
     @apply flex items-center justify-between gap-3;
   }
@@ -1198,99 +1024,17 @@
     @apply grid gap-2 text-[12px] font-bold uppercase tracking-normal text-[#7b8190];
   }
 
-  .dc-error-banner,
-  .error-bar {
+  .dc-error-banner {
     @apply flex items-center justify-between gap-3 rounded-[18px] border border-white/45 bg-white/28 p-3 text-[14px] font-medium text-[#28313a] shadow-[inset_0_1px_0_rgb(255_255_255/0.6)];
-  }
-
-  .msg-row {
-    @apply flex flex-col gap-1 px-1;
-  }
-
-  .msg-user-row {
-    @apply items-end;
-  }
-
-  .msg-bot-row {
-    @apply items-start;
-  }
-
-  .msg-user {
-    @apply max-w-[82%] rounded-[20px] rounded-br-md bg-[linear-gradient(135deg,#1c1c1e,#3a3a3c)] px-4 py-2.5 text-[15px] leading-snug text-white shadow-[0_8px_20px_rgb(28_28_30/0.18)];
-  }
-
-  .msg-bot {
-    @apply max-w-[92%] rounded-[20px] rounded-bl-md border border-white/38 bg-white/38 px-4 py-3 text-[15px] leading-relaxed text-[#1c1c1e] shadow-[0_8px_22px_rgb(15_23_42/0.055),inset_0_1px_0_rgb(255_255_255/0.62)] backdrop-blur-2xl;
-  }
-
-  .msg-time {
-    @apply mt-1 px-1 font-mono text-[11px] text-[#8e8e93];
-  }
-
-  .composer-bar {
-    @apply sticky bottom-0 mt-auto flex items-end gap-2 rounded-[24px] border border-white/42 bg-white/36 p-2 shadow-[0_-1px_0_rgb(255_255_255/0.58),0_-18px_42px_rgb(15_23_42/0.055)] backdrop-blur-3xl backdrop-saturate-200;
   }
 
   .composer-input {
     @apply min-h-10 max-h-32 flex-1 resize-none rounded-[20px] border-0 bg-black/[0.045] px-4 py-2.5 text-[16px] text-[#1c1c1e] outline-none transition-colors duration-200 placeholder:text-[#8e8e93] focus:bg-black/[0.065];
   }
 
-  .send-btn {
-    @apply grid size-10 shrink-0 cursor-pointer place-items-center rounded-full border-0 bg-[linear-gradient(135deg,#1c1c1e,#3a3a3c)] text-white shadow-[0_8px_18px_rgb(28_28_30/0.22)] transition-[transform,opacity,box-shadow] duration-200 active:scale-[0.88] disabled:cursor-not-allowed disabled:opacity-30 disabled:shadow-none;
-    touch-action: manipulation;
-  }
-
   .task-row {
     @apply flex w-full cursor-pointer items-center gap-3 rounded-[16px] border-0 bg-transparent p-3 text-left transition-[transform,background-color] duration-200 active:scale-[0.985] active:bg-black/[0.045];
   }
-
-  .task-row-active {
-    @apply bg-black/[0.045];
-  }
-
-  .task-divider {
-    @apply mx-3 h-px bg-black/[0.06];
-  }
-
-  .empty-state {
-    @apply flex flex-col items-center justify-center gap-3 py-12 text-center text-[#8e8e93];
-  }
-
-  .empty-state h3 {
-    @apply text-[17px] font-semibold text-[#1c1c1e];
-  }
-
-  .empty-state p {
-    @apply text-[14px] leading-relaxed text-[#8e8e93];
-  }
-
-  .empty-state-icon {
-    @apply grid size-14 place-items-center rounded-[20px] bg-black/[0.055] text-[#1c1c1e];
-  }
-
-  .typing-dots {
-    @apply flex items-center gap-1 py-2;
-  }
-
-  .typing-dot {
-    @apply size-1.5 rounded-full bg-[#8e8e93];
-    animation: dc-typing 1.2s ease-in-out infinite;
-  }
-
-  .typing-dot:nth-child(2) {
-    animation-delay: 0.15s;
-  }
-
-  .typing-dot:nth-child(3) {
-    animation-delay: 0.3s;
-  }
-
-  .typing-dots-sm { @apply flex items-center gap-1; }
-  .typing-dot-sm { @apply inline-block size-1 rounded-full bg-[#8e8e93]; animation: dc-typing 1.2s ease-in-out infinite; }
-  .typing-dot-sm:nth-child(2) { animation-delay: 0.15s; }
-  .typing-dot-sm:nth-child(3) { animation-delay: 0.3s; }
-  .typing-dots-sm-inline { @apply inline-flex items-center gap-1 mr-1; }
-  .typing-dots-sm-inline .typing-dot-sm { @apply size-1; }
 
   .cc-wrap {
     @apply flex min-h-0 flex-col gap-3;
@@ -1413,11 +1157,7 @@
   }
 
   /* ── 工具卡片 ────────────────────────────── */
-  .cc-tool-detail { overflow: hidden; }
   .cc-tool-row { overflow: hidden; }
-  .cc-tool-detail .cc-assistant-copy {
-    @apply mt-1 pl-1 border-l-2 border-black/[0.06];
-  }
 
   .cc-assistant-copy .markdown-renderer p {
     @apply my-2;
@@ -1430,18 +1170,6 @@
 
   .cc-assistant-copy .markdown-renderer li {
     @apply my-1;
-  }
-
-  .cc-tool-head {
-    @apply mb-2 flex items-center gap-2 text-[15px] leading-6;
-  }
-
-  .cc-tool-head strong {
-    @apply font-semibold text-[#24292f];
-  }
-
-  .cc-tool-head span {
-    @apply text-[#24292f];
   }
 
   .cc-command-summary {
@@ -1492,10 +1220,6 @@
     @apply bg-[#ffebe9] text-[#a40e26];
   }
 
-  .cc-tool-row-copy {
-    @apply flex min-w-0 flex-col gap-0.5;
-  }
-
   .cc-tool-row-title {
     @apply min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[15px] font-semibold leading-6 text-[#24292f];
   }
@@ -1506,18 +1230,6 @@
 
   .cc-tool-row-mini-entry {
     @apply ml-1 inline-flex shrink-0 rounded-full border border-sky-200/80 bg-sky-50/80 px-2 py-0.5 text-[11px] font-semibold text-sky-700;
-  }
-
-  .cc-tool-row-preview {
-    @apply ml-12 mt-0.5 max-w-[680px] overflow-hidden rounded-[6px] border border-black/[0.08] bg-[#f6f8fa] px-2.5 py-1.5 text-[12px] leading-5 text-[#57606a];
-  }
-
-  .cc-tool-row-preview code {
-    @apply font-mono text-[12px] text-[#57606a];
-  }
-
-  .cc-tool-detail {
-    @apply ml-12 mt-1 max-w-[700px] rounded-[7px] border border-white/46 bg-white/54 px-3 py-2 text-[14px] leading-relaxed text-[#24292f] shadow-[0_1px_2px_rgb(27_31_36/0.03)];
   }
 
   .cc-tool-io-card {
@@ -1544,64 +1256,6 @@
 
   .cc-tool-io-section--output pre {
     @apply text-[#3f3f46];
-  }
-
-  .cc-tool-detail > p {
-    @apply my-1 flex flex-wrap items-baseline gap-2 text-[#6e7781];
-  }
-
-  .cc-tool-detail > p span {
-    @apply text-[12px] uppercase text-[#8c959f];
-  }
-
-  .cc-tool-detail code {
-    @apply rounded-[4px] bg-black/[0.07] px-1.5 py-0.5 font-mono text-[12px] text-[#24292f];
-    overflow-wrap: anywhere;
-    white-space: pre-wrap;
-  }
-
-  .cc-tool-args-block {
-    @apply items-start;
-  }
-
-  .cc-tool-args-block code {
-    @apply block min-w-0 flex-1;
-  }
-
-  .cc-tool-detail .markdown-renderer {
-    @apply text-[14px] leading-relaxed text-[#24292f];
-  }
-
-  .cc-tool-detail .markdown-renderer p {
-    @apply my-1 block text-[#24292f];
-  }
-
-  .cc-tool-detail .md-p {
-    @apply my-1;
-  }
-
-  .cc-command-status {
-    @apply justify-self-start rounded-full bg-transparent px-0 text-[13px] font-normal text-[#6e7781];
-  }
-
-  .cc-command-status--running {
-    @apply text-[#7d4e00];
-  }
-
-  .cc-command-status--failed {
-    @apply text-[#a40e26];
-  }
-
-  .cc-command-status--completed {
-    @apply text-[#1f883d];
-  }
-
-  .cc-tool-pending {
-    @apply border-t border-black/[0.08] bg-[#f6f8fa] px-3 py-2 text-[12px] leading-5 text-[#6e7781];
-  }
-
-  .cc-tool-more {
-    @apply text-[12px] text-[#6e7781];
   }
 
   .cc-approval-card {
@@ -1646,26 +1300,6 @@
 
   .cc-clarification-card__copy span {
     overflow-wrap: anywhere;
-  }
-
-  .cc-clarification-bar {
-    @apply flex items-start gap-3 rounded-[7px] border border-[#0969da]/25 bg-[#ddf4ff]/70 px-3 py-2;
-  }
-
-  .cc-clarification-bar__question {
-    @apply shrink-0 text-[13px] font-medium text-[#0969da];
-  }
-
-  .cc-clarification-bar__options {
-    @apply flex flex-1 flex-wrap items-center gap-2;
-  }
-
-  .cc-clarification-bar__chip {
-    @apply cursor-pointer rounded-full border border-[#0969da]/30 bg-white px-3 py-1 text-[12px] font-medium text-[#0969da] transition-colors duration-150 hover:bg-[#0969da]/8 active:bg-[#0969da]/15 disabled:cursor-not-allowed disabled:opacity-50;
-  }
-
-  .cc-clarification-bar__dismiss {
-    @apply cursor-pointer rounded-full border-0 bg-transparent px-2 py-1 text-[12px] text-[#6e7781] transition-colors duration-150 hover:text-[#24292f] hover:bg-black/5;
   }
 
   .cc-error-card {
@@ -1738,22 +1372,6 @@
     @apply grid size-8 cursor-pointer place-items-center rounded-[6px] border-0 bg-transparent text-[#24292f] transition-colors duration-150 hover:bg-[#f6f8fa] active:bg-[#eef1f4];
   }
 
-  .cc-file-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border-width: 0;
-  }
-
-  .cc-composer-spacer {
-    @apply flex-1;
-  }
-
   .cc-mode-picker {
     @apply static min-w-0;
   }
@@ -1774,22 +1392,6 @@
     @apply border-[#0969da]/25 bg-[#ddf4ff] text-[#0969da] hover:bg-[#cbefff];
   }
 
-  .cc-provider-chip {
-    @apply hidden min-w-0 max-w-[150px] items-center gap-1.5 rounded-[6px] px-2 text-[13px] font-medium text-[#57606a] sm:inline-flex;
-  }
-
-  .cc-provider-chip span {
-    @apply truncate;
-  }
-
-  .cc-send {
-    @apply grid size-9 cursor-pointer place-items-center rounded-[8px] border-0 bg-[#ffb3b8] text-white shadow-[0_2px_8px_rgb(255_128_135/0.34)] transition-[transform,opacity,background-color] duration-150 hover:bg-[#ff9fa6] active:scale-95 disabled:cursor-not-allowed disabled:opacity-45;
-  }
-
-  .cc-send--interrupt {
-    @apply inline-flex h-9 w-auto min-w-[78px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap bg-[#24292f] px-3 text-[13px] font-semibold shadow-[0_2px_8px_rgb(36_41_47/0.20)] hover:bg-[#424a53];
-  }
-
   .cc-samples {
     @apply mx-5 mt-3 flex shrink-0 gap-2 overflow-x-auto rounded-[8px] border border-black/[0.10] bg-[#f6f8fa] p-2;
     scrollbar-width: thin;
@@ -1800,9 +1402,6 @@
   }
 
   @container (max-width: 420px) {
-    .cc-provider-chip {
-      display: none;
-    }
 
     .cc-mode-trigger {
       width: 2rem;
@@ -1915,27 +1514,6 @@
   }
   .cc-plan-panel__goal {
     @apply mb-3 border-b border-black/[0.08] pb-3 text-[14px] leading-snug text-[#24292f];
-  }
-  .cc-plan-steps {
-    @apply flex flex-col gap-2;
-  }
-  .cc-plan-step {
-    @apply flex items-start gap-2.5;
-  }
-  .cc-plan-step__num {
-    @apply mt-0.5 flex size-[18px] shrink-0 items-center justify-center rounded-full bg-[#ddf4ff] text-[11px] font-semibold text-[#0969da];
-  }
-  .cc-plan-step__body {
-    @apply flex min-w-0 flex-col gap-0.5;
-  }
-  .cc-plan-step__body .cc-plan-step__tool {
-    @apply text-[13px] font-semibold text-[#1f2328];
-  }
-  .cc-plan-step__body .cc-plan-step__reason {
-    @apply text-[12px] text-[#57606a] leading-snug;
-  }
-  .cc-plan-step__args {
-    @apply mt-0.5 rounded-[4px] bg-black/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-[#57606a] truncate max-w-full inline-block;
   }
   /* ── Task 进度面板 ───────────────────────── */
   .cc-task-progress {
@@ -2120,20 +1698,11 @@
    * 高光和边缘透镜规则，状态色再在下面叠加。
    */
   .glass,
-  .glass-subtle,
-  .glass-strong,
-  .nav-bar,
-  .app-sidebar,
   .dc-card,
-  .dc-sidebar__metric-card,
-  .dc-workspace-bar__card,
-  .composer-bar,
-  .msg-bot,
   .pill,
   .badge,
   .dc-pill-meta,
   .status-pill,
-  .dc-metric,
   .dc-summary-fact,
   .dc-current-result,
   .dc-keyvalue-row,
@@ -2141,7 +1710,6 @@
   .dc-panel-item,
   .dc-timeline__item,
   .dc-result-item,
-  .dc-service-item,
   .dc-layer-reference,
   .dc-layer-fields,
   .dc-layer-manager__item,
@@ -2149,12 +1717,7 @@
   .dc-icon-button,
   .dc-link-button,
   .dc-action-button,
-  .dc-utility--button,
-  .map-tool,
   .dc-map-stage__legend-item,
-  .dc-map-stage__zoom,
-  .dc-map-stage__icon,
-  .dc-map-stage__basemap,
   .dc-map-popup,
   .alert {
     border-color: rgb(255 255 255 / 0.34);
@@ -2172,25 +1735,11 @@
     -webkit-backdrop-filter: blur(var(--liquid-blur, 18px)) saturate(230%) contrast(1.16) brightness(1.07);
   }
 
-  .nav-bar {
-    --liquid-alpha: 0.09;
-    --liquid-blur: 16px;
-    --liquid-shadow: 0 18px 44px rgb(15 23 42 / 0.08);
-  }
-
-  .app-sidebar {
-    --liquid-alpha: 0.08;
-    --liquid-blur: 16px;
-  }
-
   .pill,
   .badge,
   .dc-pill-meta,
   .status-pill,
-  .map-tool,
   .dc-map-stage__legend-item,
-  .dc-map-stage__icon,
-  .dc-map-stage__basemap,
   .dc-layer-manager__icon,
   .dc-icon-button,
   .dc-link-button,
@@ -2205,26 +1754,15 @@
     --liquid-alpha: 0.11;
   }
 
-  .dc-card--links {
-    --liquid-alpha: 0.10;
-  }
-
-  .msg-bot,
-  .composer-bar,
   .dc-map-popup,
   .alert {
     --liquid-alpha: 0.18;
     --liquid-blur: 18px;
   }
 
-  .pill-active,
-  .sidebar-btn-active,
-  .dc-sidebar__item--active,
   .dc-result-item--active,
   .dc-panel-item--active,
-  .dc-layer-manager__item--active,
-  .dc-map-stage__legend-item--active,
-  .dc-map-stage__basemap--active {
+  .dc-layer-manager__item--active {
     border-color: rgb(28 28 30 / 0.12);
     color: #1c1c1e;
     background:
@@ -2232,7 +1770,6 @@
       linear-gradient(180deg, rgb(255 255 255 / 0.08), rgb(255 255 255 / 0.018));
   }
 
-  .badge-neutral,
   .status-pill--accent {
     border-color: rgb(28 28 30 / 0.12);
     color: #3a3a3c;
@@ -2261,8 +1798,7 @@
   }
 
   .dc-link-button--primary,
-  .dc-action-button--primary,
-  .map-tool-active {
+  .dc-action-button--primary {
     border-color: rgb(255 255 255 / 0.48);
     color: #111820;
     background:
@@ -2307,91 +1843,10 @@
     background: rgb(142 142 147 / 0.36);
   }
 
-  .btn-primary,
-  .send-btn,
-  .msg-user {
-    position: relative;
-    isolation: isolate;
-    overflow: hidden;
-    border: 1px solid rgb(255 255 255 / 0.42);
-    color: #111820;
-    background:
-      radial-gradient(circle at 18% 8%, rgb(255 255 255 / 0.54), transparent 30%),
-      linear-gradient(145deg, rgb(255 255 255 / 0.38), rgb(255 255 255 / 0.12));
-    box-shadow:
-      inset 0 1px 0 rgb(255 255 255 / 0.44),
-      inset 0 -1px 0 rgb(0 0 0 / 0.08),
-      0 12px 28px rgb(0 0 0 / 0.10);
-    backdrop-filter: blur(10px) saturate(185%) contrast(1.06) brightness(1.06);
-    -webkit-backdrop-filter: blur(10px) saturate(185%) contrast(1.06) brightness(1.06);
-  }
-
   /* 主按钮与用户气泡共享静态折射膜，避免提交后对话区持续闪动。 */
-  .btn-primary::before,
-  .send-btn::before,
-  .msg-user::before {
-    content: "";
-    position: absolute;
-    inset: -60%;
-    z-index: 0;
-    pointer-events: none;
-    opacity: 0.44;
-    background:
-      conic-gradient(from 170deg at 50% 50%, transparent 0 18%, rgb(255 255 255 / 0.40) 28%, rgb(199 199 204 / 0.20) 42%, transparent 58%, rgb(255 255 255 / 0.28) 76%, transparent 100%);
-    mix-blend-mode: screen;
-    transform: translate3d(-6%, -4%, 0) rotate(-6deg) scale(1.02);
-  }
-
-  .btn-primary > *,
-  .send-btn > *,
-  .msg-user > * {
-    position: relative;
-    z-index: 1;
-  }
-}
-
-@media (max-width: 1279px) {
-  .digital-cartographer .app-shell-grid {
-    grid-template-columns: 76px minmax(0, 1fr);
-  }
-}
-
-@media (max-width: 1023px) {
-  .digital-cartographer .app-shell-grid {
-    @apply block pt-16;
-  }
-
-  .digital-cartographer .app-sidebar {
-    @apply fixed inset-x-3 bottom-3 top-auto z-40 h-auto rounded-[24px] border border-white/42 bg-white/44 p-2 shadow-[0_18px_50px_rgb(15_23_42/0.14)] backdrop-blur-3xl;
-    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
-  }
-
-  .digital-cartographer .app-sidebar-copy,
-  .digital-cartographer .app-sidebar-metrics {
-    @apply hidden;
-  }
-
-  .digital-cartographer .app-sidebar-nav {
-    @apply grid grid-cols-5 gap-1;
-  }
-
-  .digital-cartographer .workspace-grid {
-    @apply grid-cols-1;
-  }
-
-  .digital-cartographer .app-main {
-    @apply pb-28;
-  }
 }
 
 @media (max-width: 767px) {
-  .nav-bar {
-    @apply gap-2 px-3;
-  }
-
-  .digital-cartographer .workspace-overview {
-    @apply grid-cols-2;
-  }
 
   .dc-card {
     @apply rounded-[24px] p-4;
@@ -2399,10 +1854,6 @@
 
   .dc-map-stage__legend {
     @apply left-3 right-3 bottom-20 max-h-24;
-  }
-
-  .dc-map-stage__controls {
-    @apply bottom-3 right-3;
   }
 }
 
@@ -2419,16 +1870,8 @@
 
 @media (prefers-reduced-transparency: reduce) {
   .glass,
-  .glass-subtle,
-  .glass-strong,
   .dc-card,
-  .nav-bar,
-  .app-sidebar,
-  .composer-bar,
-  .dc-map-stage__legend-item,
-  .dc-map-stage__icon,
-  .dc-map-stage__basemap,
-  .dc-map-stage__zoom {
+  .dc-map-stage__legend-item {
     @apply bg-white shadow-none backdrop-blur-none;
   }
 }
@@ -2446,104 +1889,22 @@
   }
 }
 
+@keyframes dc-entry-pulse {
+  0%,
+  100% {
+    opacity: 0.82;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
 @keyframes dc-spin {
   to {
     transform: rotate(360deg);
   }
-}
-
-/* ======================================================================
- * VoiceBar — 语音条 (钉钉/微信风格)
- * ====================================================================== */
-
-@layer components {
-  .voice-trigger {
-    @apply mt-2 inline-flex items-center gap-1.5 rounded-xl border border-white/40 bg-white/50 px-3 py-1.5 text-[12px] font-medium text-slate-500;
-    @apply transition-all hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-600 active:scale-[0.97];
-  }
-
-  .voice-trigger__label {
-    @apply text-[11px];
-  }
-
-  .voice-bar {
-    @apply mt-2 rounded-2xl border border-white/40 bg-white/60 px-3 py-2 backdrop-blur-sm;
-  }
-
-  .voice-bar__row {
-    @apply flex items-center gap-2;
-  }
-
-  .voice-bar__btn {
-    @apply flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-600;
-    @apply transition-colors hover:bg-slate-200 active:scale-95;
-  }
-
-  .voice-bar__btn:disabled {
-    @apply cursor-not-allowed opacity-60;
-  }
-
-  .voice-bar__spinner {
-    @apply animate-spin;
-  }
-
-  .voice-bar__wave {
-    @apply relative flex-1 cursor-pointer overflow-hidden rounded-lg px-1 py-2;
-  }
-
-  .voice-bar__wave-bars {
-    @apply flex items-center gap-0.5;
-  }
-
-  .voice-bar__bar {
-    @apply block w-1 flex-shrink-0 rounded-full bg-slate-300 transition-all;
-    height: 8px;
-    animation: voice-bar-pulse 0.8s ease-in-out infinite;
-  }
-
-  .voice-bar__bar--active {
-    @apply bg-indigo-400;
-  }
-
-  .voice-bar__progress {
-    @apply absolute inset-y-0 left-0 rounded-lg bg-indigo-200/40 transition-[width] duration-200;
-  }
-
-  .voice-bar__time {
-    @apply flex-shrink-0 text-[11px] tabular-nums text-slate-400;
-    width: 32px;
-  }
-
-  .voice-bar__expand {
-    @apply flex-shrink-0 rounded-md p-0.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600;
-  }
-
-  .voice-bar__icon {
-    @apply flex-shrink-0 text-slate-300;
-  }
-
-  .voice-bar__text {
-    @apply mt-2 border-t border-slate-100 pt-2 text-[13px] leading-relaxed text-slate-600;
-  }
-
-  /* 文件浏览器 — Windows 资源管理器风格 */
-  .file-browser__head {
-    @apply flex items-center gap-2 border-b border-slate-200 pb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400;
-  }
-  .file-browser__row {
-    @apply flex items-center gap-2 border-b border-slate-100 py-2.5 transition-colors hover:bg-slate-50;
-  }
-  .file-browser__row:last-child { @apply border-b-0; }
-  .file-browser__col { @apply flex items-center; }
-  .file-browser__col--name { @apply min-w-0 flex-1 gap-2 truncate text-[13px] font-medium text-slate-800; }
-  .file-browser__col--size { @apply w-20 flex-shrink-0 text-[12px] tabular-nums text-slate-500; }
-  .file-browser__col--date { @apply w-28 flex-shrink-0 text-[12px] tabular-nums text-slate-400; }
-  .file-browser__col--actions { @apply w-8 flex-shrink-0 justify-end; }
-}
-
-@keyframes voice-bar-pulse {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 1; }
 }
 
 /* ======================================================================
@@ -3231,7 +2592,6 @@
     @apply truncate text-[11px] text-slate-400;
   }
 
-  .tool-card__badges,
   .tool-management__risk,
   .tool-management__tag-row,
   .tool-provider-row__meta {
@@ -3650,15 +3010,10 @@
 
   :where(
     .glass,
-    .glass-subtle,
-    .liquid-panel,
-    .nav-bar,
-    .app-sidebar,
     .dc-map-stage__hud,
     .dc-map-popup,
     .cc-composer,
     .cc-tool-io-card,
-    .cc-tool-detail,
     .cc-decision-sheet,
     .cc-data-context,
     .cc-data-reference,
@@ -3668,8 +3023,7 @@
     .cc-error-card,
     .cc-system-card,
     .cc-task-row,
-    .cc-task-search,
-    .sidebar-btn-active
+    .cc-task-search
   ) {
     --liquid-filter: var(--liquid-filter-panel);
     backdrop-filter: var(--liquid-filter) blur(var(--liquid-blur, 16px)) saturate(230%) contrast(1.16) brightness(1.07) !important;
@@ -3677,11 +3031,7 @@
   }
 
   :where(
-    .glass-strong,
-    .liquid-strong,
     .dc-card,
-    .dc-sidebar__metric-card,
-    .dc-workspace-bar__card,
     .cc-panel,
     .cc-result-card
   ) {
@@ -3692,37 +3042,20 @@
 
   :where(
     .pill,
-    .liquid-chip,
     .badge,
     .dc-pill-meta,
     .status-pill,
     .dc-link-button,
     .dc-action-button,
-    .dc-utility--button,
-    .map-tool,
     .dc-map-stage__legend-item,
-    .dc-map-stage__zoom,
-    .dc-map-stage__icon,
-    .dc-map-stage__basemap,
     .dc-map-stage__canvas .maplibregl-ctrl-scale,
     .cc-mini-button,
     .cc-icon-button,
-    .cc-mode-trigger,
-    .sidebar-btn-active
+    .cc-mode-trigger
   ) {
     --liquid-filter: var(--liquid-filter-chip);
     backdrop-filter: var(--liquid-filter) blur(var(--liquid-blur, 12px)) saturate(225%) contrast(1.12) brightness(1.06) !important;
     -webkit-backdrop-filter: var(--liquid-filter) blur(var(--liquid-blur, 12px)) saturate(225%) contrast(1.12) brightness(1.06) !important;
-  }
-
-  .dc-map-stage.glass-strong {
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-  }
-
-  .dc-map-stage.glass-strong::before,
-  .dc-map-stage.glass-strong::after {
-    display: none;
   }
 
   /* ---- spin animation utility ---- */
@@ -3844,14 +3177,6 @@
     display: none;
   }
 
-  .liquid-glass-local-defs {
-    position: absolute;
-    width: 0;
-    height: 0;
-    overflow: hidden;
-    pointer-events: none;
-  }
-
   .liquid-glass-surface {
     position: relative;
     isolation: isolate;
@@ -3895,185 +3220,14 @@
     mask-composite: exclude;
   }
 
-  .liquid-glass-surface > :not(.liquid-glass-local-defs) {
+  .liquid-glass-surface > * {
     position: relative;
     z-index: 1;
   }
 
-  .liquid-glass-surface--strong {
-    --liquid-blur: 26px;
-    --liquid-film-opacity: 0.48;
-    background: var(--glass-strong-bg);
-    box-shadow: var(--glass-shadow);
-  }
-
-  .liquid-glass-surface--chip {
-    --liquid-blur: 16px;
-    --liquid-film-opacity: 0.34;
-    background: var(--glass-chip-bg);
-    box-shadow: var(--glass-shadow-soft);
-    backdrop-filter: var(--liquid-filter) blur(16px) saturate(210%) contrast(1.12) brightness(1.06) !important;
-    -webkit-backdrop-filter: var(--liquid-filter) blur(16px) saturate(210%) contrast(1.12) brightness(1.06) !important;
-  }
-
-  .nav-bar {
-    inset: 10px 14px auto;
-    width: auto;
-    height: 58px;
-    padding: 0 10px 0 12px;
-    border-radius: 24px;
-    border-bottom-width: 1px;
-    background: var(--glass-strong-bg);
-    box-shadow: var(--glass-shadow);
-  }
-
-  .nav-bar__identity {
-    @apply flex min-w-0 flex-1 items-center gap-3;
-  }
-
-  .nav-bar__mark {
-    @apply grid size-9 shrink-0 place-items-center rounded-[14px] border border-white/55 text-[#1f3038];
-    background: var(--glass-control-bg);
-    box-shadow: var(--glass-shadow-soft);
-  }
-
-  .nav-bar__brand {
-    @apply hidden shrink-0 flex-col leading-none md:flex;
-  }
-
-  .nav-bar__brand strong {
-    @apply text-[14px] font-bold tracking-[-0.02em] text-[#101820];
-  }
-
-  .nav-bar__brand span {
-    @apply mt-1 text-[9px] font-semibold tracking-[0.08em] text-[#5f7078];
-  }
-
-  .nav-bar__nav {
-    @apply flex min-w-0 items-center gap-1 md:ml-2;
-  }
-
-  .nav-bar__nav-item {
-    @apply flex h-9 cursor-pointer items-center gap-1.5 rounded-[13px] border border-transparent px-3 text-[13px] font-semibold text-[#52626b] transition-[color,background-color,border-color,box-shadow,transform] duration-200 hover:text-[#111a21] active:scale-[0.97];
-  }
-
-  .nav-bar__nav-item--active {
-    @apply border-white/60 text-[#111a21];
-    background: var(--glass-control-bg);
-    box-shadow: var(--glass-shadow-soft);
-  }
-
-  .nav-bar__status {
-    @apply flex shrink-0 items-center gap-2;
-  }
-
-  .nav-bar__status-chip {
-    @apply h-8 items-center gap-1.5 rounded-[12px] border border-white/42 px-2.5 text-[11px] font-semibold text-[#58666f];
-    background: var(--glass-chip-bg);
-  }
-
-  .btn-primary {
-    color: #111820;
-    background:
-      radial-gradient(circle at 18% 0%, rgb(255 255 255 / 0.54), transparent 30%),
-      linear-gradient(145deg, rgb(255 255 255 / 0.40), rgb(255 255 255 / 0.12));
-    box-shadow:
-      inset 0 1px 0 rgb(255 255 255 / 0.64),
-      inset 0 -1px 0 rgb(0 0 0 / 0.08),
-      0 12px 28px rgb(0 0 0 / 0.10);
-  }
-
-  .app-shell-grid {
-    display: grid;
-    min-height: 100dvh;
-    grid-template-columns: var(--dc-sidebar-width) minmax(0, 1fr);
-    gap: 14px;
-    padding: 82px 14px 14px;
-  }
-
-  .app-sidebar {
-    position: sticky;
-    top: 82px;
-    display: flex;
-    height: calc(100dvh - 96px);
-    flex-direction: column;
-    gap: 20px;
-    align-self: start;
-    border-radius: 28px;
-    padding: 20px 16px 16px;
-  }
-
-  .app-sidebar-copy {
-    @apply px-2 pt-1;
-  }
-
-  .app-sidebar-copy h2 {
-    @apply mt-1.5 text-[20px] font-bold tracking-[-0.025em] text-[#101820];
-  }
-
-  .app-sidebar-copy p {
-    @apply mt-2 text-[12px] leading-relaxed text-[#5c6a73];
-  }
-
-  .app-sidebar-nav {
-    @apply flex flex-col gap-1;
-  }
-
-  .sidebar-btn,
-  .dc-sidebar__item {
-    @apply min-h-11 rounded-[15px] px-3.5 text-[14px] font-semibold text-[#4f5d66] transition-[background-color,color,box-shadow,transform] duration-200 active:scale-[0.98];
-  }
-
-  .sidebar-btn-active,
-  .dc-sidebar__item--active {
-    color: #111a21;
-    background: var(--glass-control-bg);
-    box-shadow: var(--glass-shadow-soft);
-  }
-
-  .app-sidebar-metrics {
-    @apply mt-auto flex flex-col gap-2.5;
-  }
-
-  .app-sidebar-metrics article {
-    @apply rounded-[18px] p-3.5;
-  }
-
-  .app-sidebar-metrics p,
-  .workspace-overview__card p {
-    @apply mt-1 truncate text-[11px] text-[#66747d];
-  }
-
-  .app-main {
-    @apply min-w-0;
-  }
-
-  .workspace-overview {
-    @apply mb-3 grid grid-cols-[repeat(4,minmax(0,1fr))] gap-3;
-  }
-
-  .workspace-overview__card {
-    @apply min-w-0 rounded-[20px] px-4 py-3.5;
-    background: var(--glass-chip-bg);
-    box-shadow: var(--glass-shadow-soft);
-  }
-
-  .detail-label,
   .dc-card__eyebrow,
   .dc-panel-section__title {
     color: #68757e;
-  }
-
-  .detail-value {
-    color: #111a21;
-  }
-
-  .workspace-grid {
-    display: grid;
-    min-height: calc(100dvh - 174px);
-    grid-template-columns: minmax(390px, 0.98fr) minmax(460px, 1.38fr) minmax(260px, 0.72fr);
-    align-items: start;
-    gap: 14px;
   }
 
   .dc-card,
@@ -4740,27 +3894,20 @@
       --liquid-edge: rgb(15 23 42 / 0.30);
     }
 
-    :where(.glass, .glass-subtle, .glass-strong, .liquid-glass-surface, .cc-panel, .dc-card, .panel, .tool-mini-app) {
+    :where(.glass, .liquid-glass-surface, .cc-panel, .dc-card, .panel, .tool-mini-app) {
       backdrop-filter: none !important;
       -webkit-backdrop-filter: none !important;
     }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    :where(.glass, .glass-subtle, .glass-strong, .liquid-glass-surface)::before {
+    :where(.glass, .liquid-glass-surface)::before {
       animation: none;
     }
   }
 }
 
 @media (max-width: 1439px) {
-  .digital-cartographer .workspace-grid {
-    grid-template-columns: minmax(360px, 0.92fr) minmax(440px, 1.28fr);
-  }
-
-  .digital-cartographer .workspace-grid > :nth-child(3) {
-    grid-column: 1 / -1;
-  }
 
   .digital-cartographer .tool-management-host {
     grid-column: 1 / -1;
@@ -4768,23 +3915,6 @@
 }
 
 @media (max-width: 1279px) {
-  .digital-cartographer .app-shell-grid {
-    grid-template-columns: 82px minmax(0, 1fr);
-  }
-
-  .digital-cartographer .app-sidebar {
-    padding-inline: 10px;
-  }
-
-  .digital-cartographer .app-sidebar-copy,
-  .digital-cartographer .app-sidebar-metrics {
-    display: none;
-  }
-
-  .digital-cartographer .sidebar-btn {
-    justify-content: center;
-    padding-inline: 0;
-  }
 
   .tool-provider-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4810,40 +3940,6 @@
   }
 
   .dc-entry-status {
-    grid-column: auto;
-  }
-
-  .digital-cartographer .app-shell-grid {
-    display: block;
-    padding: 80px 12px 96px;
-  }
-
-  .digital-cartographer .app-sidebar {
-    position: fixed;
-    inset: auto 12px 12px;
-    z-index: 40;
-    display: block;
-    width: auto;
-    height: auto;
-    min-height: 0;
-    border-radius: 24px;
-    padding: 7px;
-  }
-
-  .digital-cartographer .app-sidebar-nav {
-    display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-  }
-
-  .digital-cartographer .workspace-overview {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .digital-cartographer .workspace-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .digital-cartographer .workspace-grid > :nth-child(3) {
     grid-column: auto;
   }
 
@@ -4952,29 +4048,6 @@
     order: 3;
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .nav-bar {
-    inset-inline: 8px;
-    top: 8px;
-    height: 56px;
-    border-radius: 20px;
-  }
-
-  .nav-bar__identity {
-    gap: 6px;
-  }
-
-  .nav-bar__mark {
-    display: none;
-  }
-
-  .nav-bar__nav-item {
-    padding-inline: 9px;
-  }
-
-  .digital-cartographer .app-shell-grid {
-    padding-inline: 8px;
   }
 
   .tool-management__hero {

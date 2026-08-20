@@ -99,7 +99,7 @@ function ScheduledTasksPanel(props: AutomationManagementPanelProps) {
   const [parameterError, setParameterError] = useState('')
   return (
     <main className="tool-management__detail tool-management__detail--extensions">
-      <section className="panel automation-panel automation-panel--summary">
+      <section className="panel automation-panel">
         <div className="panel__header"><div><div className="panel__eyebrow">系统调度</div><h2>定时任务</h2></div><StatusPill label={`${props.scheduledTasks.length} 个任务`} tone="accent" /></div>
         <div className="panel__section automation-form-grid">
           <Field label="目标自动化流程"><select value={selectedAutomationId} onChange={event => setSelectedAutomationId(event.target.value)}>{enabledAutomations.map(automation => <option key={automation.automationId} value={automation.automationId}>{automation.name} · 修订 {automation.revision}</option>)}</select></Field>

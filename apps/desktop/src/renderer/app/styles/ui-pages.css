@@ -298,6 +298,19 @@
   background: var(--ui-danger-soft);
 }
 
+.account-action--ghost {
+  color: var(--ui-text-muted);
+  border-color: var(--ui-border);
+  background: transparent;
+  box-shadow: none;
+}
+
+.account-action--ghost:hover:not(:disabled) {
+  color: var(--ui-accent-hover);
+  border-color: rgb(8 127 152 / 0.22);
+  background: var(--ui-accent-soft);
+}
+
 .account-action--danger:hover:not(:disabled),
 .model-settings__custom-actions button.is-danger:hover:not(:disabled) {
   color: #8e3030;

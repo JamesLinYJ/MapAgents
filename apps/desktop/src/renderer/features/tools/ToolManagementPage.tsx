@@ -321,7 +321,7 @@ export function ToolManagementPage({
         </LiquidGlassSurface>
 
         <main className="tool-management__detail">
-          <LiquidGlassSurface as="section" variant="panel" className="panel tool-management__provider-panel">
+          <LiquidGlassSurface as="section" variant="panel" className="panel">
             <div className="panel__header">
               <div>
                 <div className="panel__eyebrow">Provider Health</div>
@@ -388,7 +388,7 @@ export function ToolManagementPage({
                 </div>
                 <div className="panel__section">
                   <div className="tool-schema-grid">
-                    <div className="tool-management__form-column">
+                    <div>
                       <div className="panel__subheader">
                         <span>参数表单</span>
                         <span className="panel__muted">{selectedTool.parameters.length} 个参数</span>

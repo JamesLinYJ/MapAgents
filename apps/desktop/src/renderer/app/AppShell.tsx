@@ -22,16 +22,6 @@ import { Suspense, useCallback, useDeferredValue, useMemo } from 'react'
 import { domAnimation, LazyMotion, MotionConfig } from 'framer-motion'
 import { useQuery } from '@tanstack/react-query'
 
-import './AppShell.css'
-import './styles/glass.css'
-import './styles/markdown.css'
-import './styles/conversation.css'
-import './styles/map.css'
-import './styles/layers.css'
-import './styles/layout.css'
-import './styles/tools-debug.css'
-import './styles/settings.css'
-import './styles/desktop.css'
 import {
   cancelSubAgent,
   followUpSubAgent,

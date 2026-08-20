@@ -164,7 +164,7 @@ function RadarMosaicConsole({
   const timeRefs = valueRefs.filter((reference) => reference.kind === 'radar_target_time')
   const strategy = selectedRefs.find((reference) => reference.kind === 'radar_mosaic_strategy')
   return (
-    <div className="tool-mini-console tool-mini-console--radar" aria-label="天气雷达组网拼图 React 控制台">
+    <div className="tool-mini-console" aria-label="天气雷达组网拼图 React 控制台">
       <div className="tool-mini-console__banner">
         <span className="tool-mini-console__live-dot" />
         <strong>Radar Mosaic Agent</strong>
@@ -205,7 +205,7 @@ function RainfallRiskConsole({
 }) {
   const thresholds = thresholdRows(formState)
   return (
-    <div className="tool-mini-console tool-mini-console--risk" aria-label="短时强降水风险区划图 React 控制台">
+    <div className="tool-mini-console" aria-label="短时强降水风险区划图 React 控制台">
       <div className="tool-mini-console__grid">
         <ConsoleCard index="01" title="数据与变量">
           <SelectPreview label="NC 数据" value={selectedRefs.find((reference) => reference.kind === 'meteorological_dataset')?.label ?? '等待 dataset_ref'} />
@@ -246,7 +246,7 @@ function AreaRainfallConsole({
   const style = isRecord(formState.parsed.args.style) ? formState.parsed.args.style : {}
   const topN = typeof formState.parsed.args.top_n === 'number' ? formState.parsed.args.top_n : 10
   return (
-    <div className="tool-mini-console tool-mini-console--table" aria-label="区域累计面雨量排行表 React 控制台">
+    <div className="tool-mini-console" aria-label="区域累计面雨量排行表 React 控制台">
       <div className="tool-mini-console__grid">
         <ConsoleCard index="01" title="数据配置">
           <SelectPreview label="NC 文件集合" value={selectedRefs.find((reference) => ['meteorological_file_collection', 'nowcast_sequence'].includes(reference.kind))?.label ?? '等待文件集合'} />
@@ -655,4 +655,3 @@ function miniAppIcon(kind: MiniAppKind) {
   if (kind === 'area_rainfall_table_console') return <Table2 size={17} aria-hidden="true" />
   return <SlidersHorizontal size={17} aria-hidden="true" />
 }
-

@@ -308,7 +308,7 @@ function AutomationStudioInner({
               <PaletteButton icon={Braces} label="输出" disabled={readOnly} onAdd={() => addNode('output')} />
             </div>
           </section>
-          <section className="automation-palette__tools">
+          <section>
             <h3>工具节点</h3>
             <label className="automation-search"><Search size={14} /><input value={toolQuery} placeholder="搜索工具" onChange={event => setToolQuery(event.target.value)} /></label>
             <div className="automation-tool-list">

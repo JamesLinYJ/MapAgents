@@ -43,7 +43,7 @@ export function AccountCenterPage({ authMe, onLogout }: AccountCenterPageProps) 
         </header>
 
         <section className="account-grid" aria-label="账号详细信息">
-          <article className="account-panel account-panel--identity">
+          <article className="account-panel">
             <PanelHead icon={<UserRound size={18} />} title="身份信息" />
             <dl className="account-kv">
               <Row label="显示名称" value={displayName} />
