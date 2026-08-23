@@ -21,16 +21,28 @@ export function fitDesktopLogPage(
   page: OperationsLogPage,
   afterSequence: number | null,
 ): OperationsLogPage {
-  const entries = [...page.entries]
-  while (entries.length > 0 && serializedBytes({ ...page, entries }) > DESKTOP_CONTROL_FRAME_MAX_BYTES) {
-    if (afterSequence === null) entries.shift()
-    else entries.pop()
+  const candidate = (entryCount: number): OperationsLogPage => {
+    const entries = afterSequence === null
+      ? page.entries.slice(page.entries.length - entryCount)
+      : page.entries.slice(0, entryCount)
+    return {
+      entries,
+      nextCursor: entries.at(-1)?.sequence ?? afterSequence,
+      hasMore: page.hasMore || entries.length < page.entries.length,
+    }
   }
-  return {
-    entries,
-    nextCursor: entries.at(-1)?.sequence ?? afterSequence,
-    hasMore: page.hasMore || entries.length < page.entries.length,
+
+  let lower = 0
+  let upper = page.entries.length
+  while (lower < upper) {
+    const entryCount = Math.ceil((lower + upper) / 2)
+    if (serializedBytes(candidate(entryCount)) <= DESKTOP_CONTROL_FRAME_MAX_BYTES) {
+      lower = entryCount
+    } else {
+      upper = entryCount - 1
+    }
   }
+  return candidate(lower)
 }
 
 function serializedBytes(value: unknown): number {
