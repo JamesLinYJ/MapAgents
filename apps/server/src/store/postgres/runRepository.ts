@@ -19,6 +19,7 @@ import type {
   ToolValueRef,
 } from '../../schemas/types.js'
 import type { ToolInvocationRecord } from '@geo-agent-platform/shared-types/tool-runtime'
+import type { RunPresentationProjection } from '@geo-agent-platform/shared-types/run-presentation'
 import type { Database } from '../../db/connection.js'
 import type { RunMutationQueue } from '../runMutationQueue.js'
 import type {
@@ -141,6 +142,10 @@ export class PostgresRunRepository implements RunRepository, ToolInvocationRepos
 
   listToolValues(runId: string): Promise<ToolValueRef[]> {
     return this.records.listToolValues(runId)
+  }
+
+  loadRunPresentation(runId: string): Promise<RunPresentationProjection> {
+    return this.records.loadRunPresentation(runId)
   }
 
   commitToolResult(

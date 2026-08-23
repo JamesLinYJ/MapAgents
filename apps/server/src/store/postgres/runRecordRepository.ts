@@ -9,7 +9,14 @@
 //   来源:       runRepository.ts 的 Item、Event、Tool Value 与 outbox 边界
 // --------------------------------------------------------------------------
 
-import { and, asc, eq } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
+import {
+  RUN_PRESENTATION_PROJECTION_SCHEMA_VERSION,
+  replayRunPresentationRecords,
+  runPresentationProjectionSchema,
+  type RunPresentationProjection,
+  type RunPresentationRecord,
+} from '@geo-agent-platform/shared-types/run-presentation'
 
 import {
   conversationItemSchema,
@@ -23,6 +30,10 @@ import { summarizeAssistantText } from '../../conversation/items.js'
 import type { Database } from '../../db/connection.js'
 import { platformEventOutbox, platformRunRecords, platformRuns, platformThreads } from '../../db/schema.js'
 import { currentLogContext } from '../../observability/logger.js'
+import {
+  runPresentationProjectionFailuresTotal,
+  runPresentationProjectionLagRecords,
+} from '../../observability/metrics.js'
 import { makeId } from '../../utils/ids.js'
 import type { RunMutationQueue } from '../runMutationQueue.js'
 import type { RunRecordRepository } from './conversationPersistencePorts.js'
@@ -47,7 +58,7 @@ export class PostgresRunRecordRepository implements RunRecordRepository {
         .limit(1)
       const run = runRows[0]
       if (!run) throw new Error(`运行 '${parsed.runId}' 不存在`)
-      if (parsed.threadId !== null && run.threadId !== parsed.threadId) {
+      if (run.threadId !== parsed.threadId) {
         throw new Error(`运行记录的 threadId 与运行 '${parsed.runId}' 不一致`)
       }
       await this.runRecords.append(tx, parsed.runId, run.threadId, [{ recordType: 'item', payloadJson: parsed }], traceId)
@@ -74,19 +85,7 @@ export class PostgresRunRecordRepository implements RunRecordRepository {
   }
 
   async listConversationItems(runId: string): Promise<ConversationItem[]> {
-    const rows = await this.db.select({ payloadJson: platformRunRecords.payloadJson })
-      .from(platformRunRecords)
-      .where(and(
-        eq(platformRunRecords.runId, runId),
-        eq(platformRunRecords.recordType, 'item'),
-      ))
-      .orderBy(asc(platformRunRecords.sequence))
-    const latest = new Map<string, ConversationItem>()
-    for (const row of rows) {
-      const item = conversationItemSchema.parse(row.payloadJson)
-      latest.set(item.itemId, item)
-    }
-    return [...latest.values()].sort((left, right) => left.timestamp.localeCompare(right.timestamp))
+    return (await this.loadRunPresentation(runId)).items
   }
 
   async appendRunEvent(event: RunEvent): Promise<void> {
@@ -95,14 +94,7 @@ export class PostgresRunRecordRepository implements RunRecordRepository {
   }
 
   async listRunEvents(runId: string): Promise<RunEvent[]> {
-    const rows = await this.db.select({ payloadJson: platformRunRecords.payloadJson })
-      .from(platformRunRecords)
-      .where(and(
-        eq(platformRunRecords.runId, runId),
-        eq(platformRunRecords.recordType, 'event'),
-      ))
-      .orderBy(asc(platformRunRecords.sequence))
-    return rows.map(row => runEventSchema.parse(row.payloadJson))
+    return (await this.loadRunPresentation(runId)).events
   }
 
   async appendToolValue(runId: string, value: ToolValueRef): Promise<void> {
@@ -111,14 +103,58 @@ export class PostgresRunRecordRepository implements RunRecordRepository {
   }
 
   async listToolValues(runId: string): Promise<ToolValueRef[]> {
-    const rows = await this.db.select({ payloadJson: platformRunRecords.payloadJson })
-      .from(platformRunRecords)
-      .where(and(
-        eq(platformRunRecords.runId, runId),
-        eq(platformRunRecords.recordType, 'value'),
-      ))
-      .orderBy(asc(platformRunRecords.sequence))
-    return rows.map(row => toolValueRefSchema.parse(row.payloadJson))
+    return (await this.loadRunPresentation(runId)).values
+  }
+
+  async loadRunPresentation(runId: string): Promise<RunPresentationProjection> {
+    const rows = await this.db.select({
+      nextRecordSequence: platformRuns.nextRecordSequence,
+      recordId: platformRunRecords.recordId,
+      recordRunId: platformRunRecords.runId,
+      recordThreadId: platformRunRecords.threadId,
+      recordSequence: platformRunRecords.sequence,
+      recordType: platformRunRecords.recordType,
+      payloadJson: platformRunRecords.payloadJson,
+      recordCreatedAt: platformRunRecords.createdAt,
+    }).from(platformRuns)
+      .leftJoin(platformRunRecords, eq(platformRunRecords.runId, platformRuns.runId))
+      .where(eq(platformRuns.runId, runId))
+      .orderBy(platformRunRecords.sequence)
+    const runRow = rows[0]
+    if (!runRow) throw new Error(`运行 '${runId}' 不存在`)
+    const sourceSequence = runRow.nextRecordSequence - 1
+    const records = rows.flatMap<RunPresentationRecord>(row => row.recordId === null
+      ? []
+      : [{
+          recordId: row.recordId,
+          runId: row.recordRunId!,
+          threadId: row.recordThreadId,
+          sequence: row.recordSequence!,
+          recordType: row.recordType!,
+          payload: row.payloadJson,
+          createdAt: row.recordCreatedAt!.toISOString(),
+        }])
+    const appliedSequence = records.at(-1)?.sequence ?? 0
+    runPresentationProjectionLagRecords.observe(Math.max(0, sourceSequence - appliedSequence))
+    try {
+      const replayed = replayRunPresentationRecords(records)
+      if ((replayed?.sourceSequence ?? 0) !== sourceSequence) {
+        throw new Error(
+          `Run '${runId}' 展示投影游标落后：事实 ${sourceSequence}，已应用 ${replayed?.sourceSequence ?? 0}`,
+        )
+      }
+      return replayed ?? runPresentationProjectionSchema.parse({
+        schemaVersion: RUN_PRESENTATION_PROJECTION_SCHEMA_VERSION,
+        runId,
+        sourceSequence: 0,
+        items: [],
+        events: [],
+        values: [],
+      })
+    } catch (error) {
+      runPresentationProjectionFailuresTotal.inc({ reason: projectionFailureReason(error) })
+      throw error
+    }
   }
 
   private async appendTypedRunRecord(
@@ -137,7 +173,7 @@ export class PostgresRunRecordRepository implements RunRecordRepository {
         .limit(1)
       const run = runRows[0]
       if (!run) throw new Error(`运行 '${runId}' 不存在`)
-      if (threadId !== null && run.threadId !== threadId) {
+      if (recordType !== 'value' && run.threadId !== threadId) {
         throw new Error(`运行记录的 threadId 与运行 '${runId}' 不一致`)
       }
       await this.runRecords.append(tx, runId, run.threadId ?? threadId, [{ recordType, payloadJson }], traceId)
@@ -151,6 +187,14 @@ export class PostgresRunRecordRepository implements RunRecordRepository {
       })
     }))
   }
+}
+
+function projectionFailureReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  if (message.includes('sequence') || message.includes('游标落后')) return 'sequence'
+  if (message.includes('稳定 ID')) return 'identity'
+  if (message.includes('未知展示记录类型')) return 'record_type'
+  return 'schema'
 }
 
 function stringContextValue(key: string): string | null {

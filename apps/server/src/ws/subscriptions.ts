@@ -77,11 +77,12 @@ export interface ReservedRunCapture<T> {
 export interface RunSubscriptionStore {
   getRun(runId: string): AnalysisRun
   getThread(threadId: string): unknown
-  listItemSnapshot(runId: string): Promise<{
+  listPresentationSnapshot(runId: string): Promise<{
     items: ConversationItem[]
+    events: RunEvent[]
     itemStream: RunItemStreamSnapshot
+    sourceSequence: number
   }>
-  listEvents(runId: string): Promise<RunEvent[]>
 }
 
 export function subscribeToRun(
@@ -146,15 +147,12 @@ export function subscribeToThread(
 }
 
 export async function snapshotRun(runId: string, store: RunSubscriptionStore) {
-  const [itemSnapshot, events] = await Promise.all([
-    store.listItemSnapshot(runId),
-    store.listEvents(runId),
-  ])
+  const presentation = await store.listPresentationSnapshot(runId)
   return projectRunSnapshotForTransport({
     run: store.getRun(runId),
-    items: itemSnapshot.items,
-    events,
-    itemStream: itemSnapshot.itemStream,
+    items: presentation.items,
+    events: presentation.events,
+    itemStream: presentation.itemStream,
   })
 }
 

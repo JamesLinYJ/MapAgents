@@ -375,8 +375,8 @@ describe('WebSocket run subscriptions', () => {
     const session = await store.createSession()
     const thread = await store.createThread(session.id, '响应因果顺序')
     const run = await store.createRun(session.id, '测试响应与推送顺序', { threadId: thread.id })
-    const staleItemSnapshot = await store.listItemSnapshot(run.id)
-    const originalListItemSnapshot = store.listItemSnapshot.bind(store)
+    const staleItemSnapshot = await store.listPresentationSnapshot(run.id)
+    const originalListItemSnapshot = store.listPresentationSnapshot.bind(store)
     const originalGetRun = store.getRun.bind(store)
     let releaseStaleSnapshot!: () => void
     const staleSnapshotBlocked = new Promise<void>(resolve => { releaseStaleSnapshot = resolve })
@@ -386,7 +386,7 @@ describe('WebSocket run subscriptions', () => {
     const terminalSnapshotProjected = new Promise<void>(resolve => { markTerminalSnapshotProjected = resolve })
     let itemSnapshotCalls = 0
     let terminalItemSnapshotReady = false
-    store.listItemSnapshot = async requestedRunId => {
+    store.listPresentationSnapshot = async requestedRunId => {
       itemSnapshotCalls += 1
       if (itemSnapshotCalls === 1) {
         markStaleSnapshotStarted()
@@ -467,7 +467,7 @@ describe('WebSocket run subscriptions', () => {
       { type: 'run.snapshot', id: null },
     ])
 
-    store.listItemSnapshot = originalListItemSnapshot
+    store.listPresentationSnapshot = originalListItemSnapshot
     store.getRun = originalGetRun
     received.length = 0
     let releaseFailedSnapshot!: () => void
@@ -478,7 +478,7 @@ describe('WebSocket run subscriptions', () => {
     const recoverySnapshotProjected = new Promise<void>(resolve => { markRecoverySnapshotProjected = resolve })
     let failedItemSnapshotCalls = 0
     let recoveryItemSnapshotReady = false
-    store.listItemSnapshot = async requestedRunId => {
+    store.listPresentationSnapshot = async requestedRunId => {
       failedItemSnapshotCalls += 1
       if (failedItemSnapshotCalls === 1) {
         markFailedSnapshotStarted()
@@ -532,7 +532,7 @@ describe('WebSocket run subscriptions', () => {
     const thread = await store.createThread(session.id, '预留槽 FIFO')
     const run = await store.createRun(session.id, '旧推送不得被新响应超车', { threadId: thread.id })
     await store.updateRunStatus(run.id, 'completed')
-    const originalListItemSnapshot = store.listItemSnapshot.bind(store)
+    const originalListItemSnapshot = store.listPresentationSnapshot.bind(store)
     const originalGetRun = store.getRun.bind(store)
 
     const server = createServer((_request, response) => response.end())
@@ -561,7 +561,7 @@ describe('WebSocket run subscriptions', () => {
       ...baseSnapshot,
       itemStream: { ...baseSnapshot.itemStream, streamId: 'stream_old_reserved' },
     }
-    const newSnapshot = {
+    let newSnapshot = {
       ...baseSnapshot,
       itemStream: { ...baseSnapshot.itemStream, streamId: 'stream_new_terminal' },
     }
@@ -573,7 +573,7 @@ describe('WebSocket run subscriptions', () => {
     const newSnapshotProjected = new Promise<void>(resolve => { markNewSnapshotProjected = resolve })
     let snapshotCalls = 0
     let newSnapshotReady = false
-    store.listItemSnapshot = async () => {
+    store.listPresentationSnapshot = async () => {
       snapshotCalls += 1
       if (snapshotCalls === 1) {
         markOldSnapshotStarted()
@@ -612,6 +612,11 @@ describe('WebSocket run subscriptions', () => {
     await oldSnapshotStarted
     const ledgerEvent = runEvent(run.id, thread.id)
     await store.appendEvent(run.id, ledgerEvent)
+    newSnapshot = {
+      ...newSnapshot,
+      events: [ledgerEvent],
+      sourceSequence: newSnapshot.sourceSequence + 1,
+    }
     ws.send(JSON.stringify({
       type: 'run:get',
       id: 'newer_get',
@@ -653,7 +658,7 @@ describe('WebSocket run subscriptions', () => {
     }
     expect(projectedEvents.map(event => event.eventId)).toContain(ledgerEvent.eventId)
 
-    store.listItemSnapshot = originalListItemSnapshot
+    store.listPresentationSnapshot = originalListItemSnapshot
     store.getRun = originalGetRun
     received.length = 0
     let releaseFirstGet!: () => void
@@ -664,7 +669,7 @@ describe('WebSocket run subscriptions', () => {
     const secondGetProjected = new Promise<void>(resolve => { markSecondGetProjected = resolve })
     let getSnapshotCalls = 0
     let secondGetSnapshotReady = false
-    store.listItemSnapshot = async () => {
+    store.listPresentationSnapshot = async () => {
       getSnapshotCalls += 1
       if (getSnapshotCalls === 1) {
         markFirstGetStarted()

@@ -1650,6 +1650,35 @@ describe('platform architecture', () => {
     }
   })
 
+  it('builds run WebSocket snapshots from one strict presentation replay', async () => {
+    const repositoryRoot = path.resolve(process.cwd(), '..', '..')
+    const subscriptionsSource = await readFile(
+      path.join(repositoryRoot, 'apps/server/src/ws/subscriptions.ts'),
+      'utf8',
+    )
+    const repositorySource = await readFile(
+      path.join(repositoryRoot, 'apps/server/src/store/postgres/runRecordRepository.ts'),
+      'utf8',
+    )
+    const projectionSource = await readFile(
+      path.join(repositoryRoot, 'packages/shared-types/src/runPresentation.ts'),
+      'utf8',
+    )
+    const transcriptSource = await readFile(
+      path.join(repositoryRoot, 'apps/server/src/store/postgres/conversationTranscriptRepository.ts'),
+      'utf8',
+    )
+
+    expect(subscriptionsSource).toContain('store.listPresentationSnapshot(runId)')
+    expect(subscriptionsSource).not.toContain('store.listItemSnapshot(runId)')
+    expect(repositorySource).toContain('nextRecordSequence: platformRuns.nextRecordSequence')
+    expect(repositorySource).toContain('replayRunPresentationRecords(records)')
+    expect(projectionSource).toContain('record.sequence !== expectedSequence')
+    expect(projectionSource).toContain('insertImmutable(events, event.eventId')
+    expect(transcriptSource).toContain('.leftJoin(')
+    expect(transcriptSource).toContain('activeLeafEntryId: platformThreads.activeLeafEntryId')
+  })
+
   it('replays the latest thread projection and keeps deleted threads removed', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'geo-threads-'))
     try {

@@ -520,6 +520,10 @@ export class PlatformPersistenceFacade {
     return this.runStore.listItemSnapshot(runId)
   }
 
+  async listPresentationSnapshot(runId: string) {
+    return this.runStore.listPresentationSnapshot(runId)
+  }
+
   async getThreadManifest(threadId: string): Promise<ThreadManifest> {
     return this.threadStore.getManifest(threadId)
   }

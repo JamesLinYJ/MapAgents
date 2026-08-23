@@ -28,6 +28,7 @@ import {
 } from '../../schemas/types.js'
 import type { ToolInvocationRecord } from '@geo-agent-platform/shared-types/tool-runtime'
 import type { ApprovalRecord } from '@geo-agent-platform/shared-types/approval-runtime'
+import type { RunPresentationProjection } from '@geo-agent-platform/shared-types/run-presentation'
 import type { Database } from '../../db/connection.js'
 import { RunMutationQueue } from '../runMutationQueue.js'
 import type {
@@ -217,6 +218,10 @@ export class PostgresConversationPersistence implements ConversationPersistence 
 
   async listRunEvents(runId: string): Promise<RunEvent[]> {
     return this.runs.listRunEvents(runId)
+  }
+
+  async loadRunPresentation(runId: string): Promise<RunPresentationProjection> {
+    return this.runs.loadRunPresentation(runId)
   }
 
   async appendToolValue(runId: string, value: ToolValueRef): Promise<void> {

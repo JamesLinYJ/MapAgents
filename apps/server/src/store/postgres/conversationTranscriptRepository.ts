@@ -130,17 +130,23 @@ export class PostgresConversationTranscriptRepository {
   }
 
   async readActiveConversation(threadId: string, leafEntryId?: string | null): Promise<TranscriptEntry[]> {
-    const [threadRows, rows] = await Promise.all([
-      this.db.select().from(platformThreads).where(eq(platformThreads.threadId, threadId)).limit(1),
-      this.db.select().from(platformConversationEntries)
-        .where(eq(platformConversationEntries.threadId, threadId))
-        .orderBy(asc(platformConversationEntries.sequence)),
-    ])
-    const thread = threadRows[0]
+    const rows = await this.db.select({
+      activeLeafEntryId: platformThreads.activeLeafEntryId,
+      entry: platformConversationEntries,
+    }).from(platformThreads)
+      .leftJoin(
+        platformConversationEntries,
+        eq(platformConversationEntries.threadId, platformThreads.threadId),
+      )
+      .where(eq(platformThreads.threadId, threadId))
+      .orderBy(asc(platformConversationEntries.sequence))
+    const thread = rows[0]
     if (!thread) throw new Error(`线程 '${threadId}' 不存在`)
     const leafId = leafEntryId ?? thread.activeLeafEntryId
     if (!leafId) return []
-    const byId = new Map(rows.map(row => [row.entryId, mapTranscriptEntryRow(row)]))
+    const byId = new Map(rows.flatMap(row => row.entry
+      ? [[row.entry.entryId, mapTranscriptEntryRow(row.entry)] as const]
+      : []))
     const chain: TranscriptEntry[] = []
     const seen = new Set<string>()
     let current = byId.get(leafId)

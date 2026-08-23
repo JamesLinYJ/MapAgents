@@ -555,6 +555,52 @@ describe.skipIf(!integrationEnabled)('真实 PostgreSQL/PostGIS 集成', () => {
         updatedAt: new Date(now.getTime() + 1_000).toISOString(),
       }
       await persistence.saveRun(runningRoot)
+      const presentationItem = {
+        itemId: 'item_projection_root',
+        itemType: 'message' as const,
+        runId: rootRunId,
+        threadId: rootThreadId,
+        role: 'assistant',
+        body: '处理中',
+        status: 'running',
+        timestamp: new Date(now.getTime() + 1_100).toISOString(),
+      }
+      await persistence.appendConversationItem(presentationItem)
+      await persistence.appendConversationItem({
+        ...presentationItem,
+        body: '处理完成',
+        status: 'completed',
+      })
+      const presentationEvent = {
+        eventId: 'event_projection_root',
+        runId: rootRunId,
+        threadId: rootThreadId,
+        type: 'trace.recorded' as const,
+        message: '投影测试',
+        timestamp: new Date(now.getTime() + 1_200).toISOString(),
+        payload: {},
+      }
+      await persistence.appendRunEvent(presentationEvent)
+      await persistence.appendRunEvent(presentationEvent)
+      expect(await persistence.loadRunPresentation(rootRunId)).toMatchObject({
+        runId: rootRunId,
+        sourceSequence: 4,
+        items: [{ itemId: presentationItem.itemId, body: '处理完成', status: 'completed' }],
+        events: [{ eventId: presentationEvent.eventId }],
+      })
+      await client.query(
+        `UPDATE platform_runs
+            SET next_record_sequence = next_record_sequence + 1
+          WHERE run_id = $1`,
+        [rootRunId],
+      )
+      await expect(persistence.loadRunPresentation(rootRunId)).rejects.toThrow(/投影游标落后/u)
+      await client.query(
+        `UPDATE platform_runs
+            SET next_record_sequence = next_record_sequence - 1
+          WHERE run_id = $1`,
+        [rootRunId],
+      )
       await children.configureRootBudget(rootRunId, {
         maxConcurrentChildren: 1,
         maxSpawnDepth: 2,

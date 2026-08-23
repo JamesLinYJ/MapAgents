@@ -589,29 +589,43 @@ export class RunStore {
     items: ConversationItem[]
     itemStream: RunItemStreamSnapshot
   }> {
+    const snapshot = await this.listPresentationSnapshot(runId)
+    return { items: snapshot.items, itemStream: snapshot.itemStream }
+  }
+
+  async listPresentationSnapshot(runId: string): Promise<{
+    items: ConversationItem[]
+    events: RunEvent[]
+    itemStream: RunItemStreamSnapshot
+    sourceSequence: number
+  }> {
     this.get(runId)
-    const captured = this.captureItemStream(runId)
-    const persisted = await this.repository.listConversationItems(runId)
-    const byItemId = new Map<string, ConversationItem>()
-    for (const item of persisted) {
-      byItemId.set(item.itemId, item)
-    }
-    const cursors = new Map<string, { sequence: number; utf16Offset: number }>()
-    for (const item of persisted) {
-      cursors.set(item.itemId, { sequence: 0, utf16Offset: (item.body ?? '').length })
-    }
-    for (const [itemId, live] of captured.items) {
-      const item = materializeStreamedItem(live)
-      byItemId.set(item.itemId, item)
-      cursors.set(itemId, { sequence: live.sequence, utf16Offset: live.utf16Length })
-    }
-    return {
-      items: orderConversationItems([...byItemId.values()]),
-      itemStream: {
-        streamId: captured.streamId,
-        cursors: [...cursors].map(([itemId, cursor]) => ({ itemId, ...cursor })),
-      },
-    }
+    return this.serializeItemMutation(runId, async () => {
+      const captured = this.captureItemStream(runId)
+      const persisted = await this.repository.loadRunPresentation(runId)
+      const byItemId = new Map<string, ConversationItem>()
+      for (const item of persisted.items) {
+        byItemId.set(item.itemId, item)
+      }
+      const cursors = new Map<string, { sequence: number; utf16Offset: number }>()
+      for (const item of persisted.items) {
+        cursors.set(item.itemId, { sequence: 0, utf16Offset: (item.body ?? '').length })
+      }
+      for (const [itemId, live] of captured.items) {
+        const item = materializeStreamedItem(live)
+        byItemId.set(item.itemId, item)
+        cursors.set(itemId, { sequence: live.sequence, utf16Offset: live.utf16Length })
+      }
+      return {
+        items: orderConversationItems([...byItemId.values()]),
+        events: persisted.events,
+        itemStream: {
+          streamId: captured.streamId,
+          cursors: [...cursors].map(([itemId, cursor]) => ({ itemId, ...cursor })),
+        },
+        sourceSequence: persisted.sourceSequence,
+      }
+    })
   }
 
   private appendItemBody(update: AppendConversationItemBody): void {

@@ -35,6 +35,7 @@ import type {
   ApprovalDecisionInput,
   ApprovalRecord,
 } from '@geo-agent-platform/shared-types/approval-runtime'
+import type { RunPresentationProjection } from '@geo-agent-platform/shared-types/run-presentation'
 
 export interface ConversationSnapshot {
   sessions: SessionRecord[]
@@ -202,6 +203,7 @@ export interface RunRecordRepository {
   listRunEvents(runId: string): Promise<RunEvent[]>
   appendToolValue(runId: string, value: ToolValueRef): Promise<void>
   listToolValues(runId: string): Promise<ToolValueRef[]>
+  loadRunPresentation(runId: string): Promise<RunPresentationProjection>
 }
 
 export interface AppendRunDomainEventsInput {

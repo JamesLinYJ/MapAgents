@@ -17,6 +17,11 @@ import {
   approvalRecordSchema,
   type ApprovalRecord,
 } from '@geo-agent-platform/shared-types/approval-runtime'
+import {
+  RUN_PRESENTATION_PROJECTION_SCHEMA_VERSION,
+  runPresentationProjectionSchema,
+  type RunPresentationProjection,
+} from '@geo-agent-platform/shared-types/run-presentation'
 
 import {
   compactionRecordSchema,
@@ -563,10 +568,7 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
   }
 
   async listConversationItems(runId: string): Promise<ConversationItem[]> {
-    this.requireRun(runId)
-    const latest = new Map<string, ConversationItem>()
-    for (const item of this.items.get(runId) ?? []) latest.set(item.itemId, item)
-    return clone([...latest.values()].sort((left, right) => left.timestamp.localeCompare(right.timestamp)))
+    return clone((await this.loadRunPresentation(runId)).items)
   }
 
   async appendRunEvent(event: RunEvent): Promise<void> {
@@ -576,14 +578,46 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
   }
 
   async listRunEvents(runId: string): Promise<RunEvent[]> {
-    this.requireRun(runId)
-    return clone(this.events.get(runId) ?? [])
+    return clone((await this.loadRunPresentation(runId)).events)
   }
 
   async appendToolValue(runId: string, value: ToolValueRef): Promise<void> {
     this.requireRun(runId)
     const parsed = toolValueRefSchema.parse(value)
     this.values.set(runId, [...(this.values.get(runId) ?? []), clone(parsed)])
+  }
+
+  async loadRunPresentation(runId: string): Promise<RunPresentationProjection> {
+    this.requireRun(runId)
+    const latestItems = new Map<string, ConversationItem>()
+    for (const item of this.items.get(runId) ?? []) latestItems.set(item.itemId, item)
+    const uniqueEvents = new Map<string, RunEvent>()
+    for (const event of this.events.get(runId) ?? []) {
+      const existing = uniqueEvents.get(event.eventId)
+      if (existing && !isDeepStrictEqual(existing, event)) {
+        throw new Error(`RunEvent '${event.eventId}' 的稳定 ID 被不同内容重复使用`)
+      }
+      uniqueEvents.set(event.eventId, event)
+    }
+    const uniqueValues = new Map<string, ToolValueRef>()
+    for (const value of this.values.get(runId) ?? []) {
+      const existing = uniqueValues.get(value.refId)
+      if (existing && !isDeepStrictEqual(existing, value)) {
+        throw new Error(`ToolValueRef '${value.refId}' 的稳定 ID 被不同内容重复使用`)
+      }
+      uniqueValues.set(value.refId, value)
+    }
+    const sourceSequence = (this.items.get(runId)?.length ?? 0)
+      + (this.events.get(runId)?.length ?? 0)
+      + (this.values.get(runId)?.length ?? 0)
+    return clone(runPresentationProjectionSchema.parse({
+      schemaVersion: RUN_PRESENTATION_PROJECTION_SCHEMA_VERSION,
+      runId,
+      sourceSequence,
+      items: [...latestItems.values()].sort((left, right) => left.timestamp.localeCompare(right.timestamp)),
+      events: [...uniqueEvents.values()],
+      values: [...uniqueValues.values()],
+    }))
   }
 
   async commitToolResult(
@@ -880,8 +914,7 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
   }
 
   async listToolValues(runId: string): Promise<ToolValueRef[]> {
-    this.requireRun(runId)
-    return clone(this.values.get(runId) ?? [])
+    return clone((await this.loadRunPresentation(runId)).values)
   }
 
   async getThreadManifest(threadId: string): Promise<ThreadManifest> {

@@ -1627,6 +1627,16 @@ apps/server/src/agent-runtime/
 
 ### WP-11：投影、观测和权威读切换
 
+**状态**：进行中；已完成 Run 展示记录的确定性重放与 WebSocket 原子读，Run state 的 domain snapshot 权威切换尚未执行。
+
+**当前实施证据**：
+
+- `platform_run_records` 继续作为现有 append-only 展示记录日志，不新增第二套表或迁移 SQL。共享 `runPresentation` reducer 从 sequence 0 严格重建 ConversationItem、RunEvent 和 ToolValueRef；item 只按稳定 itemId 更新，event/value 的同 ID 不同内容直接失败，未知 record type 和任何 sequence 缺口都不再被忽略。
+- PostgreSQL reader 通过 `platform_runs LEFT JOIN platform_run_records` 的单条语句同时取得事实游标和完整记录，在同一数据库 statement snapshot 内校验 `next_record_sequence - 1`。`run:get` / `run:subscribe` 改为一次 `listPresentationSnapshot` 同时读取 items 与 events，不再并发读取两个可能属于不同时点的列表。
+- canonical Transcript 的 active leaf 与全部 entry 也改为一次 `platform_threads LEFT JOIN platform_conversation_entries` 读取，避免先读叶子、再读条目时跨过并发 append；父链循环和缺失父条目仍然硬失败。
+- 新增 projection lag histogram 与按 `sequence / identity / record_type / schema` 分类的失败 counter；失败会终止该次快照，不返回部分 UI 状态。真实 PostgreSQL/PostGIS 回归覆盖 item 终态重放、RunEvent 幂等和人工游标落后硬失败。
+- Run status/state 目前仍从 `platform_runs` 启动投影读取。已有开发数据库可能含有早于 Domain Journal 的 Run；在没有明确清理旧数据的前提下，本轮没有把“缺 journal”改成整个平台启动失败，也没有加入读取 fallback。完成旧数据处置后再做该权威切换。
+
 **验收**：
 
 - Transcript/Item/RunEvent 从 domain event 重建。

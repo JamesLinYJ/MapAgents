@@ -128,6 +128,14 @@ function createRunStore(overrides: Partial<ConversationPayloadStore> = {}) {
     saveThread: vi.fn().mockRejectedValue(new Error('projection unavailable')),
     appendConversationItem: vi.fn().mockResolvedValue(undefined),
     listConversationItems: vi.fn().mockResolvedValue([]),
+    loadRunPresentation: vi.fn().mockResolvedValue({
+      schemaVersion: 1,
+      runId: 'run_1',
+      sourceSequence: 0,
+      items: [],
+      events: [],
+      values: [],
+    }),
   } as unknown as ConversationPersistence
   const itemBus = new InMemoryEventBus<ConversationItem>()
   const itemUpsertBus = new InMemoryEventBus<RunItemUpsert>()
@@ -396,6 +404,30 @@ describe('RunStore projections', () => {
     unblockFirstWrite()
     await Promise.all([startWrite, terminalWrite])
     expect(upserts.map(update => update.cursor.sequence)).toEqual([0, 1])
+  })
+
+  it('captures a presentation snapshot only after an in-flight item commit is projected', async () => {
+    const { store, repository } = createRunStore()
+    let releaseWrite!: () => void
+    const blockedWrite = new Promise<void>(resolve => { releaseWrite = resolve })
+    vi.mocked(repository.appendConversationItem).mockImplementationOnce(() => blockedWrite)
+    const started: ConversationItem = {
+      itemId: 'item_snapshot_barrier', itemType: 'message', runId: 'run_1', threadId: 'thread_1',
+      role: 'assistant', body: '', name: null, arguments: null, output: null,
+      turnId: null, callId: null, phase: null, status: 'running', isError: false,
+      metadata: {}, timestamp: '2026-07-09T00:00:01.000Z',
+    }
+
+    const write = store.appendItem(started)
+    await vi.waitFor(() => expect(repository.appendConversationItem).toHaveBeenCalledOnce())
+    const snapshot = store.listPresentationSnapshot('run_1')
+    await Promise.resolve()
+    expect(repository.loadRunPresentation).not.toHaveBeenCalled()
+
+    releaseWrite()
+    await write
+    expect((await snapshot).items).toContainEqual(started)
+    expect(repository.loadRunPresentation).toHaveBeenCalledOnce()
   })
 
   it('atomically closes item writes before waiting for an in-flight durable item', async () => {

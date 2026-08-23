@@ -169,6 +169,18 @@ export const runDomainReplayComparisonsTotal = new Counter({
   labelNames: ['scope', 'outcome'],
 })
 
+export const runPresentationProjectionLagRecords = new Histogram({
+  name: 'geo_agent_platform_run_presentation_projection_lag_records',
+  help: 'Run 展示记录事实游标与成功 reducer 游标之间的记录数',
+  buckets: [0, 1, 2, 4, 8, 16, 32, 64, 128],
+})
+
+export const runPresentationProjectionFailuresTotal = new Counter({
+  name: 'geo_agent_platform_run_presentation_projection_failures_total',
+  help: 'Run 展示记录因 sequence、schema 或稳定 ID 冲突而重放失败的总数',
+  labelNames: ['reason'],
+})
+
 // Rate limiting
 export const rateLimitHitsTotal = new Counter({
   name: 'geo_agent_platform_rate_limit_hits_total',

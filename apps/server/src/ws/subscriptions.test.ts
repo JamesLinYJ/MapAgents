@@ -197,25 +197,28 @@ describe('sendWs transport boundary', () => {
     const store: RunSubscriptionStore = {
       getRun: () => run,
       getThread: () => ({}),
-      listEvents: async () => [],
-      listItemSnapshot: async () => {
+      listPresentationSnapshot: async () => {
         calls += 1
         if (calls === 1) {
           await oldSnapshotBlocked
           return {
             items: [oldItem],
+            events: [],
             itemStream: {
               streamId: 'stream_old',
               cursors: [{ itemId: oldItem.itemId, sequence: 1, utf16Offset: 2 }],
             },
+            sourceSequence: 1,
           }
         }
         return {
           items: [finalItem],
+          events: [],
           itemStream: {
             streamId: 'stream_new',
             cursors: [{ itemId: finalItem.itemId, sequence: 0, utf16Offset: 7 }],
           },
+          sourceSequence: 2,
         }
       },
     }
@@ -250,14 +253,18 @@ describe('sendWs transport boundary', () => {
     const store = {
       getRun: () => ({ id: 'run_1' }),
       getThread: () => ({}),
-      listEvents: async () => [],
-      listItemSnapshot: async () => {
+      listPresentationSnapshot: async () => {
         calls += 1
         inFlight += 1
         maxInFlight = Math.max(maxInFlight, inFlight)
         try {
           await firstCaptureBlocked
-          return { items: [], itemStream: { streamId: 'stream_1', cursors: [] } }
+          return {
+            items: [],
+            events: [],
+            itemStream: { streamId: 'stream_1', cursors: [] },
+            sourceSequence: 0,
+          }
         } finally {
           inFlight -= 1
         }
@@ -327,8 +334,7 @@ describe('sendWs transport boundary', () => {
     const store = {
       getRun: () => { throw new Error('must not project a failed snapshot') },
       getThread: () => ({}),
-      listEvents: async () => [],
-      listItemSnapshot: async () => { throw new Error('snapshot storage failed') },
+      listPresentationSnapshot: async () => { throw new Error('snapshot storage failed') },
     } as RunSubscriptionStore
 
     const failedSnapshot = sendRunSnapshot(ws, 'run_1', store)
