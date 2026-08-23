@@ -63,7 +63,7 @@ export const threadManifestSchema = z.object({
   updatedAt: z.string(),
 })
 
-export const AGENTS_SDK_STATE_SCHEMA_VERSION = 5 as const
+export const AGENTS_SDK_STATE_SCHEMA_VERSION = 6 as const
 
 export const runCheckpointSchema = z.object({
   schemaVersion: z.literal(2).default(2),

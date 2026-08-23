@@ -2,13 +2,13 @@
 
 > 本文是面向 Codex 执行的架构 RFC、迁移手册和逐 PR 验收清单。
 >
-> **状态**：In progress（WP-00、WP-01 与 SDK 防腐基础已进入实现）
+> **状态**：In progress（WP-00 至 WP-04 已完成；下一包为 WP-05）
 >
 > **Newmap 基线**：`JamesLinYJ/Newmap@ffa50bbe1bd0e8de82f7f40448bafbe3f1eb751a`
 >
 > **Codex 参考基线**：`openai/codex@4a7b51c560aaef0a89298272d3fff1aefe3dd666`
 >
-> **当前 SDK**：`@openai/agents@0.15.0`
+> **当前 SDK**：`@openai/agents@0.16.1`
 >
 > **计划验证目标 SDK**：`@openai/agents@0.16.1`；升级只能在兼容性契约测试通过后落地。
 >
@@ -1346,8 +1346,8 @@ apps/server/src/agent-runtime/
 | `agent/runtimeSdkExecutor.ts` | `sdk/AgentsSdkSegmentExecutor.ts` + `turn/TurnEngine.ts` + terminal policies |
 | `agent/runtimeAssembly.ts` | `sdk/AgentsSdkAssembly.ts` + `step/AgentStepContextFactory.ts` + `tools/ToolPlanCompiler.ts` |
 | `agent/runSteeringController.ts` | `input/RunInputMailbox.ts` |
-| `agent/agentsCheckpointService.ts` | `sdk/AgentsSdkCheckpointCodec.ts` + checkpoint repository |
-| `agent/fileAgentsSession.ts` | `sdk/CanonicalAgentsSession.ts` |
+| `agent/agentsCheckpointService.ts` | 已删除；由 `sdk/AgentsSdkCheckpointService.ts` + `AgentsSdkCheckpointCodec.ts` + checkpoint repository 持有 |
+| `agent/fileAgentsSession.ts` | 已删除；由 `sdk/CanonicalAgentsSession.ts` 持有 replay-only Session |
 | `agent/runtimeModelInput.ts` | `context/ModelInputPlanner.ts` + `ContextWindowManager.ts` |
 | `agent/contextManager.ts` | thread context service + `ContextCompactor.ts` |
 | `agent/toolExecutionCoordinator.ts` | ToolRouter、Ledger、EffectCommitter、WorkflowBinder、ProjectionPublisher |
@@ -1453,6 +1453,8 @@ apps/server/src/agent-runtime/
 
 ### WP-04：SDK 防腐层与 public checkpoint
 
+**状态**：已完成（2026-08-23）。
+
 **修改**：
 
 - 所有 RunState 操作迁入 `sdk/`。
@@ -1465,6 +1467,15 @@ apps/server/src/agent-runtime/
 - 禁止模式 `rg` 为零。
 - approval resume、crash resume 通过。
 - tool terminal 证明来自平台 ledger，不来自 blob 解析。
+
+**实施证据**：
+
+- `agent-runtime/sdk/AgentsSdkBridge.ts` 是生产代码唯一的 `RunState` 导入和公开操作边界。
+- `AgentsSdkCheckpointCodec.ts` 使用 strict envelope；`AgentsSdkCheckpointService.ts` 同时校验数据库元数据、envelope 和 input cursor。
+- `CanonicalAgentsSession.ts` 只保存 replay history；`runtimeAssembly.ts` 已删除 Session 到 canonical transcript 的反向投影。
+- 活动 steering 通过 public `RunState.addInput()` 与 `AgentsSdkSegmentRotation` 切换 segment，不再访问 `_originalInput`。
+- `015_agents_sdk_checkpoint_envelope.sql` 将旧活动 checkpoint 显式失败封口，SDK state schema 升级到 v6。
+- 架构测试禁止私有字段、内部 JSON 扫描、旧边界文件和 `sdk/` 外的生产 `RunState` 导入。
 
 ### WP-05：Input Mailbox 与 ModelRequest Journal
 

@@ -14,6 +14,30 @@ import { describe, expect, it } from 'vitest'
 import { ToolCallRecoveryLedger } from './toolCallRecoveryLedger.js'
 
 describe('ToolCallRecoveryLedger', () => {
+  it('只把公开 SDK terminal 回调与 durable pending 的交集交给 checkpoint', async () => {
+    const ledger = new ToolCallRecoveryLedger({
+      saveRunCheckpoint: async () => undefined,
+    }, 'run_public_terminal', ['call_pending', 'call_unobserved'])
+
+    await ledger.observeSdkTerminal('call_pending')
+    await ledger.observeSdkTerminal('call_not_pending')
+
+    expect(await ledger.checkpointTerminalCallIds()).toEqual(['call_pending'])
+    expect(ledger.snapshot()).toEqual(['call_pending', 'call_unobserved'])
+  })
+
+  it('只在 durable SDK checkpoint 接受后清理公开 terminal 候选', async () => {
+    const ledger = new ToolCallRecoveryLedger({
+      saveRunCheckpoint: async () => undefined,
+    }, 'run_checkpoint_terminal', ['call_done', 'call_pending'])
+
+    await ledger.observeSdkTerminal('call_done')
+    await ledger.acceptCheckpointTerminals(['call_done'])
+
+    expect(ledger.snapshot()).toEqual(['call_pending'])
+    expect(await ledger.checkpointTerminalCallIds()).toEqual([])
+  })
+
   it('accepts checkpoint terminals in memory without a second durable write', async () => {
     let writes = 0
     const ledger = new ToolCallRecoveryLedger({

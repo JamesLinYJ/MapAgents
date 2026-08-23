@@ -37,7 +37,8 @@ import {
 } from './runtimeSdkProjection.js'
 import { approvalRejectionMessage, resolveDecision } from './runtimeApprovals.js'
 import type { SandboxClientFactory } from './runtimeSandbox.js'
-import { AgentsCheckpointService } from './agentsCheckpointService.js'
+import { AgentsSdkBridge } from '../agent-runtime/sdk/AgentsSdkBridge.js'
+import { AgentsSdkCheckpointService } from '../agent-runtime/sdk/AgentsSdkCheckpointService.js'
 import { RuntimeTranscriptProjector } from './runtimeTranscriptProjector.js'
 import { RuntimeApprovalPersistence } from './runtimeApprovalPersistence.js'
 import { RunSteeringController } from './runSteeringController.js'
@@ -68,7 +69,8 @@ export interface OpenAIAgentsRuntimeOptions {
 // 内容载荷存储、审批边界和通用工具/Automation 入口。
 export class OpenAIAgentsRuntime {
   private readonly abortControllers = new Map<string, AbortController>()
-  private readonly checkpoints: AgentsCheckpointService
+  private readonly checkpoints: AgentsSdkCheckpointService
+  private readonly sdk = new AgentsSdkBridge()
   private readonly transcriptProjector: RuntimeTranscriptProjector
   private readonly approvalPersistence: RuntimeApprovalPersistence
   private readonly steering: RunSteeringController
@@ -84,7 +86,7 @@ export class OpenAIAgentsRuntime {
     modelCompletions?: ModelCompletionService,
   ) {
     this.subAgentControls = new SubAgentControlPlane(store)
-    this.checkpoints = new AgentsCheckpointService(store)
+    this.checkpoints = new AgentsSdkCheckpointService(store)
     this.transcriptProjector = new RuntimeTranscriptProjector(store, toolRegistry)
     this.approvalPersistence = new RuntimeApprovalPersistence(store, toolRegistry, this.checkpoints)
     this.steering = new RunSteeringController(store)
@@ -92,7 +94,6 @@ export class OpenAIAgentsRuntime {
       store,
       toolRegistry,
       modelRegistry,
-      transcriptProjector: this.transcriptProjector,
       runtimeOptions,
       stepContexts: runtimeOptions.stepContexts,
       subAgentControls: this.subAgentControls,
@@ -160,7 +161,7 @@ export class OpenAIAgentsRuntime {
         async () => {
           await this.refreshAuthorization(options)
           const assembly = await this.assemblyFactory.create(options, threadId, turnId, eventSink, itemSink, abort.signal)
-          const resumeState = options.resume
+          const restored = options.resume
             ? await this.checkpoints.restore({
               runId: options.runId,
               agent: assembly.agent,
@@ -169,10 +170,11 @@ export class OpenAIAgentsRuntime {
               configDigest: assembly.configDigest,
             })
             : null
+          if (restored) assembly.checkpointContext.adopt(restored.stepContext)
           return this.sdkExecutor.execute(
             options,
             assembly,
-            resumeState,
+            restored?.state ?? null,
             abort.signal,
             eventSink,
             itemSink,
@@ -365,18 +367,24 @@ export class OpenAIAgentsRuntime {
             abort.signal,
             false,
           )
-          const state = await this.checkpoints.restore({
+          const restored = await this.checkpoints.restore({
             runId: options.runId,
             agent: assembly.agent,
             context: assembly.context,
             sdkVersion: assembly.sdkVersion,
             configDigest: assembly.configDigest,
           })
+          assembly.checkpointContext.adopt(restored.stepContext)
+          const state = restored.state
           const callId = requireString(approval.payload.callId, '审批 payload.callId')
-          const interruption = state.getInterruptions().find(item => functionCallId(item) === callId)
+          const interruption = this.sdk.interruptions(state).find(item => functionCallId(item) === callId)
           if (!interruption) throw new Error(`SDK 状态中不存在待审批调用 '${callId}'`)
-          if (approved) state.approve(interruption)
-          else state.reject(interruption, { message: approvalRejectionMessage(approval.action) })
+          this.sdk.resolveApproval({
+            state,
+            interruption,
+            approved,
+            rejectionMessage: approvalRejectionMessage(approval.action),
+          })
           return this.sdkExecutor.execute(options, assembly, state, abort.signal, eventSink, itemSink)
         },
       )

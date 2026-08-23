@@ -340,6 +340,7 @@ describe('platform architecture', () => {
       '012_run_input_delivery_ack.sql',
       '013_run_domain_journal.sql',
       '014_agent_step_geo_world.sql',
+      '015_agents_sdk_checkpoint_envelope.sql',
     ])
 
     const operationalSourceFiles = await collectProductionFiles([
@@ -566,8 +567,8 @@ describe('platform architecture', () => {
       'payloadStore.readObject',
       'payloadStore.appendValue',
       'payloadStore.appendAgentTranscript',
-      'payloadStore.saveAgentsSdkState',
-      'payloadStore.readAgentsSdkState',
+      'payloadStore.saveAgentsSdkCheckpointEnvelope',
+      'payloadStore.readAgentsSdkCheckpointEnvelope',
     ]
 
     for (const delegate of requiredDelegates) {
@@ -973,7 +974,7 @@ describe('platform architecture', () => {
     expect(source.includes('export class ConversationPayloadStore implements ConversationPayloadStorage')).toBe(true)
     expect(source.includes('隐式满足 ConversationPayloadStorage')).toBe(false)
     expect(portSource.includes('saveRun(')).toBe(false)
-    expect(portSource.includes('saveAgentsSdkState(')).toBe(false)
+    expect(portSource.includes('saveAgentsSdkCheckpointEnvelope(')).toBe(false)
     expect(portSource.includes('saveMemory(')).toBe(false)
     expect(portSource.includes('appendTranscript(')).toBe(false)
     expect(portSource.includes('appendCompaction(')).toBe(false)

@@ -50,8 +50,14 @@ export interface CaptureAgentStepContextInput {
   auth: AuthContext | null
 }
 
+export interface RecordedAgentStepContext {
+  identity: Pick<AgentStepContext['identity'], 'segmentId'>
+  toolPlanDigest: string
+  worldRevision: number
+}
+
 export interface AgentStepContextRecorder {
-  record(input: CaptureAgentStepContextInput): Promise<void>
+  record(input: CaptureAgentStepContextInput): Promise<RecordedAgentStepContext>
 }
 
 interface AgentStepContextWriter {
@@ -82,8 +88,8 @@ export class AgentStepContextFactory implements AgentStepContextRecorder {
     private readonly baselineBuilder: GeoWorldBaselineSource,
   ) {}
 
-  async record(input: CaptureAgentStepContextInput): Promise<void> {
-    await this.capture(input)
+  async record(input: CaptureAgentStepContextInput): Promise<AgentStepContext> {
+    return this.capture(input)
   }
 
   async capture(input: CaptureAgentStepContextInput): Promise<AgentStepContext> {

@@ -129,6 +129,10 @@ export class ToolExecutionCoordinator {
     return this.recoveryLedger.acceptCheckpointTerminals(callIds)
   }
 
+  checkpointTerminalToolCallIds(): Promise<string[]> {
+    return this.recoveryLedger.checkpointTerminalCallIds()
+  }
+
   currentModelInputObjectiveRevision(): number {
     return this.modelInputObjectiveRevision
   }
@@ -142,10 +146,10 @@ export class ToolExecutionCoordinator {
   }
 
   markSdkToolCallTerminal(callId: string): Promise<void> {
-    // stream/session 投影看到 result 并不等于恢复点已包含 result。
-    // 只有 AgentsCheckpointService 提交序列化 RunState 后才能清理账本。
-    void callId
-    return Promise.resolve()
+    // 公开 SDK result 回调只登记“可随下一 checkpoint 收敛”的候选。
+    // Durable pending ledger 仍保持不变，直到 opaque RunState checkpoint
+    // 与这些 callId 在同一个 PostgreSQL 事务中提交。
+    return this.recoveryLedger.observeSdkTerminal(callId)
   }
 
   formatToolFailureForModel(toolName: string, message: string): string {

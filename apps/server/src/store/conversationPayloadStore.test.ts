@@ -156,7 +156,7 @@ describe('conversation repository', () => {
       const protectedThread = await store.createThread(session.id, '保留对象')
       const run = await store.createRun(session.id, '保存检查点', { threadId: protectedThread.id })
       const sdkState = JSON.stringify({ state: 'durable' })
-      await store.saveAgentsSdkState(run.id, sdkState, {
+      await store.saveAgentsSdkCheckpointEnvelope(run.id, sdkState, {
         agentsSdkVersion: 'test-sdk',
         runtimeConfigDigest: 'test-runtime-digest',
       })
@@ -170,7 +170,7 @@ describe('conversation repository', () => {
       await store.deleteThread(disposable.id)
       await store.purgeThread(disposable.id)
 
-      expect(await store.readAgentsSdkState(run.id)).toBe(sdkState)
+      expect(await store.readAgentsSdkCheckpointEnvelope(run.id)).toBe(sdkState)
       expect((await store.getThreadMemory(protectedThread.id)).content).toBe('需要长期保留的线程记忆')
       expect(await readFile(path.join(root, ...uploaded.relativePath.split('/')))).toEqual(Buffer.from([1, 2, 3, 4]))
     } finally {

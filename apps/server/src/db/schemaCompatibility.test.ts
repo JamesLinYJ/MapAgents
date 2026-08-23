@@ -29,6 +29,7 @@ const migrationIds = [
   '012_run_input_delivery_ack',
   '013_run_domain_journal',
   '014_agent_step_geo_world',
+  '015_agents_sdk_checkpoint_envelope',
 ] as const
 
 function currentCapabilities(overrides: Record<string, unknown> = {}) {
@@ -90,10 +91,20 @@ describe('verifyDatabaseSchemaCompatibility', () => {
       .rejects.toThrow(/001_init_postgis/u)
   })
 
+  it('拒绝缺少 opaque SDK checkpoint envelope 迁移的数据库', async () => {
+    const db = databaseWithRows(
+      [{ table_name: 'platform_schema_migrations' }],
+      currentMigrations().filter(row => row.migration_id !== '015_agents_sdk_checkpoint_envelope'),
+    )
+
+    await expect(verifyDatabaseSchemaCompatibility(db as never))
+      .rejects.toThrow(/015_agents_sdk_checkpoint_envelope/u)
+  })
+
   it('拒绝让旧服务连接未来版本数据库', async () => {
     const db = databaseWithRows(
       [{ table_name: 'platform_schema_migrations' }],
-      [...currentMigrations(), { migration_id: '015_future_change', checksum: 'b'.repeat(64) }],
+      [...currentMigrations(), { migration_id: '016_future_change', checksum: 'b'.repeat(64) }],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))

@@ -11,9 +11,7 @@
 
 import {
   RunContext,
-  type Agent,
   type AgentInputItem,
-  type RunState,
 } from '@openai/agents'
 import PQueue from 'p-queue'
 
@@ -22,7 +20,6 @@ import { errorLogPayload, logger } from '../observability/logger.js'
 import { ModelRequestTelemetry } from '../observability/modelRequestTelemetry.js'
 import type { AgentState, RunGoal, RunGoalVerdict, SupervisorDelivery } from '../schemas/types.js'
 import type { AgentRuntimeStore } from '../store/runtimePorts.js'
-import type { AgentsCheckpointService } from './agentsCheckpointService.js'
 import type { AgentsExecutionContext } from './agentsToolBridge.js'
 import { assertArtifactDeliveryIsVisible } from './artifactDeliveryPolicy.js'
 import { aggregateModelUsage, mergeModelUsageStats, type ModelUsageLike } from './modelUsage.js'
@@ -32,19 +29,27 @@ import {
   errorMessage,
 } from './runtimeSdkProjection.js'
 import type { RuntimeTranscriptProjector } from './runtimeTranscriptProjector.js'
-import type { RunOptions, RuntimeAssembly, StreamProjectionState } from './runtimeTypes.js'
+import type {
+  RunOptions,
+  RuntimeAgentsSdkState,
+  RuntimeAssembly,
+  StreamProjectionState,
+} from './runtimeTypes.js'
 import type { RunSteeringController } from './runSteeringController.js'
 import { evaluateTerminalDelivery } from './terminalDeliveryPolicy.js'
 import type { RunEventSink } from './turnRunner.js'
 import { goalTokenUsage, type GoalJudgePort } from './goalJudge.js'
 import { buildInitialAgentInput } from './multimodalInput.js'
-import { stageRunInputsInSdkState } from './agentsSdkStateBoundary.js'
+import { AgentsSdkBridge } from '../agent-runtime/sdk/AgentsSdkBridge.js'
+import type { AgentsSdkCheckpointService } from '../agent-runtime/sdk/AgentsSdkCheckpointService.js'
+import { AgentsSdkSegmentRotation } from '../agent-runtime/sdk/AgentsSdkSegmentRotation.js'
+import type { RecordedAgentStepContext } from '../agent-runtime/step/AgentStepContextFactory.js'
 
 export type RuntimeSdkOutcome = 'completed' | 'waiting_approval' | 'clarification_needed'
 
 interface RuntimeSdkExecutorDependencies {
   store: AgentRuntimeStore
-  checkpoints: AgentsCheckpointService
+  checkpoints: AgentsSdkCheckpointService
   transcriptProjector: RuntimeTranscriptProjector
   approvalPersistence: RuntimeApprovalPersistence
   steering: RunSteeringController
@@ -54,15 +59,14 @@ interface RuntimeSdkExecutorDependencies {
 // 只负责驱动一次 SDK Runner，并把 SDK 中断和终态交给平台投影边界。
 // PostgreSQL 仍是 transcript、审批、工作流和结果账本的事实源。
 export class RuntimeSdkExecutor {
+  private readonly sdk = new AgentsSdkBridge()
+
   constructor(private readonly dependencies: RuntimeSdkExecutorDependencies) {}
 
   async execute(
     options: RunOptions,
     assembly: RuntimeAssembly,
-    resumeState: RunState<
-      AgentsExecutionContext,
-      Agent<AgentsExecutionContext>
-    > | null,
+    resumeState: RuntimeAgentsSdkState | null,
     signal: AbortSignal,
     eventSink: RunEventSink,
     itemSink: ItemSink,
@@ -76,10 +80,7 @@ export class RuntimeSdkExecutor {
       transcriptProjector,
     } = this.dependencies
     let outcome: RuntimeSdkOutcome | null = null
-    let nextInput: RunState<
-      AgentsExecutionContext,
-      Agent<AgentsExecutionContext>
-    > | AgentInputItem[] | string = resumeState ?? await buildInitialAgentInput(
+    let nextInput: RuntimeAgentsSdkState | AgentInputItem[] | string = resumeState ?? await buildInitialAgentInput(
       store,
       options.runId,
       options.query,
@@ -99,6 +100,18 @@ export class RuntimeSdkExecutor {
 
     try {
       while (true) {
+        if (!pendingInputLeaseId && assembly.checkpointContext.current()) {
+          const delivery = await steering.consumePendingWithRevision(options.runId)
+          assembly.coordinator.bindModelInputObjectiveRevision(delivery.objectiveRevision)
+          if (delivery.leaseId) {
+            if (this.sdk.isState<AgentsExecutionContext>(nextInput)) {
+              this.sdk.stageInput(nextInput, delivery.items)
+            } else {
+              nextInput = appendSegmentInput(nextInput, delivery.items)
+            }
+            pendingInputLeaseId = delivery.leaseId
+          }
+        }
         const projection = transcriptProjector.createState()
         activeProjection = projection
         const modelTelemetry = new ModelRequestTelemetry({
@@ -109,23 +122,40 @@ export class RuntimeSdkExecutor {
           threadId: assembly.threadId,
         })
         activeModelTelemetry = modelTelemetry
-        const streamStateReady = deferred<RunState<
-          AgentsExecutionContext,
-          Agent<AgentsExecutionContext>
-        >>()
+        const streamStateReady = deferred<RuntimeAgentsSdkState>()
+        let stateCheckpointed = false
+        let filterInvocationCount = 0
         const checkpointCurrentState = async (
-          state: RunState<AgentsExecutionContext, Agent<AgentsExecutionContext>>,
+          state: RuntimeAgentsSdkState,
+          stepContext: RecordedAgentStepContext,
         ): Promise<void> => {
           const leaseId = pendingInputLeaseId
-          const commit = await checkpoints.persist(options.runId, state, assembly, leaseId)
-          // Durable checkpoint 事务已把 state 中的 function_call_result 与
-          // pending tool ledger 绑定提交；再同步进程内快照，不发起二次 DB 写。
+          const terminalToolCallIds = await assembly.coordinator.checkpointTerminalToolCallIds()
+          const commit = await checkpoints.persist(options.runId, state, {
+            sdkVersion: assembly.sdkVersion,
+            configDigest: assembly.configDigest,
+            stepContext,
+            terminalToolCallIds,
+          }, leaseId)
+          // Durable checkpoint 事务已把公开 SDK result 回调确认的 callId 与
+          // pending tool ledger 绑定提交；进程内快照只接受该事务的返回值。
           await assembly.coordinator.acceptCheckpointedToolCalls(commit.terminalToolCallIds)
           if (leaseId) {
             pendingInputLeaseId = null
             await steering.recordCheckpointAcknowledgements(options.runId, commit.acknowledgedInputs)
           }
+          stateCheckpointed = true
         }
+        const unsubscribeCheckpointContext = assembly.checkpointContext.subscribe(async stepContext => {
+          // 新 lease 已经用 RunState.addInput() 排队，但在 provider 完整响应前
+          // 不能推进 input cursor。没有活动 lease 的首个模型请求则在发包前
+          // 保存可恢复 baseline，并绑定刚捕获的精确 StepContext。
+          if (stateCheckpointed || pendingInputLeaseId) return
+          await serializeInputCheckpoint(async () => checkpointCurrentState(
+            await streamStateReady.promise,
+            stepContext,
+          ))
+        })
         const stream = await assembly.runner.run(
           assembly.agent,
           nextInput,
@@ -138,31 +168,59 @@ export class RuntimeSdkExecutor {
             maxTurns: options.runtimeConfig.maxTurns,
             signal,
             callModelInputFilter: ({ modelData }) => serializeInputCheckpoint(async () => {
-              // 首次模型请求也必须先有一个可恢复 baseline。后续请求则用
-              // 当前完整 state 原子 ack 上一批输入；因此工具结果恢复不依赖
-              // 滞后的 stream event 消费，也不会出现 lease 已发出但无 hash。
-              await checkpointCurrentState(await streamStateReady.promise)
+              filterInvocationCount += 1
+              if (filterInvocationCount === 1) {
+                // Segment 首次请求的 baseline 由模型 transport 边界在精确
+                // StepContext 捕获后保存。若已有 pending input，必须等模型完整
+                // 接纳后才 ack，所以这里也不提前 checkpoint。
+                return assembly.modelInput.filter(modelData, [])
+              }
+
+              stateCheckpointed = false
+              const stepContext = assembly.checkpointContext.current()
+              if (!stepContext) throw new Error('Agent SDK 后续模型请求缺少 StepContext')
+              await checkpointCurrentState(await streamStateReady.promise, stepContext)
               const delivery = await steering.consumePendingWithRevision(options.runId)
               if (delivery.leaseId) {
-                stageRunInputsInSdkState(
-                  await streamStateReady.promise,
-                  options.runId,
-                  delivery.items,
-                )
-                await assembly.session.retainRunInputs(delivery.items)
-                pendingInputLeaseId = delivery.leaseId
+                throw new AgentsSdkSegmentRotation({
+                  items: delivery.items,
+                  objectiveRevision: delivery.objectiveRevision,
+                  leaseId: delivery.leaseId,
+                })
               }
               assembly.coordinator.bindModelInputObjectiveRevision(delivery.objectiveRevision)
-              return assembly.modelInput.filter(modelData, delivery.items)
+              return assembly.modelInput.filter(modelData, [])
             }),
           },
         )
         streamStateReady.resolve(stream.state)
-        for await (const event of stream) {
-          modelTelemetry.observe(event)
-          await transcriptProjector.projectStreamEvent(event, projection, assembly, eventSink, itemSink)
+        let segmentError: unknown = null
+        try {
+          for await (const event of stream) {
+            modelTelemetry.observe(event)
+            await transcriptProjector.projectStreamEvent(event, projection, assembly, eventSink, itemSink)
+          }
+          await stream.completed
+        } catch (error) {
+          segmentError = error
+        } finally {
+          unsubscribeCheckpointContext()
         }
-        await stream.completed
+
+        if (segmentError instanceof AgentsSdkSegmentRotation) {
+          this.sdk.stageInput(stream.state, segmentError.input.items)
+          pendingInputLeaseId = segmentError.input.leaseId
+          assembly.coordinator.bindModelInputObjectiveRevision(segmentError.input.objectiveRevision)
+          await transcriptProjector.linkAssistantTranscriptEntries(options.runId, assembly, projection, itemSink)
+          if (projection.reasoningItemId) itemSink.completeItem(projection.reasoningItemId)
+          await this.updateUsage(options.runId, stream.rawResponses)
+          nextInput = stream.state
+          continue
+        }
+        if (segmentError) {
+          modelTelemetry.fail(segmentError)
+          throw segmentError
+        }
         if (stream.error) {
           modelTelemetry.fail(stream.error)
           throw stream.error
@@ -172,7 +230,10 @@ export class RuntimeSdkExecutor {
             ? signal.reason
             : new Error(`运行 '${options.runId}' 的模型流在完整响应前被取消`)
         }
-        await serializeInputCheckpoint(() => checkpointCurrentState(stream.state))
+        stateCheckpointed = false
+        const finalStepContext = assembly.checkpointContext.current()
+        if (!finalStepContext) throw new Error('Agent SDK 完整响应缺少 StepContext')
+        await serializeInputCheckpoint(() => checkpointCurrentState(stream.state, finalStepContext))
         await transcriptProjector.linkAssistantTranscriptEntries(options.runId, assembly, projection, itemSink)
         if (projection.reasoningItemId) {
           itemSink.completeItem(projection.reasoningItemId)
@@ -189,7 +250,6 @@ export class RuntimeSdkExecutor {
           return outcome
         }
 
-        assembly.discardPendingSessionAssistantMessage()
         const candidateFinalOutput = optionalFinalText(stream.finalOutput)
         const candidateSnapshot = await steering.modelInputRevisionSnapshot(options.runId)
         const candidateObjectiveRevision = candidateSnapshot.objectiveRevision
@@ -340,8 +400,7 @@ export class RuntimeSdkExecutor {
         const persisted = await transcriptProjector.appendAssistantMessageTranscript(
           assembly,
           finalOutput,
-          itemId,
-          candidateObjectiveRevision,
+          { itemId, objectiveRevision: candidateObjectiveRevision },
         )
         projection.assistantItemId = null
         const supersedeCurrentCandidate = () => supersedeAssistantCandidate({
@@ -791,9 +850,9 @@ function goalRecheckInstruction(goal: RunGoal, verdict: RunGoalVerdict): string 
 
 async function persistCleanCheckpoint(
   store: AgentRuntimeStore,
-  checkpoints: AgentsCheckpointService,
+  checkpoints: AgentsSdkCheckpointService,
   runId: string,
-  state: RunState<AgentsExecutionContext, Agent<AgentsExecutionContext>>,
+  state: RuntimeAgentsSdkState,
   assembly: RuntimeAssembly,
 ): Promise<void> {
   // stream.completed 后的统一 checkpoint 已落盘相同 RunState。这些
@@ -813,9 +872,9 @@ async function persistCleanCheckpoint(
 
 async function supersedeAssistantCandidate(input: {
   store: AgentRuntimeStore
-  checkpoints: AgentsCheckpointService
+  checkpoints: AgentsSdkCheckpointService
   assembly: RuntimeAssembly
-  streamState: RunState<AgentsExecutionContext, Agent<AgentsExecutionContext>>
+  streamState: RuntimeAgentsSdkState
   eventSink: RunEventSink
   itemSink: ItemSink
   projection: StreamProjectionState
@@ -867,6 +926,16 @@ function optionalFinalText(finalOutput: unknown): string | null {
   return typeof finalOutput === 'string' && finalOutput.trim()
     ? finalOutput.trim()
     : null
+}
+
+function appendSegmentInput(
+  input: AgentInputItem[] | string,
+  items: readonly AgentInputItem[],
+): AgentInputItem[] {
+  const initial = typeof input === 'string'
+    ? [{ type: 'message' as const, role: 'user' as const, content: input }]
+    : input
+  return [...structuredClone(initial), ...structuredClone(items)]
 }
 
 function requireFinalText(finalOutput: unknown): string {

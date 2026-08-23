@@ -57,6 +57,7 @@ import { wsConnectionsActive } from '../observability/metrics.js'
 import { StartRunService } from '../conversation/startRunService.js'
 import { ToolResultCommitService } from '../tools/resultPersistence.js'
 import type { FileLifecyclePort } from '../store/fileLifecycleService.js'
+import type { AgentStepContextRecorder } from '../agent-runtime/step/AgentStepContextFactory.js'
 
 const TEST_ORIGIN = 'http://127.0.0.1:5173'
 const TEST_CSRF = 'csrf_test'
@@ -81,13 +82,23 @@ async function removeTempRoot(root: string): Promise<void> {
   await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
 }
 
+function testStepContextRecorder(): AgentStepContextRecorder {
+  return {
+    record: async input => ({
+      identity: { segmentId: input.segmentId },
+      toolPlanDigest: input.toolPlan.catalogDigest,
+      worldRevision: 1,
+    }),
+  }
+}
+
 function createWsHandler(server: Parameters<typeof createWsHandlerBase>[0], dependencies: TestWsDependencies) {
   const runtime = dependencies.runtime ?? new OpenAIAgentsRuntime(
     dependencies.store,
     dependencies.toolRegistry,
     dependencies.modelRegistry,
     {
-      stepContexts: { record: async () => {} },
+      stepContexts: testStepContextRecorder(),
       createSandboxClient: dependencies.createSandboxClient,
       authorizationLease: async auth => auth,
     },
@@ -819,7 +830,7 @@ describe('WebSocket run subscriptions', () => {
       ? { text: '工具已执行。' }
       : { toolCalls: [{ id: 'call_sensitive', name: 'sensitive_tool', arguments: '{"value":1}' }] })))
     const waiting = await new OpenAIAgentsRuntime(store, tools, models, {
-      stepContexts: { record: async () => {} },
+      stepContexts: testStepContextRecorder(),
       createSandboxClient: testSandboxClientFactory,
     }).run({
       runId: run.id,

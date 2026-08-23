@@ -17,11 +17,13 @@ import type { AgentRuntimeConfig } from '@geo-agent-platform/shared-types/runtim
 import type { ModelAdapter } from '../model/registry.js'
 import type { ModelCapabilitySnapshot } from '../schemas/types.js'
 import type { AuthContext } from '../security/types.js'
-import type { FileAgentsSession } from './fileAgentsSession.js'
+import type { CanonicalAgentsSession } from '../agent-runtime/sdk/CanonicalAgentsSession.js'
 import type { AgentsExecutionContext } from './agentsToolBridge.js'
 import type { ToolExecutionCoordinator } from './toolExecutionCoordinator.js'
 import type { RuntimeSdkIntegration } from './runtimeSdkIntegrations.js'
 import type { RuntimeModelInputController } from './runtimeModelInput.js'
+import type { RecordedAgentStepContext } from '../agent-runtime/step/AgentStepContextFactory.js'
+import type { AgentsSdkState } from '../agent-runtime/sdk/AgentsSdkBridge.js'
 
 export interface RunOptions {
   runId: string
@@ -42,7 +44,7 @@ export interface RunOptions {
 export interface RuntimeAssembly {
   agent: Agent<AgentsExecutionContext>
   runner: Runner
-  session: FileAgentsSession
+  session: CanonicalAgentsSession
   context: AgentsExecutionContext
   coordinator: ToolExecutionCoordinator
   adapter: ModelAdapter
@@ -55,6 +57,12 @@ export interface RuntimeAssembly {
   sdkVersion: string
   threadId: string
   turnId: string
+  segmentId: string
+  checkpointContext: {
+    current(): RecordedAgentStepContext | null
+    adopt(context: RecordedAgentStepContext): void
+    subscribe(listener: (context: RecordedAgentStepContext) => Promise<void>): () => void
+  }
   subAgentToolNames: ReadonlySet<string>
   handoffToolNames: ReadonlySet<string>
   handoffAgentNames: ReadonlySet<string>
@@ -64,14 +72,20 @@ export interface RuntimeAssembly {
   isUnavailableSdkToolCall: (callId: string) => boolean
   completeHandoff: (agentId: string, summary: string) => Promise<void>
   failHandoff: (agentId: string, message: string) => Promise<void>
-  flushPendingSessionAssistantMessage: () => Promise<void>
-  discardPendingSessionAssistantMessage: () => void
 }
+
+export type RuntimeAgentsSdkState = AgentsSdkState<AgentsExecutionContext>
 
 export interface StreamProjectionState {
   assistantItemId: string | null
   reasoningItemId: string | null
   lastAssistantText: string
-  completedAssistantItems: Array<{ itemId: string; text: string; entryId: string | null }>
+  lastAssistantSdkItemId: string | null
+  completedAssistantItems: Array<{
+    itemId: string
+    text: string
+    sdkItemId: string | null
+    entryId: string | null
+  }>
   subAgentCallItemIds: Map<string, string>
 }

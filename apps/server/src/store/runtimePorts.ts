@@ -60,9 +60,9 @@ export interface AgentRuntimeStore {
   ): Promise<void>
   getRunCheckpoint(runId: string): Promise<RunCheckpoint>
   appendAgentTranscript(runId: string, agentId: string, record: Record<string, unknown>): Promise<void>
-  saveAgentsSdkState(
+  saveAgentsSdkCheckpointEnvelope(
     runId: string,
-    serializedState: string,
+    serializedEnvelope: string,
     metadata: {
       agentsSdkVersion: string
       runtimeConfigDigest: string
@@ -70,7 +70,7 @@ export interface AgentRuntimeStore {
       terminalToolCallIds?: readonly string[]
     },
   ): Promise<RunSteeringRecord[]>
-  readAgentsSdkState(runId: string): Promise<string>
+  readAgentsSdkCheckpointEnvelope(runId: string): Promise<string>
   appendEvent(runId: string, event: RunEvent): Promise<void>
   listEvents(runId: string): Promise<RunEvent[]>
   appendItem(update: ConversationItemStoreUpdate): Promise<void>

@@ -14,7 +14,6 @@ import {
   Runner,
   webSearchTool,
   type AgentOptions,
-  type AgentInputItem,
   type ModelRequest,
   type Tool,
 } from '@openai/agents'
@@ -53,7 +52,7 @@ import {
   assertAgentsSdkVersionSupported,
   runtimeConfigDigest,
 } from './agentsRuntimeMetadata.js'
-import { FileAgentsSession } from './fileAgentsSession.js'
+import { CanonicalAgentsSession } from '../agent-runtime/sdk/CanonicalAgentsSession.js'
 import { createHandoffAgents } from './handoffAgentFactory.js'
 import { buildPlanningCapabilityCatalog, buildSystemPrompt } from './prompts.js'
 import { RunToolConcurrencyGate } from './runToolConcurrencyGate.js'
@@ -65,20 +64,14 @@ import {
   type SandboxClientFactory,
 } from './runtimeSandbox.js'
 import {
-  assistantText,
   conversationMessagesToAgentItems,
   errorMessage,
-  isAssistantMessage,
   modelSettings,
-  parseArguments,
-  sdkNativeLedgerStatus,
-  toolResultText,
 } from './runtimeSdkProjection.js'
 import {
   buildRuntimeSdkSandboxIntegration,
   createRuntimeSdkIntegration,
 } from './runtimeSdkIntegrations.js'
-import type { RuntimeTranscriptProjector } from './runtimeTranscriptProjector.js'
 import type { RunOptions, RuntimeAssembly } from './runtimeTypes.js'
 import {
   protectModelTransportFromRunInputMarkers,
@@ -96,7 +89,10 @@ import {
 import type { RunEventSink } from './turnRunner.js'
 import { ToolResultCommitService } from '../tools/resultPersistence.js'
 import { makeId } from '../utils/ids.js'
-import type { AgentStepContextRecorder } from '../agent-runtime/step/AgentStepContextFactory.js'
+import type {
+  AgentStepContextRecorder,
+  RecordedAgentStepContext,
+} from '../agent-runtime/step/AgentStepContextFactory.js'
 import {
   createAgentToolPlan,
   handoffToolPlanSource,
@@ -114,7 +110,6 @@ interface RuntimeAssemblyFactoryDependencies {
   store: AgentRuntimeStore
   toolRegistry: ToolRegistry
   modelRegistry: ModelAdapterRegistry
-  transcriptProjector: RuntimeTranscriptProjector
   runtimeOptions: RuntimeAssemblyFactoryOptions
   modelCompletions?: ModelCompletionService
   subAgentControls: SubAgentControlPlane
@@ -149,7 +144,6 @@ export class RuntimeAssemblyFactory {
       store,
       subAgentControls,
       toolRegistry,
-      transcriptProjector,
     } = this.dependencies
     const adapter = modelRegistry.resolveProvider(options.provider)
     const workspaceId = store.getRun(options.runId).workspaceId
@@ -164,6 +158,22 @@ export class RuntimeAssemblyFactory {
     assertAgentRuntimeCapabilities(adapter, modelCapabilities, options.runtimeConfig)
     const configDigest = runtimeConfigDigest(options.runtimeConfig)
     const segmentId = makeId('segment')
+    let latestCheckpointContext: RecordedAgentStepContext | null = null
+    let checkpointContextListener: ((context: RecordedAgentStepContext) => Promise<void>) | null = null
+    const checkpointContext = {
+      current: (): RecordedAgentStepContext | null => latestCheckpointContext,
+      adopt: (context: RecordedAgentStepContext): void => {
+        if (latestCheckpointContext) throw new Error('Agent StepContext checkpoint 已初始化')
+        latestCheckpointContext = structuredClone(context)
+      },
+      subscribe: (listener: (context: RecordedAgentStepContext) => Promise<void>): (() => void) => {
+        if (checkpointContextListener) throw new Error('Agent StepContext checkpoint listener 已绑定')
+        checkpointContextListener = listener
+        return () => {
+          if (checkpointContextListener === listener) checkpointContextListener = null
+        }
+      },
+    }
     const providerModel = adapter.createAgentModel(selectedModel)
     const subAgentRootModel = protectModelTransportFromRunInputMarkers(providerModel)
     let captureModelRequest: ((request: ModelRequest) => Promise<void>) | null = null
@@ -426,7 +436,7 @@ export class RuntimeAssemblyFactory {
     captureModelRequest = async request => {
       const objectiveRevision = coordinator.currentModelInputObjectiveRevision()
       const toolPlan = createAgentToolPlan({ request, sources: requestToolSources })
-      await stepContexts.record({
+      const captured = await stepContexts.record({
         runId: options.runId,
         turnId,
         segmentId,
@@ -447,6 +457,11 @@ export class RuntimeAssemblyFactory {
         activeSkills: sandboxIntegration.activeSkills,
         auth: options.auth ?? null,
       })
+      if (captured.identity.segmentId !== segmentId) {
+        throw new Error(`Agent StepContext segment '${captured.identity.segmentId}' 与运行段 '${segmentId}' 不一致`)
+      }
+      latestCheckpointContext = captured
+      await checkpointContextListener?.(captured)
     }
 
     const inputTranscript = await store.activeTranscript(threadId)
@@ -576,193 +591,12 @@ export class RuntimeAssemblyFactory {
       })
     })
 
-    let assembly: RuntimeAssembly | null = null
-    let pendingSessionAssistantContent: string | null = null
-    const flushPendingSessionAssistantMessage = async (): Promise<void> => {
-      if (!pendingSessionAssistantContent) return
-      if (!assembly) throw new Error('SDK Session assistant 消息早于运行时装配完成')
-      const content = pendingSessionAssistantContent
-      pendingSessionAssistantContent = null
-      await transcriptProjector.appendAssistantMessageTranscript(assembly, content)
-    }
-    const discardPendingSessionAssistantMessage = (): void => {
-      pendingSessionAssistantContent = null
-    }
-    const projectSessionItems = async (items: AgentInputItem[]): Promise<void> => {
-      if (!assembly) throw new Error('SDK Session item 早于运行时装配完成')
-      const currentAssembly = assembly
-      for (const item of items) {
-        if (isAssistantMessage(item)) {
-          const content = assistantText(item)
-          if (!content) continue
-          await flushPendingSessionAssistantMessage()
-          pendingSessionAssistantContent = content
-          continue
-        }
-        if (item.type === 'reasoning' || ('role' in item && item.role === 'user')) continue
-        if (item.type === 'hosted_tool_call') {
-          await flushPendingSessionAssistantMessage()
-          await transcriptProjector.appendSdkHostedToolCallCheckpoint(
-            options.runId,
-            threadId,
-            turnId,
-            item,
-            itemSink,
-            sdkNativeToolPresentation(item.name, currentAssembly),
-          )
-          continue
-        }
-        if (item.type === 'function_call') {
-          const transcript = await store.activeTranscript(threadId)
-          const existingToolCall = transcript
-            .find(entry => entry.kind === 'tool_call' && entry.payload.callId === item.callId)
-          const itemObjectiveRevision = existingToolCall
-            ? objectiveRevisionFromPayload(existingToolCall.payload, 1)
-            : currentAssembly.context.currentObjectiveRevision()
-          const exists = Boolean(existingToolCall)
-          const terminal = transcript
-            .some(entry => entry.kind === 'tool_result' && entry.payload.callId === item.callId)
-          if (!exists) {
-            if (unavailableSdkToolCallIds.has(item.callId)) {
-              const label = currentAssembly.subAgentToolNames.has(item.name)
-                ? '子智能体任务'
-                : toolRegistry.get(item.name)?.label ?? item.name
-              await transcriptProjector.appendSdkRejectedToolCallTranscript(
-                options.runId,
-                threadId,
-                turnId,
-                item,
-                itemSink,
-                label,
-                itemObjectiveRevision,
-              )
-            } else if (toolRegistry.get(item.name)) {
-              // SDK Session 与工具 invoke 的持久化回调没有先后契约。恢复或快模型
-              // 路径中 Session 可能先看到 function_call；统一进入 coordinator 的
-              // 单航班 prepare，不能把正常的回调反序当成损坏状态。
-              await coordinator.prepare(
-                item.name,
-                parseArguments(item.arguments),
-                item.callId,
-              )
-            } else if (currentAssembly.subAgentToolNames.has(item.name)) {
-              throw new Error(`SDK Session 收到未准备的子智能体调用 '${item.callId}'`)
-            } else {
-              await transcriptProjector.appendSdkNativeToolCallTranscript(
-                options.runId,
-                threadId,
-                turnId,
-                item,
-                itemSink,
-                sdkNativeToolPresentation(item.name, currentAssembly),
-                itemObjectiveRevision,
-              )
-            }
-          }
-          if (unavailableSdkToolCallIds.has(item.callId) || terminal) {
-            await coordinator.markSdkToolCallTerminal(item.callId)
-          } else if (!transcriptProjector.isPlatformManagedTool(item.name, currentAssembly)) {
-            await coordinator.markSdkToolCallPending(item.callId)
-          }
-          if (pendingSessionAssistantContent) {
-            await transcriptProjector.appendAssistantContentCheckpoint(
-              assembly,
-              item.callId,
-              pendingSessionAssistantContent,
-            )
-            pendingSessionAssistantContent = null
-          }
-          continue
-        }
-        await flushPendingSessionAssistantMessage()
-        if (item.type === 'function_call_result') {
-          const transcript = await store.activeTranscript(threadId)
-          const itemObjectiveRevision = objectiveRevisionForCall(
-            transcript,
-            item.callId,
-          )
-          const exists = transcript
-            .some(entry => entry.kind === 'tool_result' && entry.payload.callId === item.callId)
-          if (exists) {
-            await coordinator.markSdkToolCallTerminal(item.callId)
-            continue
-          }
-          const content = toolResultText(item.output)
-          const isSubAgent = currentAssembly.subAgentToolNames.has(item.name)
-          const isSdkRejectedTool = unavailableSdkToolCallIds.has(item.callId)
-          const isSdkNativeTool = !isSdkRejectedTool
-            && !transcriptProjector.isPlatformManagedTool(item.name, currentAssembly)
-          const nativePresentation = sdkNativeToolPresentation(item.name, currentAssembly)
-          const platformTool = toolRegistry.get(item.name)
-          const failedCheckpoint = transcript.some(entry => (
-            entry.kind === 'checkpoint'
-            && entry.payload.callId === item.callId
-            && entry.payload.ledgerStatus === 'failed'
-          ))
-          const ledgerStatus = isSdkRejectedTool
-            ? 'rejected'
-            : isSdkNativeTool
-            ? sdkNativeLedgerStatus(item.status)
-            : (isSubAgent ? 'completed' : failedCheckpoint ? 'failed' : 'rejected')
-          await store.appendTranscript({
-            threadId,
-            runId: options.runId,
-            turnId,
-            kind: 'tool_result',
-            payload: {
-              callId: item.callId,
-              name: item.name,
-              label: isSubAgent
-                ? '子智能体任务'
-                : isSdkRejectedTool
-                  ? platformTool?.label ?? item.name
-                  : isSdkNativeTool
-                    ? nativePresentation.label
-                    : platformTool?.label ?? item.name,
-              summary: content,
-              content,
-              contentRef: null,
-              ledgerStatus,
-              resultId: null,
-              objectiveRevision: itemObjectiveRevision,
-              ...(isSdkRejectedTool
-                ? { source: 'openai_agents_sdk' }
-                : isSdkNativeTool ? { source: nativePresentation.source } : {}),
-            },
-          })
-          if (isSdkNativeTool) {
-            const outputItem = itemSink.startItem('function_call_output', {
-              callId: item.callId,
-              name: item.name,
-              role: 'tool',
-              metadata: {
-                toolLabel: nativePresentation.label,
-                source: nativePresentation.source,
-                objectiveRevision: itemObjectiveRevision,
-              },
-            })
-            itemSink.completeItem(outputItem.itemId, {
-              callId: item.callId,
-              name: item.name,
-              output: content,
-              isError: ledgerStatus === 'failed',
-              metadata: {
-                toolLabel: nativePresentation.label,
-                source: nativePresentation.source,
-                objectiveRevision: itemObjectiveRevision,
-              },
-            })
-          }
-          await coordinator.markSdkToolCallTerminal(item.callId)
-          unavailableSdkToolCallIds.delete(item.callId)
-        }
-      }
-    }
+    // SDK Session 只保存 SDK 的 replay history；平台 transcript 由公开 stream
+    // 事件、工具 ledger 与 executor 终态提交拥有，禁止从 Session 反推 canonical facts。
     const history = conversationMessagesToAgentItems(assembled.messages, systemPrompt)
-    const session = new FileAgentsSession(
+    const session = new CanonicalAgentsSession(
       `${options.sessionId}:${threadId}`,
       history,
-      projectSessionItems,
     )
     const completedAssembly: RuntimeAssembly = {
       agent,
@@ -780,6 +614,8 @@ export class RuntimeAssemblyFactory {
       sdkVersion,
       threadId,
       turnId,
+      segmentId,
+      checkpointContext,
       subAgentToolNames: new Set(subAgentConfigs
         .filter(config => config.delegationMode === 'as_tool')
         .map(config => config.agentId)),
@@ -791,26 +627,9 @@ export class RuntimeAssemblyFactory {
       isUnavailableSdkToolCall: callId => unavailableSdkToolCallIds.has(callId),
       completeHandoff: handoffIntegration.complete,
       failHandoff: handoffIntegration.fail,
-      flushPendingSessionAssistantMessage,
-      discardPendingSessionAssistantMessage,
     }
-    assembly = completedAssembly
     return completedAssembly
   }
-}
-
-function objectiveRevisionForCall(
-  entries: ReadonlyArray<{ kind: string; payload: Record<string, unknown> }>,
-  callId: string,
-): number {
-  const toolCall = entries.find(entry => entry.kind === 'tool_call' && entry.payload.callId === callId)
-  if (!toolCall) throw new Error(`SDK Session 工具结果 '${callId}' 缺少 canonical tool_call`)
-  return objectiveRevisionFromPayload(toolCall.payload, 1)
-}
-
-function objectiveRevisionFromPayload(payload: Record<string, unknown>, fallback: number): number {
-  const value = payload.objectiveRevision
-  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : fallback
 }
 
 function createThreadValueState(
@@ -882,22 +701,6 @@ function assertAgentRuntimeCapabilities(
   if (config.subAgents.some(agent => agent.delegationMode === 'handoff') && !capabilities.handoffs) {
     throw new Error(`模型 provider '${adapter.provider}' 不支持 Agent handoff`)
   }
-}
-
-function sdkNativeToolPresentation(
-  toolName: string,
-  assembly: RuntimeAssembly,
-): { label: string; source: string } {
-  if (assembly.hostedToolNames.has(toolName) || toolName === 'web_search_call') {
-    return { label: '联网搜索', source: 'openai_agents_hosted_web_search' }
-  }
-  if (assembly.handoffToolNames.has(toolName)) {
-    return { label: 'Handoff 转交', source: 'openai_agents_handoff' }
-  }
-  if (assembly.mcpToolNames.has(toolName)) {
-    return { label: 'MCP 工具调用', source: 'openai_agents_mcp' }
-  }
-  return { label: '沙箱工具调用', source: 'openai_agents_sandbox' }
 }
 
 function createHostedTools(

@@ -1,22 +1,22 @@
 // +-------------------------------------------------------------------------
 //
-//   地理智能平台 - Agents SDK 文件会话测试
+//   地理智能平台 - Agents SDK canonical replay Session 测试
 //
-//   文件:       fileAgentsSession.test.ts
+//   文件:       CanonicalAgentsSession.test.ts
 //
 //   日期:       2026年06月23日
 //   作者:       JamesLinYJ
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
-// FileAgentsSession 是 SDK Session 与 canonical transcript 的边界。
+// CanonicalAgentsSession 只拥有 SDK replay history；observer 不写平台事实。
 // provider reasoning 只服务当前 run 的 UI 回放，不能成为后续模型历史。
 
 import type { AgentInputItem } from '@openai/agents'
 import { describe, expect, it } from 'vitest'
-import { FileAgentsSession } from './fileAgentsSession.js'
+import { CanonicalAgentsSession } from './CanonicalAgentsSession.js'
 
-describe('FileAgentsSession', () => {
+describe('CanonicalAgentsSession', () => {
   it('serializes concurrent SDK persistence callbacks in invocation order', async () => {
     const projected: string[] = []
     let releaseFirst!: () => void
@@ -27,7 +27,7 @@ describe('FileAgentsSession', () => {
     const firstStartedPromise = new Promise<void>(resolve => {
       firstStarted = resolve
     })
-    const session = new FileAgentsSession('test-session', [], async items => {
+    const session = new CanonicalAgentsSession('test-session', [], async items => {
       const item = items[0]
       if (!item || item.type !== 'function_call') throw new Error('测试项类型错误')
       projected.push(item.callId)
@@ -59,7 +59,7 @@ describe('FileAgentsSession', () => {
 
   it('does not persist provider reasoning as replayable session history', async () => {
     const projected: AgentInputItem[][] = []
-    const session = new FileAgentsSession('test-session', [], async items => {
+    const session = new CanonicalAgentsSession('test-session', [], async items => {
       projected.push(items)
     })
 
@@ -86,7 +86,7 @@ describe('FileAgentsSession', () => {
 
   it('retains platform run inputs once across outer Runner sessions without reprojecting them', async () => {
     const projected: AgentInputItem[][] = []
-    const session = new FileAgentsSession('test-session', [], async items => {
+    const session = new CanonicalAgentsSession('test-session', [], async items => {
       projected.push(items)
     })
     const runInput = {

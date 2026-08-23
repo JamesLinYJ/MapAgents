@@ -48,6 +48,7 @@ import type {
   AgentStepContextRecorder,
   CaptureAgentStepContextInput,
 } from '../agent-runtime/step/AgentStepContextFactory.js'
+import { AgentsSdkCheckpointCodec } from '../agent-runtime/sdk/AgentsSdkCheckpointCodec.js'
 
 async function removeTempRoot(root: string): Promise<void> {
   await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
@@ -58,13 +59,23 @@ function testRuntime(
   tools: ToolRegistry,
   models: ModelAdapterRegistry,
   goalJudge?: GoalJudgePort,
-  stepContexts: AgentStepContextRecorder = { record: async () => {} },
+  stepContexts: AgentStepContextRecorder = testStepContextRecorder(),
 ): OpenAIAgentsRuntime {
   return new OpenAIAgentsRuntime(store, tools, models, {
     stepContexts,
     createSandboxClient: testSandboxClientFactory,
     ...(goalJudge ? { goalJudge } : {}),
   })
+}
+
+function testStepContextRecorder(): AgentStepContextRecorder {
+  return {
+    record: async input => ({
+      identity: { segmentId: input.segmentId },
+      toolPlanDigest: input.toolPlan.catalogDigest,
+      worldRevision: 1,
+    }),
+  }
 }
 
 describe('OpenAIAgentsRuntime delivery boundaries', () => {
@@ -132,7 +143,14 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         tools,
         registryWith(fakeAdapter(model)),
         undefined,
-        { record: async input => { captures.push(input) } },
+        { record: async input => {
+          captures.push(input)
+          return {
+            identity: { segmentId: input.segmentId },
+            toolPlanDigest: input.toolPlan.catalogDigest,
+            worldRevision: 1,
+          }
+        } },
       ).run(runOptions(run, thread.id))
 
       expect(completed.status).toBe('completed')
@@ -899,8 +917,8 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         }
       })
       const runtime = testRuntime(store, tools, registryWith(fakeAdapter(model)))
-      const originalSave = store.saveAgentsSdkState.bind(store)
-      store.saveAgentsSdkState = async (...args) => {
+      const originalSave = store.saveAgentsSdkCheckpointEnvelope.bind(store)
+      store.saveAgentsSdkCheckpointEnvelope = async (...args) => {
         if (args[2].inputLeaseId) throw new Error('注入的 checkpoint/input ack 事务失败')
         return originalSave(...args)
       }
@@ -923,13 +941,13 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         activeInputLeaseTo: 1,
       })
 
-      store.saveAgentsSdkState = originalSave
+      store.saveAgentsSdkCheckpointEnvelope = originalSave
       await store.updateRunStatus(run.id, 'running')
       const recovery = new RunSteeringController(store)
       await recovery.open(run.id, { recoverLeased: true })
       expect((await store.listRunInputs(run.id))[0]).toMatchObject({ status: 'queued', inputSequence: 1 })
       const replay = await recovery.consumePendingWithRevision(run.id)
-      const acked = await store.saveAgentsSdkState(run.id, '{"response":"recovered"}', {
+      const acked = await store.saveAgentsSdkCheckpointEnvelope(run.id, '{"response":"recovered"}', {
         agentsSdkVersion: 'test-sdk',
         runtimeConfigDigest: 'test-runtime',
         inputLeaseId: replay.leaseId,
@@ -2628,13 +2646,14 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         item.action === 'sensitive_tool' && item.status === 'pending'
       ))
       if (!nestedApproval) throw new Error('测试没有生成子智能体内部审批')
-      const serialized = JSON.parse(await store.readAgentsSdkState(run.id)) as {
-        pendingAgentToolRuns?: Record<string, unknown>
-      }
+      const checkpointEnvelope = new AgentsSdkCheckpointCodec().decode(
+        await store.readAgentsSdkCheckpointEnvelope(run.id),
+      )
 
       expect(nestedWaiting.status).toBe('waiting_approval')
       expect(executions).toBe(0)
-      expect(Object.keys(serialized.pendingAgentToolRuns ?? {})).not.toHaveLength(0)
+      expect(checkpointEnvelope.publicSerializedState).not.toHaveLength(0)
+      expect(checkpointEnvelope.segmentId).not.toHaveLength(0)
 
       const completed = await runtime.resolveApproval(
         run.id,

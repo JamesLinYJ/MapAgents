@@ -40,6 +40,7 @@ export class RuntimeTranscriptProjector {
       assistantItemId: null,
       reasoningItemId: null,
       lastAssistantText: '',
+      lastAssistantSdkItemId: null,
       completedAssistantItems: [],
       subAgentCallItemIds: new Map(),
     }
@@ -82,7 +83,10 @@ export class RuntimeTranscriptProjector {
           .filter(part => part.type === 'output_text')
           .map(part => part.text)
           .join('')
-        if (content && !projection.assistantItemId) projection.lastAssistantText = content
+        if (content) {
+          projection.lastAssistantSdkItemId = raw.id ?? null
+          if (!projection.assistantItemId) projection.lastAssistantText = content
+        }
       }
       return
     }
@@ -93,7 +97,7 @@ export class RuntimeTranscriptProjector {
       }
       return
     }
-    if (event.name === 'tool_called') {
+    if (event.name === 'tool_called' || event.name === 'handoff_requested') {
       if (projection.assistantItemId || projection.lastAssistantText.trim()) {
         const itemId = projection.assistantItemId
           ?? itemSink.startItem('message', { role: 'assistant' }).itemId
@@ -101,9 +105,15 @@ export class RuntimeTranscriptProjector {
           ? {}
           : { body: projection.lastAssistantText })
         const text = completed.body ?? ''
-        projection.completedAssistantItems.push({ itemId, text, entryId: null })
+        projection.completedAssistantItems.push({
+          itemId,
+          text,
+          sdkItemId: projection.lastAssistantSdkItemId,
+          entryId: null,
+        })
         projection.assistantItemId = null
         projection.lastAssistantText = ''
+        projection.lastAssistantSdkItemId = null
       }
       const raw = event.item.rawItem
       if (
@@ -194,6 +204,14 @@ export class RuntimeTranscriptProjector {
           )
         }
       }
+      if (raw.type === 'hosted_tool_call') {
+        await this.persistCompletedAssistantEntriesForToolCall(
+          assembly,
+          projection,
+          itemSink,
+          null,
+        )
+      }
       if (raw.type === 'function_call' && !this.isPlatformManagedTool(raw.name, assembly)) {
         await assembly.coordinator.markSdkToolCallPending(raw.callId)
       }
@@ -215,8 +233,18 @@ export class RuntimeTranscriptProjector {
       )
       return
     }
-    if (event.name === 'tool_output') {
+    if (event.name === 'tool_output' || event.name === 'handoff_occurred') {
       const raw = event.item.rawItem
+      if (raw.type === 'function_call_result') {
+        // 工具 prepare/result 已进入平台账本后，公开 tool_output 才是把同一
+        // 模型响应中的 assistant 前导正文绑定到 callId 的稳定时点。
+        await this.persistCompletedAssistantEntriesForToolCall(
+          assembly,
+          projection,
+          itemSink,
+          raw.callId,
+        )
+      }
       if (
         raw.type === 'function_call_result'
         && !this.isPlatformManagedTool(raw.name, assembly)
@@ -405,6 +433,37 @@ export class RuntimeTranscriptProjector {
     }
   }
 
+  private async persistCompletedAssistantEntriesForToolCall(
+    assembly: RuntimeAssembly,
+    projection: StreamProjectionState,
+    itemSink: ItemSink,
+    callId: string | null,
+  ): Promise<void> {
+    const unresolved = projection.completedAssistantItems.filter(item => !item.entryId)
+    for (const [index, projected] of unresolved.entries()) {
+      const attachesToTool = callId !== null && index === unresolved.length - 1
+      const entry = attachesToTool
+        ? await this.appendAssistantContentCheckpoint(
+            assembly,
+            callId,
+            projected.text,
+            projected.sdkItemId,
+          )
+        : await this.appendAssistantMessageTranscript(assembly, projected.text, {
+            itemId: projected.itemId,
+            sdkItemId: projected.sdkItemId,
+          })
+      itemSink.completeItem(projected.itemId, {
+        body: projected.text,
+        metadata: {
+          transcriptEntryId: entry.entryId,
+          ...(attachesToTool ? { assistantContentForCallId: callId } : {}),
+        },
+      })
+      projected.entryId = entry.entryId
+    }
+  }
+
   isPlatformManagedTool(toolName: string, assembly: RuntimeAssembly): boolean {
     return Boolean(this.toolRegistry.get(toolName))
       || assembly.subAgentToolNames.has(toolName)
@@ -576,17 +635,26 @@ export class RuntimeTranscriptProjector {
   appendAssistantMessageTranscript(
     assembly: RuntimeAssembly,
     content: string,
-    itemId?: string | null,
-    objectiveRevision = assembly.context.currentObjectiveRevision(),
+    options: {
+      itemId?: string | null
+      sdkItemId?: string | null
+      objectiveRevision?: number
+    } = {},
   ) {
+    const objectiveRevision = options.objectiveRevision
+      ?? assembly.context.currentObjectiveRevision()
     return this.store.appendTranscript({
       threadId: assembly.threadId,
       runId: assembly.context.runId,
       turnId: assembly.turnId,
       kind: 'message',
-      payload: itemId
-        ? { role: 'assistant', content, itemId, objectiveRevision }
-        : { role: 'assistant', content, objectiveRevision },
+      payload: {
+        role: 'assistant',
+        content,
+        ...(options.itemId ? { itemId: options.itemId } : {}),
+        ...(options.sdkItemId ? { sdkItemId: options.sdkItemId } : {}),
+        objectiveRevision,
+      },
     })
   }
 
@@ -594,6 +662,7 @@ export class RuntimeTranscriptProjector {
     assembly: RuntimeAssembly,
     callId: string,
     content: string,
+    sdkItemId: string | null = null,
   ) {
     const entries = await this.store.activeTranscript(assembly.threadId)
     const toolCall = entries.find(entry => entry.kind === 'tool_call' && entry.payload.callId === callId)
@@ -615,6 +684,13 @@ export class RuntimeTranscriptProjector {
       if (existingCheckpoint.payload.content !== content) {
         throw new Error(`工具调用 '${callId}' 的 assistant 前导正文 checkpoint 不一致`)
       }
+      if (
+        sdkItemId
+        && existingCheckpoint.payload.sdkItemId
+        && existingCheckpoint.payload.sdkItemId !== sdkItemId
+      ) {
+        throw new Error(`工具调用 '${callId}' 的 assistant SDK item 不一致`)
+      }
       return existingCheckpoint
     }
     return this.store.appendTranscript({
@@ -626,7 +702,8 @@ export class RuntimeTranscriptProjector {
         type: 'assistant_content_for_tool_call',
         callId,
         content,
-        source: 'openai_agents_session',
+        ...(sdkItemId ? { sdkItemId } : {}),
+        source: 'openai_agents_stream',
         objectiveRevision,
       },
     })

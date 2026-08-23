@@ -24,6 +24,7 @@ interface ToolCallRecoveryLedgerStore {
  */
 export class ToolCallRecoveryLedger {
   private pending: Set<string>
+  private readonly observedTerminals = new Set<string>()
   private mutation: Promise<void> = Promise.resolve()
 
   constructor(
@@ -42,6 +43,20 @@ export class ToolCallRecoveryLedger {
     return this.transition(callId, false)
   }
 
+  observeSdkTerminal(callId: string): Promise<void> {
+    if (!callId) return Promise.reject(new Error('工具调用恢复账本缺少 callId'))
+    const operation = this.mutation.then(() => {
+      this.observedTerminals.add(callId)
+    })
+    this.mutation = operation.then(() => undefined, () => undefined)
+    return operation
+  }
+
+  async checkpointTerminalCallIds(): Promise<string[]> {
+    await this.mutation
+    return [...this.observedTerminals].filter(callId => this.pending.has(callId))
+  }
+
   // Durable SDK checkpoint 已在同一 PostgreSQL 事务中清理这些 callId。
   // 这里只同步进程内快照，不得再发起第二次 DB 写入。
   acceptCheckpointTerminals(callIds: Iterable<string>): Promise<void> {
@@ -49,7 +64,10 @@ export class ToolCallRecoveryLedger {
     if (!terminal.size) return Promise.resolve()
     const operation = this.mutation.then(() => {
       const next = new Set(this.pending)
-      for (const callId of terminal) next.delete(callId)
+      for (const callId of terminal) {
+        next.delete(callId)
+        this.observedTerminals.delete(callId)
+      }
       this.pending = next
     })
     this.mutation = operation.then(() => undefined, () => undefined)
@@ -66,7 +84,10 @@ export class ToolCallRecoveryLedger {
       if (this.pending.has(callId) === pending) return
       const next = new Set(this.pending)
       if (pending) next.add(callId)
-      else next.delete(callId)
+      else {
+        next.delete(callId)
+        this.observedTerminals.delete(callId)
+      }
       const pendingToolCallIds = [...next]
       await this.store.saveRunCheckpoint(this.runId, {
         pendingToolCallIds,

@@ -304,9 +304,9 @@ export class PlatformPersistenceFacade {
     await this.runStore.appendAgentTranscript(runId, agentId, record)
   }
 
-  async saveAgentsSdkState(
+  async saveAgentsSdkCheckpointEnvelope(
     runId: string,
-    serializedState: string,
+    serializedEnvelope: string,
     metadata: {
       agentsSdkVersion: string
       runtimeConfigDigest: string
@@ -314,11 +314,11 @@ export class PlatformPersistenceFacade {
       terminalToolCallIds?: readonly string[]
     },
   ): Promise<RunSteeringRecord[]> {
-    return this.runStore.saveAgentsSdkState(runId, serializedState, metadata)
+    return this.runStore.saveAgentsSdkCheckpointEnvelope(runId, serializedEnvelope, metadata)
   }
 
-  async readAgentsSdkState(runId: string): Promise<string> {
-    return this.runStore.readAgentsSdkState(runId)
+  async readAgentsSdkCheckpointEnvelope(runId: string): Promise<string> {
+    return this.runStore.readAgentsSdkCheckpointEnvelope(runId)
   }
 
   async putConversationObject(

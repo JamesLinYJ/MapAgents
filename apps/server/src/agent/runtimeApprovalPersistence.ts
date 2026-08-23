@@ -18,14 +18,14 @@ import { makeId, nowUtc } from '../utils/ids.js'
 import { approvalDecisionFromRequest, approvalDescription, approvalTitle, upsertDecision } from './runtimeApprovals.js'
 import { functionCallId, parseArguments, requireThreadId } from './runtimeSdkProjection.js'
 import type { RunEventSink } from './turnRunner.js'
-import type { AgentsCheckpointService } from './agentsCheckpointService.js'
+import type { AgentsSdkCheckpointService } from '../agent-runtime/sdk/AgentsSdkCheckpointService.js'
 import type { RunOptions } from './runtimeTypes.js'
 
 export class RuntimeApprovalPersistence {
   constructor(
     private readonly store: AgentRuntimeStore,
     private readonly toolRegistry: ToolRegistry,
-    private readonly checkpoints: AgentsCheckpointService,
+    private readonly checkpoints: AgentsSdkCheckpointService,
   ) {}
 
   async persist(

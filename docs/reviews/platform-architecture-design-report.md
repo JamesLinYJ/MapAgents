@@ -268,7 +268,7 @@ Supervisor 只管理三个固定服务：
 | Server 启动、HTTP/WS 和生命周期 | [`apps/server/src/main.ts`](../../apps/server/src/main.ts)、[`lifecycle.ts`](../../apps/server/src/lifecycle.ts) |
 | 应用依赖装配 | [`apps/server/src/app/container.ts`](../../apps/server/src/app/container.ts) |
 | WS 注册与授权绑定 | [`apps/server/src/ws/commandRegistry.ts`](../../apps/server/src/ws/commandRegistry.ts) |
-| Agent、审批和 checkpoint | [`apps/server/src/agent/runtime.ts`](../../apps/server/src/agent/runtime.ts)、[`agentsCheckpointService.ts`](../../apps/server/src/agent/agentsCheckpointService.ts) |
+| Agent、审批和 checkpoint | [`apps/server/src/agent/runtime.ts`](../../apps/server/src/agent/runtime.ts)、[`AgentsSdkCheckpointService.ts`](../../apps/server/src/agent-runtime/sdk/AgentsSdkCheckpointService.ts) |
 | `valueRef` 持久化 | [`apps/server/src/tools/resultPersistence.ts`](../../apps/server/src/tools/resultPersistence.ts) |
 | PostgreSQL 与载荷存储组合 | [`apps/server/src/store/platformPersistenceFacade.ts`](../../apps/server/src/store/platformPersistenceFacade.ts) |
 | Electron Main 组合根 | [`apps/desktop/src/main/index.ts`](../../apps/desktop/src/main/index.ts) |

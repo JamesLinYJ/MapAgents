@@ -59,11 +59,11 @@ describe('RunSteeringController', () => {
       expect(await controller.consumedObjectiveRevision(run.id)).toBe(1)
       expect((await controller.modelInputRevisionSnapshot(run.id)).state).toBeNull()
 
-      await expect(store.saveAgentsSdkState(run.id, '{"unsafe":"checkpoint"}', {
+      await expect(store.saveAgentsSdkCheckpointEnvelope(run.id, '{"unsafe":"checkpoint"}', {
         agentsSdkVersion: 'test-sdk',
         runtimeConfigDigest: 'test-runtime',
       })).rejects.toThrow(/input|lease/u)
-      const acked = await store.saveAgentsSdkState(run.id, '{"response":"durable"}', {
+      const acked = await store.saveAgentsSdkCheckpointEnvelope(run.id, '{"response":"durable"}', {
         agentsSdkVersion: 'test-sdk',
         runtimeConfigDigest: 'test-runtime',
         inputLeaseId: delivery.leaseId,
@@ -177,7 +177,7 @@ describe('RunSteeringController', () => {
       expect(await controller.tryClaimTerminal(run.id, 1)).toBe(false)
 
       const delivery = await controller.consumePendingWithRevision(run.id)
-      const acked = await store.saveAgentsSdkState(run.id, '{"response":"revision-2"}', {
+      const acked = await store.saveAgentsSdkCheckpointEnvelope(run.id, '{"response":"revision-2"}', {
         agentsSdkVersion: 'test-sdk',
         runtimeConfigDigest: 'test-runtime',
         inputLeaseId: delivery.leaseId,
@@ -245,7 +245,7 @@ describe('RunSteeringController', () => {
       const idempotentLease = await store.leaseRunInputs(run.id, replay.leaseId!)
       expect(idempotentLease.map(record => record.inputSequence)).toEqual([1, 2])
 
-      const acked = await store.saveAgentsSdkState(run.id, '{"response":"replayed"}', {
+      const acked = await store.saveAgentsSdkCheckpointEnvelope(run.id, '{"response":"replayed"}', {
         agentsSdkVersion: 'test-sdk',
         runtimeConfigDigest: 'test-runtime',
         inputLeaseId: replay.leaseId,
@@ -272,13 +272,13 @@ describe('RunSteeringController', () => {
       })
       expect(await postAckRecovery.stateForRevision(run.id, 3)).toMatchObject({ objectiveRevision: 3 })
 
-      await expect(restoredStore.saveAgentsSdkState(run.id, '{"response":"replayed"}', {
+      await expect(restoredStore.saveAgentsSdkCheckpointEnvelope(run.id, '{"response":"replayed"}', {
         agentsSdkVersion: 'test-sdk',
         runtimeConfigDigest: 'test-runtime',
         inputLeaseId: replay.leaseId,
       })).resolves.toHaveLength(2)
 
-      await expect(restoredStore.saveAgentsSdkState(run.id, '{"response":"stale-overwrite"}', {
+      await expect(restoredStore.saveAgentsSdkCheckpointEnvelope(run.id, '{"response":"stale-overwrite"}', {
         agentsSdkVersion: 'test-sdk',
         runtimeConfigDigest: 'test-runtime',
         inputLeaseId: replay.leaseId,

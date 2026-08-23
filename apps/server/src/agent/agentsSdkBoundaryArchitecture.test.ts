@@ -9,30 +9,48 @@
 //   协助:       OpenAI Codex:GPT-5.6 Pro
 // --------------------------------------------------------------------------
 
-import { readdir, readFile } from 'node:fs/promises'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 describe('Agents SDK anti-corruption boundary', () => {
-  it('把 SDK 内部状态接触限制在单一防腐文件，并禁止解析 checkpoint 内部布局', async () => {
-    const sourceRoot = path.join(process.cwd(), 'src')
+  it('把 RunState 操作限制在 sdk/，并禁止解析 checkpoint 内部布局', async () => {
+    const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
     const files = await collectProductionTypescript(sourceRoot)
     const internalInputToken = '.' + '_' + 'originalInput'
     const generatedItemsToken = 'generated' + 'Items'
-    const allowedInternalInputFile = 'agent/agentsSdkStateBoundary.ts'
 
     for (const file of files) {
       const relative = path.relative(sourceRoot, file).replace(/\\/gu, '/')
       const source = await readFile(file, 'utf8')
-      if (source.includes(internalInputToken)) {
-        expect(relative).toBe(allowedInternalInputFile)
-      }
+      expect(source.includes(internalInputToken), relative).toBe(false)
       expect(source.includes(generatedItemsToken), relative).toBe(false)
+      if (/import[\s\S]*?\bRunState\b[\s\S]*?from ['"]@openai\/agents['"]/u.test(source)) {
+        expect(relative.startsWith('agent-runtime/sdk/'), relative).toBe(true)
+      }
       expect(
         /JSON\.parse\([^)]*\.toString\(\)/u.test(source),
         relative,
       ).toBe(false)
     }
+
+    await expect(stat(path.join(sourceRoot, 'agent/agentsSdkStateBoundary.ts')))
+      .rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(stat(path.join(sourceRoot, 'agent/agentsCheckpointService.ts')))
+      .rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(stat(path.join(sourceRoot, 'agent/fileAgentsSession.ts')))
+      .rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(stat(path.join(sourceRoot, 'agent-runtime/sdk/AgentsSdkBridge.ts')))
+      .resolves.toMatchObject({})
+    await expect(stat(path.join(sourceRoot, 'agent-runtime/sdk/AgentsSdkCheckpointCodec.ts')))
+      .resolves.toMatchObject({})
+    await expect(stat(path.join(sourceRoot, 'agent-runtime/sdk/CanonicalAgentsSession.ts')))
+      .resolves.toMatchObject({})
+
+    const assemblySource = await readFile(path.join(sourceRoot, 'agent/runtimeAssembly.ts'), 'utf8')
+    expect(assemblySource.includes('projectSessionItems')).toBe(false)
+    expect(assemblySource.includes('SDK Session 只保存 SDK 的 replay history')).toBe(true)
   })
 })
 

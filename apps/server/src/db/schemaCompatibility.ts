@@ -30,9 +30,10 @@ export const REQUIRED_MIGRATIONS = [
   '012_run_input_delivery_ack',
   '013_run_domain_journal',
   '014_agent_step_geo_world',
+  '015_agents_sdk_checkpoint_envelope',
 ] as const
 
-export const CURRENT_DATABASE_SCHEMA_VERSION = 14
+export const CURRENT_DATABASE_SCHEMA_VERSION = 15
 
 const migrationRowsSchema = z.array(z.object({
   migration_id: z.string().min(1),
@@ -53,7 +54,7 @@ export async function verifyDatabaseSchemaCompatibility(
   if (typeof tableName !== 'string') {
     throw new Error(
       '数据库尚未启用版本跟踪。请重建开发数据库并应用 '
-      + 'infra/migrations/000_schema_migrations.sql 至 014_agent_step_geo_world.sql '
+      + 'infra/migrations/000_schema_migrations.sql 至 015_agents_sdk_checkpoint_envelope.sql '
       + '后重新启动。',
     )
   }

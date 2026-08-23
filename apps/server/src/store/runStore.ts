@@ -394,9 +394,9 @@ export class RunStore {
     await this.payloadStore.appendAgentTranscript(runId, agentId, record)
   }
 
-  async saveAgentsSdkState(
+  async saveAgentsSdkCheckpointEnvelope(
     runId: string,
-    serializedState: string,
+    serializedEnvelope: string,
     metadata: {
       agentsSdkVersion: string
       runtimeConfigDigest: string
@@ -407,8 +407,8 @@ export class RunStore {
     this.get(runId)
     return this.objectPublication.publish(async () => {
       const reference = await this.payloadStore.putObject(
-        serializedState,
-        'application/vnd.geo-agent-platform.agents-state+json',
+        serializedEnvelope,
+        'application/vnd.geo-agent-platform.agents-checkpoint+json',
       )
       return this.repository.saveAgentsSdkCheckpoint(runId, {
         contentHash: reference.hash,
@@ -421,11 +421,11 @@ export class RunStore {
     })
   }
 
-  async readAgentsSdkState(runId: string): Promise<string> {
+  async readAgentsSdkCheckpointEnvelope(runId: string): Promise<string> {
     this.get(runId)
     const checkpoint = await this.repository.getRunCheckpoint(runId)
     const hash = checkpoint.sdkStateContentHash
-    if (!hash) throw new Error(`run '${runId}' 缺少 Agents SDK 状态，不能恢复`)
+    if (!hash) throw new Error(`run '${runId}' 缺少 Agents SDK checkpoint envelope，不能恢复`)
     const bytes = await this.payloadStore.readObjectByHash(hash)
     return Buffer.from(bytes).toString('utf8')
   }

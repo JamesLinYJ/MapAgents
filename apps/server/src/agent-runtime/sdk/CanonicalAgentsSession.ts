@@ -1,8 +1,8 @@
 // +-------------------------------------------------------------------------
 //
-//   地理智能平台 - Agents SDK 文件会话投影
+//   地理智能平台 - Agents SDK canonical replay Session
 //
-//   文件:       fileAgentsSession.ts
+//   文件:       CanonicalAgentsSession.ts
 //
 //   日期:       2026年06月22日
 //   作者:       JamesLinYJ
@@ -11,13 +11,13 @@
 
 import type { AgentInputItem, Session } from '@openai/agents'
 
-export type SessionItemProjector = (items: AgentInputItem[]) => Promise<void>
+export type SessionItemsObserver = (items: AgentInputItem[]) => Promise<void>
 
-// FileAgentsSession
+// CanonicalAgentsSession
 //
-// canonical transcript 仍是事实源；Session 只向 Runner 提供当前活动链快照，
-// 并把本次运行新增的语义项交给同一个幂等 projector。
-export class FileAgentsSession implements Session {
+// canonical transcript 仍是事实源；Session 只向 Runner 提供当前活动链快照。
+// 可选 observer 仅用于 SDK Session 契约观测，不能承担平台事实投影。
+export class CanonicalAgentsSession implements Session {
   private readonly appended: AgentInputItem[] = []
   private readonly retainedRunInputs = new Map<string, string>()
   private mutation: Promise<void> = Promise.resolve()
@@ -25,7 +25,7 @@ export class FileAgentsSession implements Session {
   constructor(
     private readonly sessionId: string,
     private readonly history: AgentInputItem[],
-    private readonly projectItems: SessionItemProjector,
+    private readonly observeItems: SessionItemsObserver = async () => undefined,
   ) {
     for (const item of history) {
       const key = platformRunInputKey(item)
@@ -62,7 +62,7 @@ export class FileAgentsSession implements Session {
       }
     }
     if (!projectable.length) return
-    await this.projectItems(projectable)
+    await this.observeItems(projectable)
     this.appended.push(...structuredClone(projectable))
   }
 
@@ -81,7 +81,7 @@ export class FileAgentsSession implements Session {
   private retainRunInputsOnce(items: readonly AgentInputItem[]): void {
     for (const item of items) {
       const key = platformRunInputKey(item)
-      if (!key) throw new Error('FileAgentsSession 只能显式保留带 platform marker 的 run input')
+      if (!key) throw new Error('CanonicalAgentsSession 只能显式保留带 platform marker 的 run input')
       const serialized = JSON.stringify(item)
       const previous = this.retainedRunInputs.get(key)
       if (previous !== undefined) {
