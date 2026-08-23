@@ -14,6 +14,7 @@ import { z } from 'zod'
 import { agentRuntimeConfigSchema } from './runtime.js'
 import { agentStateSchema, runStatusSchema, toolValueRefSchema } from './core.js'
 import { artifactDisplaySchema } from './map.js'
+import { childRunForkModeSchema } from './childRun.js'
 
 // --- Session / Thread / Run ---
 
@@ -182,6 +183,23 @@ export const agentThreadRecordSchema = z.object({
 
 export const analysisRunSchema = z.object({
   id: z.string(),
+  runKind: z.enum(['root', 'child']).default('root'),
+  rootRunId: z.string().nullable().default(null),
+  parentRunId: z.string().nullable().default(null),
+  parentTurnId: z.string().nullable().default(null),
+  rootTurnId: z.string().nullable().default(null),
+  spawnCallId: z.string().nullable().default(null),
+  agentPath: z.string().default('/root'),
+  taskName: z.string().nullable().default(null),
+  agentRole: z.string().nullable().default(null),
+  spawnDepth: z.number().int().nonnegative().default(0),
+  forkMode: childRunForkModeSchema.default('none'),
+  forkTurnCount: z.number().int().positive().nullable().default(null),
+  modelOverride: z.string().nullable().default(null),
+  reasoningOverride: z.string().nullable().default(null),
+  maxModelTokens: z.number().int().positive().nullable().default(null),
+  maxWallClockMs: z.number().int().positive().nullable().default(null),
+  usedModelTokens: z.number().int().nonnegative().default(0),
   threadId: z.string().nullable().default(null),
   sessionId: z.string(),
   workspaceId: z.string().nullable().default(null),
@@ -197,6 +215,34 @@ export const analysisRunSchema = z.object({
   conversationPath: z.string().nullable().default(null),
   // 运行时配置是跨进程持久化的事实，不接受 z.custom 这种无法验证结构的占位符。
   runtimeConfigSnapshot: agentRuntimeConfigSchema.nullable().default(null),
+}).superRefine((run, context) => {
+  if (run.runKind === 'root') {
+    if (run.parentRunId || run.parentTurnId || run.spawnCallId || run.taskName || run.agentRole) {
+      context.addIssue({ code: 'custom', path: ['runKind'], message: 'root Run 不能携带 child 身份字段' })
+    }
+    if (run.agentPath !== '/root' || run.spawnDepth !== 0 || run.forkMode !== 'none') {
+      context.addIssue({ code: 'custom', path: ['agentPath'], message: 'root Run 必须使用根路径且不能 fork' })
+    }
+    return
+  }
+  const required = [
+    ['rootRunId', run.rootRunId],
+    ['parentRunId', run.parentRunId],
+    ['parentTurnId', run.parentTurnId],
+    ['rootTurnId', run.rootTurnId],
+    ['spawnCallId', run.spawnCallId],
+    ['taskName', run.taskName],
+    ['agentRole', run.agentRole],
+  ] as const
+  for (const [field, value] of required) {
+    if (!value) context.addIssue({ code: 'custom', path: [field], message: `child Run 缺少 ${field}` })
+  }
+  if (run.spawnDepth < 1 || !/^\/root(?:\/[a-z0-9_]+)+$/u.test(run.agentPath)) {
+    context.addIssue({ code: 'custom', path: ['agentPath'], message: 'child Run 必须使用规范 agentPath 和正深度' })
+  }
+  if ((run.forkMode === 'last_n_turns') !== (run.forkTurnCount !== null)) {
+    context.addIssue({ code: 'custom', path: ['forkTurnCount'], message: 'last_n_turns 必须独占 forkTurnCount' })
+  }
 })
 
 export const directToolResultSchema = z.object({

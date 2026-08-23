@@ -59,6 +59,7 @@ import {
   RuntimeHookRegistry,
   type RuntimeHookHandler,
 } from '../agent-runtime/hooks/RuntimeHookRegistry.js'
+import type { AgentMessage } from '@geo-agent-platform/shared-types/child-run'
 
 export type { SandboxClientFactory } from './runtimeSandbox.js'
 export type { RunOptions } from './runtimeTypes.js'
@@ -70,6 +71,11 @@ export interface OpenAIAgentsRuntimeOptions {
   goalJudge?: GoalJudgePort
   authorizationLease?: (auth: AuthContext, run: AnalysisRun) => Promise<AuthContext>
   hookHandlers?: readonly RuntimeHookHandler[]
+  agentMailbox?: {
+    listMessages(runId: string): Promise<AgentMessage[]>
+    markMessageDelivered(runId: string, messageId: string): Promise<AgentMessage>
+    checkpointDeliveredMessages(runId: string): Promise<AgentMessage[]>
+  }
 }
 
 // OpenAIAgentsRuntime
@@ -166,6 +172,7 @@ export class OpenAIAgentsRuntime {
       }
 
       await this.steering.open(options.runId, { recoverLeased: options.resume === true })
+      await this.deliverAgentMailbox(options.runId)
       const completed = await withToolAuthorizationLease(
         () => this.refreshAuthorization(options),
         async () => {
@@ -204,6 +211,7 @@ export class OpenAIAgentsRuntime {
       )
       if (completed === 'waiting_approval') return this.store.getRun(options.runId)
       if (completed === 'clarification_needed') return this.store.getRun(options.runId)
+      await this.runtimeOptions.agentMailbox?.checkpointDeliveredMessages(options.runId)
       await finalizer.complete()
       await this.maybeExtractLongTermMemories(options, threadId, eventSink)
       return this.store.getRun(options.runId)
@@ -280,6 +288,22 @@ export class OpenAIAgentsRuntime {
         completedAt: cancelledAt,
       },
     })
+  }
+
+  private async deliverAgentMailbox(runId: string): Promise<void> {
+    const mailbox = this.runtimeOptions.agentMailbox
+    if (!mailbox) return
+    const queued = (await mailbox.listMessages(runId))
+      .filter(message => message.status === 'queued')
+      .sort((left, right) => left.sequence - right.sequence)
+    for (const message of queued) {
+      await this.steering.enqueue(
+        runId,
+        message.messageId,
+        `来自运行 '${message.senderRunId}' 的智能体消息：${message.content}`,
+      )
+      await mailbox.markMessageDelivered(runId, message.messageId)
+    }
   }
 
   steer(runId: string, steeringId: string, content: string) {

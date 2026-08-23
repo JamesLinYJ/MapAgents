@@ -87,6 +87,12 @@ export interface ToolContext {
     runId: string;
     sessionId: string;
     threadId: string | null;
+    /** 当前工具调用所属 Turn；仅 Agent 执行面保证提供。 */
+    turnId?: string;
+    /** 整棵持久子运行树共享的根 Turn。 */
+    rootTurnId?: string;
+    /** SDK/工具账本中的稳定调用 ID，可直接用作幂等键。 */
+    toolCallId?: string;
     signal: AbortSignal;
     runtimeRoot?: string;
     runtimeConfig?: AgentRuntimeConfig;

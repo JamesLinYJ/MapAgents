@@ -2,7 +2,7 @@
 
 > 本文是面向 Codex 执行的架构 RFC、迁移手册和逐 PR 验收清单。
 >
-> **状态**：In progress（WP-00 至 WP-09 已完成；下一包为 WP-10）
+> **状态**：In progress（WP-00 至 WP-10 已完成；下一包为 WP-11）
 >
 > **Newmap 基线**：`JamesLinYJ/Newmap@ffa50bbe1bd0e8de82f7f40448bafbe3f1eb751a`
 >
@@ -1615,6 +1615,15 @@ apps/server/src/agent-runtime/
 - child cancellation 不影响 root。
 - depth/concurrency/total budget。
 - Agent.asTool/handoff 普通回归。
+
+**实施证据**：
+
+- `platform_runs` 直接持久化 root/parent Turn、spawn call、规范 agent path、fork 范围、模型覆盖与单 Run 预算；`platform_root_run_budgets` 以根 Run 行锁和 CAS 原子限制深度、并发、累计 child、整棵树词元与 wall-clock，`platform_agent_messages` 以接收方单调 sequence 实现 `queued → delivered → checkpointed` mailbox。以上均只进入唯一权威 `infra/database/schema.sql`，没有新增 migration SQL。
+- `ChildRunManager` 为每个长任务创建独立 Thread、Run、checkpoint 与 Runner；spawn 直接使用当前 ToolContext 的 `turnId/rootTurnId/toolCallId`，同一 call 重试返回同一 child。`none/all/last N` fork 都是显式选择，last-N 按完整 Turn 截取并在嵌套 fork 中保留 Turn 身份。
+- `spawn_child_run`、`list_child_runs`、`send_child_input`、`send_child_message`、`wait_child_runs`、`interrupt_child_run` 与 `resume_child_run` 作为正式 Agent 工具注册。queue-only 消息不会隐式启动 Turn；trigger-turn 通过持久 Run Input 交付；取消和恢复都校验同一根运行，不能传播到 root 或兄弟 child。
+- mailbox 先写 PostgreSQL，再用同一个 message ID 幂等进入 Run Input；只有 SDK 运行完成并保存 clean checkpoint 后才把 delivered 消息推进为 checkpointed。服务启动会对所有既有终态 child 补写幂等 completion 消息，消除“child 已完成但父消息在进程退出前未写入”的窗口。
+- 模型用量不再由旁路仓储单独改列；`RunStore` 根据 `runtimeStats.modelTotalTokens` 的单调增量调用专用事务，在一次提交中更新 Run state、单 Run `usedModelTokens`、根预算和 Domain Journal。普通状态保存禁止推进词元列，因此不会用内存旧值覆盖预算事实。
+- 真实 PostgreSQL/PostGIS 空库回归覆盖单一 schema、根预算并发拒绝与终态释放、模型预算回滚、消息幂等/交付/checkpoint，以及 last-N 嵌套 fork；控制面和工具定向测试覆盖幂等 spawn、独立中断/恢复、消息触发语义与启动对账。原有 Agents SDK Runner、Agent-as-tool、handoff 与 WebSocket 运行时回归保持绿色。
 
 ### WP-11：投影、观测和权威读切换
 

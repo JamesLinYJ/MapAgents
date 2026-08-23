@@ -154,7 +154,12 @@ export interface ConversationTranscriptRepository {
   appendConversationEntry(input: AppendConversationEntryInput): Promise<TranscriptEntry>
   readThreadHistory(threadId: string, cursor?: string | null, limit?: number): Promise<ThreadHistoryPage>
   readActiveConversation(threadId: string, leafEntryId?: string | null): Promise<TranscriptEntry[]>
-  forkConversation(sourceThreadId: string, targetThreadId: string, sourceEntryId: string): Promise<Map<string, string>>
+  forkConversation(
+    sourceThreadId: string,
+    targetThreadId: string,
+    sourceEntryId: string,
+    lastNTurns?: number | null,
+  ): Promise<Map<string, string>>
 }
 
 export interface ThreadRepository extends
@@ -166,6 +171,7 @@ export interface ThreadRepository extends
 export interface RunStateRepository {
   createRunLifecycle(run: AnalysisRun): Promise<RunLifecycleResult>
   saveRun(run: AnalysisRun): Promise<void>
+  saveRunWithModelUsage(run: AnalysisRun, modelTokens: number): Promise<void>
   saveRunWithCheckpoint(
     run: AnalysisRun,
     fields: Partial<Pick<RunCheckpoint, 'activeEntryId' | 'pendingToolCallIds' | 'recoveryStatus'>>,

@@ -164,10 +164,20 @@ export class ThreadStore {
     return entry
   }
 
-  async fork(sourceThreadId: string, sourceEntryId: string, title?: string | null): Promise<AgentThreadRecord> {
+  async fork(
+    sourceThreadId: string,
+    sourceEntryId: string,
+    title?: string | null,
+    lastNTurns?: number | null,
+  ): Promise<AgentThreadRecord> {
     const source = this.get(sourceThreadId)
     const target = await this.create(source.sessionId, title ?? `${source.title} · 分支`)
-    const mapping = await this.repositories.transcript.forkConversation(sourceThreadId, target.id, sourceEntryId)
+    const mapping = await this.repositories.transcript.forkConversation(
+      sourceThreadId,
+      target.id,
+      sourceEntryId,
+      lastNTurns,
+    )
     await this.files.cloneThreadFiles(sourceThreadId, target.id)
     const sourceMemory = await this.getMemory(sourceThreadId)
     if (sourceMemory.version > 0 || sourceMemory.content.trim()) {

@@ -118,6 +118,7 @@ function createRunStore(overrides: Partial<ConversationPayloadStore> = {}) {
   } as unknown as ConversationPayloadStore
   const repository = {
     saveRun: vi.fn().mockResolvedValue(undefined),
+    saveRunWithModelUsage: vi.fn().mockResolvedValue(undefined),
     saveRunWithCheckpoint: vi.fn().mockResolvedValue(undefined),
     saveRunCheckpoint: vi.fn().mockResolvedValue(undefined),
     getRunCheckpoint: vi.fn().mockResolvedValue({
@@ -182,6 +183,33 @@ describe('RunStore projections', () => {
     ])
 
     expect(index.getRun('run_1').state.warnings).toEqual(['A', 'B'])
+  })
+
+  it('commits model token growth through the atomic budget transaction', async () => {
+    const { store, index, repository } = createRunStore()
+
+    await store.updateState('run_1', {
+      runtimeStats: { modelInputTokens: 9, modelOutputTokens: 3, modelTotalTokens: 12 },
+    })
+
+    expect(repository.saveRunWithModelUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        usedModelTokens: 12,
+        state: expect.objectContaining({
+          runtimeStats: expect.objectContaining({ modelTotalTokens: 12 }),
+        }),
+      }),
+      12,
+    )
+    expect(repository.saveRun).not.toHaveBeenCalled()
+    expect(index.getRun('run_1').usedModelTokens).toBe(12)
+
+    await store.updateState('run_1', { warnings: ['用量后普通状态写入'] })
+    expect(repository.saveRun).toHaveBeenCalledWith(expect.objectContaining({ usedModelTokens: 12 }))
+    expect(index.getRun('run_1').usedModelTokens).toBe(12)
+    await expect(store.updateState('run_1', {
+      runtimeStats: { modelTotalTokens: 11 },
+    })).rejects.toThrow(/累计词元不能回退/u)
   })
 
   it('marks an orphaned active run as interrupted during startup recovery', async () => {

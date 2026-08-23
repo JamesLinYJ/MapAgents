@@ -41,6 +41,7 @@ import { RuntimeConfigStore } from './postgres/runtimeConfigStore.js'
 import { ToolCatalogStore } from './postgres/toolCatalogStore.js'
 import { AutomationStore } from './postgres/automationStore.js'
 import { CustomProviderStore } from './postgres/customProviderStore.js'
+import { PostgresChildRunRepository } from './postgres/childRunRepository.js'
 import { PlatformEventHub } from './platformEventHub.js'
 import {
   PostgresConversationPersistence,
@@ -73,6 +74,7 @@ export class PlatformPersistenceFacade {
   readonly toolCatalog: ToolCatalogStore
   readonly automations: AutomationStore
   readonly customProviders: CustomProviderStore
+  readonly childRuns: PostgresChildRunRepository
 
   private readonly index = new ConversationProjectionIndex()
   private readonly payloadStore: ConversationPayloadStore
@@ -155,6 +157,7 @@ export class PlatformPersistenceFacade {
     this.toolCatalog = new ToolCatalogStore(db)
     this.automations = new AutomationStore(db)
     this.customProviders = new CustomProviderStore(db)
+    this.childRuns = new PostgresChildRunRepository(db)
   }
 
   // --- Sessions ---
@@ -317,6 +320,23 @@ export class PlatformPersistenceFacade {
     goal?: RunGoalInput | null
     runtimeConfigSnapshot?: AgentRuntimeConfig | null
     contextReferences?: ContextReference[]
+    childIdentity?: {
+      rootRunId: string
+      parentRunId: string
+      parentTurnId: string
+      rootTurnId: string
+      spawnCallId: string
+      agentPath: string
+      taskName: string
+      agentRole: string
+      spawnDepth: number
+      forkMode: 'none' | 'full_history' | 'last_n_turns'
+      forkTurnCount: number | null
+      modelOverride: string | null
+      reasoningOverride: string | null
+      maxModelTokens: number | null
+      maxWallClockMs: number | null
+    }
   }): Promise<AnalysisRun> {
     return this.runStore.create(sessionId, query, opts)
   }
@@ -525,8 +545,13 @@ export class PlatformPersistenceFacade {
     return this.threadStore.appendTranscript(input)
   }
 
-  async forkThread(sourceThreadId: string, sourceEntryId: string, title?: string | null): Promise<AgentThreadRecord> {
-    return this.threadStore.fork(sourceThreadId, sourceEntryId, title)
+  async forkThread(
+    sourceThreadId: string,
+    sourceEntryId: string,
+    title?: string | null,
+    lastNTurns?: number | null,
+  ): Promise<AgentThreadRecord> {
+    return this.threadStore.fork(sourceThreadId, sourceEntryId, title, lastNTurns)
   }
 
   async getThreadMemory(threadId: string): Promise<ThreadMemoryDocument> {

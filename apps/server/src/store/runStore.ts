@@ -206,13 +206,49 @@ export class RunStore {
     goal?: RunGoalInput | null
     runtimeConfigSnapshot?: AgentRuntimeConfig | null
     contextReferences?: ContextReference[]
+    childIdentity?: {
+      rootRunId: string
+      parentRunId: string
+      parentTurnId: string
+      rootTurnId: string
+      spawnCallId: string
+      agentPath: string
+      taskName: string
+      agentRole: string
+      spawnDepth: number
+      forkMode: 'none' | 'full_history' | 'last_n_turns'
+      forkTurnCount: number | null
+      modelOverride: string | null
+      reasoningOverride: string | null
+      maxModelTokens: number | null
+      maxWallClockMs: number | null
+    }
   }): Promise<AnalysisRun> {
     const session = this.sessionStore.get(sessionId)
     const thread = opts?.threadId ? this.index.getThread(opts.threadId) : null
     if (thread && thread.sessionId !== sessionId) throw new Error('run 的 thread 不属于当前 session')
     const now = nowUtc()
+    const runId = makeId('run')
+    const child = opts?.childIdentity
     const run: AnalysisRun = {
-      id: makeId('run'),
+      id: runId,
+      runKind: child ? 'child' : 'root',
+      rootRunId: child?.rootRunId ?? runId,
+      parentRunId: child?.parentRunId ?? null,
+      parentTurnId: child?.parentTurnId ?? null,
+      rootTurnId: child?.rootTurnId ?? null,
+      spawnCallId: child?.spawnCallId ?? null,
+      agentPath: child?.agentPath ?? '/root',
+      taskName: child?.taskName ?? null,
+      agentRole: child?.agentRole ?? null,
+      spawnDepth: child?.spawnDepth ?? 0,
+      forkMode: child?.forkMode ?? 'none',
+      forkTurnCount: child?.forkTurnCount ?? null,
+      modelOverride: child?.modelOverride ?? null,
+      reasoningOverride: child?.reasoningOverride ?? null,
+      maxModelTokens: child?.maxModelTokens ?? null,
+      maxWallClockMs: child?.maxWallClockMs ?? null,
+      usedModelTokens: 0,
       threadId: opts?.threadId ?? null,
       sessionId,
       workspaceId: thread?.workspaceId ?? session.workspaceId,
@@ -352,12 +388,16 @@ export class RunStore {
     return this.serializeStateMutation(runId, async () => {
       const run = this.get(runId)
       const updates = mutation(run.state)
+      const state = agentStateSchema.parse({ ...run.state, ...updates })
+      const modelTokens = modelTokenDelta(run.state.runtimeStats, state.runtimeStats)
       const next = {
         ...run,
-        state: agentStateSchema.parse({ ...run.state, ...updates }),
+        usedModelTokens: normalizedModelTokens(run.usedModelTokens) + modelTokens,
+        state,
         updatedAt: nowUtc(),
       }
-      await this.repository.saveRun(next)
+      if (modelTokens > 0) await this.repository.saveRunWithModelUsage(next, modelTokens)
+      else await this.repository.saveRun(next)
       this.index.setRun(next)
       this.events.runBus.publish(runId, structuredClone(next))
       return next
@@ -824,6 +864,22 @@ export class RunStore {
     }
     this.closedItemRuns.delete(runId)
   }
+}
+
+function modelTokenDelta(
+  before: Record<string, number>,
+  after: Record<string, number>,
+): number {
+  const previous = normalizedModelTokens(before.modelTotalTokens)
+  const current = normalizedModelTokens(after.modelTotalTokens)
+  if (current < previous) throw new Error('模型累计词元不能回退')
+  return current - previous
+}
+
+function normalizedModelTokens(value: number | undefined): number {
+  if (value === undefined) return 0
+  if (!Number.isInteger(value) || value < 0) throw new Error('模型累计词元必须是非负整数')
+  return value
 }
 
 function materializeStreamedItem(live: StreamedConversationItem): ConversationItem {

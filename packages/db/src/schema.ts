@@ -171,6 +171,24 @@ export const platformThreads = pgTable('platform_threads', {
 
 export const platformRuns = pgTable('platform_runs', {
   runId: text('run_id').primaryKey(),
+  runKind: text('run_kind').notNull().default('root'),
+  rootRunId: text('root_run_id').notNull().references((): AnyPgColumn => platformRuns.runId, { onDelete: 'cascade' }),
+  parentRunId: text('parent_run_id').references((): AnyPgColumn => platformRuns.runId, { onDelete: 'cascade' }),
+  parentTurnId: text('parent_turn_id'),
+  rootTurnId: text('root_turn_id'),
+  spawnCallId: text('spawn_call_id'),
+  agentPath: text('agent_path').notNull().default('/root'),
+  taskName: text('task_name'),
+  agentRole: text('agent_role'),
+  spawnDepth: integer('spawn_depth').notNull().default(0),
+  forkMode: text('fork_mode').notNull().default('none'),
+  forkTurnCount: integer('fork_turn_count'),
+  modelOverride: text('model_override'),
+  reasoningOverride: text('reasoning_override'),
+  maxModelTokens: integer('max_model_tokens'),
+  maxWallClockMs: integer('max_wall_clock_ms'),
+  usedModelTokens: integer('used_model_tokens').notNull().default(0),
+  nextAgentMessageSequence: integer('next_agent_message_sequence').notNull().default(1),
   sessionId: text('session_id').notNull().references(() => platformSessions.sessionId, { onDelete: 'cascade' }),
   threadId: text('thread_id').references(() => platformThreads.threadId, { onDelete: 'cascade' }),
   workspaceId: text('workspace_id').references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
@@ -208,6 +226,47 @@ export const platformRuns = pgTable('platform_runs', {
   sessionUpdatedIdx: index('idx_platform_runs_session_updated').on(table.sessionId, table.updatedAt),
   workspaceUpdatedIdx: index('idx_platform_runs_workspace_updated').on(table.workspaceId, table.updatedAt),
   statusUpdatedIdx: index('idx_platform_runs_status_updated').on(table.status, table.updatedAt),
+  parentSpawnIdx: uniqueIndex('idx_platform_runs_parent_spawn_unique').on(table.parentRunId, table.spawnCallId),
+  rootAgentPathIdx: uniqueIndex('idx_platform_runs_root_agent_path_unique').on(table.rootRunId, table.agentPath),
+  identityCheck: check(
+    'platform_runs_identity_check',
+    sql`(
+      ${table.runKind} = 'root'
+      AND ${table.rootRunId} = ${table.runId}
+      AND ${table.parentRunId} IS NULL
+      AND ${table.parentTurnId} IS NULL
+      AND ${table.rootTurnId} IS NULL
+      AND ${table.spawnCallId} IS NULL
+      AND ${table.agentPath} = '/root'
+      AND ${table.taskName} IS NULL
+      AND ${table.agentRole} IS NULL
+      AND ${table.spawnDepth} = 0
+      AND ${table.forkMode} = 'none'
+      AND ${table.forkTurnCount} IS NULL
+    ) OR (
+      ${table.runKind} = 'child'
+      AND ${table.rootRunId} <> ${table.runId}
+      AND ${table.parentRunId} IS NOT NULL
+      AND ${table.parentRunId} <> ${table.runId}
+      AND ${table.parentTurnId} IS NOT NULL
+      AND ${table.rootTurnId} IS NOT NULL
+      AND ${table.spawnCallId} IS NOT NULL
+      AND ${table.agentPath} ~ '^/root(/[a-z0-9_]+)+$'
+      AND ${table.taskName} ~ '^[a-z0-9_]+$'
+      AND ${table.agentRole} IS NOT NULL
+      AND ${table.spawnDepth} > 0
+      AND ${table.forkMode} IN ('none', 'full_history', 'last_n_turns')
+      AND ((${table.forkMode} = 'last_n_turns') = (${table.forkTurnCount} IS NOT NULL))
+    )`,
+  ),
+  budgetCheck: check(
+    'platform_runs_budget_check',
+    sql`${table.usedModelTokens} >= 0
+      AND (${table.maxModelTokens} IS NULL OR ${table.maxModelTokens} > 0)
+      AND (${table.maxWallClockMs} IS NULL OR ${table.maxWallClockMs} > 0)
+      AND (${table.maxModelTokens} IS NULL OR ${table.usedModelTokens} <= ${table.maxModelTokens})
+      AND ${table.nextAgentMessageSequence} > 0`,
+  ),
   inputCursorCheck: check(
     'platform_runs_input_cursor_check',
     sql`${table.nextInputSequence} > 0
@@ -238,6 +297,73 @@ export const platformRuns = pgTable('platform_runs', {
       AND ${table.activeInputLeaseId} IS NULL
       AND ${table.terminalClaimedAt} IS NOT NULL
     )`,
+  ),
+}))
+
+export const platformRootRunBudgets = pgTable('platform_root_run_budgets', {
+  rootRunId: text('root_run_id').primaryKey().references(() => platformRuns.runId, { onDelete: 'cascade' }),
+  maxConcurrentChildren: integer('max_concurrent_children').notNull().default(3),
+  maxSpawnDepth: integer('max_spawn_depth').notNull().default(3),
+  maxTotalChildren: integer('max_total_children').notNull().default(12),
+  maxTotalModelTokens: integer('max_total_model_tokens'),
+  maxWallClockMs: integer('max_wall_clock_ms'),
+  totalChildren: integer('total_children').notNull().default(0),
+  activeChildren: integer('active_children').notNull().default(0),
+  usedModelTokens: integer('used_model_tokens').notNull().default(0),
+  version: integer('version').notNull().default(0),
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  countersCheck: check(
+    'platform_root_run_budgets_counters_check',
+    sql`${table.maxConcurrentChildren} > 0
+      AND ${table.maxSpawnDepth} >= 0
+      AND ${table.maxTotalChildren} > 0
+      AND ${table.totalChildren} >= 0
+      AND ${table.activeChildren} >= 0
+      AND ${table.activeChildren} <= ${table.totalChildren}
+      AND ${table.activeChildren} <= ${table.maxConcurrentChildren}
+      AND ${table.totalChildren} <= ${table.maxTotalChildren}
+      AND ${table.usedModelTokens} >= 0
+      AND (${table.maxTotalModelTokens} IS NULL OR ${table.maxTotalModelTokens} > 0)
+      AND (${table.maxWallClockMs} IS NULL OR ${table.maxWallClockMs} > 0)
+      AND (${table.maxTotalModelTokens} IS NULL OR ${table.usedModelTokens} <= ${table.maxTotalModelTokens})
+      AND ${table.version} >= 0`,
+  ),
+}))
+
+export const platformAgentMessages = pgTable('platform_agent_messages', {
+  messageId: text('message_id').primaryKey(),
+  rootRunId: text('root_run_id').notNull().references(() => platformRuns.runId, { onDelete: 'cascade' }),
+  senderRunId: text('sender_run_id').notNull().references(() => platformRuns.runId, { onDelete: 'cascade' }),
+  receiverRunId: text('receiver_run_id').notNull().references(() => platformRuns.runId, { onDelete: 'cascade' }),
+  parentTurnId: text('parent_turn_id').notNull(),
+  rootTurnId: text('root_turn_id').notNull(),
+  sequence: integer('sequence').notNull(),
+  kind: text('kind').notNull(),
+  content: text('content').notNull(),
+  triggerTurn: boolean('trigger_turn').notNull().default(false),
+  status: text('status').notNull().default('queued'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+  checkpointedAt: timestamp('checkpointed_at', { withTimezone: true }),
+}, (table) => ({
+  receiverSequenceIdx: uniqueIndex('idx_platform_agent_messages_receiver_sequence_unique')
+    .on(table.receiverRunId, table.sequence),
+  receiverStatusIdx: index('idx_platform_agent_messages_receiver_status')
+    .on(table.receiverRunId, table.status, table.sequence),
+  messageCheck: check(
+    'platform_agent_messages_state_check',
+    sql`${table.senderRunId} <> ${table.receiverRunId}
+      AND ${table.sequence} > 0
+      AND length(${table.content}) > 0
+      AND ${table.kind} IN ('input', 'message', 'completion')
+      AND ${table.status} IN ('queued', 'delivered', 'checkpointed')
+      AND (
+        (${table.status} = 'queued' AND ${table.deliveredAt} IS NULL AND ${table.checkpointedAt} IS NULL)
+        OR (${table.status} = 'delivered' AND ${table.deliveredAt} IS NOT NULL AND ${table.checkpointedAt} IS NULL)
+        OR (${table.status} = 'checkpointed' AND ${table.deliveredAt} IS NOT NULL AND ${table.checkpointedAt} IS NOT NULL)
+      )`,
   ),
 }))
 

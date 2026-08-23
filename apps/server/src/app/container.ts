@@ -80,6 +80,8 @@ import { AgentStepContextFactory } from '../agent-runtime/step/AgentStepContextF
 import { AgentStepContextRepository } from '../agent-runtime/step/AgentStepContextRepository.js'
 import { GeoWorldBaselineBuilder } from '../agent-runtime/world/GeoWorldBaselineBuilder.js'
 import { GeoWorldRepository } from '../agent-runtime/world/GeoWorldRepository.js'
+import { ChildRunManager } from '../agent-runtime/children/ChildRunManager.js'
+import { createDurableChildRunsProvider } from '../tools/durableChildRuns.js'
 
 export interface AppContainer {
   env: Env
@@ -102,6 +104,7 @@ export interface AppContainer {
   modelCompletions: ModelCompletionService
   runtime: OpenAIAgentsRuntime
   runTasks: RunTaskManager
+  childRuns: ChildRunManager
   startRunService: StartRunService
   resultCommitService: ToolResultCommitService
   automationRegistry: AutomationRegistry
@@ -231,6 +234,7 @@ export async function createAppContainer(input: {
     modelRegistry,
     {
       stepContexts,
+      agentMailbox: store.childRuns,
       ...(agentTracing ? { agentTracing } : {}),
       authorizationLease: async (auth, run) => {
         if (!run.workspaceId) {
@@ -253,6 +257,12 @@ export async function createAppContainer(input: {
   const usageStats = new UsageStatsService(store, env)
   const backgroundTasks = new BackgroundTaskRegistry()
   const runTasks = new RunTaskManager(runtime, store, backgroundTasks)
+  const childRuns = new ChildRunManager({
+    store,
+    repository: store.childRuns,
+    tasks: runTasks,
+  })
+  await childRuns.reconcileTerminalCompletions()
   const startRunService = new StartRunService({
     store,
     usageStats,
@@ -316,6 +326,7 @@ export async function createAppContainer(input: {
   })
   await discoverAndLoad(managedLayers, { env, registry: toolRegistry, scheduledTaskService })
   toolRegistry.register(createAutomationExecutionProvider(automationInvocationService))
+  toolRegistry.register(createDurableChildRunsProvider(childRuns))
   const workerContractDigest = await validateWorkerContracts(env, toolRegistry)
   const capabilities = buildRuntimeCapabilities({
     workerContractDigest,
@@ -351,6 +362,7 @@ export async function createAppContainer(input: {
     modelCompletions,
     runtime,
     runTasks,
+    childRuns,
     startRunService,
     resultCommitService,
     automationRegistry,

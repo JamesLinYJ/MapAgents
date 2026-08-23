@@ -813,7 +813,7 @@ export class ToolExecutionCoordinator {
       existingArtifactIds = new Set(
         this.options.store.getRun(this.options.runId).state.artifacts.map(artifact => artifact.artifactId),
       )
-      result = await this.options.registry.execute(toolName, invocation.toolArgs, this.createToolContext())
+      result = await this.options.registry.execute(toolName, invocation.toolArgs, this.createToolContext(callId))
       const commit = await this.effectCommitter.commit({
         runId: this.options.runId,
         callId,
@@ -936,12 +936,15 @@ export class ToolExecutionCoordinator {
     return tool.label
   }
 
-  private createToolContext(): ToolContext {
+  private createToolContext(toolCallId: string): ToolContext {
     const run = this.options.store.getRun(this.options.runId)
     return {
       runId: this.options.runId,
       sessionId: this.options.sessionId,
       threadId: this.options.threadId,
+      turnId: this.options.turnId,
+      rootTurnId: run.rootTurnId ?? this.options.turnId,
+      toolCallId,
       signal: this.options.signal,
       runtimeRoot: this.options.store.runtimeRoot,
       ...(this.options.runtimeConfig ? { runtimeConfig: this.options.runtimeConfig } : {}),

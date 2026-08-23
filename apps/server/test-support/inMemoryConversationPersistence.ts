@@ -335,6 +335,9 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
 
   async saveRun(run: AnalysisRun): Promise<void> {
     const before = clone(this.requireRun(run.id))
+    if (run.usedModelTokens !== before.usedModelTokens) {
+      throw new Error(`运行 '${run.id}' 的模型词元只能通过用量事务推进`)
+    }
     const current = this.requireDomainSnapshot(run.id)
     this.runs.set(run.id, clone(run))
     const events = buildRunTransitionEvents({
@@ -350,11 +353,43 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
     assertRunDomainCheckpointProjection(snapshot, memoryDomainCheckpoint(this.requireCheckpoint(run.id)))
   }
 
+  async saveRunWithModelUsage(run: AnalysisRun, modelTokens: number): Promise<void> {
+    if (!Number.isInteger(modelTokens) || modelTokens <= 0) {
+      throw new Error('模型词元增量必须是正整数')
+    }
+    const before = clone(this.requireRun(run.id))
+    if (run.status !== before.status) {
+      throw new Error(`运行 '${run.id}' 的模型用量事务不能同时改变运行状态`)
+    }
+    if (run.usedModelTokens !== before.usedModelTokens + modelTokens) {
+      throw new Error(`运行 '${run.id}' 的模型词元累计值与增量不一致`)
+    }
+    if (run.maxModelTokens !== null && run.usedModelTokens > run.maxModelTokens) {
+      throw new Error(`运行 '${run.id}' 的模型词元预算已耗尽`)
+    }
+    const current = this.requireDomainSnapshot(run.id)
+    this.runs.set(run.id, clone(run))
+    const events = buildRunTransitionEvents({
+      before,
+      after: run,
+      expectedSequence: current.sequence,
+      reason: 'model_usage_recorded',
+    })
+    const snapshot = events.length
+      ? this.appendDomainEvents({ runId: run.id, expectedSequence: current.sequence, events })
+      : current
+    assertRunDomainProjection(snapshot, run)
+    assertRunDomainCheckpointProjection(snapshot, memoryDomainCheckpoint(this.requireCheckpoint(run.id)))
+  }
+
   async saveRunWithCheckpoint(
     run: AnalysisRun,
     fields: Partial<Pick<RunCheckpoint, 'activeEntryId' | 'pendingToolCallIds' | 'recoveryStatus'>>,
   ): Promise<void> {
     const before = clone(this.requireRun(run.id))
+    if (run.usedModelTokens !== before.usedModelTokens) {
+      throw new Error(`运行 '${run.id}' 的模型词元只能通过用量事务推进`)
+    }
     const domainBefore = this.requireDomainSnapshot(run.id)
     const current = this.requireCheckpoint(run.id)
     this.runs.set(run.id, clone(run))
@@ -1010,8 +1045,18 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
     return clone(chain.reverse())
   }
 
-  async forkConversation(sourceThreadId: string, targetThreadId: string, sourceEntryId: string): Promise<Map<string, string>> {
-    const source = await this.readActiveConversation(sourceThreadId, sourceEntryId)
+  async forkConversation(
+    sourceThreadId: string,
+    targetThreadId: string,
+    sourceEntryId: string,
+    lastNTurns?: number | null,
+  ): Promise<Map<string, string>> {
+    if (lastNTurns !== undefined && lastNTurns !== null
+      && (!Number.isInteger(lastNTurns) || lastNTurns <= 0)) {
+      throw new Error('lastNTurns 必须是正整数')
+    }
+    const completeSource = await this.readActiveConversation(sourceThreadId, sourceEntryId)
+    const source = lastNTurns ? lastMemoryTurns(completeSource, lastNTurns) : completeSource
     const target = this.requireThread(targetThreadId)
     const mapping = new Map<string, string>()
     for (const entry of source) {
@@ -1021,7 +1066,7 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
         runId: null,
         turnId: entry.turnId,
         kind: entry.kind,
-        payload: entry.payload,
+        payload: { ...entry.payload, forkedFromEntryId: entry.entryId },
         parentEntryId: entry.parentEntryId ? mapping.get(entry.parentEntryId) ?? null : null,
         logicalParentEntryId: entry.logicalParentEntryId ? mapping.get(entry.logicalParentEntryId) ?? null : null,
         entryId: nextId,
@@ -1527,6 +1572,21 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
       purgeAfter: state.purgeAfter,
     }
   }
+}
+
+function lastMemoryTurns(entries: TranscriptEntry[], count: number): TranscriptEntry[] {
+  const turnIds: string[] = []
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const turnId = entries[index]?.turnId
+    if (!turnId || turnIds.includes(turnId)) continue
+    turnIds.unshift(turnId)
+    if (turnIds.length === count) break
+  }
+  if (!turnIds.length) throw new Error('源对话没有可供 last_n_turns fork 的 turn 身份')
+  const selected = new Set(turnIds)
+  const first = entries.findIndex(entry => entry.turnId !== null && selected.has(entry.turnId))
+  if (first < 0) throw new Error('无法定位 last_n_turns fork 边界')
+  return entries.slice(first)
 }
 
 function clone<T>(value: T): T {

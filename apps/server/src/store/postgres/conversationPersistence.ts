@@ -166,6 +166,10 @@ export class PostgresConversationPersistence implements ConversationPersistence 
     await this.runs.saveRun(run)
   }
 
+  async saveRunWithModelUsage(run: AnalysisRun, modelTokens: number): Promise<void> {
+    await this.runs.saveRunWithModelUsage(run, modelTokens)
+  }
+
   async saveRunWithCheckpoint(
     run: AnalysisRun,
     fields: Partial<Pick<RunCheckpoint, 'activeEntryId' | 'pendingToolCallIds' | 'recoveryStatus'>>,
@@ -330,8 +334,9 @@ export class PostgresConversationPersistence implements ConversationPersistence 
     sourceThreadId: string,
     targetThreadId: string,
     sourceEntryId: string,
+    lastNTurns?: number | null,
   ): Promise<Map<string, string>> {
-    return this.threads.forkConversation(sourceThreadId, targetThreadId, sourceEntryId)
+    return this.threads.forkConversation(sourceThreadId, targetThreadId, sourceEntryId, lastNTurns)
   }
 
   async enqueueRunInput(input: EnqueueRunInput): Promise<RunSteeringRecord> {

@@ -127,7 +127,8 @@ export class PostgresThreadRepository implements ThreadRepository {
     sourceThreadId: string,
     targetThreadId: string,
     sourceEntryId: string,
+    lastNTurns?: number | null,
   ): Promise<Map<string, string>> {
-    return this.transcript.forkConversation(sourceThreadId, targetThreadId, sourceEntryId)
+    return this.transcript.forkConversation(sourceThreadId, targetThreadId, sourceEntryId, lastNTurns)
   }
 }

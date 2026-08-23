@@ -82,6 +82,10 @@ export class PostgresRunRepository implements RunRepository, ToolInvocationRepos
     return this.state.saveRun(run)
   }
 
+  saveRunWithModelUsage(run: AnalysisRun, modelTokens: number): Promise<void> {
+    return this.state.saveRunWithModelUsage(run, modelTokens)
+  }
+
   saveRunWithCheckpoint(
     run: AnalysisRun,
     fields: Partial<Pick<RunCheckpoint, 'activeEntryId' | 'pendingToolCallIds' | 'recoveryStatus'>>,

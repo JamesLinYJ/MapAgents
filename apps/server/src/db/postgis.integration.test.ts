@@ -20,6 +20,7 @@ import { verifyDatabaseSchemaCompatibility } from './schemaCompatibility.js'
 import { ManagedLayerService } from '../gis/managedLayers/managedLayerService.js'
 import {
   agentStateSchema,
+  analysisRunSchema,
 } from '../schemas/types.js'
 import {
   GeoWorldRevisionConflictError,
@@ -30,6 +31,8 @@ import { AgentStepContextRepository } from '../agent-runtime/step/AgentStepConte
 import { AgentStepContextFactory } from '../agent-runtime/step/AgentStepContextFactory.js'
 import { agentContextDigest } from '../agent-runtime/step/agentContextDigest.js'
 import { defaultRuntimeConfig } from '../agent/defaultRuntimeConfig.js'
+import { PostgresConversationPersistence } from '../store/postgres/conversationPersistence.js'
+import { PostgresChildRunRepository } from '../store/postgres/childRunRepository.js'
 import {
   replayGeoWorldDiff,
 } from '@geo-agent-platform/shared-types/geo-world'
@@ -159,9 +162,9 @@ describe.skipIf(!integrationEnabled)('真实 PostgreSQL/PostGIS 集成', () => {
       )
       await client.query(
         `INSERT INTO platform_runs
-           (run_id, session_id, thread_id, workspace_id, created_by_user_id, visibility,
+           (run_id, root_run_id, session_id, thread_id, workspace_id, created_by_user_id, visibility,
             user_query, status, state_json, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, 'private', '验证 GeoWorld CAS', 'running', $6, $7, $7)`,
+         VALUES ($1, $1, $2, $3, $4, $5, 'private', '验证 GeoWorld CAS', 'running', $6, $7, $7)`,
         [
           runId,
           sessionId,
@@ -453,6 +456,242 @@ describe.skipIf(!integrationEnabled)('真实 PostgreSQL/PostGIS 集成', () => {
     }
   })
 
+  it('以根预算原子创建 child Run 并持久交付 mailbox', async () => {
+    const userId = 'user_child_control'
+    const workspaceId = 'workspace_child_control'
+    const sessionId = 'session_child_control'
+    const rootThreadId = 'thread_child_root'
+    const firstThreadId = 'thread_child_first'
+    const secondThreadId = 'thread_child_second'
+    const rootRunId = 'run_child_root'
+    const rootTurnId = 'turn_child_root'
+    const now = new Date('2026-08-24T00:00:00.000Z')
+    const persistence = new PostgresConversationPersistence(db)
+    const children = new PostgresChildRunRepository(db)
+
+    try {
+      await client.query(
+        `INSERT INTO platform_users
+           (user_id, subject, email, display_name, created_at, updated_at)
+         VALUES ($1, $1, $2, '子运行测试', $3, $3)`,
+        [userId, `${userId}@example.test`, now],
+      )
+      await client.query(
+        `INSERT INTO platform_workspaces
+           (workspace_id, name, created_by_user_id, created_at, updated_at)
+         VALUES ($1, '子运行工作区', $2, $3, $3)`,
+        [workspaceId, userId, now],
+      )
+      await client.query(
+        `INSERT INTO platform_sessions
+           (session_id, workspace_id, created_by_user_id, visibility, status, created_at, updated_at)
+         VALUES ($1, $2, $3, 'private', 'active', $4, $4)`,
+        [sessionId, workspaceId, userId, now],
+      )
+      for (const [threadId, title] of [
+        [rootThreadId, '根运行'],
+        [firstThreadId, '第一个子运行'],
+        [secondThreadId, '第二个子运行'],
+      ] as const) {
+        await client.query(
+          `INSERT INTO platform_threads
+             (thread_id, session_id, workspace_id, created_by_user_id, visibility, title, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, 'private', $5, $6, $6)`,
+          [threadId, sessionId, workspaceId, userId, title, now],
+        )
+      }
+
+      await persistence.appendConversationEntry({
+        threadId: rootThreadId,
+        turnId: 'turn_history_1',
+        kind: 'message',
+        payload: { role: 'user', content: '第一问' },
+      })
+      await persistence.appendConversationEntry({
+        threadId: rootThreadId,
+        turnId: 'turn_history_1',
+        kind: 'message',
+        payload: { role: 'assistant', content: '第一答' },
+      })
+      await persistence.appendConversationEntry({
+        threadId: rootThreadId,
+        turnId: 'turn_history_2',
+        kind: 'message',
+        payload: { role: 'user', content: '第二问' },
+      })
+      const historyLeaf = await persistence.appendConversationEntry({
+        threadId: rootThreadId,
+        turnId: 'turn_history_2',
+        kind: 'message',
+        payload: { role: 'assistant', content: '第二答' },
+      })
+      await persistence.forkConversation(rootThreadId, firstThreadId, historyLeaf.entryId, 1)
+      const recentHistory = await persistence.readActiveConversation(firstThreadId)
+      expect(recentHistory.map(entry => entry.payload.content)).toEqual(['第二问', '第二答'])
+      expect(recentHistory.map(entry => entry.turnId)).toEqual(['turn_history_2', 'turn_history_2'])
+      await persistence.forkConversation(
+        firstThreadId,
+        secondThreadId,
+        recentHistory.at(-1)!.entryId,
+        1,
+      )
+      expect((await persistence.readActiveConversation(secondThreadId)).map(entry => entry.turnId))
+        .toEqual(['turn_history_2', 'turn_history_2'])
+
+      const root = integrationRun({
+        runId: rootRunId,
+        rootRunId,
+        threadId: rootThreadId,
+        sessionId,
+        workspaceId,
+        userId,
+        userQuery: '协调子运行',
+        now,
+      })
+      const createdRoot = (await persistence.createRunLifecycle(root)).run
+      const runningRoot = {
+        ...createdRoot,
+        status: 'running' as const,
+        updatedAt: new Date(now.getTime() + 1_000).toISOString(),
+      }
+      await persistence.saveRun(runningRoot)
+      await children.configureRootBudget(rootRunId, {
+        maxConcurrentChildren: 1,
+        maxSpawnDepth: 2,
+        maxTotalChildren: 3,
+        maxTotalModelTokens: 150,
+        maxWallClockMs: null,
+      })
+
+      const first = integrationRun({
+        runId: 'run_child_first',
+        rootRunId,
+        parentRunId: rootRunId,
+        parentTurnId: rootTurnId,
+        rootTurnId,
+        spawnCallId: 'call_spawn_first',
+        agentPath: '/root/first',
+        taskName: 'first',
+        agentRole: '验证 mailbox',
+        spawnDepth: 1,
+        forkMode: 'none',
+        maxModelTokens: 100,
+        threadId: firstThreadId,
+        sessionId,
+        workspaceId,
+        userId,
+        userQuery: '完成第一个任务',
+        now: new Date(now.getTime() + 2_000),
+      })
+      const createdFirst = (await persistence.createRunLifecycle(first)).run
+      expect(await children.getDescriptor(createdFirst.id)).toEqual(expect.objectContaining({
+        runId: createdFirst.id,
+        rootRunId,
+        parentRunId: rootRunId,
+        status: 'queued',
+      }))
+      expect(await children.getRootBudget(rootRunId)).toEqual(expect.objectContaining({
+        totalChildren: 1,
+        activeChildren: 1,
+      }))
+
+      const second = integrationRun({
+        runId: 'run_child_second',
+        rootRunId,
+        parentRunId: rootRunId,
+        parentTurnId: rootTurnId,
+        rootTurnId,
+        spawnCallId: 'call_spawn_second',
+        agentPath: '/root/second',
+        taskName: 'second',
+        agentRole: '验证并发预算',
+        spawnDepth: 1,
+        forkMode: 'none',
+        threadId: secondThreadId,
+        sessionId,
+        workspaceId,
+        userId,
+        userQuery: '完成第二个任务',
+        now: new Date(now.getTime() + 3_000),
+      })
+      await expect(persistence.createRunLifecycle(second)).rejects.toThrow(/并发 child 数预算已耗尽/u)
+
+      const queued = await children.appendMessage({
+        messageId: 'message_child_first',
+        senderRunId: rootRunId,
+        receiverRunId: createdFirst.id,
+        parentTurnId: rootTurnId,
+        rootTurnId,
+        kind: 'input',
+        content: '补充持久输入',
+        triggerTurn: true,
+      })
+      expect(queued).toEqual(expect.objectContaining({ sequence: 1, status: 'queued' }))
+      expect(await children.appendMessage({
+        messageId: 'message_child_first',
+        senderRunId: rootRunId,
+        receiverRunId: createdFirst.id,
+        parentTurnId: rootTurnId,
+        rootTurnId,
+        kind: 'input',
+        content: '补充持久输入',
+        triggerTurn: true,
+      })).toEqual(queued)
+      await expect(children.appendMessage({
+        messageId: 'message_child_first',
+        senderRunId: rootRunId,
+        receiverRunId: createdFirst.id,
+        parentTurnId: rootTurnId,
+        rootTurnId,
+        kind: 'input',
+        content: '同一幂等键的不同内容',
+        triggerTurn: true,
+      })).rejects.toThrow(/已用于不同请求/u)
+      expect(await children.markMessageDelivered(createdFirst.id, queued.messageId))
+        .toEqual(expect.objectContaining({ status: 'delivered' }))
+      expect(await children.checkpointDeliveredMessages(createdFirst.id))
+        .toEqual([expect.objectContaining({ status: 'checkpointed' })])
+
+      const firstWithUsage = {
+        ...createdFirst,
+        usedModelTokens: 60,
+        state: agentStateSchema.parse({
+          ...createdFirst.state,
+          runtimeStats: { ...createdFirst.state.runtimeStats, modelTotalTokens: 60 },
+        }),
+        updatedAt: new Date(now.getTime() + 3_500).toISOString(),
+      }
+      await persistence.saveRunWithModelUsage(firstWithUsage, 60)
+      await expect(persistence.saveRunWithModelUsage({
+        ...firstWithUsage,
+        usedModelTokens: 110,
+        state: agentStateSchema.parse({
+          ...firstWithUsage.state,
+          runtimeStats: { ...firstWithUsage.state.runtimeStats, modelTotalTokens: 110 },
+        }),
+      }, 50)).rejects.toThrow(/模型词元预算已耗尽/u)
+      expect(await children.getRootBudget(rootRunId)).toEqual(expect.objectContaining({ usedModelTokens: 60 }))
+
+      await persistence.saveRun({
+        ...firstWithUsage,
+        status: 'completed',
+        updatedAt: new Date(now.getTime() + 4_000).toISOString(),
+      })
+      expect(await children.getRootBudget(rootRunId)).toEqual(expect.objectContaining({
+        totalChildren: 1,
+        activeChildren: 0,
+      }))
+      await persistence.createRunLifecycle(second)
+      expect(await children.getRootBudget(rootRunId)).toEqual(expect.objectContaining({
+        totalChildren: 2,
+        activeChildren: 1,
+      }))
+    } finally {
+      await client.query('DELETE FROM platform_workspaces WHERE workspace_id = $1', [workspaceId])
+      await client.query('DELETE FROM platform_users WHERE user_id = $1', [userId])
+    }
+  })
+
   it('通过真实空间表完成图层导入、筛选、计数和删除', async () => {
     const service = new ManagedLayerService(db)
     const layer = await service.importGeoJsonLayer({
@@ -505,4 +744,65 @@ async function applyDatabaseSchema(client: Client): Promise<void> {
     'utf8',
   )).replace(/\r\n?/gu, '\n')
   await client.query(content)
+}
+
+function integrationRun(input: {
+  runId: string
+  rootRunId: string
+  parentRunId?: string
+  parentTurnId?: string
+  rootTurnId?: string
+  spawnCallId?: string
+  agentPath?: string
+  taskName?: string
+  agentRole?: string
+  spawnDepth?: number
+  forkMode?: 'none' | 'full_history' | 'last_n_turns'
+  maxModelTokens?: number
+  threadId: string
+  sessionId: string
+  workspaceId: string
+  userId: string
+  userQuery: string
+  now: Date
+}) {
+  const child = Boolean(input.parentRunId)
+  const createdAt = input.now.toISOString()
+  return analysisRunSchema.parse({
+    id: input.runId,
+    runKind: child ? 'child' : 'root',
+    rootRunId: input.rootRunId,
+    parentRunId: input.parentRunId ?? null,
+    parentTurnId: input.parentTurnId ?? null,
+    rootTurnId: input.rootTurnId ?? null,
+    spawnCallId: input.spawnCallId ?? null,
+    agentPath: input.agentPath ?? '/root',
+    taskName: input.taskName ?? null,
+    agentRole: input.agentRole ?? null,
+    spawnDepth: input.spawnDepth ?? 0,
+    forkMode: input.forkMode ?? 'none',
+    forkTurnCount: null,
+    modelOverride: null,
+    reasoningOverride: null,
+    maxModelTokens: input.maxModelTokens ?? null,
+    maxWallClockMs: null,
+    usedModelTokens: 0,
+    threadId: input.threadId,
+    sessionId: input.sessionId,
+    workspaceId: input.workspaceId,
+    createdByUserId: input.userId,
+    visibility: 'private',
+    userQuery: input.userQuery,
+    modelProvider: 'deepseek',
+    modelName: 'deepseek-v4-flash',
+    status: 'queued',
+    createdAt,
+    updatedAt: createdAt,
+    state: agentStateSchema.parse({
+      sessionId: input.sessionId,
+      threadId: input.threadId,
+      userQuery: input.userQuery,
+    }),
+    runtimeConfigSnapshot: defaultRuntimeConfig(),
+  })
 }

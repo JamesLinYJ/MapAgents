@@ -161,8 +161,14 @@ export class PostgresConversationTranscriptRepository {
     sourceThreadId: string,
     targetThreadId: string,
     sourceEntryId: string,
+    lastNTurns?: number | null,
   ): Promise<Map<string, string>> {
-    const source = await this.readActiveConversation(sourceThreadId, sourceEntryId)
+    if (lastNTurns !== undefined && lastNTurns !== null
+      && (!Number.isInteger(lastNTurns) || lastNTurns <= 0)) {
+      throw new Error('lastNTurns 必须是正整数')
+    }
+    const completeSource = await this.readActiveConversation(sourceThreadId, sourceEntryId)
+    const source = lastNTurns ? lastTurns(completeSource, lastNTurns) : completeSource
     return this.db.transaction(async tx => {
       const targetRows = await tx.select().from(platformThreads)
         .where(eq(platformThreads.threadId, targetThreadId)).for('update').limit(1)
@@ -180,7 +186,7 @@ export class PostgresConversationTranscriptRepository {
           sessionId: target.sessionId,
           threadId: targetThreadId,
           runId: null,
-          turnId: null,
+          turnId: entry.turnId,
           sequence: target.nextEntrySequence + index,
           parentEntryId: entry.parentEntryId ? idMap.get(entry.parentEntryId) ?? null : null,
           logicalParentEntryId: entry.logicalParentEntryId ? idMap.get(entry.logicalParentEntryId) ?? null : null,
@@ -209,12 +215,33 @@ export class PostgresConversationTranscriptRepository {
         aggregateType: 'thread',
         aggregateId: targetThreadId,
         eventType: 'thread.forked',
-        payloadJson: { sourceThreadId, sourceEntryId, entryCount: createdRows.length },
+        payloadJson: {
+          sourceThreadId,
+          sourceEntryId,
+          entryCount: createdRows.length,
+          forkMode: lastNTurns ? 'last_n_turns' : 'full_history',
+          forkTurnCount: lastNTurns ?? null,
+        },
         traceId: stringContextValue('traceId'),
       })
       return idMap
     })
   }
+}
+
+function lastTurns(entries: TranscriptEntry[], count: number): TranscriptEntry[] {
+  const turnIds: string[] = []
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const turnId = entries[index]?.turnId
+    if (!turnId || turnIds.includes(turnId)) continue
+    turnIds.unshift(turnId)
+    if (turnIds.length === count) break
+  }
+  if (!turnIds.length) throw new Error('源对话没有可供 last_n_turns fork 的 turn 身份')
+  const selected = new Set(turnIds)
+  const first = entries.findIndex(entry => entry.turnId !== null && selected.has(entry.turnId))
+  if (first < 0) throw new Error('无法定位 last_n_turns fork 边界')
+  return entries.slice(first)
 }
 
 function stringContextValue(key: string): string | null {

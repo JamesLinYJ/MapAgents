@@ -734,6 +734,24 @@ CREATE TABLE public.platform_run_snapshots (
 
 CREATE TABLE public.platform_runs (
     run_id text NOT NULL,
+    run_kind text DEFAULT 'root'::text NOT NULL,
+    root_run_id text NOT NULL,
+    parent_run_id text,
+    parent_turn_id text,
+    root_turn_id text,
+    spawn_call_id text,
+    agent_path text DEFAULT '/root'::text NOT NULL,
+    task_name text,
+    agent_role text,
+    spawn_depth integer DEFAULT 0 NOT NULL,
+    fork_mode text DEFAULT 'none'::text NOT NULL,
+    fork_turn_count integer,
+    model_override text,
+    reasoning_override text,
+    max_model_tokens integer,
+    max_wall_clock_ms integer,
+    used_model_tokens integer DEFAULT 0 NOT NULL,
+    next_agent_message_sequence integer DEFAULT 1 NOT NULL,
     session_id text NOT NULL,
     thread_id text,
     workspace_id text,
@@ -766,9 +784,55 @@ CREATE TABLE public.platform_runs (
     terminal_objective_revision integer,
     terminal_input_cursor integer,
     terminal_claimed_at timestamp with time zone,
+    CONSTRAINT platform_runs_identity_check CHECK (((run_kind = 'root'::text) AND (root_run_id = run_id) AND (parent_run_id IS NULL) AND (parent_turn_id IS NULL) AND (root_turn_id IS NULL) AND (spawn_call_id IS NULL) AND (agent_path = '/root'::text) AND (task_name IS NULL) AND (agent_role IS NULL) AND (spawn_depth = 0) AND (fork_mode = 'none'::text) AND (fork_turn_count IS NULL)) OR ((run_kind = 'child'::text) AND (root_run_id <> run_id) AND (parent_run_id IS NOT NULL) AND (parent_run_id <> run_id) AND (parent_turn_id IS NOT NULL) AND (root_turn_id IS NOT NULL) AND (spawn_call_id IS NOT NULL) AND (agent_path ~ '^/root(/[a-z0-9_]+)+$'::text) AND (task_name ~ '^[a-z0-9_]+$'::text) AND (agent_role IS NOT NULL) AND (spawn_depth > 0) AND (fork_mode = ANY (ARRAY['none'::text, 'full_history'::text, 'last_n_turns'::text])) AND ((fork_mode = 'last_n_turns'::text) = (fork_turn_count IS NOT NULL)))),
+    CONSTRAINT platform_runs_budget_check CHECK (((used_model_tokens >= 0) AND ((max_model_tokens IS NULL) OR (max_model_tokens > 0)) AND ((max_wall_clock_ms IS NULL) OR (max_wall_clock_ms > 0)) AND ((max_model_tokens IS NULL) OR (used_model_tokens <= max_model_tokens)) AND (next_agent_message_sequence > 0))),
     CONSTRAINT platform_runs_input_cursor_check CHECK (((next_input_sequence > 0) AND (checkpoint_input_cursor >= 0) AND (checkpoint_input_cursor < next_input_sequence) AND (((active_input_lease_id IS NULL) AND (active_input_lease_from IS NULL) AND (active_input_lease_to IS NULL)) OR ((active_input_lease_id IS NOT NULL) AND (active_input_lease_from = (checkpoint_input_cursor + 1)) AND (active_input_lease_to >= active_input_lease_from) AND (active_input_lease_to < next_input_sequence))))),
     CONSTRAINT platform_runs_next_record_sequence_check CHECK ((next_record_sequence > 0)),
     CONSTRAINT platform_runs_terminal_input_claim_check CHECK ((((terminal_input_claim_id IS NULL) AND (terminal_objective_revision IS NULL) AND (terminal_input_cursor IS NULL) AND (terminal_claimed_at IS NULL)) OR ((terminal_input_claim_id IS NOT NULL) AND (terminal_objective_revision = (terminal_input_cursor + 1)) AND (terminal_objective_revision = next_input_sequence) AND (terminal_input_cursor = checkpoint_input_cursor) AND (active_input_lease_id IS NULL) AND (terminal_claimed_at IS NOT NULL))))
+);
+
+
+--
+-- Name: platform_root_run_budgets; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.platform_root_run_budgets (
+    root_run_id text NOT NULL,
+    max_concurrent_children integer DEFAULT 3 NOT NULL,
+    max_spawn_depth integer DEFAULT 3 NOT NULL,
+    max_total_children integer DEFAULT 12 NOT NULL,
+    max_total_model_tokens integer,
+    max_wall_clock_ms integer,
+    total_children integer DEFAULT 0 NOT NULL,
+    active_children integer DEFAULT 0 NOT NULL,
+    used_model_tokens integer DEFAULT 0 NOT NULL,
+    version integer DEFAULT 0 NOT NULL,
+    started_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT platform_root_run_budgets_counters_check CHECK (((max_concurrent_children > 0) AND (max_spawn_depth >= 0) AND (max_total_children > 0) AND (total_children >= 0) AND (active_children >= 0) AND (active_children <= total_children) AND (active_children <= max_concurrent_children) AND (total_children <= max_total_children) AND (used_model_tokens >= 0) AND ((max_total_model_tokens IS NULL) OR (max_total_model_tokens > 0)) AND ((max_wall_clock_ms IS NULL) OR (max_wall_clock_ms > 0)) AND ((max_total_model_tokens IS NULL) OR (used_model_tokens <= max_total_model_tokens)) AND (version >= 0)))
+);
+
+
+--
+-- Name: platform_agent_messages; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.platform_agent_messages (
+    message_id text NOT NULL,
+    root_run_id text NOT NULL,
+    sender_run_id text NOT NULL,
+    receiver_run_id text NOT NULL,
+    parent_turn_id text NOT NULL,
+    root_turn_id text NOT NULL,
+    sequence integer NOT NULL,
+    kind text NOT NULL,
+    content text NOT NULL,
+    trigger_turn boolean DEFAULT false NOT NULL,
+    status text DEFAULT 'queued'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    delivered_at timestamp with time zone,
+    checkpointed_at timestamp with time zone,
+    CONSTRAINT platform_agent_messages_state_check CHECK (((sender_run_id <> receiver_run_id) AND (sequence > 0) AND (length(content) > 0) AND (kind = ANY (ARRAY['input'::text, 'message'::text, 'completion'::text])) AND (status = ANY (ARRAY['queued'::text, 'delivered'::text, 'checkpointed'::text])) AND (((status = 'queued'::text) AND (delivered_at IS NULL) AND (checkpointed_at IS NULL)) OR ((status = 'delivered'::text) AND (delivered_at IS NOT NULL) AND (checkpointed_at IS NULL)) OR ((status = 'checkpointed'::text) AND (delivered_at IS NOT NULL) AND (checkpointed_at IS NOT NULL)))))
 );
 
 
@@ -1381,6 +1445,22 @@ ALTER TABLE ONLY public.platform_run_snapshots
 
 
 --
+-- Name: platform_agent_messages platform_agent_messages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_agent_messages
+    ADD CONSTRAINT platform_agent_messages_pkey PRIMARY KEY (message_id);
+
+
+--
+-- Name: platform_root_run_budgets platform_root_run_budgets_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_root_run_budgets
+    ADD CONSTRAINT platform_root_run_budgets_pkey PRIMARY KEY (root_run_id);
+
+
+--
 -- Name: platform_runs platform_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1795,6 +1875,34 @@ CREATE INDEX idx_platform_runs_thread_updated ON public.platform_runs USING btre
 --
 
 CREATE INDEX idx_platform_runs_workspace_updated ON public.platform_runs USING btree (workspace_id, updated_at);
+
+
+--
+-- Name: idx_platform_runs_parent_spawn_unique; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_platform_runs_parent_spawn_unique ON public.platform_runs USING btree (parent_run_id, spawn_call_id);
+
+
+--
+-- Name: idx_platform_runs_root_agent_path_unique; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_platform_runs_root_agent_path_unique ON public.platform_runs USING btree (root_run_id, agent_path);
+
+
+--
+-- Name: idx_platform_agent_messages_receiver_sequence_unique; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_platform_agent_messages_receiver_sequence_unique ON public.platform_agent_messages USING btree (receiver_run_id, sequence);
+
+
+--
+-- Name: idx_platform_agent_messages_receiver_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_platform_agent_messages_receiver_status ON public.platform_agent_messages USING btree (receiver_run_id, status, sequence);
 
 
 --
@@ -2418,6 +2526,54 @@ ALTER TABLE ONLY public.platform_run_records
 
 ALTER TABLE ONLY public.platform_run_snapshots
     ADD CONSTRAINT platform_run_snapshots_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.platform_runs(run_id) ON DELETE CASCADE;
+
+
+--
+-- Name: platform_runs platform_runs_root_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_runs
+    ADD CONSTRAINT platform_runs_root_run_id_fkey FOREIGN KEY (root_run_id) REFERENCES public.platform_runs(run_id) ON DELETE CASCADE;
+
+
+--
+-- Name: platform_runs platform_runs_parent_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_runs
+    ADD CONSTRAINT platform_runs_parent_run_id_fkey FOREIGN KEY (parent_run_id) REFERENCES public.platform_runs(run_id) ON DELETE CASCADE;
+
+
+--
+-- Name: platform_root_run_budgets platform_root_run_budgets_root_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_root_run_budgets
+    ADD CONSTRAINT platform_root_run_budgets_root_run_id_fkey FOREIGN KEY (root_run_id) REFERENCES public.platform_runs(run_id) ON DELETE CASCADE;
+
+
+--
+-- Name: platform_agent_messages platform_agent_messages_root_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_agent_messages
+    ADD CONSTRAINT platform_agent_messages_root_run_id_fkey FOREIGN KEY (root_run_id) REFERENCES public.platform_runs(run_id) ON DELETE CASCADE;
+
+
+--
+-- Name: platform_agent_messages platform_agent_messages_sender_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_agent_messages
+    ADD CONSTRAINT platform_agent_messages_sender_run_id_fkey FOREIGN KEY (sender_run_id) REFERENCES public.platform_runs(run_id) ON DELETE CASCADE;
+
+
+--
+-- Name: platform_agent_messages platform_agent_messages_receiver_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_agent_messages
+    ADD CONSTRAINT platform_agent_messages_receiver_run_id_fkey FOREIGN KEY (receiver_run_id) REFERENCES public.platform_runs(run_id) ON DELETE CASCADE;
 
 
 --

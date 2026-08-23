@@ -80,6 +80,53 @@ describe('conversation repository', () => {
     }
   })
 
+  it('forks the last N complete Turns and preserves Turn identity for nested forks', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-conversation-last-turns-'))
+    try {
+      const harness = new PersistenceFacadeTestHarness()
+      const store = await createStore(root, harness)
+      const session = await store.createSession()
+      const source = await store.createThread(session.id, 'Turn 来源')
+      await store.appendTranscript({
+        threadId: source.id,
+        turnId: 'turn_1',
+        kind: 'message',
+        payload: { role: 'user', content: '第一问' },
+      })
+      await store.appendTranscript({
+        threadId: source.id,
+        turnId: 'turn_1',
+        kind: 'message',
+        payload: { role: 'assistant', content: '第一答' },
+      })
+      await store.appendTranscript({
+        threadId: source.id,
+        turnId: 'turn_2',
+        kind: 'message',
+        payload: { role: 'user', content: '第二问' },
+      })
+      const last = await store.appendTranscript({
+        threadId: source.id,
+        turnId: 'turn_2',
+        kind: 'message',
+        payload: { role: 'assistant', content: '第二答' },
+      })
+
+      const recent = await store.forkThread(source.id, last.entryId, '最近一轮', 1)
+      const recentEntries = await store.activeTranscript(recent.id)
+      expect(recentEntries.map(entry => entry.payload.content)).toEqual(['第二问', '第二答'])
+      expect(recentEntries.map(entry => entry.turnId)).toEqual(['turn_2', 'turn_2'])
+      expect(recentEntries[0]?.parentEntryId).toBeNull()
+
+      const nested = await store.forkThread(recent.id, recentEntries.at(-1)!.entryId, '嵌套最近一轮', 1)
+      const nestedEntries = await store.activeTranscript(nested.id)
+      expect(nestedEntries.map(entry => entry.payload.content)).toEqual(['第二问', '第二答'])
+      expect(nestedEntries.map(entry => entry.turnId)).toEqual(['turn_2', 'turn_2'])
+    } finally {
+      await removeTestTree(root)
+    }
+  })
+
   it('commits thread and run lifecycle pointers atomically and restores them after restart', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-conversation-lifecycle-'))
     try {

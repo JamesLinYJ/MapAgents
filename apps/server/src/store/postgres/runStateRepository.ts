@@ -14,8 +14,14 @@ import { and, asc, eq, ne, sql } from 'drizzle-orm'
 
 import type { AnalysisRun, RunCheckpoint } from '../../schemas/types.js'
 import type { Database } from '../../db/connection.js'
-import { platformRuns, platformSessions, platformThreads } from '../../db/schema.js'
+import {
+  platformRootRunBudgets,
+  platformRuns,
+  platformSessions,
+  platformThreads,
+} from '../../db/schema.js'
 import type { RunMutationQueue } from '../runMutationQueue.js'
+import type { DatabaseTransaction } from './runRecordAppender.js'
 import {
   assertRunDomainCheckpointProjection,
   assertRunDomainProjection,
@@ -66,10 +72,28 @@ export class PostgresRunStateRepository implements RunStateRepository {
         assertRunOwnerMatchesSession(run, session)
       }
 
+      const rootBudget = run.runKind === 'child'
+        ? await this.requireSpawnCapacity(tx, run)
+        : null
+
       const insertedRows = await tx.insert(platformRuns).values(toRunInsertValues(run)).returning()
       const insertedRun = insertedRows[0]
       if (!insertedRun) throw new Error(`运行 '${run.id}' 创建失败`)
       const persistedRun = mapAnalysisRunRow(insertedRun)
+      if (persistedRun.runKind === 'root') {
+        await tx.insert(platformRootRunBudgets).values({ rootRunId: persistedRun.id })
+      } else if (rootBudget) {
+        const reserved = await tx.update(platformRootRunBudgets).set({
+          totalChildren: rootBudget.totalChildren + 1,
+          activeChildren: rootBudget.activeChildren + 1,
+          version: rootBudget.version + 1,
+          updatedAt: new Date(),
+        }).where(and(
+          eq(platformRootRunBudgets.rootRunId, persistedRun.rootRunId!),
+          eq(platformRootRunBudgets.version, rootBudget.version),
+        )).returning()
+        if (!reserved[0]) throw new Error(`根运行 '${persistedRun.rootRunId}' 的 child 预算预留冲突`)
+      }
       const checkpoint = toRunDomainCheckpoint(insertedRun)
       const domainSnapshot = await this.domainJournal.appendInTransaction(tx, {
         runId: run.id,
@@ -115,18 +139,103 @@ export class PostgresRunStateRepository implements RunStateRepository {
           .where(eq(platformRuns.runId, run.id)).for('update').limit(1)
         const beforeRow = beforeRows[0]
         if (!beforeRow) throw new Error(`运行 '${run.id}' 不存在`)
+        if (run.usedModelTokens !== beforeRow.usedModelTokens) {
+          throw new Error(`运行 '${run.id}' 的模型词元只能通过用量事务推进`)
+        }
         const currentSnapshot = await this.domainJournal.requireSnapshotInTransaction(tx, run.id)
         const rows = await tx.update(platformRuns).set(toRunUpdateValues(values))
           .where(eq(platformRuns.runId, run.id))
           .returning()
         const afterRow = rows[0]
         if (!afterRow) throw new Error(`运行 '${run.id}' 不存在`)
+        await this.adjustActiveChildBudget(tx, beforeRow, afterRow)
         const persistedRun = mapAnalysisRunRow(afterRow)
         const events = buildRunTransitionEvents({
           before: mapAnalysisRunRow(beforeRow),
           after: persistedRun,
           expectedSequence: currentSnapshot.sequence,
           reason: 'run_state_saved',
+        })
+        const snapshot = events.length
+          ? await this.domainJournal.appendInTransaction(tx, {
+            runId: run.id,
+            expectedSequence: currentSnapshot.sequence,
+            events,
+          })
+          : currentSnapshot
+        assertRunDomainProjection(snapshot, persistedRun)
+        assertRunDomainCheckpointProjection(snapshot, toRunDomainCheckpoint(afterRow))
+      })
+    })
+  }
+
+  /**
+   * 模型用量、Run 投影与根预算必须在同一事务内推进。若先单独更新预算，
+   * 后续普通 saveRun 会把内存中的旧 usedModelTokens 写回数据库。
+   */
+  async saveRunWithModelUsage(run: AnalysisRun, modelTokens: number): Promise<void> {
+    if (!Number.isInteger(modelTokens) || modelTokens <= 0) {
+      throw new Error('模型词元增量必须是正整数')
+    }
+    const values = toRunInsertValues(run)
+    await this.runMutations.run(run.id, async () => {
+      await this.db.transaction(async tx => {
+        const beforeRows = await tx.select().from(platformRuns)
+          .where(eq(platformRuns.runId, run.id)).for('update').limit(1)
+        const beforeRow = beforeRows[0]
+        if (!beforeRow) throw new Error(`运行 '${run.id}' 不存在`)
+        if (run.status !== beforeRow.status) {
+          throw new Error(`运行 '${run.id}' 的模型用量事务不能同时改变运行状态`)
+        }
+        if (run.usedModelTokens !== beforeRow.usedModelTokens + modelTokens) {
+          throw new Error(`运行 '${run.id}' 的模型词元累计值与增量不一致`)
+        }
+        if (run.maxModelTokens !== null && run.usedModelTokens > run.maxModelTokens) {
+          throw new Error(`运行 '${run.id}' 的模型词元预算已耗尽`)
+        }
+        if (run.maxWallClockMs !== null
+          && Date.now() - new Date(run.createdAt).getTime() >= run.maxWallClockMs) {
+          throw new Error(`运行 '${run.id}' 的 wall-clock 预算已耗尽`)
+        }
+
+        const budgetRows = await tx.select().from(platformRootRunBudgets)
+          .where(eq(platformRootRunBudgets.rootRunId, beforeRow.rootRunId)).for('update').limit(1)
+        const budget = budgetRows[0]
+        if (!budget) throw new Error(`根运行 '${beforeRow.rootRunId}' 缺少根预算`)
+        const rootUsedModelTokens = budget.usedModelTokens + modelTokens
+        if (budget.maxTotalModelTokens !== null && rootUsedModelTokens > budget.maxTotalModelTokens) {
+          throw new Error(`根运行 '${beforeRow.rootRunId}' 的模型词元预算已耗尽`)
+        }
+        if (budget.maxWallClockMs !== null
+          && Date.now() - budget.startedAt.getTime() >= budget.maxWallClockMs) {
+          throw new Error(`根运行 '${beforeRow.rootRunId}' 的 wall-clock 预算已耗尽`)
+        }
+
+        const currentSnapshot = await this.domainJournal.requireSnapshotInTransaction(tx, run.id)
+        const rows = await tx.update(platformRuns).set({
+          ...toRunUpdateValues(values),
+          usedModelTokens: run.usedModelTokens,
+        })
+          .where(eq(platformRuns.runId, run.id))
+          .returning()
+        const afterRow = rows[0]
+        if (!afterRow) throw new Error(`运行 '${run.id}' 不存在`)
+        const updatedBudget = await tx.update(platformRootRunBudgets).set({
+          usedModelTokens: rootUsedModelTokens,
+          version: budget.version + 1,
+          updatedAt: new Date(),
+        }).where(and(
+          eq(platformRootRunBudgets.rootRunId, beforeRow.rootRunId),
+          eq(platformRootRunBudgets.version, budget.version),
+        )).returning()
+        if (!updatedBudget[0]) throw new Error(`根运行 '${beforeRow.rootRunId}' 的词元预算 CAS 冲突`)
+
+        const persistedRun = mapAnalysisRunRow(afterRow)
+        const events = buildRunTransitionEvents({
+          before: mapAnalysisRunRow(beforeRow),
+          after: persistedRun,
+          expectedSequence: currentSnapshot.sequence,
+          reason: 'model_usage_recorded',
         })
         const snapshot = events.length
           ? await this.domainJournal.appendInTransaction(tx, {
@@ -162,6 +271,7 @@ export class PostgresRunStateRepository implements RunStateRepository {
           .returning()
         const afterRow = rows[0]
         if (!afterRow) throw new Error(`运行 '${run.id}' 不存在`)
+        await this.adjustActiveChildBudget(tx, beforeRow, afterRow)
         const persistedRun = mapAnalysisRunRow(afterRow)
         const checkpoint = toRunDomainCheckpoint(afterRow)
         const events = buildRunTransitionEvents({
@@ -196,4 +306,76 @@ export class PostgresRunStateRepository implements RunStateRepository {
       .orderBy(asc(platformRuns.createdAt))
     return rows.map(mapAnalysisRunRow)
   }
+
+  private async requireSpawnCapacity(
+    tx: DatabaseTransaction,
+    child: AnalysisRun,
+  ): Promise<typeof platformRootRunBudgets.$inferSelect> {
+    if (!child.parentRunId || !child.rootRunId) throw new Error('child Run 缺少父/根身份')
+    const parentRows = await tx.select().from(platformRuns)
+      .where(eq(platformRuns.runId, child.parentRunId)).for('update').limit(1)
+    const parent = parentRows[0]
+    if (!parent) throw new Error(`父运行 '${child.parentRunId}' 不存在`)
+    if (parent.rootRunId !== child.rootRunId) throw new Error('child Run 与父运行不属于同一根运行')
+    if (parent.sessionId !== child.sessionId || parent.workspaceId !== child.workspaceId) {
+      throw new Error('child Run 与父运行资源归属不一致')
+    }
+    if (child.spawnDepth !== parent.spawnDepth + 1) throw new Error('child Run 深度不是父运行深度加一')
+    if (!child.agentPath.startsWith(`${parent.agentPath}/`)) throw new Error('child Run agentPath 不属于父路径')
+    if (!isBudgetActiveStatus(parent.status)) throw new Error(`父运行 '${parent.runId}' 当前不能生成 child Run`)
+
+    const budgetRows = await tx.select().from(platformRootRunBudgets)
+      .where(eq(platformRootRunBudgets.rootRunId, child.rootRunId)).for('update').limit(1)
+    const budget = budgetRows[0]
+    if (!budget) throw new Error(`根运行 '${child.rootRunId}' 缺少根预算`)
+    if (child.spawnDepth > budget.maxSpawnDepth) throw new Error('child Run 超过根运行最大生成深度')
+    if (budget.totalChildren >= budget.maxTotalChildren) throw new Error('根运行累计 child 数预算已耗尽')
+    if (budget.activeChildren >= budget.maxConcurrentChildren) throw new Error('根运行并发 child 数预算已耗尽')
+    if (budget.maxTotalModelTokens !== null && budget.usedModelTokens >= budget.maxTotalModelTokens) {
+      throw new Error('根运行模型词元预算已耗尽')
+    }
+    if (budget.maxWallClockMs !== null
+      && Date.now() - budget.startedAt.getTime() >= budget.maxWallClockMs) {
+      throw new Error('根运行 wall-clock 预算已耗尽')
+    }
+    const remainingTokens = budget.maxTotalModelTokens === null
+      ? null
+      : budget.maxTotalModelTokens - budget.usedModelTokens
+    if (child.maxModelTokens !== null && remainingTokens !== null && child.maxModelTokens > remainingTokens) {
+      throw new Error('child Run 模型词元预算超过根运行剩余额度')
+    }
+    return budget
+  }
+
+  private async adjustActiveChildBudget(
+    tx: DatabaseTransaction,
+    before: typeof platformRuns.$inferSelect,
+    after: typeof platformRuns.$inferSelect,
+  ): Promise<void> {
+    if (before.runKind !== 'child' || after.runKind !== 'child') return
+    const beforeActive = isBudgetActiveStatus(before.status)
+    const afterActive = isBudgetActiveStatus(after.status)
+    if (beforeActive === afterActive) return
+    const rows = await tx.select().from(platformRootRunBudgets)
+      .where(eq(platformRootRunBudgets.rootRunId, after.rootRunId)).for('update').limit(1)
+    const budget = rows[0]
+    if (!budget) throw new Error(`根运行 '${after.rootRunId}' 缺少根预算`)
+    const delta = afterActive ? 1 : -1
+    const activeChildren = budget.activeChildren + delta
+    if (activeChildren < 0) throw new Error(`根运行 '${after.rootRunId}' 的活动 child 计数下溢`)
+    if (activeChildren > budget.maxConcurrentChildren) throw new Error('根运行并发 child 数预算已耗尽')
+    const updated = await tx.update(platformRootRunBudgets).set({
+      activeChildren,
+      version: budget.version + 1,
+      updatedAt: new Date(),
+    }).where(and(
+      eq(platformRootRunBudgets.rootRunId, after.rootRunId),
+      eq(platformRootRunBudgets.version, budget.version),
+    )).returning()
+    if (!updated[0]) throw new Error(`根运行 '${after.rootRunId}' 的活动 child 预算更新冲突`)
+  }
+}
+
+function isBudgetActiveStatus(status: string): boolean {
+  return ['queued', 'running', 'clarification_needed', 'waiting_approval'].includes(status)
 }
