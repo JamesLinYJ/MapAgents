@@ -36,7 +36,6 @@ import type { Env } from '../framework/env.js'
 import type { ManagedLayerService } from '../gis/managedLayers/managedLayerService.js'
 import { ModelAdapterRegistry, type ModelAdapter } from '../model/registry.js'
 import type { ConversationItem, RunEvent } from '../schemas/types.js'
-import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import type { ToolProvider } from '../framework/types.js'
 import { defaultRuntimeConfig } from '../agent/defaultRuntimeConfig.js'
 import {
@@ -765,15 +764,25 @@ describe('WebSocket run subscriptions', () => {
       }],
     })
 
+    const tools = new ToolRegistry()
+    const models = registryWith(fakeAdapter(textModel('已收到补充。')))
+    const runtime = new OpenAIAgentsRuntime(store, tools, models, {
+      stepContexts: testStepContextRecorder(),
+      createSandboxClient: testSandboxClientFactory,
+      authorizationLease: async auth => auth,
+    })
+    const runTasks = new RunTaskManager(runtime, store)
     const server = createServer((_request, response) => response.end())
     const wss = createWsHandler(server, {
       store,
-      toolRegistry: new ToolRegistry(),
-      modelRegistry: registryWith(fakeAdapter(textModel('已收到补充。'))),
+      toolRegistry: tools,
+      modelRegistry: models,
       managedLayers: {} as unknown as ManagedLayerService,
       runtimeRoot: root,
       createSandboxClient: testSandboxClientFactory,
       security: testSecurity(),
+      runtime,
+      runTasks,
     })
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     const address = server.address()
@@ -805,8 +814,7 @@ describe('WebSocket run subscriptions', () => {
       resolvedAt: expect.any(String),
       payload: expect.objectContaining({ optionId: 'browser', answer: '浏览器 WebGL' }),
     })
-    await waitForRunSettled(store, nextRunId)
-    await backgroundSnapshot
+    await Promise.all([runTasks.drain(), backgroundSnapshot])
     await store.flushConversationStore()
     await close(ws)
   })
@@ -837,6 +845,7 @@ describe('WebSocket run subscriptions', () => {
       createSandboxClient: testSandboxClientFactory,
       authorizationLease: async auth => auth,
     })
+    const runTasks = new RunTaskManager(runtime, store)
     const waiting = await runtime.run({
       runId: run.id,
       threadId: thread.id,
@@ -861,6 +870,7 @@ describe('WebSocket run subscriptions', () => {
       createSandboxClient: testSandboxClientFactory,
       security: testSecurity(),
       runtime,
+      runTasks,
     })
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     const address = server.address()
@@ -880,7 +890,7 @@ describe('WebSocket run subscriptions', () => {
     }, 'approval_decision'))
 
     expect(isRecord(response) ? response.status : null).toBe('queued')
-    await waitForRunSettled(store, run.id)
+    await runTasks.drain()
     expect(executions).toBe(1)
     const latest = store.getRun(run.id)
     expect(latest.state.approvals[0].payload.consumed).toBe(true)
@@ -1310,15 +1320,6 @@ function runEvent(runId: string, threadId: string): RunEvent {
     timestamp: new Date().toISOString(),
     payload: {},
   }
-}
-
-async function waitForRunSettled(store: PlatformPersistenceFacade, runId: string): Promise<void> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const status = store.getRun(runId).status
-    if (status !== 'queued' && status !== 'running') return
-    await new Promise(resolve => setTimeout(resolve, 25))
-  }
-  throw new Error(`运行 '${runId}' 未在测试时间内结束`)
 }
 
 function waitForBackgroundSnapshot(ws: WebSocket, ignoredRunId: string): Promise<void> {
