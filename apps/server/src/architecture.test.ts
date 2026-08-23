@@ -110,7 +110,7 @@ describe('platform architecture', () => {
     const schemaSource = await readFile(path.join(repositoryRoot, 'packages/db/src/schema.ts'), 'utf8')
     const serverSchemaBridge = await readFile(path.join(process.cwd(), 'src/db/schema.ts'), 'utf8')
     const baselineSource = await readFile(
-      path.join(repositoryRoot, 'infra/migrations/001_init_postgis.sql'),
+      path.join(repositoryRoot, 'infra/database/schema.sql'),
       'utf8',
     )
     const securityDatabaseSource = await readFile(
@@ -131,17 +131,17 @@ describe('platform architecture', () => {
       "references(() => platformRuns.runId, { onDelete: 'set null' })",
     ]
     const baselineForeignKeys = [
-      'user_id      TEXT NOT NULL REFERENCES auth_user(id) ON DELETE CASCADE',
-      'created_by_user_id TEXT NOT NULL REFERENCES platform_users(user_id) ON DELETE RESTRICT',
-      'workspace_id  TEXT NOT NULL REFERENCES platform_workspaces(workspace_id) ON DELETE CASCADE',
-      'actor_user_id  TEXT REFERENCES platform_users(user_id) ON DELETE SET NULL',
-      'session_id          TEXT REFERENCES platform_sessions(session_id) ON DELETE CASCADE',
-      'thread_id           TEXT REFERENCES platform_threads(thread_id) ON DELETE SET NULL',
-      'based_on_entry_id TEXT REFERENCES platform_conversation_entries(entry_id) ON DELETE SET NULL',
-      'boundary_entry_id       TEXT NOT NULL REFERENCES platform_conversation_entries(entry_id) ON DELETE CASCADE',
-      'dataset_id         TEXT NOT NULL REFERENCES platform_meteorological_datasets(dataset_id) ON DELETE CASCADE',
-      'last_run_id        TEXT REFERENCES platform_runs(run_id) ON DELETE SET NULL',
-      'run_id             TEXT REFERENCES platform_runs(run_id) ON DELETE SET NULL',
+      'FOREIGN KEY (user_id) REFERENCES public.auth_user(id) ON DELETE CASCADE',
+      'FOREIGN KEY (created_by_user_id) REFERENCES public.platform_users(user_id) ON DELETE RESTRICT',
+      'FOREIGN KEY (workspace_id) REFERENCES public.platform_workspaces(workspace_id) ON DELETE CASCADE',
+      'FOREIGN KEY (actor_user_id) REFERENCES public.platform_users(user_id) ON DELETE SET NULL',
+      'FOREIGN KEY (session_id) REFERENCES public.platform_sessions(session_id) ON DELETE CASCADE',
+      'FOREIGN KEY (thread_id) REFERENCES public.platform_threads(thread_id) ON DELETE SET NULL',
+      'FOREIGN KEY (based_on_entry_id) REFERENCES public.platform_conversation_entries(entry_id) ON DELETE SET NULL',
+      'FOREIGN KEY (boundary_entry_id) REFERENCES public.platform_conversation_entries(entry_id) ON DELETE CASCADE',
+      'FOREIGN KEY (dataset_id) REFERENCES public.platform_meteorological_datasets(dataset_id) ON DELETE CASCADE',
+      'FOREIGN KEY (last_run_id) REFERENCES public.platform_runs(run_id) ON DELETE SET NULL',
+      'FOREIGN KEY (run_id) REFERENCES public.platform_runs(run_id) ON DELETE SET NULL',
     ]
 
     for (const foreignKey of drizzleForeignKeys) {
@@ -317,31 +317,16 @@ describe('platform architecture', () => {
     }
 
     const baselineSource = await readFile(
-      path.join(repositoryRoot, 'infra/migrations/001_init_postgis.sql'),
+      path.join(repositoryRoot, 'infra/database/schema.sql'),
       'utf8',
     )
     expect(baselineSource.includes(['share', 'token'].join('_'))).toBe(false)
-    const migrationFiles = (await readdir(
-      path.join(repositoryRoot, 'infra/migrations'),
+    const databaseSqlFiles = (await readdir(
+      path.join(repositoryRoot, 'infra/database'),
     )).filter(file => file.endsWith('.sql')).sort()
-    expect(migrationFiles).toEqual([
-      '000_schema_migrations.sql',
-      '001_init_postgis.sql',
-      '002_automation_reliability_constraints.sql',
-      '003_better_auth_admin.sql',
-      '004_agents_sdk_native_runtime.sql',
-      '005_remove_public_sharing.sql',
-      '006_native_agent_runtime.sql',
-      '007_model_result_cache.sql',
-      '008_tool_result_commit_idempotency.sql',
-      '009_file_object_lifecycle.sql',
-      '010_file_ready_source_invariant.sql',
-      '011_custom_model_providers.sql',
-      '012_run_input_delivery_ack.sql',
-      '013_run_domain_journal.sql',
-      '014_agent_step_geo_world.sql',
-      '015_agents_sdk_checkpoint_envelope.sql',
-    ])
+    expect(databaseSqlFiles).toEqual(['schema.sql'])
+    await expect(stat(path.join(repositoryRoot, 'infra/migrations')))
+      .rejects.toMatchObject({ code: 'ENOENT' })
 
     const operationalSourceFiles = await collectProductionFiles([
       path.join(repositoryRoot, 'packages/operations-supervisor/src'),

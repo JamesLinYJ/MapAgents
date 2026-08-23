@@ -99,7 +99,7 @@ export class PostgresRunDomainJournalRepository implements RunDomainJournalRepos
     const snapshot = await this.getSnapshotInTransaction(tx, runId)
     if (!snapshot) {
       throw new Error(
-        `run '${runId}' 缺少领域日志 snapshot；数据库 migration 013 未完整回填`,
+        `run '${runId}' 缺少领域日志 snapshot；数据库不是当前权威基线或写入未完成`,
       )
     }
     return snapshot

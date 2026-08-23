@@ -72,7 +72,7 @@ try {
   const existing = new Set(result.rows.map(row => String(row.relname)))
   const missing = requiredTables.filter(table => !existing.has(table))
   if (missing.length) {
-    throw new Error(`数据库不是当前平台基线，缺少表：${missing.join('、')}。请先应用 infra/migrations/001_init_postgis.sql。`)
+    throw new Error(`数据库不是当前平台基线，缺少表：${missing.join('、')}。请使用空数据库执行 infra/database/schema.sql。`)
   }
   await client.query(`TRUNCATE TABLE ${resetTables.join(', ')} RESTART IDENTITY CASCADE`)
 } finally {

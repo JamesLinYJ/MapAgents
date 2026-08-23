@@ -13,25 +13,6 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { verifyDatabaseSchemaCompatibility } from './schemaCompatibility.js'
 
-const migrationIds = [
-  '000_schema_migrations',
-  '001_init_postgis',
-  '002_automation_reliability_constraints',
-  '003_better_auth_admin',
-  '004_agents_sdk_native_runtime',
-  '005_remove_public_sharing',
-  '006_native_agent_runtime',
-  '007_model_result_cache',
-  '008_tool_result_commit_idempotency',
-  '009_file_object_lifecycle',
-  '010_file_ready_source_invariant',
-  '011_custom_model_providers',
-  '012_run_input_delivery_ack',
-  '013_run_domain_journal',
-  '014_agent_step_geo_world',
-  '015_agents_sdk_checkpoint_envelope',
-] as const
-
 function currentCapabilities(overrides: Record<string, unknown> = {}) {
   return {
     vector_tile_function: 'geo_agent_platform_layer_tiles(integer,integer,integer,json)',
@@ -50,153 +31,69 @@ function currentCapabilities(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function currentMigrations() {
-  return migrationIds.map(migration_id => ({ migration_id, checksum: 'a'.repeat(64) }))
-}
-
-function databaseWithRows(...rows: unknown[][]) {
+function databaseWithCapabilities(capabilities: Record<string, unknown>) {
   return {
-    execute: vi.fn()
-      .mockResolvedValueOnce({ rows: rows[0] ?? [] })
-      .mockResolvedValueOnce({ rows: rows[1] ?? [] })
-      .mockResolvedValueOnce({ rows: rows[2] ?? [] }),
+    execute: vi.fn().mockResolvedValueOnce({ rows: [capabilities] }),
   }
 }
 
 describe('verifyDatabaseSchemaCompatibility', () => {
-  it('接受当前单一基线', async () => {
-    const db = databaseWithRows(
-      [{ table_name: 'platform_schema_migrations' }],
-      currentMigrations(),
-      [currentCapabilities()],
-    )
+  it('接受由单一权威基线创建的当前结构', async () => {
+    const db = databaseWithCapabilities(currentCapabilities())
 
     await expect(verifyDatabaseSchemaCompatibility(db as never)).resolves.toBeUndefined()
+    expect(db.execute).toHaveBeenCalledTimes(1)
   })
 
-  it('拒绝没有版本跟踪表的旧数据库并指向当前基线', async () => {
-    const db = databaseWithRows([{ table_name: null }])
-
-    await expect(verifyDatabaseSchemaCompatibility(db as never))
-      .rejects.toThrow(/000_schema_migrations/u)
-  })
-
-  it('拒绝没有当前基线记录的数据库', async () => {
-    const db = databaseWithRows(
-      [{ table_name: 'platform_schema_migrations' }],
-      [],
-    )
-
-    await expect(verifyDatabaseSchemaCompatibility(db as never))
-      .rejects.toThrow(/001_init_postgis/u)
-  })
-
-  it('拒绝缺少 opaque SDK checkpoint envelope 迁移的数据库', async () => {
-    const db = databaseWithRows(
-      [{ table_name: 'platform_schema_migrations' }],
-      currentMigrations().filter(row => row.migration_id !== '015_agents_sdk_checkpoint_envelope'),
-    )
-
-    await expect(verifyDatabaseSchemaCompatibility(db as never))
-      .rejects.toThrow(/015_agents_sdk_checkpoint_envelope/u)
-  })
-
-  it('拒绝让旧服务连接未来版本数据库', async () => {
-    const db = databaseWithRows(
-      [{ table_name: 'platform_schema_migrations' }],
-      [...currentMigrations(), { migration_id: '016_future_change', checksum: 'b'.repeat(64) }],
-    )
-
-    await expect(verifyDatabaseSchemaCompatibility(db as never))
-      .rejects.toThrow(/数据库版本高于当前服务支持/u)
-  })
-
-  it('拒绝迁移记录存在但固定瓦片函数缺失的半升级数据库', async () => {
-    const db = databaseWithRows(
-      [{ table_name: 'platform_schema_migrations' }],
-      currentMigrations(),
-      [currentCapabilities({ vector_tile_function: null })],
-    )
+  it('拒绝固定瓦片函数缺失的数据库', async () => {
+    const db = databaseWithCapabilities(currentCapabilities({ vector_tile_function: null }))
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
       .rejects.toThrow(/geo_agent_platform_layer_tiles\(integer, integer, integer, json\)/u)
   })
 
-  it('拒绝没有 checksum 的遗留迁移记录', async () => {
-    const db = databaseWithRows(
-      [{ table_name: 'platform_schema_migrations' }],
-      currentMigrations().map(row => row.migration_id === '001_init_postgis'
-        ? { migration_id: row.migration_id, checksum: null }
-        : row),
-    )
+  it.each([
+    ['model_result_cache_table', /platform_model_result_cache/u],
+    ['file_objects_table', /platform_file_objects/u],
+    ['model_providers_table', /platform_model_providers/u],
+  ] as const)('拒绝缺少基线能力 %s 的数据库', async (field, expected) => {
+    const db = databaseWithCapabilities(currentCapabilities({ [field]: null }))
 
-    await expect(verifyDatabaseSchemaCompatibility(db as never))
-      .rejects.toThrow(/没有 checksum/u)
+    await expect(verifyDatabaseSchemaCompatibility(db as never)).rejects.toThrow(expected)
   })
 
-  it('拒绝缓存表缺失的半升级数据库', async () => {
-    const db = databaseWithRows(
-      [{ table_name: 'platform_schema_migrations' }],
-      currentMigrations(),
-      [currentCapabilities({ model_result_cache_table: null })],
-    )
+  it('拒绝 Run input mailbox 列不完整的数据库', async () => {
+    const db = databaseWithCapabilities(currentCapabilities({ run_input_delivery_ack: false }))
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
-      .rejects.toThrow(/platform_model_result_cache/u)
+      .rejects.toThrow(/Run input sequence\/cursor\/lease/u)
   })
 
-  it('拒绝自定义 Provider 表缺失的半升级数据库', async () => {
-    const db = databaseWithRows(
-      [{ table_name: 'platform_schema_migrations' }],
-      currentMigrations(),
-      [currentCapabilities({ model_providers_table: null })],
-    )
+  it('拒绝 Run domain journal 表缺失的数据库', async () => {
+    const db = databaseWithCapabilities(currentCapabilities({ run_domain_events_table: null }))
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
-      .rejects.toThrow(/platform_model_providers/u)
+      .rejects.toThrow(/Run domain journal\/snapshot/u)
   })
 
-  it('拒绝 run input delivery ack 列缺失的半升级数据库', async () => {
-    const db = databaseWithRows(
-      [{ table_name: 'platform_schema_migrations' }],
-      currentMigrations(),
-      [currentCapabilities({ run_input_delivery_ack: false })],
-    )
+  it('拒绝 GeoWorld 或 StepContext 表缺失的数据库', async () => {
+    const db = databaseWithCapabilities(currentCapabilities({ agent_step_contexts_table: null }))
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
-      .rejects.toThrow(/012_run_input_delivery_ack/u)
-  })
-
-  it('拒绝 Run domain journal 表缺失的半升级数据库', async () => {
-    const db = databaseWithRows(
-      [{ table_name: 'platform_schema_migrations' }],
-      currentMigrations(),
-      [currentCapabilities({ run_domain_events_table: null })],
-    )
-
-    await expect(verifyDatabaseSchemaCompatibility(db as never))
-      .rejects.toThrow(/013_run_domain_journal/u)
-  })
-
-  it('拒绝 GeoWorld 或 StepContext 表缺失的半升级数据库', async () => {
-    const db = databaseWithRows(
-      [{ table_name: 'platform_schema_migrations' }],
-      currentMigrations(),
-      [currentCapabilities({ agent_step_contexts_table: null })],
-    )
-
-    await expect(verifyDatabaseSchemaCompatibility(db as never))
-      .rejects.toThrow(/014_agent_step_geo_world/u)
+      .rejects.toThrow(/GeoWorld\/Agent StepContext/u)
   })
 
   it('拒绝仍会覆盖历史 GeoWorld 的单列主键草案', async () => {
-    const db = databaseWithRows(
-      [{ table_name: 'platform_schema_migrations' }],
-      currentMigrations(),
-      [currentCapabilities({ geo_world_snapshot_primary_key: false })],
-    )
+    const db = databaseWithCapabilities(currentCapabilities({ geo_world_snapshot_primary_key: false }))
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
       .rejects.toThrow(/追加式主键/u)
+  })
+
+  it('所有错误都指向空库权威基线而不是增量迁移', async () => {
+    const db = databaseWithCapabilities(currentCapabilities({ vector_tile_function: null }))
+
+    await expect(verifyDatabaseSchemaCompatibility(db as never))
+      .rejects.toThrow(/infra\/database\/schema\.sql/u)
   })
 })

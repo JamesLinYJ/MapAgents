@@ -6,8 +6,7 @@
 //   单元测试不应隐式依赖 Docker，集成测试则必须连接真实 PostGIS。
 // --------------------------------------------------------------------------
 
-import { createHash } from 'node:crypto'
-import { readdir, readFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -21,13 +20,9 @@ import { verifyDatabaseSchemaCompatibility } from './schemaCompatibility.js'
 import { ManagedLayerService } from '../gis/managedLayers/managedLayerService.js'
 import {
   agentStateSchema,
-  replayRunDomainEvents,
-  runDomainEventSchema,
 } from '../schemas/types.js'
-import { PostgresRunDomainJournalRepository } from '../store/postgres/runDomainJournalRepository.js'
 import {
   GeoWorldRevisionConflictError,
-  RunDomainSequenceConflictError,
 } from '../store/storeErrors.js'
 import { GeoWorldRepository } from '../agent-runtime/world/GeoWorldRepository.js'
 import { GeoWorldBaselineBuilder } from '../agent-runtime/world/GeoWorldBaselineBuilder.js'
@@ -52,7 +47,7 @@ describe.skipIf(!integrationEnabled)('真实 PostgreSQL/PostGIS 集成', () => {
     const connectionString = externalDatabaseUrl ?? await startPostgresContainer()
     client = new Client({ connectionString })
     await client.connect()
-    await applyMigrations(client)
+    await applyDatabaseSchema(client)
 
     db = createDb(connectionString)
     await verifyDatabaseSchemaCompatibility(db)
@@ -64,28 +59,14 @@ describe.skipIf(!integrationEnabled)('真实 PostgreSQL/PostGIS 集成', () => {
     await container?.stop()
   }, 30_000)
 
-  it('应用全部迁移并验证 PostGIS 能力', async () => {
+  it('从单一权威基线初始化并验证 PostGIS 能力', async () => {
     const result = await db.execute<{ version: string }>(sql`
       SELECT postgis_full_version() AS version
     `)
     expect(result.rows[0]?.version).toMatch(/POSTGIS/u)
   })
 
-  it('把开发期单列 GeoWorld 主键收敛为可重入的追加式主键', async () => {
-    await client.query(`
-      ALTER TABLE platform_agent_step_contexts
-        DROP CONSTRAINT platform_agent_step_contexts_world_snapshot_fk;
-      ALTER TABLE platform_geo_world_snapshots
-        DROP CONSTRAINT platform_geo_world_snapshots_pk;
-      ALTER TABLE platform_geo_world_snapshots
-        ADD CONSTRAINT platform_geo_world_snapshots_pkey PRIMARY KEY (run_id);
-      ALTER TABLE platform_geo_world_snapshots
-        ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
-    `)
-
-    await applyMigration(client, '014_agent_step_geo_world.sql')
-    await applyMigration(client, '014_agent_step_geo_world.sql')
-
+  it('权威基线直接创建追加式 GeoWorld 主键', async () => {
     const primaryKey = await client.query<{ column_name: string }>(`
       SELECT attribute.attname AS column_name
       FROM pg_constraint constraint_row
@@ -112,8 +93,6 @@ describe.skipIf(!integrationEnabled)('真实 PostgreSQL/PostGIS 集成', () => {
   })
 
   it('以真实行锁串行化 GeoWorld CAS 并保存不可变 StepContext', async () => {
-    await applyMigration(client, '014_agent_step_geo_world.sql')
-    await applyMigration(client, '014_agent_step_geo_world.sql')
     const userId = 'user_step_context'
     const workspaceId = 'workspace_step_context'
     const sessionId = 'session_step_context'
@@ -477,115 +456,6 @@ describe.skipIf(!integrationEnabled)('真实 PostgreSQL/PostGIS 集成', () => {
     expect(await service.getLayer(layer.layerKey)).toBeNull()
   })
 
-  it('可重入迁移历史 Run 并从 sequence 1 完整重放领域快照', async () => {
-    const sessionId = 'session_domain_backfill'
-    const threadId = 'thread_domain_backfill'
-    const runId = 'run_domain_backfill'
-    const now = new Date('2026-08-20T00:00:00.000Z')
-    const state = agentStateSchema.parse({
-      sessionId,
-      threadId,
-      userQuery: '验证领域日志历史回放',
-      objectiveRevision: 2,
-    })
-
-    try {
-      await client.query(
-        `INSERT INTO platform_sessions
-           (session_id, visibility, status, created_at, updated_at)
-         VALUES ($1, 'private', 'active', $2, $2)`,
-        [sessionId, now],
-      )
-      await client.query(
-        `INSERT INTO platform_threads
-           (thread_id, session_id, visibility, title, next_entry_sequence, created_at, updated_at)
-         VALUES ($1, $2, 'private', '领域日志迁移夹具', 3, $3, $3)`,
-        [threadId, sessionId, now],
-      )
-      await client.query(
-        `INSERT INTO platform_runs
-           (run_id, session_id, thread_id, visibility, user_query, status, state_json,
-            next_input_sequence, checkpoint_input_cursor, created_at, updated_at)
-         VALUES ($1, $2, $3, 'private', '验证领域日志历史回放', 'running', $4, 3, 1, $5, $5)`,
-        [runId, sessionId, threadId, JSON.stringify(state), now],
-      )
-      await client.query(
-        `INSERT INTO platform_conversation_entries
-           (entry_id, session_id, thread_id, run_id, sequence, kind, payload_json, created_at)
-         VALUES
-           ('entry_domain_1', $1, $2, $3, 1, 'user_input', '{}'::jsonb, $4),
-           ('entry_domain_2', $1, $2, $3, 2, 'user_input', '{}'::jsonb, $4)`,
-        [sessionId, threadId, runId, now],
-      )
-      await client.query(
-        `INSERT INTO platform_run_inputs
-           (input_id, run_id, thread_id, entry_id, item_id, content, input_sequence,
-            status, queued_at, lease_id, leased_at, acked_at)
-         VALUES
-           ('input_domain_1', $1, $2, 'entry_domain_1', 'item_domain_1', '第一条输入', 1,
-            'acked', $3, 'lease_domain_1', $3, $3),
-           ('input_domain_2', $1, $2, 'entry_domain_2', 'item_domain_2', '第二条输入', 2,
-            'queued', $3, NULL, NULL, NULL)`,
-        [runId, threadId, now],
-      )
-
-      await applyMigration(client, '013_run_domain_journal.sql')
-      await applyMigration(client, '013_run_domain_journal.sql')
-
-      const repository = new PostgresRunDomainJournalRepository(db)
-      const events = await repository.listRunDomainEvents(runId)
-      const snapshot = await repository.getRunDomainSnapshot(runId)
-
-      expect(events.map(event => event.type)).toEqual([
-        'run.created',
-        'input.queued',
-        'input.checkpointed',
-        'run.checkpoint_changed',
-      ])
-      expect(events.map(event => event.sequence)).toEqual([1, 2, 3, 4])
-      expect(replayRunDomainEvents(events)).toEqual(snapshot)
-      expect(snapshot).toMatchObject({
-        runId,
-        sequence: 4,
-        status: 'running',
-        state: { objectiveRevision: 2 },
-        inputDeliveries: {
-          input_domain_1: { status: 'acked', leaseId: 'lease_domain_1' },
-          input_domain_2: { status: 'queued', leaseId: null },
-        },
-        checkpoint: {
-          nextInputSequence: 3,
-          checkpointInputCursor: 1,
-          activeInputLeaseId: null,
-        },
-      })
-
-      const competingWrites = await Promise.allSettled([
-        repository.appendRunDomainEvents({
-          runId,
-          expectedSequence: snapshot!.sequence,
-          events: [migrationWarningEvent(runId, snapshot!.sequence + 1, 'writer_a')],
-        }),
-        repository.appendRunDomainEvents({
-          runId,
-          expectedSequence: snapshot!.sequence,
-          events: [migrationWarningEvent(runId, snapshot!.sequence + 1, 'writer_b')],
-        }),
-      ])
-      expect(competingWrites.filter(result => result.status === 'fulfilled')).toHaveLength(1)
-      expect(competingWrites.find(result => result.status === 'rejected')).toMatchObject({
-        reason: expect.any(RunDomainSequenceConflictError),
-      })
-      const finalEvents = await repository.listRunDomainEvents(runId)
-      expect(finalEvents.map(event => event.sequence)).toEqual([1, 2, 3, 4, 5])
-      expect(replayRunDomainEvents(finalEvents)).toEqual(
-        await repository.getRunDomainSnapshot(runId),
-      )
-    } finally {
-      await client.query('DELETE FROM platform_sessions WHERE session_id = $1', [sessionId])
-    }
-  })
-
   async function startPostgresContainer(): Promise<string> {
     container = await new PostgreSqlContainer('postgis/postgis:16-3.5')
       .withDatabase('geo_agent_integration')
@@ -596,50 +466,10 @@ describe.skipIf(!integrationEnabled)('真实 PostgreSQL/PostGIS 集成', () => {
   }
 })
 
-async function applyMigrations(client: Client): Promise<void> {
-  const directory = path.join(repositoryRoot, 'infra', 'migrations')
-  const files = (await readdir(directory, { withFileTypes: true }))
-    .filter(entry => entry.isFile() && /^\d{3}_[a-z0-9_]+\.sql$/u.test(entry.name))
-    .sort((left, right) => left.name.localeCompare(right.name))
-
-  for (const entry of files) {
-    const content = (await readFile(path.join(directory, entry.name), 'utf8')).replace(/\r\n?/gu, '\n')
-    await client.query(content)
-    const migrationId = entry.name.replace(/\.sql$/u, '')
-    const checksum = createHash('sha256').update(content).digest('hex')
-    await client.query(`
-      INSERT INTO platform_schema_migrations
-        (migration_id, checksum, application_release)
-      VALUES ($1, $2, $3)
-      ON CONFLICT (migration_id) DO UPDATE SET
-        checksum = EXCLUDED.checksum,
-        application_release = EXCLUDED.application_release
-    `, [migrationId, checksum, 'postgis-integration-test'])
-  }
-}
-
-async function applyMigration(client: Client, fileName: string): Promise<void> {
+async function applyDatabaseSchema(client: Client): Promise<void> {
   const content = (await readFile(
-    path.join(repositoryRoot, 'infra', 'migrations', fileName),
+    path.join(repositoryRoot, 'infra', 'database', 'schema.sql'),
     'utf8',
   )).replace(/\r\n?/gu, '\n')
   await client.query(content)
-}
-
-function migrationWarningEvent(runId: string, sequence: number, suffix: string) {
-  return runDomainEventSchema.parse({
-    eventId: `domain_postgis_${suffix}`,
-    runId,
-    sequence,
-    turnId: null,
-    stepId: null,
-    objectiveRevision: 2,
-    causationId: null,
-    correlationId: `domain_postgis_${suffix}`,
-    actor: { kind: 'system', id: null },
-    occurredAt: '2026-08-20T00:00:01.000Z',
-    schemaVersion: 1,
-    type: 'projection.warning',
-    payload: { code: suffix, message: suffix },
-  })
 }

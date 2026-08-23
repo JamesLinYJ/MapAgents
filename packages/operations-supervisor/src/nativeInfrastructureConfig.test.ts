@@ -145,7 +145,7 @@ describe('native infrastructure configuration', () => {
     expect(arguments_.at(-1)).toContain('SELECT postgis_full_version()')
     expect(arguments_.at(-1)).toContain('platform_sessions')
     expect(arguments_.at(-1)).toContain('platform_layer_features')
-    expect(arguments_.at(-1)).toContain('platform_schema_migrations')
+    expect(arguments_.at(-1)).toContain('platform_agent_step_contexts')
   })
 
   it('discovers PostGIS through the running server without requiring pg_config', () => {

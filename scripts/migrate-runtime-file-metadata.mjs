@@ -325,7 +325,7 @@ async function archiveIdempotencyDirectories(directories, uploadsDirectory, arch
 async function assertFileLifecycleTable(client_) {
   const result = await client_.query("SELECT to_regclass('public.platform_file_objects') AS table_name")
   if (!result.rows[0]?.table_name) {
-    throw new Error('数据库缺少 platform_file_objects；请先应用 infra/migrations/009_file_object_lifecycle.sql。')
+    throw new Error('数据库缺少 platform_file_objects；请使用空数据库执行 infra/database/schema.sql。')
   }
 }
 

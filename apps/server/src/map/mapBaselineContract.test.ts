@@ -12,13 +12,13 @@ import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
-const baselinePath = fileURLToPath(new URL('../../../../infra/migrations/001_init_postgis.sql', import.meta.url))
+const baselinePath = fileURLToPath(new URL('../../../../infra/database/schema.sql', import.meta.url))
 
 describe('map database baseline contract', () => {
   it('keeps text feature identifiers as MVT attributes instead of numeric feature ids', async () => {
     const source = await readFile(baselinePath, 'utf8')
     const functionBody = source.match(
-      /CREATE OR REPLACE FUNCTION geo_agent_platform_layer_tiles[\s\S]+?\$\$;/u,
+      /CREATE FUNCTION public\.geo_agent_platform_layer_tiles[\s\S]+?\$\$;/u,
     )?.[0]
 
     expect(functionBody).toBeDefined()
@@ -32,7 +32,7 @@ describe('map database baseline contract', () => {
   it('persists label configuration with each scene layer', async () => {
     const baseline = await readFile(baselinePath, 'utf8')
     const sceneLayerTable = baseline.match(
-      /CREATE TABLE IF NOT EXISTS platform_map_scene_layers[\s\S]+?\);/u,
+      /CREATE TABLE public\.platform_map_scene_layers[\s\S]+?\);/u,
     )?.[0]
 
     expect(sceneLayerTable).toContain('label_json')
@@ -41,7 +41,7 @@ describe('map database baseline contract', () => {
   it('indexes explicit artifact replacement groups per thread', async () => {
     const baseline = await readFile(baselinePath, 'utf8')
 
-    expect(baseline).toContain('replacement_group  TEXT')
+    expect(baseline).toMatch(/replacement_group text/u)
     expect(baseline).toContain('idx_platform_map_layers_thread_replacement')
   })
 })

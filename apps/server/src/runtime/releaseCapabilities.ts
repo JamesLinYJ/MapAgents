@@ -18,7 +18,7 @@ import {
   runtimeCapabilitiesSchema,
   type RuntimeCapabilities,
 } from '@geo-agent-platform/shared-types/release'
-import { CURRENT_DATABASE_SCHEMA_VERSION } from '../db/schemaCompatibility.js'
+import { DATABASE_SCHEMA_CONTRACT_VERSION } from '../db/schemaCompatibility.js'
 
 const packageVersion = readServerPackageVersion()
 const runtimeManifestFileName = 'runtime-service-manifest.json'
@@ -78,7 +78,7 @@ export function buildRuntimeCapabilities(input: {
     apiProtocolVersion: API_PROTOCOL_VERSION,
     minDesktopProtocol: DESKTOP_PROTOCOL_VERSION,
     maxDesktopProtocol: DESKTOP_PROTOCOL_VERSION,
-    databaseSchemaVersion: CURRENT_DATABASE_SCHEMA_VERSION,
+    databaseSchemaVersion: DATABASE_SCHEMA_CONTRACT_VERSION,
     workerContractDigest: input.workerContractDigest,
   })
 }

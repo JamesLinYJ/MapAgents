@@ -10,7 +10,7 @@
 | 构建校验 | `npm run build`、`npm run lint:desktop`、`npm run lint:terminology`、`npm run check:bundle` | 编译、静态检查和桌面包预算检查 |
 | 发布制品 | `npm run release:runtime`、`npm run verify:runtime`、`scripts/make-desktop-release.ps1` | 生成/校验 Node/Worker 运行服务制品（含 DB、共享契约、监督器运行包、SPDX SBOM 和 checksum manifest）或 Electron 发布包；需要签名时显式传入 `--signing-key <Ed25519 私钥>` |
 | 服务安装 | `scripts/install-winsw-service.ps1`、`scripts/install-desktop-runtime-manifest.ps1` | Windows 服务及桌面运行清单安装 |
-| 数据维护 | `npm run migrate:file-lifecycle`、`npm run reset:conversations`、`scripts/reset_platform_data.sql` | 旧上传 metadata 默认 dry-run 校验、显式导入，或显式确认后的开发数据清理 |
+| 数据维护 | `npm run migrate:file-lifecycle`、`npm run reset:conversations` | 旧上传 metadata 默认 dry-run 校验、显式导入，或显式确认后的开发数据清理 |
 | Python/科学计算 | `scripts/run-worker.ps1`、`scripts/run-worker.sh` | 启动 Worker；算法代码归属 `packages/gis-meteorology` |
 
 ## 约定

@@ -11,7 +11,7 @@
 //   P0 重构 (2026-07-03):
 //     作者: Claude Code
 //     启动期不再执行任何 CREATE/ALTER/INDEX/ADD COLUMN。
-//     改为纯校验：缺表或缺列时抛出明确错误，提示运行 baseline migration。
+//     改为纯校验：缺表或缺列时抛出明确错误，提示从空库执行权威基线。
 //     保留 RBAC 默认 policy 的 INSERT seed（数据级，非 DDL）。
 // --------------------------------------------------------------------------
 
@@ -106,7 +106,7 @@ export async function ensureSecurityTables(db: Database): Promise<void> {
 }
 
 // verifySchema 校验 public schema 下 table→columns 均存在。
-// 缺表或缺列时抛出包含 "baseline migration" 提示的错误。
+// 缺表或缺列时抛出指向唯一 schema.sql 的明确错误。
 export async function verifySchema(db: Database, required: Record<string, string[]>): Promise<void> {
   const tableNames = Object.keys(required)
 
@@ -148,7 +148,7 @@ export async function verifySchema(db: Database, required: Record<string, string
   }
   if (errors.length) {
     throw new Error(
-      `Schema 验证失败。请运行 baseline migration 或 reset 数据库。\n${errors.join('\n')}`,
+      `Schema 验证失败。请备份需要保留的数据后，从空数据库执行 infra/database/schema.sql。\n${errors.join('\n')}`,
     )
   }
 }

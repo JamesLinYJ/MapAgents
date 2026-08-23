@@ -4,7 +4,7 @@
  * Build the self-contained service side of a release.
  *
  * The Electron package is deliberately separate. This artifact contains the
- * Node service, Worker sources, migrations, and service definitions together
+ * Node service, Worker sources, the authoritative database schema, and service definitions together
  * with a checksum manifest. It never silently copies from the current working
  * directory: every source path is explicit and missing inputs fail the build.
  */
@@ -88,7 +88,7 @@ const sources = [
   ['apps/worker/uv.lock', 'apps/worker/uv.lock', 'file'],
   ['packages/gis-meteorology/pyproject.toml', 'packages/gis-meteorology/pyproject.toml', 'file'],
   ['packages/gis-meteorology/src', 'packages/gis-meteorology/src', 'directory'],
-  ['infra/migrations', 'infra/migrations', 'directory'],
+  ['infra/database/schema.sql', 'infra/database/schema.sql', 'file'],
   ['infra/seeds/layers', 'infra/seeds/layers', 'directory'],
   ['deploy', 'deploy', 'directory'],
   ['scripts/run-worker.ps1', 'scripts/run-worker.ps1', 'file'],
@@ -450,7 +450,7 @@ async function loadReleaseContracts() {
   ).href)
   const apiProtocolVersion = sharedRelease.API_PROTOCOL_VERSION
   const desktopProtocolVersion = sharedRelease.DESKTOP_PROTOCOL_VERSION
-  const databaseSchemaVersion = schemaCompatibility.CURRENT_DATABASE_SCHEMA_VERSION
+  const databaseSchemaVersion = schemaCompatibility.DATABASE_SCHEMA_CONTRACT_VERSION
   if (![apiProtocolVersion, desktopProtocolVersion, databaseSchemaVersion]
     .every(value => Number.isInteger(value) && value >= 0)) {
     throw new Error('发布协议或数据库版本常量无效。')

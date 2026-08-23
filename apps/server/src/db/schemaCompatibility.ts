@@ -10,92 +10,18 @@
 // --------------------------------------------------------------------------
 
 import { sql } from 'drizzle-orm'
-import { z } from 'zod'
 
 import type { Database } from './connection.js'
 
-export const REQUIRED_MIGRATIONS = [
-  '000_schema_migrations',
-  '001_init_postgis',
-  '002_automation_reliability_constraints',
-  '003_better_auth_admin',
-  '004_agents_sdk_native_runtime',
-  '005_remove_public_sharing',
-  '006_native_agent_runtime',
-  '007_model_result_cache',
-  '008_tool_result_commit_idempotency',
-  '009_file_object_lifecycle',
-  '010_file_ready_source_invariant',
-  '011_custom_model_providers',
-  '012_run_input_delivery_ack',
-  '013_run_domain_journal',
-  '014_agent_step_geo_world',
-  '015_agents_sdk_checkpoint_envelope',
-] as const
-
-export const CURRENT_DATABASE_SCHEMA_VERSION = 15
-
-const migrationRowsSchema = z.array(z.object({
-  migration_id: z.string().min(1),
-  checksum: z.string().nullable().optional(),
-}))
+export const DATABASE_SCHEMA_CONTRACT_VERSION = 1
 
 /**
- * 服务启动只验证数据库兼容性，不在运行时自动执行 DDL。
- * 缺失迁移和数据库版本过新都必须由部署者显式处理，避免半升级状态。
+ * 服务启动只验证数据库结构能力，不在运行时自动执行 DDL。
+ * 新数据库由 infra/database/schema.sql 一次初始化；旧结构必须显式导出后重建。
  */
 export async function verifyDatabaseSchemaCompatibility(
   db: Pick<Database, 'execute'>,
 ): Promise<void> {
-  const tableResult = await db.execute(sql`
-    SELECT to_regclass('public.platform_schema_migrations') AS table_name
-  `)
-  const tableName = (tableResult.rows[0] as { table_name?: unknown } | undefined)?.table_name
-  if (typeof tableName !== 'string') {
-    throw new Error(
-      '数据库尚未启用版本跟踪。请重建开发数据库并应用 '
-      + 'infra/migrations/000_schema_migrations.sql 至 015_agents_sdk_checkpoint_envelope.sql '
-      + '后重新启动。',
-    )
-  }
-
-  const migrationResult = await db.execute(sql`
-    SELECT migration_id
-      , checksum
-    FROM platform_schema_migrations
-    ORDER BY migration_id
-  `)
-  const migrationIds = migrationRowsSchema.parse(migrationResult.rows).map(row => row.migration_id)
-  const applied = new Set(migrationIds)
-  const missing = REQUIRED_MIGRATIONS.filter(migrationId => !applied.has(migrationId))
-  if (missing.length > 0) {
-    throw new Error(
-      `数据库不是当前基线，缺少：${missing.join('、')}。`
-      + '请先执行部署阶段 migration；禁止只补写版本记录。',
-    )
-  }
-
-  const unverified = migrationResult.rows
-    .map(row => migrationRowsSchema.element.parse(row))
-    .filter(row => !row.checksum)
-    .map(row => row.migration_id)
-  if (unverified.length > 0) {
-    throw new Error(
-      `数据库存在没有 checksum 的 migration：${unverified.join('、')}。`
-      + '请使用当前版本迁移器完成一次校准后再启动服务。',
-    )
-  }
-
-  const unsupported = migrationIds
-    .map(migrationId => ({ migrationId, version: migrationVersion(migrationId) }))
-    .filter(entry => entry.version > CURRENT_DATABASE_SCHEMA_VERSION)
-  if (unsupported.length > 0) {
-    throw new Error(
-      `数据库版本高于当前服务支持的 v${CURRENT_DATABASE_SCHEMA_VERSION}：`
-      + `${unsupported.map(entry => entry.migrationId).join('、')}。请升级 平台 服务，不能用旧服务连接新数据库。`,
-    )
-  }
-
   const capabilityResult = await db.execute(sql`
     SELECT to_regprocedure(
       'public.geo_agent_platform_layer_tiles(integer,integer,integer,json)'
@@ -163,10 +89,9 @@ export async function verifyDatabaseSchemaCompatibility(
   )?.vector_tile_function
   if (typeof vectorTileFunction !== 'string') {
     throw new Error(
-      '数据库迁移记录与实际能力不一致：缺少 '
+      '数据库结构与当前应用契约不一致：缺少 '
       + 'geo_agent_platform_layer_tiles(integer, integer, integer, json)。'
-      + '请重新执行部署阶段 migration；'
-      + '禁止只补写迁移记录。',
+      + '请使用空数据库执行 infra/database/schema.sql。',
     )
   }
   const modelResultCacheTable = (
@@ -174,8 +99,8 @@ export async function verifyDatabaseSchemaCompatibility(
   )?.model_result_cache_table
   if (typeof modelResultCacheTable !== 'string') {
     throw new Error(
-      '数据库迁移记录与实际能力不一致：缺少 platform_model_result_cache。'
-      + '请执行 007_model_result_cache.sql；禁止由应用启动时创建业务表。',
+      '数据库结构与当前应用契约不一致：缺少 platform_model_result_cache。'
+      + '请使用空数据库执行 infra/database/schema.sql。',
     )
   }
   const fileObjectsTable = (
@@ -183,8 +108,8 @@ export async function verifyDatabaseSchemaCompatibility(
   )?.file_objects_table
   if (typeof fileObjectsTable !== 'string') {
     throw new Error(
-      '数据库迁移记录与实际能力不一致：缺少 platform_file_objects。'
-      + '请执行 009_file_object_lifecycle.sql；禁止由应用启动时创建业务表。',
+      '数据库结构与当前应用契约不一致：缺少 platform_file_objects。'
+      + '请使用空数据库执行 infra/database/schema.sql。',
     )
   }
   const modelProvidersTable = (
@@ -192,8 +117,8 @@ export async function verifyDatabaseSchemaCompatibility(
   )?.model_providers_table
   if (typeof modelProvidersTable !== 'string') {
     throw new Error(
-      '数据库迁移记录与实际能力不一致：缺少 platform_model_providers。'
-      + '请执行 011_custom_model_providers.sql；禁止由应用启动时创建业务表。',
+      '数据库结构与当前应用契约不一致：缺少 platform_model_providers。'
+      + '请使用空数据库执行 infra/database/schema.sql。',
     )
   }
   const runInputDeliveryAck = (
@@ -201,8 +126,8 @@ export async function verifyDatabaseSchemaCompatibility(
   )?.run_input_delivery_ack
   if (runInputDeliveryAck !== true) {
     throw new Error(
-      '数据库迁移记录与实际能力不一致：Run input sequence/cursor/lease 列不完整。'
-      + '请执行 012_run_input_delivery_ack.sql；禁止只补写迁移记录。',
+      '数据库结构与当前应用契约不一致：Run input sequence/cursor/lease 列不完整。'
+      + '请使用空数据库执行 infra/database/schema.sql。',
     )
   }
   const runDomainEventsTable = (
@@ -213,8 +138,8 @@ export async function verifyDatabaseSchemaCompatibility(
   )?.run_snapshots_table
   if (typeof runDomainEventsTable !== 'string' || typeof runSnapshotsTable !== 'string') {
     throw new Error(
-      '数据库迁移记录与实际能力不一致：Run domain journal/snapshot 表不完整。'
-      + '请执行 013_run_domain_journal.sql；禁止只补写迁移记录。',
+      '数据库结构与当前应用契约不一致：Run domain journal/snapshot 表不完整。'
+      + '请使用空数据库执行 infra/database/schema.sql。',
     )
   }
   const geoWorldSnapshotsTable = (
@@ -240,13 +165,8 @@ export async function verifyDatabaseSchemaCompatibility(
     || agentStepWorldForeignKey !== true
   ) {
     throw new Error(
-      '数据库迁移记录与实际能力不一致：GeoWorld/Agent StepContext 表或追加式主键不完整。'
-      + '请执行 014_agent_step_geo_world.sql；禁止只补写迁移记录。',
+      '数据库结构与当前应用契约不一致：GeoWorld/Agent StepContext 表或追加式主键不完整。'
+      + '请使用空数据库执行 infra/database/schema.sql。',
     )
   }
-}
-
-function migrationVersion(migrationId: string): number {
-  const match = /^(\d{3})_/u.exec(migrationId)
-  return match ? Number.parseInt(match[1] ?? '', 10) : 0
 }

@@ -15,7 +15,7 @@ packages/
   conversation-presentation/ 桌面端与 CLI 共用的只读对话展示投影
   gis-meteorology/  地理与气象领域算法
   operations-supervisor/ TypeScript 进程监督器
-infra/          PostgreSQL/PostGIS migration 与地图种子
+infra/          PostgreSQL/PostGIS 权威基线与地图种子
 deploy/         systemd、WinSW 和生产环境模板
 scripts/        开发、校验、部署与数据维护脚本
 tests/          跨应用端到端测试
