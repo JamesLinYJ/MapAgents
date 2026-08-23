@@ -170,20 +170,46 @@ export class RuntimeModelInputController {
 
 const protectedModels = new WeakMap<Model, Model>()
 
+export type ModelRequestObserver = (request: ModelRequest) => Promise<void>
+
 // filter 的返回值同时用于 SDK Session 持久化，不能在这里删除 delivery
 // marker；否则外层 Runner 会把无 marker 副本再次写入历史。模型边界仅对
 // 即将发给 provider 的请求副本脱敏，RunState/Session 继续保留幂等键。
-export function protectModelTransportFromRunInputMarkers(model: Model): Model {
-  const existing = protectedModels.get(model)
-  if (existing) return existing
+export function protectModelTransportFromRunInputMarkers(
+  model: Model,
+  observeRequest?: ModelRequestObserver,
+): Model {
+  if (!observeRequest) {
+    const existing = protectedModels.get(model)
+    if (existing) return existing
+  }
   const protectedModel: Model = {
-    getResponse: request => model.getResponse(stripRunInputMarkersFromRequest(request)),
-    getStreamedResponse: request => model.getStreamedResponse(stripRunInputMarkersFromRequest(request)),
+    getResponse: async request => {
+      const protectedRequest = stripRunInputMarkersFromRequest(request)
+      await observeRequest?.(protectedRequest)
+      return model.getResponse(protectedRequest)
+    },
+    getStreamedResponse: request => observeStreamedRequest(
+      model,
+      stripRunInputMarkersFromRequest(request),
+      observeRequest,
+    ),
     getRetryAdvice: args => model.getRetryAdvice?.(args),
   }
-  protectedModels.set(model, protectedModel)
-  protectedModels.set(protectedModel, protectedModel)
+  if (!observeRequest) {
+    protectedModels.set(model, protectedModel)
+    protectedModels.set(protectedModel, protectedModel)
+  }
   return protectedModel
+}
+
+async function* observeStreamedRequest(
+  model: Model,
+  request: ModelRequest,
+  observer: ModelRequestObserver | undefined,
+): ReturnType<Model['getStreamedResponse']> {
+  await observer?.(request)
+  yield* model.getStreamedResponse(request)
 }
 
 function stripRunInputMarkersFromRequest(request: ModelRequest): ModelRequest {

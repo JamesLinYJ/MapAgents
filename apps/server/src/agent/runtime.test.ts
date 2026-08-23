@@ -44,6 +44,10 @@ import type { GoalJudgePort } from './goalJudge.js'
 import { OpenAIAgentsRuntime } from './runtime.js'
 import { RunSteeringController } from './runSteeringController.js'
 import { testSandboxClientFactory } from '../../test-support/agentsSandboxClient.js'
+import type {
+  AgentStepContextRecorder,
+  CaptureAgentStepContextInput,
+} from '../agent-runtime/step/AgentStepContextFactory.js'
 
 async function removeTempRoot(root: string): Promise<void> {
   await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
@@ -54,8 +58,10 @@ function testRuntime(
   tools: ToolRegistry,
   models: ModelAdapterRegistry,
   goalJudge?: GoalJudgePort,
+  stepContexts: AgentStepContextRecorder = { record: async () => {} },
 ): OpenAIAgentsRuntime {
   return new OpenAIAgentsRuntime(store, tools, models, {
+    stepContexts,
     createSandboxClient: testSandboxClientFactory,
     ...(goalJudge ? { goalJudge } : {}),
   })
@@ -88,6 +94,59 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       ...subAgent,
       artifactIds: ['artifact_query_result'],
     }).success).toBe(true)
+  })
+
+  it('captures the exact root StepContext before every provider model request', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-step-context-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '模型请求快照')
+      const run = await store.createRun(session.id, '查询当前图层', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: testRuntimeConfig(),
+      })
+      const tools = new ToolRegistry()
+      tools.register(providerFromTools('step-context-test', [{
+        ...toolDefinition('query_layer', ['query']),
+        handler: async () => result('query_layer', [], { count: 1 }),
+      }]))
+      const captures: CaptureAgentStepContextInput[] = []
+      const captureCountsAtProvider: number[] = []
+      const model = scriptedModel(request => {
+        captureCountsAtProvider.push(captures.length)
+        return hasToolResult(request)
+          ? { text: '已完成图层查询。' }
+          : {
+              toolCalls: [{
+                id: 'call_step_context',
+                name: 'query_layer',
+                arguments: '{"query":"current"}',
+              }],
+            }
+      })
+      const completed = await testRuntime(
+        store,
+        tools,
+        registryWith(fakeAdapter(model)),
+        undefined,
+        { record: async input => { captures.push(input) } },
+      ).run(runOptions(run, thread.id))
+
+      expect(completed.status).toBe('completed')
+      expect(captureCountsAtProvider).toEqual([1, 2])
+      expect(captures).toHaveLength(2)
+      expect(captures.map(capture => capture.toolPlan.entries.map(entry => entry.name)))
+        .toEqual([['query_layer'], ['query_layer']])
+      expect(captures.every(capture => capture.objectiveRevision === 1)).toBe(true)
+      expect(captures.every(capture => capture.inputCursor === 0)).toBe(true)
+      expect(captures[0]?.toolPlan.catalogDigest).toBe(captures[1]?.toolPlan.catalogDigest)
+      expect(Object.isFrozen(captures[0]?.toolPlan)).toBe(true)
+    } finally {
+      await removeTempRoot(root)
+    }
   })
 
   it('releases the active-run lifecycle when the first persistence write fails', async () => {

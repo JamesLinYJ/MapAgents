@@ -286,6 +286,7 @@ describe('runtime SDK integrations', () => {
     expect(integration.activeMcpServers).toEqual(['docs'])
     expect(integration.tools.map(candidate => candidate.name)).toEqual(['docs_search'])
     expect([...integration.mcpToolNames]).toEqual(['docs_search'])
+    expect([...integration.mcpToolServers]).toEqual([['docs_search', 'docs']])
     const [mcpTool] = integration.tools
     expect(mcpTool?.type).toBe('function')
     if (mcpTool?.type !== 'function') throw new Error('测试工具必须是 function tool')

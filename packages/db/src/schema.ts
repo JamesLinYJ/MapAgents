@@ -252,6 +252,69 @@ export const platformRunSnapshots = pgTable('platform_run_snapshots', {
   ),
 }))
 
+// 每个 Run 的 GIS 世界快照与显式 patch diff。revision 是该世界的唯一
+// 乐观并发令牌；真实图层、数据集、文件和 Artifact 仍由各自业务表拥有。
+export const platformGeoWorldSnapshots = pgTable('platform_geo_world_snapshots', {
+  runId: text('run_id').notNull().references(() => platformRuns.runId, { onDelete: 'cascade' }),
+  workspaceId: text('workspace_id').notNull().references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull().default(1),
+  stateSchemaVersion: integer('state_schema_version').notNull(),
+  stateDigest: text('state_digest').notNull(),
+  stateJson: jsonb('state_json').notNull().$type<Record<string, unknown>>(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  primaryKey: primaryKey({
+    columns: [table.runId, table.revision],
+    name: 'platform_geo_world_snapshots_pk',
+  }),
+  workspaceCreatedIdx: index('idx_geo_world_snapshots_workspace_created').on(table.workspaceId, table.createdAt),
+  revisionCheck: check('platform_geo_world_snapshots_revision_check', sql`${table.revision} > 0`),
+  schemaVersionCheck: check('platform_geo_world_snapshots_schema_version_check', sql`${table.stateSchemaVersion} > 0`),
+}))
+
+export const platformGeoWorldDiffs = pgTable('platform_geo_world_diffs', {
+  diffId: text('diff_id').primaryKey(),
+  runId: text('run_id').notNull().references(() => platformRuns.runId, { onDelete: 'cascade' }),
+  fromRevision: integer('from_revision').notNull(),
+  toRevision: integer('to_revision').notNull(),
+  diffJson: jsonb('diff_json').notNull().$type<Record<string, unknown>>(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+}, (table) => ({
+  runToRevisionIdx: uniqueIndex('idx_geo_world_diffs_run_to_revision_unique').on(table.runId, table.toRevision),
+  fromRevisionCheck: check('platform_geo_world_diffs_from_revision_check', sql`${table.fromRevision} > 0`),
+  revisionStepCheck: check('platform_geo_world_diffs_revision_step_check', sql`${table.toRevision} = ${table.fromRevision} + 1`),
+}))
+
+// StepContext 是模型请求级不可变事实。模型可见工具计划、授权和世界 revision
+// 都由同一记录绑定；后续配置变化只能生成下一条 context。
+export const platformAgentStepContexts = pgTable('platform_agent_step_contexts', {
+  stepId: text('step_id').primaryKey(),
+  runId: text('run_id').notNull().references(() => platformRuns.runId, { onDelete: 'cascade' }),
+  turnId: text('turn_id').notNull(),
+  segmentId: text('segment_id').notNull(),
+  modelRequestIndex: integer('model_request_index').notNull(),
+  objectiveRevision: integer('objective_revision').notNull(),
+  inputCursor: integer('input_cursor').notNull(),
+  worldRevision: integer('world_revision').notNull(),
+  runtimeConfigDigest: text('runtime_config_digest').notNull(),
+  toolPlanDigest: text('tool_plan_digest').notNull(),
+  contextDigest: text('context_digest').notNull(),
+  contextJson: jsonb('context_json').notNull().$type<Record<string, unknown>>(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+}, (table) => ({
+  worldSnapshotFk: foreignKey({
+    columns: [table.runId, table.worldRevision],
+    foreignColumns: [platformGeoWorldSnapshots.runId, platformGeoWorldSnapshots.revision],
+    name: 'platform_agent_step_contexts_world_snapshot_fk',
+  }).onDelete('cascade'),
+  runRequestIdx: uniqueIndex('idx_agent_step_contexts_run_request_unique').on(table.runId, table.modelRequestIndex),
+  turnRequestIdx: index('idx_agent_step_contexts_turn_request').on(table.turnId, table.modelRequestIndex),
+  requestIndexCheck: check('platform_agent_step_contexts_request_index_check', sql`${table.modelRequestIndex} > 0`),
+  objectiveRevisionCheck: check('platform_agent_step_contexts_objective_revision_check', sql`${table.objectiveRevision} > 0`),
+  inputCursorCheck: check('platform_agent_step_contexts_input_cursor_check', sql`${table.inputCursor} >= 0`),
+  worldRevisionCheck: check('platform_agent_step_contexts_world_revision_check', sql`${table.worldRevision} > 0`),
+}))
+
 // 纯辅助模型结果缓存不是对话事实源；删除或过期不会影响 Run/Thread 恢复。
 // 仅保存内容哈希与已校验的小型结果，避免持久化原始提示词。
 export const platformModelResultCache = pgTable('platform_model_result_cache', {

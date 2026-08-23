@@ -33,6 +33,7 @@ const AGENT_NAME = /^[a-zA-Z0-9_-]+$/u
 export interface HandoffAgentIntegration {
   handoffs: Handoff<AgentsExecutionContext, 'text'>[]
   agentIds: ReadonlySet<string>
+  toolAgentIds: ReadonlyMap<string, string>
   complete(agentId: string, summary: string): Promise<void>
   fail(agentId: string, message: string): Promise<void>
 }
@@ -110,6 +111,7 @@ export function createHandoffAgents(options: HandoffAgentFactoryOptions): Handof
   return {
     handoffs,
     agentIds: new Set(configs.map(config => config.agentId)),
+    toolAgentIds: new Map(configs.map(config => [`handoff_to_${config.agentId}`, config.agentId])),
     async complete(agentId, summary) {
       const config = byAgentId.get(agentId)
       if (!config) return

@@ -23,7 +23,9 @@
     "./map": { "types": "./dist/map.d.ts", "import": "./dist/map.js", "default": "./dist/map.js" },
     "./release": { "types": "./dist/release.d.ts", "import": "./dist/release.js", "default": "./dist/release.js" },
     "./meteorology": { "types": "./dist/meteorology.d.ts", "import": "./dist/meteorology.js", "default": "./dist/meteorology.js" },
-    "./run-domain": { "types": "./dist/runDomain.d.ts", "import": "./dist/runDomain.js", "default": "./dist/runDomain.js" }
+    "./run-domain": { "types": "./dist/runDomain.d.ts", "import": "./dist/runDomain.js", "default": "./dist/runDomain.js" },
+    "./geo-world": { "types": "./dist/geoWorld.d.ts", "import": "./dist/geoWorld.js", "default": "./dist/geoWorld.js" },
+    "./agent-step-context": { "types": "./dist/agentStepContext.d.ts", "import": "./dist/agentStepContext.js", "default": "./dist/agentStepContext.js" }
   },
   "types": "./dist/index.d.ts",
   "scripts": {

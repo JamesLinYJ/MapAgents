@@ -15,6 +15,7 @@ import {
   webSearchTool,
   type AgentOptions,
   type AgentInputItem,
+  type ModelRequest,
   type Tool,
 } from '@openai/agents'
 import {
@@ -94,6 +95,15 @@ import {
 } from './toolExecutionPolicy.js'
 import type { RunEventSink } from './turnRunner.js'
 import { ToolResultCommitService } from '../tools/resultPersistence.js'
+import { makeId } from '../utils/ids.js'
+import type { AgentStepContextRecorder } from '../agent-runtime/step/AgentStepContextFactory.js'
+import {
+  createAgentToolPlan,
+  handoffToolPlanSource,
+  platformToolPlanSource,
+  sdkToolPlanSource,
+  type AgentToolPlanSource,
+} from '../agent-runtime/step/AgentToolPlan.js'
 
 export interface RuntimeAssemblyFactoryOptions {
   createSandboxClient?: SandboxClientFactory
@@ -108,6 +118,7 @@ interface RuntimeAssemblyFactoryDependencies {
   runtimeOptions: RuntimeAssemblyFactoryOptions
   modelCompletions?: ModelCompletionService
   subAgentControls: SubAgentControlPlane
+  stepContexts: AgentStepContextRecorder
   recordWarning: (
     runId: string,
     message: string,
@@ -134,6 +145,7 @@ export class RuntimeAssemblyFactory {
       modelRegistry,
       recordWarning,
       runtimeOptions,
+      stepContexts,
       store,
       subAgentControls,
       toolRegistry,
@@ -150,7 +162,17 @@ export class RuntimeAssemblyFactory {
     assertAgentsSdkVersionSupported(sdkVersion)
     const modelCapabilities = resolveAdapterModelCapabilities(adapter, selectedModel)
     assertAgentRuntimeCapabilities(adapter, modelCapabilities, options.runtimeConfig)
-    const model = protectModelTransportFromRunInputMarkers(adapter.createAgentModel(selectedModel))
+    const configDigest = runtimeConfigDigest(options.runtimeConfig)
+    const segmentId = makeId('segment')
+    const providerModel = adapter.createAgentModel(selectedModel)
+    const subAgentRootModel = protectModelTransportFromRunInputMarkers(providerModel)
+    let captureModelRequest: ((request: ModelRequest) => Promise<void>) | null = null
+    const model = protectModelTransportFromRunInputMarkers(providerModel, request => {
+      if (!captureModelRequest) {
+        throw new Error('Agent StepContext 记录器尚未绑定模型请求')
+      }
+      return captureModelRequest(request)
+    })
     const developerToolsEnabled = developerToolsEnabledForRuntime(options.runtimeConfig)
     const registeredAgentTools = toolRegistry.list()
       .filter(tool => tool.executionSurfaces?.includes('agent') ?? true)
@@ -299,7 +321,7 @@ export class RuntimeAssemblyFactory {
     const subAgentDependencies = {
       configs: subAgentConfigs,
       selectedModel,
-      rootModel: model,
+      rootModel: subAgentRootModel,
       reasoning: options.reasoning,
       adapter,
       toolRegistry,
@@ -328,12 +350,12 @@ export class RuntimeAssemblyFactory {
       executionGate,
       query: options.query,
     })
-    const sandboxToolNames = new Set([
+    const sandboxCapabilities = [
       ...coreSandboxCapabilities,
       ...sandboxIntegration.capabilities,
-    ].flatMap(capability => capability.tools()
-      .filter(tool => tool.type === 'function')
-      .map(tool => tool.name)))
+    ]
+    const sandboxTools = sandboxCapabilities.flatMap(capability => capability.tools())
+    const sandboxToolNames = new Set(sandboxTools.map(tool => tool.name))
     const sandboxManifest = sandboxEnabled
       ? buildSandboxManifest(
           options,
@@ -364,6 +386,68 @@ export class RuntimeAssemblyFactory {
       reservedToolNames,
       executionGate,
     )
+    const mcpConfigs = new Map(options.runtimeConfig.sdk.mcp.servers.map(server => [server.name, server]))
+    const requestToolSources: AgentToolPlanSource[] = [
+      ...supervisorToolDefinitions.map(platformToolPlanSource),
+      ...subAgentTools.map(tool => sdkToolPlanSource({
+        tool,
+        kind: 'subagent',
+        providerId: tool.name,
+      })),
+      ...sdkIntegration.tools.map(tool => {
+        const serverName = sdkIntegration.mcpToolServers.get(tool.name)
+        if (!serverName) throw new Error(`MCP 工具 '${tool.name}' 缺少 server 来源`)
+        const server = mcpConfigs.get(serverName)
+        if (!server) throw new Error(`MCP 工具 '${tool.name}' 引用了未知 server '${serverName}'`)
+        return sdkToolPlanSource({
+          tool,
+          kind: 'mcp',
+          providerId: serverName,
+          requiresApproval: server.approval === 'always',
+        })
+      }),
+      ...hostedTools.map(tool => sdkToolPlanSource({
+        tool,
+        kind: 'hosted',
+        providerId: adapter.provider,
+        readOnly: true,
+        destructive: false,
+      })),
+      ...sandboxTools.map(tool => sdkToolPlanSource({
+        tool,
+        kind: 'sandbox',
+        providerId: options.runtimeConfig.sandbox.backend,
+        requiresApproval: true,
+      })),
+      ...[...handoffIntegration.toolAgentIds].map(([toolName, agentId]) => (
+        handoffToolPlanSource({ toolName, agentId })
+      )),
+    ]
+    captureModelRequest = async request => {
+      const objectiveRevision = coordinator.currentModelInputObjectiveRevision()
+      const toolPlan = createAgentToolPlan({ request, sources: requestToolSources })
+      await stepContexts.record({
+        runId: options.runId,
+        turnId,
+        segmentId,
+        objectiveRevision,
+        inputCursor: objectiveRevision - 1,
+        provider: adapter.provider,
+        modelId: selectedModel,
+        transport: adapter.agentRuntimeCapabilities.transport,
+        modelCapabilities,
+        reasoningEffort: request.modelSettings.reasoning?.effort ?? null,
+        serviceTier: null,
+        timeoutMs: request.modelSettings.timeoutMs ?? 0,
+        runtimeConfig: options.runtimeConfig,
+        runtimeConfigDigest: configDigest,
+        toolPlan,
+        activeMcpServers: sdkIntegration.activeMcpServers,
+        mcpToolServers: sdkIntegration.mcpToolServers,
+        activeSkills: sandboxIntegration.activeSkills,
+        auth: options.auth ?? null,
+      })
+    }
 
     const inputTranscript = await store.activeTranscript(threadId)
     const existingInputSummaries = new Map(inputTranscript.flatMap(entry => (
@@ -439,8 +523,7 @@ export class RuntimeAssemblyFactory {
         ...agentOptions,
       defaultManifest: sandboxManifest,
       capabilities: [
-        ...coreSandboxCapabilities,
-        ...sandboxIntegration.capabilities,
+        ...sandboxCapabilities,
       ],
       })
       : new Agent<AgentsExecutionContext>(agentOptions)
@@ -693,7 +776,7 @@ export class RuntimeAssemblyFactory {
       ...(sandbox ? { sandbox } : {}),
       sdkIntegration,
       modelInput,
-      configDigest: runtimeConfigDigest(options.runtimeConfig),
+      configDigest,
       sdkVersion,
       threadId,
       turnId,

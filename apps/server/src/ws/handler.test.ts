@@ -87,6 +87,7 @@ function createWsHandler(server: Parameters<typeof createWsHandlerBase>[0], depe
     dependencies.toolRegistry,
     dependencies.modelRegistry,
     {
+      stepContexts: { record: async () => {} },
       createSandboxClient: dependencies.createSandboxClient,
       authorizationLease: async auth => auth,
     },
@@ -818,6 +819,7 @@ describe('WebSocket run subscriptions', () => {
       ? { text: '工具已执行。' }
       : { toolCalls: [{ id: 'call_sensitive', name: 'sensitive_tool', arguments: '{"value":1}' }] })))
     const waiting = await new OpenAIAgentsRuntime(store, tools, models, {
+      stepContexts: { record: async () => {} },
       createSandboxClient: testSandboxClientFactory,
     }).run({
       runId: run.id,

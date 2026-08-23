@@ -29,9 +29,10 @@ export const REQUIRED_MIGRATIONS = [
   '011_custom_model_providers',
   '012_run_input_delivery_ack',
   '013_run_domain_journal',
+  '014_agent_step_geo_world',
 ] as const
 
-export const CURRENT_DATABASE_SCHEMA_VERSION = 13
+export const CURRENT_DATABASE_SCHEMA_VERSION = 14
 
 const migrationRowsSchema = z.array(z.object({
   migration_id: z.string().min(1),
@@ -52,7 +53,7 @@ export async function verifyDatabaseSchemaCompatibility(
   if (typeof tableName !== 'string') {
     throw new Error(
       '数据库尚未启用版本跟踪。请重建开发数据库并应用 '
-      + 'infra/migrations/000_schema_migrations.sql 至 013_run_domain_journal.sql '
+      + 'infra/migrations/000_schema_migrations.sql 至 014_agent_step_geo_world.sql '
       + '后重新启动。',
     )
   }
@@ -103,6 +104,29 @@ export async function verifyDatabaseSchemaCompatibility(
     to_regclass('public.platform_model_providers') AS model_providers_table,
     to_regclass('public.platform_run_domain_events') AS run_domain_events_table,
     to_regclass('public.platform_run_snapshots') AS run_snapshots_table,
+    to_regclass('public.platform_geo_world_snapshots') AS geo_world_snapshots_table,
+    to_regclass('public.platform_geo_world_diffs') AS geo_world_diffs_table,
+    to_regclass('public.platform_agent_step_contexts') AS agent_step_contexts_table,
+    COALESCE((
+      SELECT array_agg(attribute.attname::text ORDER BY key_column.ordinality)
+        = ARRAY['run_id', 'revision']::text[]
+      FROM pg_constraint constraint_row
+      CROSS JOIN LATERAL unnest(constraint_row.conkey)
+        WITH ORDINALITY AS key_column(attnum, ordinality)
+      JOIN pg_attribute attribute
+        ON attribute.attrelid = constraint_row.conrelid
+       AND attribute.attnum = key_column.attnum
+      WHERE constraint_row.conrelid = to_regclass('public.platform_geo_world_snapshots')
+        AND constraint_row.contype = 'p'
+      GROUP BY constraint_row.oid
+    ), FALSE) AS geo_world_snapshot_primary_key,
+    EXISTS (
+      SELECT 1
+      FROM pg_constraint
+      WHERE conrelid = to_regclass('public.platform_agent_step_contexts')
+        AND conname = 'platform_agent_step_contexts_world_snapshot_fk'
+        AND contype = 'f'
+    ) AS agent_step_world_foreign_key,
     (
       SELECT COUNT(*) = 4
       FROM information_schema.columns
@@ -128,6 +152,11 @@ export async function verifyDatabaseSchemaCompatibility(
       model_providers_table?: unknown
       run_domain_events_table?: unknown
       run_snapshots_table?: unknown
+      geo_world_snapshots_table?: unknown
+      geo_world_diffs_table?: unknown
+      agent_step_contexts_table?: unknown
+      geo_world_snapshot_primary_key?: unknown
+      agent_step_world_foreign_key?: unknown
       run_input_delivery_ack?: unknown
     } | undefined
   )?.vector_tile_function
@@ -185,6 +214,33 @@ export async function verifyDatabaseSchemaCompatibility(
     throw new Error(
       '数据库迁移记录与实际能力不一致：Run domain journal/snapshot 表不完整。'
       + '请执行 013_run_domain_journal.sql；禁止只补写迁移记录。',
+    )
+  }
+  const geoWorldSnapshotsTable = (
+    capabilityResult.rows[0] as { geo_world_snapshots_table?: unknown } | undefined
+  )?.geo_world_snapshots_table
+  const geoWorldDiffsTable = (
+    capabilityResult.rows[0] as { geo_world_diffs_table?: unknown } | undefined
+  )?.geo_world_diffs_table
+  const agentStepContextsTable = (
+    capabilityResult.rows[0] as { agent_step_contexts_table?: unknown } | undefined
+  )?.agent_step_contexts_table
+  const geoWorldSnapshotPrimaryKey = (
+    capabilityResult.rows[0] as { geo_world_snapshot_primary_key?: unknown } | undefined
+  )?.geo_world_snapshot_primary_key
+  const agentStepWorldForeignKey = (
+    capabilityResult.rows[0] as { agent_step_world_foreign_key?: unknown } | undefined
+  )?.agent_step_world_foreign_key
+  if (
+    typeof geoWorldSnapshotsTable !== 'string'
+    || typeof geoWorldDiffsTable !== 'string'
+    || typeof agentStepContextsTable !== 'string'
+    || geoWorldSnapshotPrimaryKey !== true
+    || agentStepWorldForeignKey !== true
+  ) {
+    throw new Error(
+      '数据库迁移记录与实际能力不一致：GeoWorld/Agent StepContext 表或追加式主键不完整。'
+      + '请执行 014_agent_step_geo_world.sql；禁止只补写迁移记录。',
     )
   }
 }

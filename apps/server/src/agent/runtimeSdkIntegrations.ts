@@ -74,6 +74,7 @@ export interface RuntimeSdkMcpFactory {
 export interface RuntimeSdkIntegration {
   tools: Tool<AgentsExecutionContext>[]
   mcpToolNames: ReadonlySet<string>
+  mcpToolServers: ReadonlyMap<string, string>
   activeMcpServers: string[]
   close(): Promise<void>
 }
@@ -155,6 +156,7 @@ export async function createRuntimeSdkIntegration(
   const tools: Tool<AgentsExecutionContext>[] = []
   const managers: ConnectedMcpServers[] = []
   const activeMcpServers: string[] = []
+  const mcpToolServers = new Map<string, string>()
   const exposedFunctionToolNames = new Set(reservedToolNames)
 
   try {
@@ -182,7 +184,7 @@ export async function createRuntimeSdkIntegration(
         reservedToolNames: new Set(exposedFunctionToolNames),
         errorFunction: null,
       })
-      appendUniqueFunctionTools(
+      const appendedNames = appendUniqueFunctionTools(
         tools,
         serverTools.map(tool => applyMcpExecutionPolicy(
           applyMcpApprovalPolicy(applyMcpOutputMetadata(tool, serverConfig), serverConfig),
@@ -190,11 +192,13 @@ export async function createRuntimeSdkIntegration(
         )),
         exposedFunctionToolNames,
       )
+      for (const toolName of appendedNames) mcpToolServers.set(toolName, serverConfig.name)
     }
 
     return {
       tools,
       mcpToolNames: new Set(tools.filter(tool => tool.type === 'function').map(tool => tool.name)),
+      mcpToolServers,
       activeMcpServers,
       close: async () => {
         await Promise.all(managers.map(manager => manager.close()))
@@ -307,6 +311,7 @@ function emptyToolIntegration(): RuntimeSdkIntegration {
   return {
     tools: [],
     mcpToolNames: new Set(),
+    mcpToolServers: new Map(),
     activeMcpServers: [],
     close: async () => {},
   }
@@ -355,14 +360,17 @@ function appendUniqueFunctionTools(
   target: Tool<AgentsExecutionContext>[],
   additions: Tool<AgentsExecutionContext>[],
   exposedNames: Set<string>,
-): void {
+): string[] {
+  const appendedNames: string[] = []
   for (const tool of additions) {
     if (tool.type === 'function') {
       if (exposedNames.has(tool.name)) throw new Error(`MCP 工具名 '${tool.name}' 与已公开工具重名`)
       exposedNames.add(tool.name)
     }
     target.push(tool)
+    appendedNames.push(tool.name)
   }
+  return appendedNames
 }
 
 function applyMcpApprovalPolicy(

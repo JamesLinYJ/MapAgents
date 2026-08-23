@@ -49,11 +49,13 @@ import { GoalJudge, type GoalJudgePort } from './goalJudge.js'
 import { SubAgentControlPlane, type SubAgentControlInput } from './subAgentControlPlane.js'
 import { authorizedAttachmentSummaries } from './multimodalInput.js'
 import { withToolAuthorizationLease } from './runToolConcurrencyGate.js'
+import type { AgentStepContextRecorder } from '../agent-runtime/step/AgentStepContextFactory.js'
 
 export type { SandboxClientFactory } from './runtimeSandbox.js'
 export type { RunOptions } from './runtimeTypes.js'
 
 export interface OpenAIAgentsRuntimeOptions {
+  stepContexts: AgentStepContextRecorder
   createSandboxClient?: SandboxClientFactory
   agentTracing?: LocalAgentTracing
   goalJudge?: GoalJudgePort
@@ -78,7 +80,7 @@ export class OpenAIAgentsRuntime {
     private readonly store: AgentRuntimeStore,
     private readonly toolRegistry: ToolRegistry,
     private readonly modelRegistry: ModelAdapterRegistry,
-    private readonly runtimeOptions: OpenAIAgentsRuntimeOptions = {},
+    private readonly runtimeOptions: OpenAIAgentsRuntimeOptions,
     modelCompletions?: ModelCompletionService,
   ) {
     this.subAgentControls = new SubAgentControlPlane(store)
@@ -92,6 +94,7 @@ export class OpenAIAgentsRuntime {
       modelRegistry,
       transcriptProjector: this.transcriptProjector,
       runtimeOptions,
+      stepContexts: runtimeOptions.stepContexts,
       subAgentControls: this.subAgentControls,
       ...(modelCompletions ? { modelCompletions } : {}),
       recordWarning: (runId, message, eventSink) => this.recordWarning(runId, message, eventSink),

@@ -339,6 +339,7 @@ describe('platform architecture', () => {
       '011_custom_model_providers.sql',
       '012_run_input_delivery_ack.sql',
       '013_run_domain_journal.sql',
+      '014_agent_step_geo_world.sql',
     ])
 
     const operationalSourceFiles = await collectProductionFiles([

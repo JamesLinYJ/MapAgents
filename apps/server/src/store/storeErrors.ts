@@ -39,3 +39,13 @@ export class RunDomainSequenceConflictError extends StoreConflictError {
     this.name = 'RunDomainSequenceConflictError'
   }
 }
+
+export class GeoWorldRevisionConflictError extends StoreConflictError {
+  constructor(runId: string, expectedRevision: number, currentRevision: number) {
+    super(
+      `run '${runId}' GeoWorld revision 冲突：`
+      + `期望 ${expectedRevision}，当前 ${currentRevision}`,
+    )
+    this.name = 'GeoWorldRevisionConflictError'
+  }
+}

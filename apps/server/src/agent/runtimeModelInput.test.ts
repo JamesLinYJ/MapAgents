@@ -264,6 +264,52 @@ describe('RuntimeModelInputController', () => {
     expect(JSON.stringify(chatCreate.mock.calls[0]?.[0])).not.toContain('geo_agent_run_input')
     expect(checkpointItem.providerData).toHaveProperty('geoAgentRunInput')
   })
+
+  it('awaits the StepContext observer on the sanitized exact request before provider I/O', async () => {
+    let releaseObserver: (() => void) | null = null
+    const observerGate = new Promise<void>(resolve => { releaseObserver = resolve })
+    let providerCalled = false
+    const provider: Model = {
+      getResponse: async () => {
+        providerCalled = true
+        return { usage: new Usage(), output: [] }
+      },
+      async *getStreamedResponse() {},
+    }
+    const observed: ModelRequest[] = []
+    const protectedModel = protectModelTransportFromRunInputMarkers(provider, async request => {
+      observed.push(request)
+      await observerGate
+    })
+    const request = {
+      ...modelRequest([{
+        type: 'message',
+        role: 'user',
+        content: '继续分析',
+        providerData: {
+          geoAgentRunInput: { runId: 'run_observer', inputSequence: 1 },
+        },
+      }]),
+      tools: [{
+        type: 'function',
+        name: 'query_layer',
+        description: '查询图层',
+        parameters: { type: 'object', properties: {}, additionalProperties: false },
+        strict: true,
+      }],
+    } satisfies ModelRequest
+
+    const pending = protectedModel.getResponse(request)
+    await vi.waitFor(() => expect(observed).toHaveLength(1))
+    expect(providerCalled).toBe(false)
+    expect(observed[0]?.tools.map(tool => tool.name)).toEqual(['query_layer'])
+    expect(JSON.stringify(observed[0]?.input)).not.toContain('geoAgentRunInput')
+    expect(JSON.stringify(request.input)).toContain('geoAgentRunInput')
+
+    releaseObserver?.()
+    await pending
+    expect(providerCalled).toBe(true)
+  })
 })
 
 function modelRequest(input: AgentInputItem[]): ModelRequest {

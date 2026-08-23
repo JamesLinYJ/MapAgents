@@ -28,6 +28,7 @@ const migrationIds = [
   '011_custom_model_providers',
   '012_run_input_delivery_ack',
   '013_run_domain_journal',
+  '014_agent_step_geo_world',
 ] as const
 
 function currentCapabilities(overrides: Record<string, unknown> = {}) {
@@ -38,6 +39,11 @@ function currentCapabilities(overrides: Record<string, unknown> = {}) {
     model_providers_table: 'platform_model_providers',
     run_domain_events_table: 'platform_run_domain_events',
     run_snapshots_table: 'platform_run_snapshots',
+    geo_world_snapshots_table: 'platform_geo_world_snapshots',
+    geo_world_diffs_table: 'platform_geo_world_diffs',
+    agent_step_contexts_table: 'platform_agent_step_contexts',
+    geo_world_snapshot_primary_key: true,
+    agent_step_world_foreign_key: true,
     run_input_delivery_ack: true,
     ...overrides,
   }
@@ -87,7 +93,7 @@ describe('verifyDatabaseSchemaCompatibility', () => {
   it('拒绝让旧服务连接未来版本数据库', async () => {
     const db = databaseWithRows(
       [{ table_name: 'platform_schema_migrations' }],
-      [...currentMigrations(), { migration_id: '014_future_change', checksum: 'b'.repeat(64) }],
+      [...currentMigrations(), { migration_id: '015_future_change', checksum: 'b'.repeat(64) }],
     )
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
@@ -159,5 +165,27 @@ describe('verifyDatabaseSchemaCompatibility', () => {
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
       .rejects.toThrow(/013_run_domain_journal/u)
+  })
+
+  it('拒绝 GeoWorld 或 StepContext 表缺失的半升级数据库', async () => {
+    const db = databaseWithRows(
+      [{ table_name: 'platform_schema_migrations' }],
+      currentMigrations(),
+      [currentCapabilities({ agent_step_contexts_table: null })],
+    )
+
+    await expect(verifyDatabaseSchemaCompatibility(db as never))
+      .rejects.toThrow(/014_agent_step_geo_world/u)
+  })
+
+  it('拒绝仍会覆盖历史 GeoWorld 的单列主键草案', async () => {
+    const db = databaseWithRows(
+      [{ table_name: 'platform_schema_migrations' }],
+      currentMigrations(),
+      [currentCapabilities({ geo_world_snapshot_primary_key: false })],
+    )
+
+    await expect(verifyDatabaseSchemaCompatibility(db as never))
+      .rejects.toThrow(/追加式主键/u)
   })
 })

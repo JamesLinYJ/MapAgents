@@ -76,6 +76,10 @@ import { StartRunService } from '../conversation/startRunService.js'
 import { buildRuntimeCapabilities } from '../runtime/releaseCapabilities.js'
 import type { RuntimeCapabilities } from '@geo-agent-platform/shared-types/release'
 import { ToolResultCommitService } from '../tools/resultPersistence.js'
+import { AgentStepContextFactory } from '../agent-runtime/step/AgentStepContextFactory.js'
+import { AgentStepContextRepository } from '../agent-runtime/step/AgentStepContextRepository.js'
+import { GeoWorldBaselineBuilder } from '../agent-runtime/world/GeoWorldBaselineBuilder.js'
+import { GeoWorldRepository } from '../agent-runtime/world/GeoWorldRepository.js'
 
 export interface AppContainer {
   env: Env
@@ -216,11 +220,17 @@ export async function createAppContainer(input: {
     ttlSeconds: env.DEEPSEEK_RESULT_CACHE_TTL_SECONDS,
     maxBytes: env.DEEPSEEK_RESULT_CACHE_MAX_BYTES,
   })
+  const stepContexts = new AgentStepContextFactory(
+    new AgentStepContextRepository(db),
+    new GeoWorldRepository(db),
+    new GeoWorldBaselineBuilder(db),
+  )
   const runtime = new OpenAIAgentsRuntime(
     store,
     toolRegistry,
     modelRegistry,
     {
+      stepContexts,
       ...(agentTracing ? { agentTracing } : {}),
       authorizationLease: async (auth, run) => {
         if (!run.workspaceId) {
