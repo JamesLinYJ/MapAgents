@@ -26,22 +26,24 @@ export class PostgresConversationSnapshotRepository implements ConversationSnaps
   constructor(private readonly db: Database) {}
 
   async loadSnapshot(): Promise<ConversationSnapshot> {
-    const [sessionRows, threadRows, runRows] = await Promise.all([
-      this.db.select().from(platformSessions),
-      this.db.select().from(platformThreads),
-      this.db.select().from(platformRuns),
-    ])
-    const activeThreadRows = threadRows.filter(row => row.status !== 'deleted')
-    const activeThreadIds = new Set(activeThreadRows.map(row => row.threadId))
-    return {
-      sessions: sessionRows.map(mapSessionRow),
-      threads: activeThreadRows.map(mapThreadRow),
-      deletedThreads: threadRows
-        .filter(row => row.status === 'deleted')
-        .map(mapDeletedThreadRow),
-      runs: runRows
-        .filter(row => row.threadId === null || activeThreadIds.has(row.threadId))
-        .map(mapAnalysisRunRow),
-    }
+    return this.db.transaction(async tx => {
+      // 三类行必须来自同一个 PostgreSQL snapshot。transaction client 上顺序
+      // 查询同时兼容 pg 9，不能用 Promise.all 并发复用同一连接。
+      const sessionRows = await tx.select().from(platformSessions)
+      const threadRows = await tx.select().from(platformThreads)
+      const runRows = await tx.select().from(platformRuns)
+      const activeThreadRows = threadRows.filter(row => row.status !== 'deleted')
+      const activeThreadIds = new Set(activeThreadRows.map(row => row.threadId))
+      return {
+        sessions: sessionRows.map(mapSessionRow),
+        threads: activeThreadRows.map(mapThreadRow),
+        deletedThreads: threadRows
+          .filter(row => row.status === 'deleted')
+          .map(mapDeletedThreadRow),
+        runs: runRows
+          .filter(row => row.threadId === null || activeThreadIds.has(row.threadId))
+          .map(mapAnalysisRunRow),
+      }
+    }, { isolationLevel: 'repeatable read', accessMode: 'read only' })
   }
 }

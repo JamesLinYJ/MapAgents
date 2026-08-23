@@ -807,6 +807,8 @@ describe('platform architecture', () => {
     expect(persistenceSource.includes('return this.snapshots.loadSnapshot()')).toBe(true)
     expect(persistenceSource.includes('await this.sessions.saveSession(session)')).toBe(true)
     expect(snapshotSource.includes('implements ConversationSnapshotRepository')).toBe(true)
+    expect(snapshotSource).toContain("isolationLevel: 'repeatable read'")
+    expect(snapshotSource).not.toContain('await Promise.all')
     expect(sessionSource.includes('implements SessionRepository')).toBe(true)
     expect(threadFacadeSource).toContain('implements ThreadRepository')
     expect(threadFacadeSource).toContain('new PostgresThreadLifecycleRepository')

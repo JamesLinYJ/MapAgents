@@ -1636,6 +1636,7 @@ apps/server/src/agent-runtime/
 - canonical Transcript 的 active leaf 与全部 entry 也改为一次 `platform_threads LEFT JOIN platform_conversation_entries` 读取，避免先读叶子、再读条目时跨过并发 append；父链循环和缺失父条目仍然硬失败。
 - 新增 projection lag histogram 与按 `sequence / identity / record_type / schema` 分类的失败 counter；失败会终止该次快照，不返回部分 UI 状态。真实 PostgreSQL/PostGIS 回归覆盖 item 终态重放、RunEvent 幂等和人工游标落后硬失败。
 - Domain Journal 新增显式 `inspectRunDomainProjection`：在一个只读 `REPEATABLE READ` 数据库快照内，从 sequence 0 重放全部 domain event，并依次核对持久 snapshot 信封、Run status/state、checkpoint 和完整 input 集合。结果严格区分 `verified`、旧数据 `not_journaled` 与带稳定原因的 `failed`，同时记录 sequence distance 和结果计数；检查不切换读源，也不阻塞开发工作台启动。真实 PostgreSQL 回归会人为破坏 snapshot 索引列，确认诊断为 `snapshot` 失败后恢复。
+- 工作台启动的 session/thread/run 聚合也改为同一个只读 `REPEATABLE READ` transaction snapshot 内顺序读取，不再用三条独立连接并发拼接可能跨越线程删除或 Run 更新的启动状态。
 - Run status/state 目前仍从 `platform_runs` 启动投影读取。已有开发数据库可能含有早于 Domain Journal 的 Run；在没有明确清理旧数据的前提下，本轮没有把“缺 journal”改成整个平台启动失败，也没有加入读取 fallback。完成旧数据处置后再做该权威切换。
 
 **验收**：
