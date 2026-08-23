@@ -33,6 +33,10 @@ import {
 import {
   agentToolOutputMetadataSchema,
 } from '@geo-agent-platform/shared-types/runtime'
+import type {
+  AgentMcpSnapshot,
+  AgentSkillInvocation,
+} from '@geo-agent-platform/shared-types/agent-step-context'
 import type { SkillMatchResult } from '@geo-agent-platform/shared-types/resources'
 import {
   Capability,
@@ -53,6 +57,8 @@ import {
   explicitSkillIds,
   selectRuntimeSkills,
 } from './skillRegistry.js'
+import { McpRuntimeManager } from '../agent-runtime/mcp/McpRuntimeManager.js'
+import { buildSkillInvocationLedger } from '../agent-runtime/skills/SkillInvocationLedger.js'
 
 interface ConnectedMcpServers {
   active: MCPServer[]
@@ -71,6 +77,10 @@ type GetMcpToolsFn = (
 export interface RuntimeSdkMcpFactory {
   connectMcpServers?: ConnectMcpServersFn
   getAllMcpTools?: GetMcpToolsFn
+  runtimeManager?: McpRuntimeManager
+  scopeId?: string
+  resourceUris?: ReadonlyMap<string, readonly string[]>
+  capabilityRoots?: readonly string[]
 }
 
 export interface RuntimeSdkIntegration {
@@ -78,6 +88,7 @@ export interface RuntimeSdkIntegration {
   mcpToolNames: ReadonlySet<string>
   mcpToolServers: ReadonlyMap<string, string>
   activeMcpServers: string[]
+  mcpBinding: AgentMcpSnapshot
   close(): Promise<void>
 }
 
@@ -86,6 +97,7 @@ export interface RuntimeSdkSandboxIntegration {
   pathGrants: []
   activeSkills: string[]
   skillMatches: SkillMatchResult[]
+  skillInvocations: AgentSkillInvocation[]
 }
 
 export function buildRuntimeSdkSandboxIntegration(
@@ -102,7 +114,7 @@ export function buildRuntimeSdkSandboxIntegration(
     if (explicitlyRequested.length) {
       throw new Error(`用户显式指定了 Skill '/${explicitlyRequested[0]}'，但 Skill 总开关已关闭。`)
     }
-    return { capabilities: [], pathGrants: [], activeSkills: [], skillMatches: [] }
+    return { capabilities: [], pathGrants: [], activeSkills: [], skillMatches: [], skillInvocations: [] }
   }
   if (!isSandboxBackendAvailable(config.sandbox)) {
     throw new Error('SDK Skill 依赖沙箱工作区；当前平台已禁用沙箱，不能启用 Skill。')
@@ -115,7 +127,13 @@ export function buildRuntimeSdkSandboxIntegration(
       }
     : selectRuntimeSkills(options.query, registry)
   if (selection.selected.length === 0) {
-    return { capabilities: [], pathGrants: [], activeSkills: [], skillMatches: selection.matches }
+    return {
+      capabilities: [],
+      pathGrants: [],
+      activeSkills: [],
+      skillMatches: selection.matches,
+      skillInvocations: [],
+    }
   }
   const children = Object.fromEntries(selection.selected.map(skill => [skill.manifestKey, buildSkillSandboxEntry(skill)]))
   const createSkillsCapability = () => skills({
@@ -139,6 +157,10 @@ export function buildRuntimeSdkSandboxIntegration(
     pathGrants: [],
     activeSkills: selection.selected.map(skill => skill.catalog.skillId),
     skillMatches: selection.matches,
+    skillInvocations: buildSkillInvocationLedger({
+      selected: selection.selected,
+      matches: selection.matches,
+    }),
   }
 }
 
@@ -149,8 +171,16 @@ export async function createRuntimeSdkIntegration(
   factory: RuntimeSdkMcpFactory = {},
 ): Promise<RuntimeSdkIntegration> {
   const mcpConfig = config.sdk.mcp
+  const runtimeManager = factory.runtimeManager ?? new McpRuntimeManager()
+  const scopeId = factory.scopeId ?? 'ephemeral'
   if (!mcpConfig.enabled) {
-    return emptyToolIntegration()
+    return emptyToolIntegration(runtimeManager.capture(scopeId, {
+      config: mcpConfig,
+      activeServerNames: [],
+      toolServers: new Map(),
+      ...(factory.resourceUris ? { resourceUris: factory.resourceUris } : {}),
+      ...(factory.capabilityRoots ? { capabilityRoots: factory.capabilityRoots } : {}),
+    }))
   }
 
   const connect = factory.connectMcpServers ?? connectMcpServers
@@ -197,14 +227,24 @@ export async function createRuntimeSdkIntegration(
       for (const toolName of appendedNames) mcpToolServers.set(toolName, serverConfig.name)
     }
 
+    const mcpBinding = runtimeManager.capture(scopeId, {
+      config: mcpConfig,
+      activeServerNames: activeMcpServers,
+      toolServers: mcpToolServers,
+      ...(factory.resourceUris ? { resourceUris: factory.resourceUris } : {}),
+      ...(factory.capabilityRoots ? { capabilityRoots: factory.capabilityRoots } : {}),
+      forceNewBinding: true,
+    })
+    const close = runtimeManager.bindClose(mcpBinding.bindingId, async () => {
+      await Promise.all(managers.map(manager => manager.close()))
+    })
     return {
       tools,
       mcpToolNames: new Set(tools.filter(tool => tool.type === 'function').map(tool => tool.name)),
       mcpToolServers,
       activeMcpServers,
-      close: async () => {
-        await Promise.all(managers.map(manager => manager.close()))
-      },
+      mcpBinding,
+      close,
     }
   } catch (error) {
     await Promise.allSettled(managers.map(manager => manager.close()))
@@ -309,12 +349,13 @@ function applyMcpExecutionPolicy(
   return { ...tool, isEnabled, invoke }
 }
 
-function emptyToolIntegration(): RuntimeSdkIntegration {
+function emptyToolIntegration(mcpBinding: AgentMcpSnapshot): RuntimeSdkIntegration {
   return {
     tools: [],
     mcpToolNames: new Set(),
     mcpToolServers: new Map(),
     activeMcpServers: [],
+    mcpBinding,
     close: async () => {},
   }
 }

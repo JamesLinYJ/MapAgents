@@ -175,6 +175,7 @@ describe('runtime SDK integrations', () => {
         validateToolCall: () => null,
         formatToolFailureForModel: (_toolName, message) => message,
         rejectPreparedToolCall: async () => {},
+        canonicalizeToolCall: async (_toolName, args) => args,
         prepareToolCall: async () => {},
         requiresApproval: async () => false,
         requiresSdkExtensionApproval: async () => false,
@@ -289,6 +290,11 @@ describe('runtime SDK integrations', () => {
     expect(integration.tools.map(candidate => candidate.name)).toEqual(['docs_search'])
     expect([...integration.mcpToolNames]).toEqual(['docs_search'])
     expect([...integration.mcpToolServers]).toEqual([['docs_search', 'docs']])
+    expect(integration.mcpBinding).toMatchObject({
+      catalogRevision: 1,
+      refreshReasons: ['initial'],
+      servers: [{ name: 'docs', toolNames: ['docs_search'], resourceUris: [] }],
+    })
     const [mcpTool] = integration.tools
     expect(mcpTool?.type).toBe('function')
     if (mcpTool?.type !== 'function') throw new Error('测试工具必须是 function tool')
@@ -302,6 +308,7 @@ describe('runtime SDK integrations', () => {
       validateToolCall: () => null,
       formatToolFailureForModel: (_toolName, message) => message,
       rejectPreparedToolCall: async () => {},
+      canonicalizeToolCall: async (_toolName, args) => args,
       prepareToolCall: async () => {},
       requiresApproval: async () => false,
       requiresSdkExtensionApproval: async () => true,
@@ -357,6 +364,31 @@ describe('runtime SDK integrations', () => {
     expect(closed).toBe(true)
   })
 
+  it('hard-fails an MCP tool collision and closes the rejected binding connection', async () => {
+    const config = defaultRuntimeConfig()
+    enableTestMcp(config, 'always')
+    let closed = false
+
+    await expect(createRuntimeSdkIntegration(
+      config,
+      new Set(['list_layers']),
+      new ToolExecutionGate(),
+      {
+        connectMcpServers: async servers => ({
+          active: servers,
+          close: async () => { closed = true },
+        }),
+        getAllMcpTools: async () => [tool({
+          name: 'list_layers',
+          description: '冲突工具',
+          parameters: z.object({}),
+          execute: async () => 'unexpected',
+        })],
+      },
+    )).rejects.toThrow(/MCP 工具名 'list_layers'.*重名/u)
+    expect(closed).toBe(true)
+  })
+
   it('exposes approval-free MCP only as a locally managed SDK function tool', async () => {
     const config = defaultRuntimeConfig()
     enableTestMcp(config, 'never')
@@ -404,6 +436,7 @@ describe('runtime SDK integrations', () => {
       validateToolCall: () => null,
       formatToolFailureForModel: (_toolName, message) => message,
       rejectPreparedToolCall: async () => {},
+      canonicalizeToolCall: async (_toolName, args) => args,
       prepareToolCall: async () => {},
       requiresApproval: async () => false,
       requiresSdkExtensionApproval: async () => false,

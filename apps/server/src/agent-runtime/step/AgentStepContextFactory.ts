@@ -12,6 +12,9 @@
 import {
   AGENT_STEP_CONTEXT_SCHEMA_VERSION,
   agentStepContextSchema,
+  type AgentMcpSnapshot,
+  type AgentPluginSnapshot,
+  type AgentSkillInvocation,
   type AgentStepContext,
   type AgentToolPlanSnapshot,
 } from '@geo-agent-platform/shared-types/agent-step-context'
@@ -46,7 +49,10 @@ export interface CaptureAgentStepContextInput {
   toolPlan: AgentToolPlanSnapshot
   activeMcpServers: readonly string[]
   mcpToolServers: ReadonlyMap<string, string>
+  mcpBinding: AgentMcpSnapshot
   activeSkills: readonly string[]
+  skillInvocations: readonly AgentSkillInvocation[]
+  pluginSnapshot: AgentPluginSnapshot
   auth: AuthContext | null
 }
 
@@ -125,25 +131,15 @@ export class AgentStepContextFactory implements AgentStepContextRecorder {
         segmentId: input.segmentId,
         modelRequestIndex,
       }
-      const mcpServers = input.runtimeConfig.sdk.mcp.servers
-        .filter(server => server.enabled && input.activeMcpServers.includes(server.name))
-        .map(server => ({
-          name: server.name,
-          transport: server.transport,
-          approval: server.approval,
-          toolNames: input.toolPlan.entries
-            .filter(entry => (
-              entry.kind === 'mcp'
-              && input.mcpToolServers.get(entry.name) === server.name
-            ))
-            .map(entry => entry.name)
-            .sort(),
-        }))
-        .sort((left, right) => left.name.localeCompare(right.name))
+      const mcp = structuredClone(input.mcpBinding)
       const roles = [...new Set(input.auth?.roles
         .filter(binding => binding.workspaceId === world.state.workspaceId)
         .map(binding => binding.role) ?? [])].sort()
       const skillIds = [...new Set(input.activeSkills)].sort()
+      const skillInvocations = [...input.skillInvocations]
+        .map(invocation => structuredClone(invocation))
+        .sort((left, right) => left.skillId.localeCompare(right.skillId))
+      const plugins = structuredClone(input.pluginSnapshot)
       const toolRules = input.runtimeConfig.supervisor.permissionRules
         .map(rule => ({
           toolPattern: rule.toolPattern,
@@ -194,15 +190,13 @@ export class AgentStepContextFactory implements AgentStepContextRecorder {
           writableRoots: capabilities.writableRoots,
           networkPolicy: capabilities.networkPolicy,
         },
-        mcp: { servers: mcpServers },
+        mcp,
         skills: {
           skillIds,
-          catalogDigest: agentContextDigest(skillIds),
+          invocations: skillInvocations,
+          catalogDigest: agentContextDigest(skillInvocations.length ? skillInvocations : skillIds),
         },
-        plugins: {
-          pluginIds: [],
-          catalogDigest: agentContextDigest([]),
-        },
+        plugins,
         tools: input.toolPlan,
         world: {
           revision: world.state.revision,
@@ -246,6 +240,19 @@ function assertMcpSourcesBound(input: CaptureAgentStepContextInput): void {
     if (!server) throw new Error(`MCP 工具 '${entry.name}' 缺少 server 来源绑定`)
     if (!activeServers.has(server)) {
       throw new Error(`MCP 工具 '${entry.name}' 引用了非活动 server '${server}'`)
+    }
+  }
+  const bindingServers = new Set(input.mcpBinding.servers.map(server => server.name))
+  if (bindingServers.size !== activeServers.size
+    || [...activeServers].some(server => !bindingServers.has(server))) {
+    throw new Error(`MCP binding '${input.mcpBinding.bindingId}' 与活动 server 列表不一致`)
+  }
+  const bindingTools = new Map(input.mcpBinding.servers.flatMap(server => (
+    server.toolNames.map(toolName => [toolName, server.name] as const)
+  )))
+  for (const [toolName, serverName] of input.mcpToolServers) {
+    if (bindingTools.get(toolName) !== serverName) {
+      throw new Error(`MCP binding '${input.mcpBinding.bindingId}' 未精确绑定工具 '${toolName}'`)
     }
   }
 }

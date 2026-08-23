@@ -2,7 +2,7 @@
 
 > 本文是面向 Codex 执行的架构 RFC、迁移手册和逐 PR 验收清单。
 >
-> **状态**：In progress（WP-00 至 WP-08 已完成；下一包为 WP-09）
+> **状态**：In progress（WP-00 至 WP-09 已完成；下一包为 WP-10）
 >
 > **Newmap 基线**：`JamesLinYJ/Newmap@ffa50bbe1bd0e8de82f7f40448bafbe3f1eb751a`
 >
@@ -1588,6 +1588,15 @@ apps/server/src/agent-runtime/
 - Plugin 不能扩大权限。
 - Hook timeout/block/additional context/input rewrite 再校验。
 - MCP/tool collision 硬失败。
+
+**实施证据**：
+
+- `agent-runtime/mcp/McpRuntimeManager.ts` 以 workspace/session scope 比较 MCP 配置、授权环境、capability roots 与真实 tool/resource catalog；变化只在下一次 capture 生成新 revision/binding。每次实际新连接都取得独立 binding，close lease 只能释放该 binding 拥有的连接。
+- `AgentStepContext.mcp` 持久化 binding ID、catalog revision、配置/auth/capability/tool/resource digests 和逐 server 的精确工具/资源目录；`ToolRouter` 与工具 ledger 继续以产生调用的 StepContext 为唯一执行绑定。MCP 与平台/其它 MCP 工具重名会在暴露目录形成前硬失败并关闭已建立连接。
+- `SkillInvocationLedger` 把 `explicit`、`implicit`、`profile`、`plugin` 调用模式连同版本、来源、内容摘要、信任状态和 required capabilities 写入每个 Step snapshot；Skill 仍只物化 instructions/workspace，不产生额外工具或宿主路径授权。
+- `CapabilityPluginRegistry` 只解析 schema 化的显式注册项，不扫描目录或执行任意入口；tool、MCP、Skill、Hook 和 writable root 必须是当前 permission envelope 的子集，扩大权限稳定失败。
+- `RuntimeHookRegistry` 只绑定宿主显式注册 handler，配置不再接受 command/path。执行合同覆盖稳定事件名、timeout、block、additional context、敏感信息清理和高风险 fail-closed；`PreToolUse` 改写按 call ID 固定，并重新通过工具 schema、Step 权限与后续 ToolPolicy/Approval 边界。子智能体内层工具使用显式 catalog route，继承父 Step 权限但不伪装成父模型公开工具。
+- 全仓 `npm test` 通过：DB 2、Shared Types 24、Conversation Presentation 23、Operations Supervisor 69、Server 865、Operations Console 75、Desktop 462 和依赖合同 1 项均为绿色。
 
 ### WP-10：Durable child Run
 

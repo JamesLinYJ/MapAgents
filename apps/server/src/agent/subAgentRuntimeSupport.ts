@@ -108,6 +108,7 @@ export function createSubAgentExecutionContext(
     validateToolCall: (toolName, args) => dependencies.coordinator.validateToolCall(toolName, args),
     formatToolFailureForModel: (toolName, message) => dependencies.coordinator.formatToolFailureForModel(toolName, message),
     rejectPreparedToolCall: (toolName, callId, message) => dependencies.coordinator.rejectPreparedToolCall(toolName, callId, message),
+    canonicalizeToolCall: (toolName, args, callId) => dependencies.coordinator.canonicalizeCatalogToolCall(toolName, args, callId),
     prepareToolCall: (toolName, args, callId) => dependencies.coordinator.prepareCatalogTool(
       toolName,
       args,

@@ -22,14 +22,46 @@ export const permissionRuleSchema = z.object({
   description: z.string().default(''),
 })
 
+export const runtimeHookEventSchema = z.enum([
+  'SessionStart',
+  'TurnStart',
+  'UserInputSubmitted',
+  'StepContextCaptured',
+  'PreToolUse',
+  'PermissionRequest',
+  'PostToolUse',
+  'PreCompact',
+  'PostCompact',
+  'Stop',
+  'ChildRunStart',
+  'ChildRunStop',
+])
+
+export const runtimeHookFailureModeSchema = z.enum(['fail_closed', 'fail_open'])
+
+// Hook 配置只引用进程内显式注册的 handler。这里不接受 command/path，避免
+// 一段普通运行时配置退化为未隔离的任意代码加载器。
 export const hookConfigSchema = z.object({
-  eventType: z.string(),
-  commandType: z.string().default('command'),
-  command: z.string(),
+  hookId: z.string().trim().min(1),
+  eventType: runtimeHookEventSchema,
+  enabled: z.boolean().default(true),
   matcher: z.record(z.string(), z.string()).prefault({}),
-  priority: z.number().default(0),
+  priority: z.number().int().default(0),
   description: z.string().default(''),
-  timeoutSeconds: z.number().default(30),
+  timeoutMs: z.number().int().positive().max(300_000).default(30_000),
+  failureMode: runtimeHookFailureModeSchema.default('fail_closed'),
+}).strict()
+
+export const runtimeHookOutputSchema = z.object({
+  decision: z.enum(['continue', 'block']).default('continue'),
+  reason: z.string().trim().min(1).nullable().default(null),
+  additionalContext: z.string().max(32_000).nullable().default(null),
+  updatedToolInput: z.record(z.string(), z.unknown()).nullable().default(null),
+  approvalDecision: z.enum(['approve', 'deny', 'defer']).nullable().default(null),
+}).strict().superRefine((output, context) => {
+  if (output.decision === 'block' && !output.reason) {
+    context.addIssue({ code: 'custom', path: ['reason'], message: 'Hook 阻断时必须提供 reason。' })
+  }
 })
 
 export const runtimeSubAgentConfigSchema = z.object({
@@ -307,6 +339,46 @@ export const runtimeSkillConfigSchema = z.object({
   }
 })
 
+export const runtimePluginCapabilityBindingsSchema = z.object({
+  toolNames: z.array(z.string().trim().min(1)).default([]),
+  mcpServerNames: z.array(z.string().trim().min(1)).default([]),
+  skillIds: z.array(z.string().trim().min(1)).default([]),
+  hookIds: z.array(z.string().trim().min(1)).default([]),
+  writableRoots: z.array(z.string().trim().min(1)).default([]),
+}).strict()
+
+export const runtimePluginRegistrationSchema = z.object({
+  pluginId: z.string().trim().min(1),
+  enabled: z.boolean().default(true),
+  version: z.string().trim().min(1).default('0.0.0'),
+  source: z.string().trim().min(1),
+  contentDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
+  bindings: runtimePluginCapabilityBindingsSchema.default({
+    toolNames: [],
+    mcpServerNames: [],
+    skillIds: [],
+    hookIds: [],
+    writableRoots: [],
+  }),
+}).strict()
+
+export const runtimePluginConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  registrations: z.array(runtimePluginRegistrationSchema).default([]),
+}).strict().superRefine((config, context) => {
+  const pluginIds = new Set<string>()
+  for (const [index, registration] of config.registrations.entries()) {
+    if (pluginIds.has(registration.pluginId)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['registrations', index, 'pluginId'],
+        message: `Plugin 注册项 '${registration.pluginId}' 重复。`,
+      })
+    }
+    pluginIds.add(registration.pluginId)
+  }
+})
+
 export const runtimeHostedWebSearchConfigSchema = z.object({
   enabled: z.boolean().default(true),
   searchContextSize: z.enum(['low', 'medium', 'high']).default('medium'),
@@ -341,6 +413,10 @@ export const runtimeSdkConfigSchema = z.object({
     autoMatchThreshold: 0.72,
     candidateThreshold: 0.12,
   }),
+  plugins: runtimePluginConfigSchema.default({
+    enabled: false,
+    registrations: [],
+  }),
 })
 
 export const agentRuntimeConfigSchema = z.object({
@@ -368,6 +444,10 @@ export const agentRuntimeConfigSchema = z.object({
       registrations: [],
       autoMatchThreshold: 0.72,
       candidateThreshold: 0.12,
+    },
+    plugins: {
+      enabled: false,
+      registrations: [],
     },
   }),
   supervisor: supervisorRuntimeConfigSchema.default({
@@ -460,6 +540,9 @@ export const agentRuntimeConfigSchema = z.object({
 })
 
 export type PermissionRuleEntry = z.infer<typeof permissionRuleSchema>
+export type RuntimeHookEvent = z.infer<typeof runtimeHookEventSchema>
+export type RuntimeHookFailureMode = z.infer<typeof runtimeHookFailureModeSchema>
+export type RuntimeHookOutput = z.infer<typeof runtimeHookOutputSchema>
 export type HookConfigEntry = z.infer<typeof hookConfigSchema>
 export type RuntimeSubAgentConfig = z.infer<typeof runtimeSubAgentConfigSchema>
 export type SubAgentInvocation = z.infer<typeof subAgentInvocationSchema>
@@ -481,5 +564,8 @@ export type RuntimeMcpServerConfig = z.infer<typeof runtimeMcpServerConfigSchema
 export type RuntimeMcpConfig = z.infer<typeof runtimeMcpConfigSchema>
 export type RuntimeSkillRegistration = z.infer<typeof runtimeSkillRegistrationSchema>
 export type RuntimeSkillConfig = z.infer<typeof runtimeSkillConfigSchema>
+export type RuntimePluginCapabilityBindings = z.infer<typeof runtimePluginCapabilityBindingsSchema>
+export type RuntimePluginRegistration = z.infer<typeof runtimePluginRegistrationSchema>
+export type RuntimePluginConfig = z.infer<typeof runtimePluginConfigSchema>
 export type RuntimeSdkConfig = z.infer<typeof runtimeSdkConfigSchema>
 export type AgentRuntimeConfig = z.infer<typeof agentRuntimeConfigSchema>

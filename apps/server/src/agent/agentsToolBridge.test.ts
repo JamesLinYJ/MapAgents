@@ -121,6 +121,7 @@ describe('createAgentsTools', () => {
       validateToolCall: () => null,
       formatToolFailureForModel: (_toolName, message) => message,
       rejectPreparedToolCall: async () => {},
+      canonicalizeToolCall: async (_toolName, args) => args,
       prepareToolCall: async () => {},
       requiresApproval: async () => false,
       requiresSdkExtensionApproval: async () => false,

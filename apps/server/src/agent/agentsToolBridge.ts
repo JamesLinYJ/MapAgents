@@ -33,6 +33,7 @@ export interface AgentsExecutionContext {
   validateToolCall(toolName: string, args: Record<string, unknown>): string | null
   formatToolFailureForModel(toolName: string, message: string): string
   rejectPreparedToolCall(toolName: string, callId: string, message: string): Promise<void>
+  canonicalizeToolCall(toolName: string, args: Record<string, unknown>, callId: string): Promise<Record<string, unknown>>
   prepareToolCall(toolName: string, args: Record<string, unknown>, callId: string): Promise<void>
   requiresApproval(toolName: string, args: Record<string, unknown>, callId: string): Promise<boolean>
   requiresSdkExtensionApproval(toolName: string, args: Record<string, unknown>, callId: string): Promise<boolean>
@@ -52,6 +53,7 @@ export interface AgentsToolExecutionScope {
   validateToolCall(toolName: string, args: Record<string, unknown>): string | null
   formatToolFailureForModel(toolName: string, message: string): string
   rejectPreparedToolCall(toolName: string, callId: string, message: string): Promise<void>
+  canonicalizeToolCall(toolName: string, args: Record<string, unknown>, callId: string): Promise<Record<string, unknown>>
   prepareToolCall(toolName: string, args: Record<string, unknown>, callId: string): Promise<void>
   requiresApproval(toolName: string, args: Record<string, unknown>, callId: string): Promise<boolean>
   requiresSdkExtensionApproval(toolName: string, args: Record<string, unknown>, callId: string): Promise<boolean>
@@ -97,8 +99,9 @@ export function createAgentsTools(
     )
     const needsApproval = async (runContext: RunContext, input: unknown, callId?: string): Promise<boolean> => {
       const execution = scope(runContext)
-      const args = normalizeArguments(input)
+      const rawArgs = normalizeArguments(input)
       if (!callId) throw new Error(`工具 '${definition.name}' 缺少 callId`)
+      const args = await execution.canonicalizeToolCall(definition.name, rawArgs, callId)
       await execution.prepareToolCall(definition.name, args, callId)
       return execution.requiresApproval(definition.name, args, callId)
     }
@@ -108,9 +111,10 @@ export function createAgentsTools(
       details?: { toolCall?: { callId?: string } },
     ): Promise<string> => {
       const execution = scope(runContext)
-      const args = normalizeArguments(input)
+      const rawArgs = normalizeArguments(input)
       const callId = details?.toolCall?.callId
       if (!callId) throw new Error(`工具 '${definition.name}' 缺少 callId`)
+      const args = await execution.canonicalizeToolCall(definition.name, rawArgs, callId)
       await execution.prepareToolCall(definition.name, args, callId)
       return execution.runToolExecution(
         executionLane,
@@ -224,6 +228,7 @@ function requireContext(runContext?: RunContext<unknown>): AgentsExecutionContex
     || typeof context.validateToolCall !== 'function'
     || typeof context.formatToolFailureForModel !== 'function'
     || typeof context.rejectPreparedToolCall !== 'function'
+    || typeof context.canonicalizeToolCall !== 'function'
     || typeof context.prepareToolCall !== 'function'
     || typeof context.requiresApproval !== 'function'
     || typeof context.requiresSdkExtensionApproval !== 'function'

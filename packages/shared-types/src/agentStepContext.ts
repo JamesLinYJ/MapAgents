@@ -19,7 +19,7 @@ import {
   type AgentToolPlanSnapshot,
 } from './toolRuntime.js'
 
-export const AGENT_STEP_CONTEXT_SCHEMA_VERSION = 2 as const
+export const AGENT_STEP_CONTEXT_SCHEMA_VERSION = 3 as const
 
 export const agentStepIdentitySchema = z.object({
   stepId: z.string().trim().min(1),
@@ -50,23 +50,66 @@ export const agentSandboxSnapshotSchema = z.object({
   networkPolicy: z.string().trim().min(1),
 }).strict()
 
+export const agentMcpServerSnapshotSchema = z.object({
+  name: z.string().trim().min(1),
+  transport: z.enum(['streamable_http', 'sse', 'stdio']),
+  approval: z.enum(['always', 'never']),
+  configDigest: z.string().trim().min(1),
+  authDigest: z.string().trim().min(1),
+  toolNames: z.array(z.string().trim().min(1)),
+  resourceUris: z.array(z.string().trim().min(1)),
+}).strict()
+
 export const agentMcpSnapshotSchema = z.object({
-  servers: z.array(z.object({
-    name: z.string().trim().min(1),
-    transport: z.enum(['streamable_http', 'sse', 'stdio']),
-    approval: z.enum(['always', 'never']),
-    toolNames: z.array(z.string().trim().min(1)),
-  }).strict()),
+  bindingId: z.string().trim().min(1),
+  catalogRevision: z.number().int().nonnegative(),
+  configDigest: z.string().trim().min(1),
+  authDigest: z.string().trim().min(1),
+  capabilityRootDigest: z.string().trim().min(1),
+  toolCatalogDigest: z.string().trim().min(1),
+  resourceCatalogDigest: z.string().trim().min(1),
+  refreshReasons: z.array(z.enum(['initial', 'config', 'auth', 'capability_roots', 'catalog', 'manual'])),
+  servers: z.array(agentMcpServerSnapshotSchema),
+}).strict()
+
+export const agentSkillInvocationSchema = z.object({
+  invocationId: z.string().trim().min(1),
+  skillId: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+  version: z.string().trim().min(1),
+  source: z.object({
+    kind: z.string().trim().min(1),
+    label: z.string().trim().min(1),
+  }).strict(),
+  contentDigest: z.string().trim().min(1),
+  trustStatus: z.enum(['builtin', 'trusted', 'untrusted', 'content_changed']),
+  requiredCapabilities: z.array(z.string().trim().min(1)),
+  mode: z.enum(['explicit', 'implicit', 'profile', 'plugin']),
+  reason: z.string().trim().min(1),
 }).strict()
 
 export const agentSkillSnapshotSchema = z.object({
   skillIds: z.array(z.string().trim().min(1)),
   catalogDigest: z.string().trim().min(1),
+  invocations: z.array(agentSkillInvocationSchema),
+}).strict()
+
+export const agentPluginBindingSchema = z.object({
+  pluginId: z.string().trim().min(1),
+  version: z.string().trim().min(1),
+  source: z.string().trim().min(1),
+  contentDigest: z.string().trim().min(1),
+  toolNames: z.array(z.string().trim().min(1)),
+  mcpServerNames: z.array(z.string().trim().min(1)),
+  skillIds: z.array(z.string().trim().min(1)),
+  hookIds: z.array(z.string().trim().min(1)),
+  writableRoots: z.array(z.string().trim().min(1)),
 }).strict()
 
 export const agentPluginSnapshotSchema = z.object({
   pluginIds: z.array(z.string().trim().min(1)),
   catalogDigest: z.string().trim().min(1),
+  bindings: z.array(agentPluginBindingSchema),
 }).strict()
 
 export const agentWorldSnapshotSchema = z.object({
@@ -123,6 +166,18 @@ export const agentStepContextSchema = z.object({
   if (context.model.modelId !== context.model.capabilities.modelId) {
     refinement.addIssue({ code: 'custom', path: ['model', 'modelId'], message: 'modelId 必须与能力快照一致' })
   }
+  if (context.skills.invocations.length > 0) {
+    const invocationIds = [...new Set(context.skills.invocations.map(item => item.skillId))].sort()
+    if (JSON.stringify(invocationIds) !== JSON.stringify([...context.skills.skillIds].sort())) {
+      refinement.addIssue({ code: 'custom', path: ['skills', 'skillIds'], message: 'skillIds 必须与 invocation ledger 一致' })
+    }
+  }
+  if (context.plugins.bindings.length > 0) {
+    const bindingIds = [...new Set(context.plugins.bindings.map(item => item.pluginId))].sort()
+    if (JSON.stringify(bindingIds) !== JSON.stringify([...context.plugins.pluginIds].sort())) {
+      refinement.addIssue({ code: 'custom', path: ['plugins', 'pluginIds'], message: 'pluginIds 必须与 Plugin binding 一致' })
+    }
+  }
 })
 
 export type AgentStepIdentity = z.infer<typeof agentStepIdentitySchema>
@@ -131,7 +186,10 @@ export type AgentPermissionSnapshot = z.infer<typeof agentPermissionSnapshotSche
 export type AgentApprovalPolicySnapshot = z.infer<typeof agentApprovalPolicySnapshotSchema>
 export type AgentSandboxSnapshot = z.infer<typeof agentSandboxSnapshotSchema>
 export type AgentMcpSnapshot = z.infer<typeof agentMcpSnapshotSchema>
+export type AgentMcpServerSnapshot = z.infer<typeof agentMcpServerSnapshotSchema>
 export type AgentSkillSnapshot = z.infer<typeof agentSkillSnapshotSchema>
+export type AgentSkillInvocation = z.infer<typeof agentSkillInvocationSchema>
 export type AgentPluginSnapshot = z.infer<typeof agentPluginSnapshotSchema>
+export type AgentPluginBinding = z.infer<typeof agentPluginBindingSchema>
 export type AgentWorldSnapshot = z.infer<typeof agentWorldSnapshotSchema>
 export type AgentStepContext = z.infer<typeof agentStepContextSchema>

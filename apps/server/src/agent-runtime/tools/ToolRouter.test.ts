@@ -128,7 +128,7 @@ function stepContext(
   stepId: string,
 ): AgentStepContext {
   return agentStepContextSchema.parse({
-    schemaVersion: 2,
+    schemaVersion: 3,
     identity: {
       stepId,
       turnId: 'turn_1',
@@ -172,9 +172,9 @@ function stepContext(
       writableRoots: [],
       networkPolicy: 'provider_and_registered_tools',
     },
-    mcp: { servers: [] },
-    skills: { skillIds: [], catalogDigest: 'sha256:skills' },
-    plugins: { pluginIds: [], catalogDigest: 'sha256:plugins' },
+    mcp: emptyMcpSnapshot(),
+    skills: { skillIds: [], invocations: [], catalogDigest: 'sha256:skills' },
+    plugins: { pluginIds: [], bindings: [], catalogDigest: 'sha256:plugins' },
     tools,
     world: {
       revision: 1,
@@ -195,6 +195,20 @@ function stepContext(
     capturedAt: '2026-08-23T00:00:00.000Z',
     contextDigest: agentContextDigest({ stepId, objectiveRevision, tools }),
   })
+}
+
+function emptyMcpSnapshot() {
+  return {
+    bindingId: 'mcp_binding_none',
+    catalogRevision: 0,
+    configDigest: 'sha256:mcp-config',
+    authDigest: 'sha256:mcp-auth',
+    capabilityRootDigest: 'sha256:mcp-capabilities',
+    toolCatalogDigest: 'sha256:mcp-tools',
+    resourceCatalogDigest: 'sha256:mcp-resources',
+    refreshReasons: ['initial'],
+    servers: [],
+  }
 }
 
 function toolDefinition(): ToolDef {

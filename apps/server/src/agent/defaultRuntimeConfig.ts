@@ -63,6 +63,10 @@ export function defaultRuntimeConfig(options: DefaultRuntimeConfigOptions = {}):
         autoMatchThreshold: 0.72,
         candidateThreshold: 0.12,
       },
+      plugins: {
+        enabled: false,
+        registrations: [],
+      },
     },
     supervisor: {
       name: 'geo_agent_supervisor',

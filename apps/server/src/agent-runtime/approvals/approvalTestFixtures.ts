@@ -40,7 +40,7 @@ export function stepContext(overrides: {
 } = {}): AgentStepContext {
   const stepId = overrides.stepId ?? 'step_1'
   return agentStepContextSchema.parse({
-    schemaVersion: 2,
+    schemaVersion: 3,
     identity: { stepId, turnId: 'turn_1', segmentId: 'segment_1', modelRequestIndex: 1 },
     runId: 'run_1',
     turnId: 'turn_1',
@@ -71,9 +71,9 @@ export function stepContext(overrides: {
       destructiveToolsRequireApproval: true,
     },
     sandbox: { backend: 'disabled', writableRoots: [], networkPolicy: 'provider_and_registered_tools' },
-    mcp: { servers: [] },
-    skills: { skillIds: [], catalogDigest: 'sha256:skills' },
-    plugins: { pluginIds: [], catalogDigest: 'sha256:plugins' },
+    mcp: emptyMcpSnapshot(),
+    skills: { skillIds: [], invocations: [], catalogDigest: 'sha256:skills' },
+    plugins: { pluginIds: [], bindings: [], catalogDigest: 'sha256:plugins' },
     tools: { entries: [], namespaces: [], deferredCatalogObjectHash: null, unavailableReasons: {}, catalogDigest: 'sha256:tools' },
     world: {
       revision: 1, stateDigest: 'sha256:world', layerIds: [], datasetIds: [], fileIds: [], artifactIds: [], valueRefIds: [],
@@ -82,4 +82,18 @@ export function stepContext(overrides: {
     capturedAt: '2026-08-24T00:00:00.000Z',
     contextDigest: overrides.contextDigest ?? 'sha256:context',
   })
+}
+
+function emptyMcpSnapshot() {
+  return {
+    bindingId: 'mcp_binding_none',
+    catalogRevision: 0,
+    configDigest: 'sha256:mcp-config',
+    authDigest: 'sha256:mcp-auth',
+    capabilityRootDigest: 'sha256:mcp-capabilities',
+    toolCatalogDigest: 'sha256:mcp-tools',
+    resourceCatalogDigest: 'sha256:mcp-resources',
+    refreshReasons: ['initial'],
+    servers: [],
+  }
 }

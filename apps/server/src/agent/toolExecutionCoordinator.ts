@@ -25,6 +25,8 @@ import { makeId } from '../utils/ids.js'
 import { ItemSink } from '../conversation/itemSink.js'
 import { RunEventSink } from './turnRunner.js'
 import { developerToolsEnabledForRuntime, ToolPolicy } from '../agent-runtime/tools/ToolPolicy.js'
+import { resolveToolPermission } from '../agent-runtime/tools/ToolPolicy.js'
+import { ensureToolSchemas } from '../framework/schema.js'
 import { AGENT_WORKFLOW_CONTROL_TOOLS } from './agentWorkflowState.js'
 import { validateGeospatialComposeWorkflowDraft } from './geospatialCompose.js'
 import type { AgentStepContext } from '@geo-agent-platform/shared-types/agent-step-context'
@@ -42,6 +44,10 @@ import {
   type ApprovalExecutionDecision,
   type ApprovalRequirement,
 } from '../agent-runtime/approvals/ApprovalService.js'
+import {
+  RuntimeHookRegistry,
+  type RuntimeHookSession,
+} from '../agent-runtime/hooks/RuntimeHookRegistry.js'
 
 interface CoordinatorOptions {
   store: ToolExecutionStore
@@ -64,6 +70,7 @@ interface CoordinatorOptions {
   valueState: Map<string, unknown>
   signal: AbortSignal
   onPlanModeChanged?: (enabled: boolean) => void
+  runtimeHooks?: RuntimeHookSession
 }
 
 // ToolExecutionCoordinator
@@ -77,6 +84,12 @@ export class ToolExecutionCoordinator {
   private readonly preparingCalls = new Map<string, Promise<void>>()
   private readonly externalAgentCalls = new Map<string, string>()
   private readonly callObjectiveRevisions = new Map<string, number>()
+  private readonly canonicalToolInputs = new Map<string, {
+    toolName: string
+    route: 'step' | 'catalog'
+    source: string
+    input: Record<string, unknown>
+  }>()
   private modelInputObjectiveRevision: number
   private readonly policy: ToolPolicy
   private readonly invocationLedger: ToolInvocationLedger
@@ -337,6 +350,89 @@ export class ToolExecutionCoordinator {
           this.options.subAgentConfigs ?? this.options.runtimeConfig?.subAgents ?? [],
         )
       : null
+  }
+
+  async canonicalizeToolCall(
+    toolName: string,
+    args: Record<string, unknown>,
+    callId: string,
+  ): Promise<Record<string, unknown>> {
+    return this.canonicalizeToolCallWithRoute(toolName, args, callId, 'step')
+  }
+
+  async canonicalizeCatalogToolCall(
+    toolName: string,
+    args: Record<string, unknown>,
+    callId: string,
+  ): Promise<Record<string, unknown>> {
+    return this.canonicalizeToolCallWithRoute(toolName, args, callId, 'catalog')
+  }
+
+  private async canonicalizeToolCallWithRoute(
+    toolName: string,
+    args: Record<string, unknown>,
+    callId: string,
+    route: 'step' | 'catalog',
+  ): Promise<Record<string, unknown>> {
+    const source = JSON.stringify(args)
+    const existing = this.canonicalToolInputs.get(callId)
+    if (existing) {
+      if (existing.toolName !== toolName || existing.route !== route || existing.source !== source) {
+        throw new Error(`工具调用 '${callId}' 的 Hook 输入已固定，不能换名或改写原始参数`)
+      }
+      return structuredClone(existing.input)
+    }
+    const context = this.router.currentStepContext()
+    const descriptor = route === 'step'
+      ? context.tools.entries.find(entry => entry.name === toolName)
+      : this.catalog.platformSource(toolName)
+    if (!descriptor) throw new Error(`工具 '${toolName}' 不在当前 StepContext 工具计划中`)
+    const result = await (this.options.runtimeHooks ?? EMPTY_RUNTIME_HOOKS).run({
+      runId: this.options.runId,
+      turnId: this.options.turnId,
+      stepId: context.identity.stepId,
+      eventType: 'PreToolUse',
+      attributes: {
+        toolName,
+        effect: descriptor.effect,
+        providerId: descriptor.providerId ?? '',
+      },
+      toolName,
+      toolInput: args,
+    }, {
+      risk: descriptor.effect === 'read' ? 'normal' : 'high',
+      signal: this.options.signal,
+      validateUpdatedToolInput: input => this.validateCanonicalToolInput(toolName, input),
+      authorizeUpdatedToolInput: input => {
+        const rule = resolveToolPermission(toolName, context.permissions.toolRules)
+        if (rule?.decision === 'always_deny') {
+          throw new Error(`StepContext 权限策略禁止工具 '${toolName}'`)
+        }
+        const rejection = this.validateToolCall(toolName, input)
+        if (rejection) throw new Error(rejection)
+      },
+    })
+    const canonical = result.toolInput ?? structuredClone(args)
+    this.canonicalToolInputs.set(callId, {
+      toolName,
+      route,
+      source,
+      input: structuredClone(canonical),
+    })
+    return canonical
+  }
+
+  private validateCanonicalToolInput(
+    toolName: string,
+    input: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const definition = this.options.registry.get(toolName)
+    if (!definition) throw new Error(`工具 '${toolName}' 未注册，不能重写输入`)
+    const invocation = splitWorkflowStepIdentity(input)
+    const parsed = ensureToolSchemas(definition).parameters.parse(invocation.toolArgs)
+    return 'workflowStepId' in input
+      ? { ...parsed, workflowStepId: invocation.workflowStepId }
+      : parsed
   }
 
   async rejectPreparedToolCall(toolName: string, callId: string, message: string): Promise<void> {
@@ -903,6 +999,8 @@ export class ToolExecutionCoordinator {
   }
 
 }
+
+const EMPTY_RUNTIME_HOOKS = new RuntimeHookRegistry([]).bind([])
 
 const AGENT_WORKFLOW_DEFINITION_TOOLS = new Set([
   'submit_agent_workflow',

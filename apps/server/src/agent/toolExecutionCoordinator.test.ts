@@ -40,6 +40,7 @@ import {
 import { agentContextDigest } from '../agent-runtime/step/agentContextDigest.js'
 import { ToolCatalog, sdkToolDescriptorSource } from '../agent-runtime/tools/ToolCatalog.js'
 import { compileDirectToolPlan } from '../agent-runtime/tools/ToolPlanCompiler.js'
+import { RuntimeHookRegistry } from '../agent-runtime/hooks/RuntimeHookRegistry.js'
 
 describe('formatToolResultForModel', () => {
   it('keeps valueRefs visible while summarizing oversized payloads', () => {
@@ -175,6 +176,75 @@ describe('ToolExecutionCoordinator', () => {
     planMode = false
     agentWorkflow = { status: 'running' }
     expect(coordinator.isSdkExtensionEnabled()).toBe(false)
+  })
+
+  it('binds one PreToolUse rewrite to the call and revalidates its schema', async () => {
+    const store = {
+      getRun: () => ({
+        state: {
+          objectiveRevision: 1,
+          planMode: false,
+          agentWorkflow: null,
+          todos: [],
+          artifacts: [],
+          warnings: [],
+          errors: [],
+        },
+      }),
+    } as unknown as ToolExecutionStore
+    const registry = new ToolRegistry()
+    registry.register(testProvider())
+    let calls = 0
+    const runtimeHooks = new RuntimeHookRegistry([{
+      hookId: 'rewrite-dataset',
+      eventTypes: ['PreToolUse'],
+      source: 'platform',
+      execute: async () => {
+        calls += 1
+        return {
+          decision: 'continue',
+          updatedToolInput: { datasetId: 'dataset_2' },
+        }
+      },
+    }]).bind([{
+      hookId: 'rewrite-dataset',
+      eventType: 'PreToolUse',
+      enabled: true,
+      matcher: { toolName: 'inspect_dataset' },
+      priority: 0,
+      description: '',
+      timeoutMs: 1_000,
+      failureMode: 'fail_closed',
+    }])
+    const coordinator = new ToolExecutionCoordinator({
+      store,
+      resultCommitService: new ToolResultCommitService(store),
+      registry,
+      adapter: null,
+      runId: 'run_hook',
+      sessionId: 'session_1',
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      inlineToolResultMaxChars: 4_000,
+      eventSink: new RunEventSink(async () => undefined, 'run_hook', 'thread_1'),
+      itemSink: new ItemSink(() => undefined, 'run_hook', 'thread_1'),
+      valueState: new Map(),
+      signal: new AbortController().signal,
+      runtimeHooks,
+    })
+    bindTestStepContext(coordinator, registry, 'run_hook', 'turn_1')
+
+    await expect(coordinator.canonicalizeToolCall(
+      'inspect_dataset',
+      { datasetId: 'dataset_1' },
+      'call_hook',
+    )).resolves.toEqual({ datasetId: 'dataset_2' })
+    await expect(coordinator.canonicalizeToolCall(
+      'inspect_dataset',
+      { datasetId: 'dataset_1' },
+      'call_hook',
+    )).resolves.toEqual({ datasetId: 'dataset_2' })
+    expect(calls).toBe(1)
   })
 
   it('rejects unknown tools and cyclic dependencies in workflow drafts', () => {
@@ -1442,7 +1512,7 @@ function bindTestStepContext(
     catalogDigest: agentContextDigest(planWithoutDigest),
   }
   coordinator.bindStepContext(agentStepContextSchema.parse({
-    schemaVersion: 2,
+    schemaVersion: 3,
     identity: { stepId: 'step_test', turnId, segmentId: 'segment_test', modelRequestIndex: 1 },
     runId,
     turnId,
@@ -1478,9 +1548,9 @@ function bindTestStepContext(
       writableRoots: [],
       networkPolicy: 'provider_and_registered_tools',
     },
-    mcp: { servers: [] },
-    skills: { skillIds: [], catalogDigest: 'sha256:skills' },
-    plugins: { pluginIds: [], catalogDigest: 'sha256:plugins' },
+    mcp: emptyMcpSnapshot(),
+    skills: { skillIds: [], invocations: [], catalogDigest: 'sha256:skills' },
+    plugins: { pluginIds: [], bindings: [], catalogDigest: 'sha256:plugins' },
     tools,
     world: {
       revision: 1,
@@ -1501,6 +1571,20 @@ function bindTestStepContext(
     capturedAt: '2026-08-23T00:00:00.000Z',
     contextDigest: agentContextDigest({ runId, turnId, tools }),
   }))
+}
+
+function emptyMcpSnapshot() {
+  return {
+    bindingId: 'mcp_binding_none',
+    catalogRevision: 0,
+    configDigest: 'sha256:mcp-config',
+    authDigest: 'sha256:mcp-auth',
+    capabilityRootDigest: 'sha256:mcp-capabilities',
+    toolCatalogDigest: 'sha256:mcp-tools',
+    resourceCatalogDigest: 'sha256:mcp-resources',
+    refreshReasons: ['initial'],
+    servers: [],
+  }
 }
 
 function testSdkToolEntry(

@@ -42,7 +42,7 @@ function context(): Record<string, unknown> {
     networkPolicy: 'provider_only',
   }
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     identity: { stepId: 'step_1', turnId: 'turn_1', segmentId: 'segment_1', modelRequestIndex: 1 },
     runId: 'run_1',
     turnId: 'turn_1',
@@ -74,9 +74,9 @@ function context(): Record<string, unknown> {
     },
     approvalPolicy: { interruptToolNames: [], destructiveToolsRequireApproval: true },
     sandbox: { backend: 'disabled', writableRoots: [], networkPolicy: 'provider_only' },
-    mcp: { servers: [] },
-    skills: { skillIds: [], catalogDigest: 'sha256:empty' },
-    plugins: { pluginIds: [], catalogDigest: 'sha256:empty' },
+    mcp: emptyMcpSnapshot(),
+    skills: { skillIds: [], invocations: [], catalogDigest: 'sha256:empty' },
+    plugins: { pluginIds: [], bindings: [], catalogDigest: 'sha256:empty' },
     tools: {
       entries: [{
         name: 'list_layers',
@@ -112,5 +112,19 @@ function context(): Record<string, unknown> {
     },
     capturedAt: '2026-08-20T01:00:00.000Z',
     contextDigest: 'sha256:context',
+  }
+}
+
+function emptyMcpSnapshot() {
+  return {
+    bindingId: 'mcp_binding_none',
+    catalogRevision: 0,
+    configDigest: 'sha256:mcp-config',
+    authDigest: 'sha256:mcp-auth',
+    capabilityRootDigest: 'sha256:mcp-capabilities',
+    toolCatalogDigest: 'sha256:mcp-tools',
+    resourceCatalogDigest: 'sha256:mcp-resources',
+    refreshReasons: ['initial'],
+    servers: [],
   }
 }

@@ -72,7 +72,59 @@ describe('AgentStepContextFactory', () => {
       toolEntry('north_search', 'mcp'),
       toolEntry('south_search', 'mcp'),
     ])
-    const base = captureInput(config, initialPlan)
+    const base: CaptureAgentStepContextInput = {
+      ...captureInput(config, initialPlan),
+      activeSkills: ['crs-audit'],
+      mcpBinding: {
+        bindingId: 'mcp_binding_exact_1',
+        catalogRevision: 7,
+        configDigest: 'sha256:mcp-config',
+        authDigest: 'sha256:mcp-auth',
+        capabilityRootDigest: 'sha256:mcp-roots',
+        toolCatalogDigest: 'sha256:mcp-tools',
+        resourceCatalogDigest: 'sha256:mcp-resources',
+        refreshReasons: ['auth'],
+        servers: [
+          {
+            name: 'north', transport: 'streamable_http', approval: 'always',
+            configDigest: 'sha256:north-config', authDigest: 'sha256:north-auth',
+            toolNames: ['north_search'], resourceUris: ['mcp://north/index'],
+          },
+          {
+            name: 'south', transport: 'streamable_http', approval: 'always',
+            configDigest: 'sha256:south-config', authDigest: 'sha256:south-auth',
+            toolNames: ['south_search'], resourceUris: [],
+          },
+        ],
+      },
+      skillInvocations: [{
+        invocationId: 'skill_invocation_crs',
+        skillId: 'crs-audit',
+        name: 'CRS 审计',
+        version: '1.0.0',
+        source: { kind: 'builtin', label: '平台内置 / crs-audit' },
+        contentDigest: 'sha256:crs',
+        trustStatus: 'builtin',
+        requiredCapabilities: ['layer-metadata'],
+        mode: 'explicit',
+        reason: '用户显式指定。',
+      }],
+      pluginSnapshot: {
+        pluginIds: ['quality-pack'],
+        catalogDigest: 'sha256:plugins',
+        bindings: [{
+          pluginId: 'quality-pack',
+          version: '1.0.0',
+          source: 'platform:quality-pack',
+          contentDigest: 'sha256:plugin',
+          toolNames: ['list_layers'],
+          mcpServerNames: ['north'],
+          skillIds: ['crs-audit'],
+          hookIds: [],
+          writableRoots: [],
+        }],
+      },
+    }
 
     const first = await factory.capture(base)
     const second = await factory.capture(base)
@@ -102,6 +154,9 @@ describe('AgentStepContextFactory', () => {
       expect.objectContaining({ name: 'north', toolNames: ['north_search'] }),
       expect.objectContaining({ name: 'south', toolNames: ['south_search'] }),
     ])
+    expect(first.mcp.bindingId).toBe('mcp_binding_exact_1')
+    expect(first.skills.invocations[0]).toMatchObject({ skillId: 'crs-audit', mode: 'explicit' })
+    expect(first.plugins.pluginIds).toEqual(['quality-pack'])
     expect(Object.isFrozen(first)).toBe(true)
     expect(Object.isFrozen(first.tools.entries)).toBe(true)
     expect(contexts).toHaveLength(3)
@@ -148,7 +203,6 @@ describe('AgentStepContextFactory', () => {
 
     await expect(factory.capture({
       ...captureInput(config, plan),
-      activeMcpServers: ['north'],
       mcpToolServers: new Map([['north_search', 'north']]),
       runtimeConfigDigest: 'sha256:not-the-runtime-config',
     })).rejects.toThrow(/runtimeConfigDigest/u)
@@ -159,6 +213,21 @@ function captureInput(
   runtimeConfig: AgentRuntimeConfig,
   plan: AgentToolPlanSnapshot,
 ): CaptureAgentStepContextInput {
+  const mcpToolServers = new Map([
+    ['north_search', 'north'],
+    ['south_search', 'south'],
+  ])
+  const mcpServers = runtimeConfig.sdk.mcp.servers.map(server => ({
+    name: server.name,
+    transport: server.transport,
+    approval: server.approval,
+    configDigest: `sha256:${server.name}-config`,
+    authDigest: `sha256:${server.name}-auth`,
+    toolNames: plan.entries
+      .filter(entry => entry.kind === 'mcp' && mcpToolServers.get(entry.name) === server.name)
+      .map(entry => entry.name),
+    resourceUris: [],
+  }))
   return {
     runId: 'run_1',
     turnId: 'turn_1',
@@ -181,11 +250,25 @@ function captureInput(
     runtimeConfigDigest: agentContextDigest(runtimeConfig),
     toolPlan: plan,
     activeMcpServers: ['north', 'south'],
-    mcpToolServers: new Map([
-      ['north_search', 'north'],
-      ['south_search', 'south'],
-    ]),
+    mcpToolServers,
+    mcpBinding: {
+      bindingId: 'mcp_binding_test',
+      catalogRevision: 1,
+      configDigest: 'sha256:mcp-config',
+      authDigest: 'sha256:mcp-auth',
+      capabilityRootDigest: 'sha256:mcp-roots',
+      toolCatalogDigest: 'sha256:mcp-tools',
+      resourceCatalogDigest: 'sha256:mcp-resources',
+      refreshReasons: ['initial'],
+      servers: mcpServers,
+    },
     activeSkills: [],
+    skillInvocations: [],
+    pluginSnapshot: {
+      pluginIds: [],
+      bindings: [],
+      catalogDigest: agentContextDigest([]),
+    },
     auth: null,
   }
 }

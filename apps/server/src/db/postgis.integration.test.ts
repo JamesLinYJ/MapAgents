@@ -391,7 +391,24 @@ describe.skipIf(!integrationEnabled)('真实 PostgreSQL/PostGIS 集成', () => {
         toolPlan,
         activeMcpServers: [],
         mcpToolServers: new Map(),
+        mcpBinding: {
+          bindingId: 'mcp_binding_disabled',
+          catalogRevision: 0,
+          configDigest: agentContextDigest(config.sdk.mcp),
+          authDigest: agentContextDigest([]),
+          capabilityRootDigest: agentContextDigest([]),
+          toolCatalogDigest: agentContextDigest([]),
+          resourceCatalogDigest: agentContextDigest([]),
+          refreshReasons: ['initial'],
+          servers: [],
+        },
         activeSkills: [],
+        skillInvocations: [],
+        pluginSnapshot: {
+          pluginIds: [],
+          bindings: [],
+          catalogDigest: agentContextDigest([]),
+        },
         auth: null,
       })
       const contexts = await Promise.all([capture(), capture()])

@@ -224,6 +224,27 @@ describe('shared boundary contracts', () => {
     }).success).toBe(false)
   })
 
+  it('keeps Plugin registration explicit and Hook configuration code-free', () => {
+    const plugin = {
+      pluginId: 'quality-pack',
+      source: 'platform:quality-pack',
+      contentDigest: `sha256:${'a'.repeat(64)}`,
+    }
+    expect(agentRuntimeConfigSchema.safeParse({
+      sdk: { plugins: { enabled: true, registrations: [plugin, plugin] } },
+    }).success).toBe(false)
+    expect(agentRuntimeConfigSchema.safeParse({
+      hookConfigs: [{
+        hookId: 'audit-hook',
+        eventType: 'PreToolUse',
+        command: 'arbitrary-command',
+      }],
+    }).success).toBe(false)
+    expect(agentRuntimeConfigSchema.safeParse({
+      hookConfigs: [{ hookId: 'audit-hook', eventType: 'PreToolUse' }],
+    }).success).toBe(true)
+  })
+
   it('validates the Worker catalog envelope and schema hash at the Node boundary', () => {
     const catalog = {
       count: 1,

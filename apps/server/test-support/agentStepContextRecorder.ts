@@ -100,15 +100,17 @@ function createTestAgentStepContext(
       writableRoots: capabilities.writableRoots,
       networkPolicy: capabilities.networkPolicy,
     },
-    mcp: { servers: [] },
+    mcp: input.mcpBinding,
     skills: {
       skillIds: [...new Set(input.activeSkills)].sort(),
-      catalogDigest: agentContextDigest([...new Set(input.activeSkills)].sort()),
+      invocations: [...input.skillInvocations],
+      catalogDigest: agentContextDigest(
+        input.skillInvocations.length
+          ? input.skillInvocations
+          : [...new Set(input.activeSkills)].sort(),
+      ),
     },
-    plugins: {
-      pluginIds: [],
-      catalogDigest: agentContextDigest([]),
-    },
+    plugins: input.pluginSnapshot,
     tools: input.toolPlan,
     world: {
       revision: 1,

@@ -107,6 +107,11 @@ import {
   assertGeoWorldBaselineBound,
   reinjectGeoWorldBaseline,
 } from '../agent-runtime/context/WorldBaselineReinjection.js'
+import { McpRuntimeManager } from '../agent-runtime/mcp/McpRuntimeManager.js'
+import { CapabilityPluginRegistry } from '../agent-runtime/plugins/CapabilityPluginRegistry.js'
+import {
+  RuntimeHookRegistry,
+} from '../agent-runtime/hooks/RuntimeHookRegistry.js'
 
 export interface RuntimeAssemblyFactoryOptions {
   createSandboxClient?: SandboxClientFactory
@@ -121,6 +126,7 @@ interface RuntimeAssemblyFactoryDependencies {
   modelCompletions?: ModelCompletionService
   subAgentControls: SubAgentControlPlane
   stepContexts: AgentStepContextRecorder
+  runtimeHooks: RuntimeHookRegistry
   recordWarning: (
     runId: string,
     message: string,
@@ -131,6 +137,8 @@ interface RuntimeAssemblyFactoryDependencies {
 // 将模型、工具、子智能体、Sandbox、MCP 与 Session 装配为单次 Runner 输入。
 // 本工厂不执行 Runner，也不拥有平台运行生命周期。
 export class RuntimeAssemblyFactory {
+  private readonly mcpRuntimeManager = new McpRuntimeManager()
+
   constructor(private readonly dependencies: RuntimeAssemblyFactoryDependencies) {}
 
   async create(
@@ -152,6 +160,7 @@ export class RuntimeAssemblyFactory {
       subAgentControls,
       toolRegistry,
     } = this.dependencies
+    const runtimeHooks = this.dependencies.runtimeHooks.bind(options.runtimeConfig.hookConfigs)
     const adapter = modelRegistry.resolveProvider(options.provider)
     const workspaceId = store.getRun(options.runId).workspaceId
     if (!adapter.createAgentModel) {
@@ -323,6 +332,7 @@ export class RuntimeAssemblyFactory {
       validateToolCall: (toolName, args) => coordinator.validateToolCall(toolName, args),
       formatToolFailureForModel: (toolName, message) => coordinator.formatToolFailureForModel(toolName, message),
       rejectPreparedToolCall: (toolName, callId, message) => coordinator.rejectPreparedToolCall(toolName, callId, message),
+      canonicalizeToolCall: (toolName, args, callId) => coordinator.canonicalizeToolCall(toolName, args, callId),
       prepareToolCall: (toolName, args, callId) => coordinator.prepare(toolName, args, callId),
       requiresApproval: (toolName, args, callId) => coordinator.requiresApproval(toolName, args, callId),
       requiresSdkExtensionApproval: (toolName, args, callId) => coordinator.requiresSdkExtensionApproval(toolName, args, callId),
@@ -350,6 +360,7 @@ export class RuntimeAssemblyFactory {
       itemSink,
       valueState,
       signal,
+      runtimeHooks,
     })
 
     const approvalTools = new Set(options.runtimeConfig.supervisor.approvalInterruptTools)
@@ -427,6 +438,14 @@ export class RuntimeAssemblyFactory {
       options.runtimeConfig,
       reservedToolNames,
       executionGate,
+      {
+        runtimeManager: this.mcpRuntimeManager,
+        scopeId: workspaceId ?? `session:${options.sessionId}`,
+        capabilityRoots: [
+          ...options.runtimeConfig.sdk.skills.skillRoots,
+          ...options.runtimeConfig.developer.allowedRoots,
+        ],
+      },
     )
     const mcpConfigs = new Map(options.runtimeConfig.sdk.mcp.servers.map(server => [server.name, server]))
     const requestToolSources: AgentToolDescriptorSource[] = [
@@ -472,6 +491,17 @@ export class RuntimeAssemblyFactory {
         })
       )),
     ]
+    const pluginSnapshot = new CapabilityPluginRegistry(options.runtimeConfig.sdk.plugins).resolve({
+      toolNames: requestToolSources.map(source => source.name),
+      mcpServerNames: sdkIntegration.activeMcpServers,
+      skillIds: sandboxIntegration.activeSkills,
+      hookIds: options.runtimeConfig.hookConfigs
+        .filter(config => config.enabled)
+        .map(config => config.hookId),
+      writableRoots: options.runtimeConfig.developer.enabled
+        ? options.runtimeConfig.developer.allowedRoots
+        : [],
+    })
     captureModelRequest = async request => {
       const durableRequest = await store.getActiveModelRequest(options.runId)
       if (durableRequest) {
@@ -531,7 +561,10 @@ export class RuntimeAssemblyFactory {
         toolPlan,
         activeMcpServers: sdkIntegration.activeMcpServers,
         mcpToolServers: sdkIntegration.mcpToolServers,
+        mcpBinding: sdkIntegration.mcpBinding,
         activeSkills: sandboxIntegration.activeSkills,
+        skillInvocations: sandboxIntegration.skillInvocations,
+        pluginSnapshot,
         auth: options.auth ?? null,
       })
       if (captured.identity.segmentId !== segmentId) {
@@ -540,7 +573,25 @@ export class RuntimeAssemblyFactory {
       latestCheckpointContext = captured
       coordinator.bindStepContext(captured)
       await checkpointContextListener?.(captured)
-      const requestWithWorldBaseline = reinjectGeoWorldBaseline(request, captured)
+      const hookResult = await runtimeHooks.run({
+        runId: options.runId,
+        turnId,
+        stepId: captured.identity.stepId,
+        eventType: 'StepContextCaptured',
+        attributes: {
+          provider: adapter.provider,
+          modelId: selectedModel,
+          mcpBindingId: captured.mcp.bindingId,
+        },
+      }, { risk: 'normal', signal })
+      if (hookResult.audit.length) {
+        eventSink.emit('trace.recorded', 'Runtime Hook 已处理 StepContext', {
+          stepId: captured.identity.stepId,
+          hooks: hookResult.audit,
+        })
+      }
+      const requestWithHookContext = appendHookContext(request, hookResult.additionalContext)
+      const requestWithWorldBaseline = reinjectGeoWorldBaseline(requestWithHookContext, captured)
       assertModelRequestWithinContextBudget(requestWithWorldBaseline, contextConfig)
       return (await modelRequestJournal.commit({
         runId: options.runId,
@@ -610,6 +661,7 @@ export class RuntimeAssemblyFactory {
         active_skills: sandboxIntegration.activeSkills,
         skill_matches: sandboxIntegration.skillMatches,
         active_mcp_servers: sdkIntegration.activeMcpServers,
+        active_plugins: pluginSnapshot.pluginIds,
         active_hosted_tools: hostedTools.map(tool => tool.name),
       })
     }
@@ -737,6 +789,21 @@ function createThreadValueState(
 ): Map<string, unknown> {
   const refs = visibleThreadValueRefs(store, threadId, currentRunId)
   return new Map<string, unknown>(refs.map(ref => [ref.refId, ref]))
+}
+
+function appendHookContext(request: ModelRequest, contexts: readonly string[]): ModelRequest {
+  if (contexts.length === 0) return request
+  const block = [
+    '<runtime-hook-context>',
+    ...contexts,
+    '</runtime-hook-context>',
+  ].join('\n')
+  return {
+    ...request,
+    systemInstructions: [request.systemInstructions?.trim(), block]
+      .filter((value): value is string => Boolean(value))
+      .join('\n\n'),
+  }
 }
 
 function visibleThreadValueRefs(

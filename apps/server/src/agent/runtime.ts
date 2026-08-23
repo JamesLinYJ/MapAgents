@@ -55,6 +55,10 @@ import {
   approvalDecisionInputSchema,
   type ApprovalDecisionInput,
 } from '@geo-agent-platform/shared-types/approval-runtime'
+import {
+  RuntimeHookRegistry,
+  type RuntimeHookHandler,
+} from '../agent-runtime/hooks/RuntimeHookRegistry.js'
 
 export type { SandboxClientFactory } from './runtimeSandbox.js'
 export type { RunOptions } from './runtimeTypes.js'
@@ -65,6 +69,7 @@ export interface OpenAIAgentsRuntimeOptions {
   agentTracing?: LocalAgentTracing
   goalJudge?: GoalJudgePort
   authorizationLease?: (auth: AuthContext, run: AnalysisRun) => Promise<AuthContext>
+  hookHandlers?: readonly RuntimeHookHandler[]
 }
 
 // OpenAIAgentsRuntime
@@ -101,6 +106,7 @@ export class OpenAIAgentsRuntime {
       runtimeOptions,
       stepContexts: runtimeOptions.stepContexts,
       subAgentControls: this.subAgentControls,
+      runtimeHooks: new RuntimeHookRegistry(runtimeOptions.hookHandlers ?? []),
       ...(modelCompletions ? { modelCompletions } : {}),
       recordWarning: (runId, message, eventSink) => this.recordWarning(runId, message, eventSink),
     })
