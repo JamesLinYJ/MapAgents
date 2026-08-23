@@ -44,6 +44,7 @@ import {
   type RunEvent,
   type RunDomainCheckpoint,
   type RunDomainEvent,
+  type RunDomainProjectionInspection,
   type RunDomainSnapshot,
   type RunCheckpoint,
   type RunSteeringRecord,
@@ -92,6 +93,7 @@ import {
   buildTerminalClaimedEvent,
   buildRunCreatedEvents,
   buildRunTransitionEvents,
+  inspectRunDomainProjection as inspectDomainProjection,
 } from '../src/store/runDomainProjection.js'
 
 interface ThreadState {
@@ -890,6 +892,9 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
           inputSequence: record.inputSequence,
           status: record.status,
           leaseId: record.status === 'queued' ? null : record.leaseId,
+          modelRequestId: record.status === 'included' || record.status === 'checkpointed'
+            ? record.modelRequestId
+            : null,
         })),
       )
       return clone(snapshot)
@@ -911,6 +916,25 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
     this.requireRun(runId)
     return clone((this.domainEvents.get(runId) ?? [])
       .filter(event => event.sequence > afterSequence))
+  }
+
+  async inspectRunDomainProjection(runId: string): Promise<RunDomainProjectionInspection> {
+    const run = this.requireRun(runId)
+    return clone(inspectDomainProjection({
+      run,
+      checkpoint: memoryDomainCheckpoint(this.requireCheckpoint(runId)),
+      inputs: (this.inputs.get(runId) ?? []).map(record => ({
+        inputId: record.steeringId,
+        inputSequence: record.inputSequence,
+        status: record.status,
+        leaseId: record.status === 'queued' ? null : record.leaseId,
+        modelRequestId: record.status === 'included' || record.status === 'checkpointed'
+          ? record.modelRequestId
+          : null,
+      })),
+      snapshot: this.domainSnapshots.get(runId) ?? null,
+      events: this.domainEvents.get(runId) ?? [],
+    }))
   }
 
   async listToolValues(runId: string): Promise<ToolValueRef[]> {

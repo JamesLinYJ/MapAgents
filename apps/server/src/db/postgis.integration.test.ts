@@ -601,6 +601,28 @@ describe.skipIf(!integrationEnabled)('真实 PostgreSQL/PostGIS 集成', () => {
           WHERE run_id = $1`,
         [rootRunId],
       )
+      expect(await persistence.inspectRunDomainProjection(rootRunId)).toMatchObject({
+        status: 'verified',
+        reason: 'verified',
+        sequenceDistance: 0,
+      })
+      await client.query(
+        `UPDATE platform_run_snapshots
+            SET sequence = sequence + 1
+          WHERE run_id = $1`,
+        [rootRunId],
+      )
+      expect(await persistence.inspectRunDomainProjection(rootRunId)).toMatchObject({
+        status: 'failed',
+        reason: 'snapshot',
+        sequenceDistance: 1,
+      })
+      await client.query(
+        `UPDATE platform_run_snapshots
+            SET sequence = sequence - 1
+          WHERE run_id = $1`,
+        [rootRunId],
+      )
       await children.configureRootBudget(rootRunId, {
         maxConcurrentChildren: 1,
         maxSpawnDepth: 2,

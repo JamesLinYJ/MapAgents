@@ -22,6 +22,7 @@ import {
 } from '../schemas/types.js'
 import { InMemoryConversationPersistence } from '../../test-support/inMemoryConversationPersistence.js'
 import { RunDomainSequenceConflictError } from './storeErrors.js'
+import { inspectRunDomainProjection } from './runDomainProjection.js'
 import { ToolInvocationLedger } from '../agent-runtime/tools/ToolInvocationLedger.js'
 import { agentContextDigest } from '../agent-runtime/step/agentContextDigest.js'
 
@@ -157,6 +158,15 @@ describe('Run domain journal', () => {
       'tool.succeeded',
     ])
     expect(replayRunDomainEvents(events)).toEqual(snapshot)
+    expect(await persistence.inspectRunDomainProjection(run.id)).toMatchObject({
+      runId: run.id,
+      status: 'verified',
+      reason: 'verified',
+      sourceSequence: events.length,
+      snapshotSequence: events.length,
+      sequenceDistance: 0,
+      details: [],
+    })
     expect(snapshot).toMatchObject({
       status: 'running',
       state: {
@@ -195,6 +205,31 @@ describe('Run domain journal', () => {
     expect(rejected).toMatchObject({ reason: expect.any(RunDomainSequenceConflictError) })
     const events = await persistence.listRunDomainEvents(runId)
     expect(events.at(-1)?.sequence).toBe(expectedSequence + 1)
+  })
+
+  it('distinguishes an intentional legacy absence from a broken event sequence', async () => {
+    const persistence = await fixture()
+    const run = (await persistence.loadSnapshot()).runs[0]!
+    const snapshot = (await persistence.getRunDomainSnapshot(run.id))!
+    const events = await persistence.listRunDomainEvents(run.id)
+    const facts = {
+      run,
+      checkpoint: snapshot.checkpoint!,
+      inputs: Object.values(snapshot.inputDeliveries),
+    }
+
+    expect(inspectRunDomainProjection({ ...facts, snapshot: null, events: [] })).toMatchObject({
+      status: 'not_journaled',
+      reason: 'not_journaled',
+    })
+    expect(inspectRunDomainProjection({
+      ...facts,
+      snapshot,
+      events: events.slice(1),
+    })).toMatchObject({
+      status: 'failed',
+      reason: 'sequence',
+    })
   })
 
   it('rolls back a journal append that would diverge from the production Run fact', async () => {

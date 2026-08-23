@@ -16,6 +16,7 @@ import {
   reduceRunDomainEvent,
   replayRunDomainEvents,
   runDomainEventSchema,
+  runDomainProjectionInspectionSchema,
   type RunDomainEvent,
 } from './runDomain.js'
 
@@ -159,6 +160,25 @@ describe('run domain journal contract', () => {
     }
 
     expect(runDomainEventSchema.safeParse(invalid).success).toBe(false)
+  })
+
+  it('keeps projection inspection status, reason and sequence distance coherent', () => {
+    const verified = {
+      runId: 'run_1',
+      status: 'verified',
+      reason: 'verified',
+      sourceSequence: 3,
+      snapshotSequence: 3,
+      sequenceDistance: 0,
+      details: [],
+    }
+    expect(runDomainProjectionInspectionSchema.parse(verified)).toEqual(verified)
+    expect(runDomainProjectionInspectionSchema.safeParse({
+      ...verified,
+      status: 'failed',
+      reason: 'verified',
+      sequenceDistance: 1,
+    }).success).toBe(false)
   })
 })
 

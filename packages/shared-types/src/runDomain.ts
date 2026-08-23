@@ -215,6 +215,81 @@ export const runDomainSnapshotSchema = z.object({
   updatedAt: z.string().min(1),
 }).strict()
 
+export const runDomainProjectionInspectionReasonSchema = z.enum([
+  'verified',
+  'not_journaled',
+  'missing_snapshot',
+  'missing_events',
+  'sequence',
+  'snapshot',
+  'run',
+  'checkpoint',
+  'input',
+  'schema',
+])
+
+export const runDomainProjectionInspectionSchema = z.object({
+  runId: z.string().min(1),
+  status: z.enum(['verified', 'not_journaled', 'failed']),
+  reason: runDomainProjectionInspectionReasonSchema,
+  sourceSequence: z.number().int().nonnegative(),
+  snapshotSequence: z.number().int().nonnegative().nullable(),
+  sequenceDistance: z.number().int().nonnegative(),
+  details: z.array(z.string()),
+}).strict().superRefine((inspection, context) => {
+  const expectedReason = inspection.status === 'verified'
+    ? 'verified'
+    : inspection.status === 'not_journaled'
+      ? 'not_journaled'
+      : null
+  if (expectedReason && inspection.reason !== expectedReason) {
+    context.addIssue({
+      code: 'custom',
+      path: ['reason'],
+      message: `status '${inspection.status}' 必须使用 reason '${expectedReason}'`,
+    })
+  }
+  if (!expectedReason && ['verified', 'not_journaled'].includes(inspection.reason)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['reason'],
+      message: `failed inspection 不能使用 reason '${inspection.reason}'`,
+    })
+  }
+  if (inspection.status === 'verified' && inspection.snapshotSequence === null) {
+    context.addIssue({
+      code: 'custom',
+      path: ['snapshotSequence'],
+      message: 'verified inspection 必须包含 snapshotSequence',
+    })
+  }
+  if (inspection.status === 'not_journaled' && (
+    inspection.sourceSequence !== 0 || inspection.snapshotSequence !== null
+  )) {
+    context.addIssue({
+      code: 'custom',
+      path: ['status'],
+      message: 'not_journaled 只表示事件与 snapshot 都不存在',
+    })
+  }
+  const expectedDistance = Math.abs(
+    inspection.sourceSequence - (inspection.snapshotSequence ?? 0),
+  )
+  if (inspection.sequenceDistance !== expectedDistance) {
+    context.addIssue({
+      code: 'custom',
+      path: ['sequenceDistance'],
+      message: `sequenceDistance 应为 ${expectedDistance}`,
+    })
+  }
+  if (inspection.status === 'failed' && inspection.details.length === 0) {
+    context.addIssue({ code: 'custom', path: ['details'], message: 'failed inspection 必须提供详情' })
+  }
+  if (inspection.status !== 'failed' && inspection.details.length > 0) {
+    context.addIssue({ code: 'custom', path: ['details'], message: '非失败结果不得携带错误详情' })
+  }
+})
+
 export type AgentStateField = z.infer<typeof agentStateFieldSchema>
 export type AgentStateFieldChange = {
   [K in keyof AgentState]: { field: K; value: AgentState[K] }
@@ -223,6 +298,10 @@ export type RunDomainInputDelivery = z.infer<typeof runDomainInputDeliverySchema
 export type RunDomainCheckpoint = z.infer<typeof runDomainCheckpointSchema>
 export type RunDomainEvent = z.infer<typeof runDomainEventSchema>
 export type RunDomainSnapshot = z.infer<typeof runDomainSnapshotSchema>
+export type RunDomainProjectionInspectionReason = z.infer<
+  typeof runDomainProjectionInspectionReasonSchema
+>
+export type RunDomainProjectionInspection = z.infer<typeof runDomainProjectionInspectionSchema>
 
 export function reduceRunDomainEvent(
   current: RunDomainSnapshot | null,

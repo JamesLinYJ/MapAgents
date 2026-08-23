@@ -169,6 +169,18 @@ export const runDomainReplayComparisonsTotal = new Counter({
   labelNames: ['scope', 'outcome'],
 })
 
+export const runDomainProjectionInspectionsTotal = new Counter({
+  name: 'geo_agent_platform_run_domain_projection_inspections_total',
+  help: 'Run 领域日志从 sequence 0 完整重放及事实核对结果',
+  labelNames: ['outcome', 'reason'],
+})
+
+export const runDomainProjectionSequenceDistanceRecords = new Histogram({
+  name: 'geo_agent_platform_run_domain_projection_sequence_distance_records',
+  help: 'Run 领域事件事实游标与持久 snapshot 游标的绝对距离',
+  buckets: [0, 1, 2, 4, 8, 16, 32, 64, 128],
+})
+
 export const runPresentationProjectionLagRecords = new Histogram({
   name: 'geo_agent_platform_run_presentation_projection_lag_records',
   help: 'Run 展示记录事实游标与成功 reducer 游标之间的记录数',

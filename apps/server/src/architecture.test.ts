@@ -1668,6 +1668,14 @@ describe('platform architecture', () => {
       path.join(repositoryRoot, 'apps/server/src/store/postgres/conversationTranscriptRepository.ts'),
       'utf8',
     )
+    const runDomainJournalSource = await readFile(
+      path.join(repositoryRoot, 'apps/server/src/store/postgres/runDomainJournalRepository.ts'),
+      'utf8',
+    )
+    const platformFacadeSource = await readFile(
+      path.join(repositoryRoot, 'apps/server/src/store/platformPersistenceFacade.ts'),
+      'utf8',
+    )
 
     expect(subscriptionsSource).toContain('store.listPresentationSnapshot(runId)')
     expect(subscriptionsSource).not.toContain('store.listItemSnapshot(runId)')
@@ -1677,6 +1685,10 @@ describe('platform architecture', () => {
     expect(projectionSource).toContain('insertImmutable(events, event.eventId')
     expect(transcriptSource).toContain('.leftJoin(')
     expect(transcriptSource).toContain('activeLeafEntryId: platformThreads.activeLeafEntryId')
+    expect(runDomainJournalSource).toContain('inspectRunDomainProjection(runId: string)')
+    expect(runDomainJournalSource).toContain("isolationLevel: 'repeatable read'")
+    expect(runDomainJournalSource).toContain('eventRows.map(mapEventRow)')
+    expect(platformFacadeSource).toContain('return this.runDomainJournal.inspectRunDomainProjection(runId)')
   })
 
   it('replays the latest thread projection and keeps deleted threads removed', async () => {

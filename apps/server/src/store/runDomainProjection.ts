@@ -13,6 +13,7 @@ import { isDeepStrictEqual } from 'node:util'
 
 import {
   RUN_DOMAIN_EVENT_SCHEMA_VERSION,
+  replayRunDomainEvents,
   runDomainEventSchema,
   type AgentState,
   type AgentStateFieldChange,
@@ -20,6 +21,8 @@ import {
   type RunDomainCheckpoint,
   type RunDomainEvent,
   type RunDomainInputDelivery,
+  type RunDomainProjectionInspection,
+  type RunDomainProjectionInspectionReason,
   type RunDomainSnapshot,
   type RunSteeringRecord,
 } from '../schemas/types.js'
@@ -49,6 +52,73 @@ export interface RunDomainCheckpointSource {
   terminalObjectiveRevision: number | null
   terminalInputCursor: number | null
   terminalClaimedAt: Date | null
+}
+
+export function inspectRunDomainProjection(input: {
+  run: AnalysisRun
+  checkpoint: RunDomainCheckpoint
+  inputs: readonly RunDomainInputDelivery[]
+  snapshot: RunDomainSnapshot | null
+  events: readonly RunDomainEvent[]
+}): RunDomainProjectionInspection {
+  const sourceSequence = input.events.at(-1)?.sequence ?? 0
+  const snapshotSequence = input.snapshot?.sequence ?? null
+  const sequenceDistance = Math.abs(sourceSequence - (snapshotSequence ?? 0))
+  const base = {
+    runId: input.run.id,
+    sourceSequence,
+    snapshotSequence,
+    sequenceDistance,
+  }
+  if (!input.snapshot && !input.events.length) {
+    return {
+      ...base,
+      status: 'not_journaled',
+      reason: 'not_journaled',
+      details: [],
+    }
+  }
+  if (!input.snapshot) {
+    return failedInspection(base, 'missing_snapshot', ['领域事件存在，但 snapshot 缺失'])
+  }
+  if (!input.events.length) {
+    return failedInspection(base, 'missing_events', ['snapshot 存在，但领域事件缺失'])
+  }
+
+  let replayed: RunDomainSnapshot | null
+  try {
+    replayed = replayRunDomainEvents(input.events)
+  } catch (error) {
+    return failedInspection(base, 'sequence', [errorMessage(error)])
+  }
+  if (!replayed || replayed.sequence !== sourceSequence) {
+    return failedInspection(base, 'sequence', [
+      `领域事件源游标 ${sourceSequence} 未能完整重放`,
+    ])
+  }
+  if (input.snapshot.sequence !== sourceSequence) {
+    return failedInspection(base, 'sequence', [
+      `snapshot 游标 ${input.snapshot.sequence} 与事件游标 ${sourceSequence} 不一致`,
+    ])
+  }
+  if (!isDeepStrictEqual(replayed, input.snapshot)) {
+    return failedInspection(base, 'snapshot', ['从 sequence 0 重放的结果与存储 snapshot 不一致'])
+  }
+
+  const runMismatches = runDomainProjectionMismatches(input.snapshot, input.run)
+  if (runMismatches.length) return failedInspection(base, 'run', runMismatches)
+  if (!isDeepStrictEqual(input.snapshot.checkpoint, input.checkpoint)) {
+    return failedInspection(base, 'checkpoint', ['领域 snapshot 与 Run checkpoint 事实不一致'])
+  }
+  if (!runDomainInputCollectionMatches(input.snapshot, input.inputs)) {
+    return failedInspection(base, 'input', ['领域 snapshot 与 Run input 集合事实不一致'])
+  }
+  return {
+    ...base,
+    status: 'verified',
+    reason: 'verified',
+    details: [],
+  }
 }
 
 export function buildRunCreatedEvents(
@@ -221,15 +291,7 @@ export function assertRunDomainProjection(
   snapshot: RunDomainSnapshot,
   run: AnalysisRun,
 ): void {
-  const mismatches: string[] = []
-  if (snapshot.runId !== run.id) mismatches.push('runId')
-  if (snapshot.status !== run.status) mismatches.push('status')
-  const stateFields = Object.keys(run.state) as Array<keyof AgentState>
-  for (const field of stateFields) {
-    if (!isDeepStrictEqual(snapshot.state[field], run.state[field])) {
-      mismatches.push(`state.${field}`)
-    }
-  }
+  const mismatches = runDomainProjectionMismatches(snapshot, run)
   assertProjection(
     mismatches.length === 0,
     run.id,
@@ -264,15 +326,53 @@ export function assertRunDomainInputCollection(
   snapshot: RunDomainSnapshot,
   deliveries: readonly RunDomainInputDelivery[],
 ): void {
+  assertProjection(
+    runDomainInputCollectionMatches(snapshot, deliveries),
+    snapshot.runId,
+    'input',
+  )
+}
+
+function runDomainProjectionMismatches(
+  snapshot: RunDomainSnapshot,
+  run: AnalysisRun,
+): string[] {
+  const mismatches: string[] = []
+  if (snapshot.runId !== run.id) mismatches.push('runId')
+  if (snapshot.status !== run.status) mismatches.push('status')
+  const stateFields = Object.keys(run.state) as Array<keyof AgentState>
+  for (const field of stateFields) {
+    if (!isDeepStrictEqual(snapshot.state[field], run.state[field])) {
+      mismatches.push(`state.${field}`)
+    }
+  }
+  return mismatches
+}
+
+function runDomainInputCollectionMatches(
+  snapshot: RunDomainSnapshot,
+  deliveries: readonly RunDomainInputDelivery[],
+): boolean {
   const projected = Object.values(snapshot.inputDeliveries)
     .sort((left, right) => left.inputSequence - right.inputSequence)
   const expected = [...deliveries]
     .sort((left, right) => left.inputSequence - right.inputSequence)
-  assertProjection(
-    isDeepStrictEqual(projected, expected),
-    snapshot.runId,
-    'input',
-  )
+  return isDeepStrictEqual(projected, expected)
+}
+
+function failedInspection(
+  base: Pick<
+    RunDomainProjectionInspection,
+    'runId' | 'sourceSequence' | 'snapshotSequence' | 'sequenceDistance'
+  >,
+  reason: Exclude<RunDomainProjectionInspectionReason, 'verified' | 'not_journaled'>,
+  details: string[],
+): RunDomainProjectionInspection {
+  return { ...base, status: 'failed', reason, details }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function changedAgentStateFields(

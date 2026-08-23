@@ -22,8 +22,10 @@ import {
   reduceRunDomainEvents,
   runDomainEventSchema,
   runDomainInputDeliverySchema,
+  runDomainProjectionInspectionSchema,
   runDomainSnapshotSchema,
   type RunDomainEvent,
+  type RunDomainProjectionInspection,
   type RunDomainSnapshot,
 } from '../../schemas/types.js'
 import { RunDomainSequenceConflictError } from '../storeErrors.js'
@@ -31,8 +33,13 @@ import {
   assertRunDomainCheckpointProjection,
   assertRunDomainInputCollection,
   assertRunDomainProjection,
+  inspectRunDomainProjection,
   toRunDomainCheckpoint,
 } from '../runDomainProjection.js'
+import {
+  runDomainProjectionInspectionsTotal,
+  runDomainProjectionSequenceDistanceRecords,
+} from '../../observability/metrics.js'
 import { mapAnalysisRunRow } from './conversationRowMappers.js'
 import type {
   AppendRunDomainEventsInput,
@@ -93,6 +100,70 @@ export class PostgresRunDomainJournalRepository implements RunDomainJournalRepos
       .where(condition)
       .orderBy(asc(platformRunDomainEvents.sequence))
     return rows.map(mapEventRow)
+  }
+
+  async inspectRunDomainProjection(runId: string): Promise<RunDomainProjectionInspection> {
+    const inspection = await this.db.transaction(async tx => {
+      const runRows = await tx.select().from(platformRuns)
+        .where(eq(platformRuns.runId, runId))
+        .limit(1)
+      const runRow = runRows[0]
+      if (!runRow) throw new Error(`运行 '${runId}' 不存在`)
+      // node-postgres 的单一 transaction client 不支持并发 query；顺序读取仍由
+      // 同一个 REPEATABLE READ snapshot 保护，且兼容 pg 9 的严格执行模型。
+      const snapshotRows = await tx.select().from(platformRunSnapshots)
+        .where(eq(platformRunSnapshots.runId, runId))
+        .limit(1)
+      const eventRows = await tx.select().from(platformRunDomainEvents)
+        .where(eq(platformRunDomainEvents.runId, runId))
+        .orderBy(asc(platformRunDomainEvents.sequence))
+      const inputRows = await tx.select().from(platformRunInputs)
+        .where(eq(platformRunInputs.runId, runId))
+        .orderBy(asc(platformRunInputs.inputSequence))
+      const sourceSequence = eventRows.at(-1)?.sequence ?? 0
+      const snapshotRow = snapshotRows[0]
+      try {
+        const snapshot = snapshotRow ? mapSnapshotRow(snapshotRow) : null
+        if (snapshotRow && (
+          snapshot!.sequence !== snapshotRow.sequence
+          || snapshot!.schemaVersion !== snapshotRow.snapshotSchemaVersion
+        )) {
+          return failedInspection(runId, sourceSequence, snapshotRow.sequence, 'snapshot', [
+            'snapshot 索引列与 state_json 信封不一致',
+          ])
+        }
+        return inspectRunDomainProjection({
+          run: mapAnalysisRunRow(runRow),
+          checkpoint: toRunDomainCheckpoint(runRow),
+          inputs: inputRows.map(row => runDomainInputDeliverySchema.parse({
+            inputId: row.inputId,
+            inputSequence: row.inputSequence,
+            status: row.status,
+            leaseId: row.status === 'queued' ? null : row.leaseId,
+            modelRequestId: row.status === 'included' || row.status === 'checkpointed'
+              ? row.modelRequestId
+              : null,
+          })),
+          snapshot,
+          events: eventRows.map(mapEventRow),
+        })
+      } catch (error) {
+        return failedInspection(
+          runId,
+          sourceSequence,
+          snapshotRow?.sequence ?? null,
+          'schema',
+          [errorMessage(error)],
+        )
+      }
+    }, { isolationLevel: 'repeatable read', accessMode: 'read only' })
+    const parsed = runDomainProjectionInspectionSchema.parse(inspection)
+    runDomainProjectionSequenceDistanceRecords.observe(parsed.sequenceDistance)
+    runDomainProjectionInspectionsTotal.inc({
+      outcome: parsed.status,
+      reason: parsed.reason,
+    })
+    return parsed
   }
 
   async requireSnapshotInTransaction(
@@ -208,4 +279,26 @@ function mapEventRow(row: typeof platformRunDomainEvents.$inferSelect): RunDomai
 
 function mapSnapshotRow(row: typeof platformRunSnapshots.$inferSelect): RunDomainSnapshot {
   return runDomainSnapshotSchema.parse(row.stateJson)
+}
+
+function failedInspection(
+  runId: string,
+  sourceSequence: number,
+  snapshotSequence: number | null,
+  reason: Extract<RunDomainProjectionInspection['reason'], 'snapshot' | 'schema'>,
+  details: string[],
+): RunDomainProjectionInspection {
+  return {
+    runId,
+    status: 'failed',
+    reason,
+    sourceSequence,
+    snapshotSequence,
+    sequenceDistance: Math.abs(sourceSequence - (snapshotSequence ?? 0)),
+    details,
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }

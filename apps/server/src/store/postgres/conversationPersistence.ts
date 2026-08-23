@@ -17,6 +17,7 @@ import {
   type ModelRequestRecord,
   type RunCheckpoint,
   type RunDomainEvent,
+  type RunDomainProjectionInspection,
   type RunDomainSnapshot,
   type RunEvent,
   type RunSteeringRecord,
@@ -403,6 +404,10 @@ export class PostgresConversationPersistence implements ConversationPersistence 
 
   listRunDomainEvents(runId: string, afterSequence = 0): Promise<RunDomainEvent[]> {
     return this.domainJournal.listRunDomainEvents(runId, afterSequence)
+  }
+
+  inspectRunDomainProjection(runId: string): Promise<RunDomainProjectionInspection> {
+    return this.domainJournal.inspectRunDomainProjection(runId)
   }
 
 

@@ -16,6 +16,7 @@ import type {
   RunCheckpoint, RunGoalInput, RunSteeringRecord, TranscriptEntry, TranscriptEntryKind, ThreadManifest,
   ThreadMemoryDocument, CompactionRecord, ToolValueRef, MeteorologicalDatasetRecord,
   ModelRequestRecord,
+  RunDomainProjectionInspection,
 } from '../schemas/types.js'
 import type { ToolInvocationRecord } from '@geo-agent-platform/shared-types/tool-runtime'
 import type { ApprovalRecord } from '@geo-agent-platform/shared-types/approval-runtime'
@@ -53,6 +54,7 @@ import type {
   ConversationSnapshotRepository,
   DeletedThreadRecord,
   RunInputRepository,
+  RunDomainJournalRepository,
   ResolveApprovalRecordInput,
   StartToolInvocationInput,
   TerminalToolInvocationInput,
@@ -85,6 +87,7 @@ export class PlatformPersistenceFacade {
   private readonly objectStore: ContentObjectGateway
   private readonly snapshotRepository: ConversationSnapshotRepository
   private readonly runInputRepository: RunInputRepository
+  private readonly runDomainJournal: RunDomainJournalRepository
   private readonly objectPublication: ObjectPublicationCoordinator
   private readonly approvals: ApprovalRepository
 
@@ -108,6 +111,7 @@ export class PlatformPersistenceFacade {
     const persistence = options.conversationPersistence ?? new PostgresConversationPersistence(db)
     this.snapshotRepository = persistence
     this.runInputRepository = persistence
+    this.runDomainJournal = persistence
     this.approvals = persistence
     this.sessionStore = new SessionStore(this.index, persistence)
     this.threadStore = new ThreadStore(
@@ -208,6 +212,11 @@ export class PlatformPersistenceFacade {
     artifacts: readonly ArtifactRef[],
   ): Promise<ToolEffectCommitResult> {
     return this.runStore.commitToolResult(runId, resultId, mutation, invocation, values, artifacts)
+  }
+
+  inspectRunDomainProjection(runId: string): Promise<RunDomainProjectionInspection> {
+    this.runStore.get(runId)
+    return this.runDomainJournal.inspectRunDomainProjection(runId)
   }
 
   prepareToolInvocation(invocation: ToolInvocationRecord): Promise<ToolInvocationRecord> {

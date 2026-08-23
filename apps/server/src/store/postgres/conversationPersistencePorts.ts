@@ -17,6 +17,7 @@ import type {
   ModelRequestRecord,
   RunCheckpoint,
   RunDomainEvent,
+  RunDomainProjectionInspection,
   RunDomainSnapshot,
   RunEvent,
   RunSteeringRecord,
@@ -216,6 +217,7 @@ export interface RunDomainJournalRepository {
   appendRunDomainEvents(input: AppendRunDomainEventsInput): Promise<RunDomainSnapshot>
   getRunDomainSnapshot(runId: string): Promise<RunDomainSnapshot | null>
   listRunDomainEvents(runId: string, afterSequence?: number): Promise<RunDomainEvent[]>
+  inspectRunDomainProjection(runId: string): Promise<RunDomainProjectionInspection>
 }
 
 export interface RunRepository extends
