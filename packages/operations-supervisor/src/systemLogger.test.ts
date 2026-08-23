@@ -82,8 +82,11 @@ describe('createSupervisorLogger', () => {
     cleanupPaths.push(projectRoot)
     const paths = await resolveOperationsPaths({ projectRoot, profile: 'development' })
     const previousRecord = '{"msg":"前一 UTC 日"}\n'
-    const previousTime = new Date('2026-08-06T23:59:00.000Z')
-    const currentTime = new Date('2026-08-07T00:01:00.000Z')
+    const currentTime = new Date()
+    currentTime.setUTCHours(0, 1, 0, 0)
+    const previousTime = new Date(currentTime)
+    previousTime.setUTCDate(previousTime.getUTCDate() - 1)
+    previousTime.setUTCHours(23, 59, 0, 0)
     await writeFile(paths.systemLogFile, previousRecord, 'utf8')
     await utimes(paths.systemLogFile, previousTime, previousTime)
 
