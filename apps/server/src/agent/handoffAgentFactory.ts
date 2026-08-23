@@ -59,7 +59,11 @@ export function createHandoffAgents(options: HandoffAgentFactoryOptions): Handof
       validateToolCall: (name, args) => options.coordinator.validateToolCall(name, args),
       formatToolFailureForModel: (name, message) => options.coordinator.formatToolFailureForModel(name, message),
       rejectPreparedToolCall: (name, callId, message) => options.coordinator.rejectPreparedToolCall(name, callId, message),
-      prepareToolCall: (name, args, callId) => options.coordinator.prepare(name, args, callId),
+      prepareToolCall: (name, args, callId) => options.coordinator.prepareCatalogTool(
+        name,
+        args,
+        callId,
+      ),
       executeTool: (name, args, callId) => options.coordinator.executeForHandoff(
         config.agentId,
         name,

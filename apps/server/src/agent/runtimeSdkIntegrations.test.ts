@@ -24,7 +24,7 @@ import {
 } from './runtimeSdkIntegrations.js'
 import { agentRuntimeConfigSchema } from '@geo-agent-platform/shared-types/runtime'
 import type { AgentsExecutionContext } from './agentsToolBridge.js'
-import { RunToolConcurrencyGate } from './runToolConcurrencyGate.js'
+import { ToolExecutionGate } from '../agent-runtime/tools/ToolExecutionGate.js'
 import { buildSkillRegistry } from './skillRegistry.js'
 
 describe('runtime SDK integrations', () => {
@@ -268,7 +268,7 @@ describe('runtime SDK integrations', () => {
     enableTestMcp(config, 'always')
     let closed = false
     const fakeServer = { name: 'docs' } as MCPServer
-    const integration = await createRuntimeSdkIntegration(config, new Set(), new RunToolConcurrencyGate(), {
+    const integration = await createRuntimeSdkIntegration(config, new Set(), new ToolExecutionGate(), {
       connectMcpServers: async () => ({
         active: [fakeServer],
         close: async () => { closed = true },
@@ -361,7 +361,7 @@ describe('runtime SDK integrations', () => {
     const integration = await createRuntimeSdkIntegration(
       config,
       new Set(['platform_tool']),
-      new RunToolConcurrencyGate(),
+      new ToolExecutionGate(),
       {
       connectMcpServers: async servers => {
         connectedServer = servers[0] ?? null

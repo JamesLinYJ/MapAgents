@@ -85,7 +85,7 @@ describe('run domain journal contract', () => {
           recoveryStatus: 'clean',
           orchestrationEngine: 'openai_agents',
           sdkStateContentHash: 'a'.repeat(64),
-          agentsSdkVersion: '0.16.1',
+          agentsSdkVersion: '0.17.0',
           runtimeConfigDigest: 'digest_1',
           sdkStateSchemaVersion: 5,
           nextInputSequence: 2,

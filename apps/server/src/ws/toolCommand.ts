@@ -91,6 +91,7 @@ export async function executeTool(
       toolName,
       args: requiredRecord(payload, 'args'),
       auth,
+      executionSurface: 'developer',
     }, {
       store,
       runtimeConfiguration: store.runtimeConfiguration,

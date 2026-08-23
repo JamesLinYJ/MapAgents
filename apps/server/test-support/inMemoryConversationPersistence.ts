@@ -9,6 +9,10 @@
 // --------------------------------------------------------------------------
 
 import { isDeepStrictEqual } from 'node:util'
+import {
+  toolInvocationRecordSchema,
+  type ToolInvocationRecord,
+} from '@geo-agent-platform/shared-types/tool-runtime'
 
 import {
   compactionRecordSchema,
@@ -49,6 +53,10 @@ import type {
   CommitModelRequestInput,
   CommitModelRequestResult,
   RunLifecycleResult,
+  StartToolInvocationInput,
+  TerminalToolInvocationInput,
+  ToolEffectCommitResult,
+  ToolInvocationEffectCommit,
   ToolResultCommitter,
   ThreadLifecycleResult,
   ThreadHistoryPage,
@@ -106,6 +114,7 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
   private readonly events = new Map<string, RunEvent[]>()
   private readonly values = new Map<string, ToolValueRef[]>()
   private readonly committedToolResults = new Set<string>()
+  private readonly toolInvocations = new Map<string, ToolInvocationRecord>()
   private readonly inputs = new Map<string, RunSteeringRecord[]>()
   private readonly modelRequests = new Map<string, ModelRequestRecord>()
   private readonly memoryVersions = new Map<string, ThreadMemoryVersionReference[]>()
@@ -255,6 +264,9 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
       this.events.delete(runId)
       this.values.delete(runId)
       this.inputs.delete(runId)
+      for (const [key, invocation] of this.toolInvocations) {
+        if (invocation.runId === runId) this.toolInvocations.delete(key)
+      }
       this.domainEvents.delete(runId)
       this.domainSnapshots.delete(runId)
     }
@@ -401,6 +413,14 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
     const current = this.requireCheckpoint(runId)
     const leaseId = input.inputLeaseId ?? null
     const terminalToolCallIds = new Set(input.terminalToolCallIds ?? [])
+    const terminalInvocations = [...terminalToolCallIds].map(callId => {
+      const invocation = this.toolInvocations.get(toolInvocationKey(runId, callId))
+      if (!invocation) throw new Error(`SDK checkpoint 引用了不存在的工具调用 '${callId}'`)
+      if (!['succeeded', 'failed', 'rejected', 'aborted', 'checkpointed'].includes(invocation.status)) {
+        throw new Error(`SDK checkpoint 不能确认非终态工具调用 '${callId}'=${invocation.status}`)
+      }
+      return invocation
+    })
     const pendingToolCallIds = current.pendingToolCallIds
       .filter(callId => !terminalToolCallIds.has(callId))
     if (!leaseId && current.activeInputLeaseId) {
@@ -470,6 +490,15 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
       activeInputLeaseFrom: leaseId ? null : current.activeInputLeaseFrom,
       activeInputLeaseTo: leaseId ? null : current.activeInputLeaseTo,
     })
+    for (const invocation of terminalInvocations) {
+      if (invocation.status === 'checkpointed') continue
+      this.toolInvocations.set(toolInvocationKey(runId, invocation.callId), toolInvocationRecordSchema.parse({
+        ...invocation,
+        status: 'checkpointed',
+        checkpointedAt: updatedAt,
+        version: invocation.version + 1,
+      }))
+    }
     this.recordMemoryCheckpoint(runId, domainBefore, checkpointed)
     return clone(checkpointed)
   }
@@ -515,13 +544,23 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
   async commitToolResult(
     run: AnalysisRun,
     resultId: string,
+    invocationCommit: ToolInvocationEffectCommit,
     values: readonly ToolValueRef[],
     _artifacts: readonly ArtifactRef[],
-  ): Promise<boolean> {
+  ): Promise<ToolEffectCommitResult> {
     const before = clone(this.requireRun(run.id))
     const domainBefore = this.requireDomainSnapshot(run.id)
-    const commitKey = `${run.id}:${resultId}`
-    if (this.committedToolResults.has(commitKey)) return false
+    const commitKey = `${run.id}:${invocationCommit.invocationId}`
+    const invocation = this.requireToolInvocationById(run.id, invocationCommit.invocationId)
+    if (this.committedToolResults.has(commitKey)) {
+      if (invocation.terminalOutcome !== 'succeeded' || invocation.resultId !== resultId) {
+        throw new Error(`结果 '${resultId}' 已提交，但调用 '${invocation.callId}' 没有成功终态`)
+      }
+      return { committed: false, invocation: clone(invocation) }
+    }
+    if (invocation.status !== 'running' || invocation.version !== invocationCommit.expectedVersion) {
+      throw new Error(`工具调用 '${invocation.callId}' 的结果提交 CAS 失败`)
+    }
     this.committedToolResults.add(commitKey)
     this.runs.set(run.id, clone(run))
     const current = this.values.get(run.id) ?? []
@@ -543,7 +582,115 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
       domainSnapshot,
       memoryDomainCheckpoint(this.requireCheckpoint(run.id)),
     )
-    return true
+    const terminal = toolInvocationRecordSchema.parse({
+      ...invocation,
+      status: invocationCommit.checkpointImmediately ? 'checkpointed' : 'succeeded',
+      terminalOutcome: 'succeeded',
+      resultId,
+      terminalAt: invocationCommit.terminalAt,
+      checkpointedAt: invocationCommit.checkpointImmediately ? invocationCommit.terminalAt : null,
+      version: invocation.version + 1,
+    })
+    this.toolInvocations.set(toolInvocationKey(run.id, invocation.callId), terminal)
+    if (invocationCommit.checkpointImmediately) {
+      const checkpoint = this.requireCheckpoint(run.id)
+      const pendingToolCallIds = checkpoint.pendingToolCallIds.filter(callId => callId !== invocation.callId)
+      await this.saveRunCheckpoint(run.id, {
+        pendingToolCallIds,
+        recoveryStatus: pendingToolCallIds.length ? 'requires_action' : 'clean',
+      })
+    }
+    return { committed: true, invocation: clone(terminal) }
+  }
+
+  async prepareToolInvocation(invocation: ToolInvocationRecord): Promise<ToolInvocationRecord> {
+    const prepared = toolInvocationRecordSchema.parse(invocation)
+    if (prepared.status !== 'prepared' || prepared.version !== 1) {
+      throw new Error('新工具调用必须以 prepared/version 1 建立')
+    }
+    this.requireRun(prepared.runId)
+    const key = toolInvocationKey(prepared.runId, prepared.callId)
+    const existing = this.toolInvocations.get(key)
+    if (existing) {
+      if (!sameToolInvocationIdentity(existing, prepared)) {
+        throw new Error(`工具调用 '${prepared.callId}' 的持久身份与重试请求不一致`)
+      }
+      return clone(existing)
+    }
+    this.toolInvocations.set(key, clone(prepared))
+    return clone(prepared)
+  }
+
+  async getToolInvocation(runId: string, callId: string): Promise<ToolInvocationRecord | null> {
+    this.requireRun(runId)
+    const invocation = this.toolInvocations.get(toolInvocationKey(runId, callId))
+    return invocation ? clone(invocation) : null
+  }
+
+  async listToolInvocations(runId: string): Promise<ToolInvocationRecord[]> {
+    this.requireRun(runId)
+    return clone([...this.toolInvocations.values()]
+      .filter(invocation => invocation.runId === runId)
+      .sort((left, right) => left.preparedAt.localeCompare(right.preparedAt)
+        || left.invocationId.localeCompare(right.invocationId)))
+  }
+
+  async startToolInvocation(input: StartToolInvocationInput): Promise<ToolInvocationRecord> {
+    const current = this.requireToolInvocationById(input.runId, input.invocationId)
+    if (current.status === 'running') return clone(current)
+    if (current.status !== 'prepared' || current.version !== input.expectedVersion) {
+      throw new Error(`工具调用 '${current.callId}' 的 running CAS 失败`)
+    }
+    const updated = toolInvocationRecordSchema.parse({
+      ...current,
+      status: 'running',
+      approvalDecision: input.approvalDecision,
+      runningAt: input.runningAt,
+      version: current.version + 1,
+    })
+    const checkpoint = this.requireCheckpoint(input.runId)
+    const pendingToolCallIds = checkpoint.pendingToolCallIds.includes(current.callId)
+      ? checkpoint.pendingToolCallIds
+      : [...checkpoint.pendingToolCallIds, current.callId]
+    await this.saveRunCheckpoint(input.runId, {
+      pendingToolCallIds,
+      recoveryStatus: 'requires_action',
+    })
+    this.toolInvocations.set(toolInvocationKey(input.runId, current.callId), updated)
+    return clone(updated)
+  }
+
+  async terminateToolInvocation(input: TerminalToolInvocationInput): Promise<ToolInvocationRecord> {
+    const current = this.requireToolInvocationById(input.runId, input.invocationId)
+    if (
+      current.terminalOutcome === input.outcome
+      && (current.status === input.outcome || current.status === 'checkpointed')
+    ) return clone(current)
+    const expectedStatuses = input.outcome === 'rejected' ? ['prepared', 'running'] : ['running']
+    if (!expectedStatuses.includes(current.status) || current.version !== input.expectedVersion) {
+      throw new Error(`工具调用 '${current.callId}' 的 ${input.outcome} CAS 失败`)
+    }
+    const updated = toolInvocationRecordSchema.parse({
+      ...current,
+      status: input.checkpointImmediately ? 'checkpointed' : input.outcome,
+      terminalOutcome: input.outcome,
+      resultId: input.resultId,
+      error: input.error,
+      terminalAt: input.terminalAt,
+      checkpointedAt: input.checkpointImmediately ? input.terminalAt : null,
+      ...(input.approvalDecision ? { approvalDecision: input.approvalDecision } : {}),
+      version: current.version + 1,
+    })
+    if (input.checkpointImmediately) {
+      const checkpoint = this.requireCheckpoint(input.runId)
+      const pendingToolCallIds = checkpoint.pendingToolCallIds.filter(callId => callId !== current.callId)
+      await this.saveRunCheckpoint(input.runId, {
+        pendingToolCallIds,
+        recoveryStatus: pendingToolCallIds.length ? 'requires_action' : 'clean',
+      })
+    }
+    this.toolInvocations.set(toolInvocationKey(input.runId, current.callId), updated)
+    return clone(updated)
   }
 
   async appendRunDomainEvents(input: {
@@ -1236,6 +1383,14 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
     return checkpoint
   }
 
+  private requireToolInvocationById(runId: string, invocationId: string): ToolInvocationRecord {
+    const invocation = [...this.toolInvocations.values()].find(candidate => (
+      candidate.runId === runId && candidate.invocationId === invocationId
+    ))
+    if (!invocation) throw new Error(`工具调用 '${invocationId}' 不存在`)
+    return invocation
+  }
+
   private assertEntry(threadId: string, entryId: string | null): void {
     if (!entryId) return
     if (!(this.entries.get(threadId) ?? []).some(entry => entry.entryId === entryId)) {
@@ -1258,6 +1413,35 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
 
 function clone<T>(value: T): T {
   return structuredClone(value)
+}
+
+function toolInvocationKey(runId: string, callId: string): string {
+  return `${runId}\u0000${callId}`
+}
+
+function sameToolInvocationIdentity(
+  left: ToolInvocationRecord,
+  right: ToolInvocationRecord,
+): boolean {
+  const identity = (value: ToolInvocationRecord) => ({
+    invocationId: value.invocationId,
+    runId: value.runId,
+    turnId: value.turnId,
+    callId: value.callId,
+    stepId: value.stepId,
+    toolName: value.toolName,
+    toolKind: value.toolKind,
+    executionSurface: value.executionSurface,
+    objectiveRevision: value.objectiveRevision,
+    toolPlanDigest: value.toolPlanDigest,
+    descriptorDigest: value.descriptorDigest,
+    argsDigest: value.argsDigest,
+    effect: value.effect,
+    replayPolicy: value.replayPolicy,
+    idempotencyKey: value.idempotencyKey,
+    approvalAction: value.approvalAction,
+  })
+  return isDeepStrictEqual(identity(left), identity(right))
 }
 
 function createThreadState(thread: AgentThreadRecord): ThreadState {

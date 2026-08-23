@@ -27,6 +27,10 @@ import type {
   TranscriptEntry,
   TranscriptEntryKind,
 } from '../../schemas/types.js'
+import type {
+  ToolInvocationRecord,
+  ToolInvocationTerminalOutcome,
+} from '@geo-agent-platform/shared-types/tool-runtime'
 
 export interface ConversationSnapshot {
   sessions: SessionRecord[]
@@ -211,9 +215,50 @@ export interface ToolResultCommitter {
   commitToolResult(
     run: AnalysisRun,
     resultId: string,
+    invocation: ToolInvocationEffectCommit,
     values: readonly ToolValueRef[],
     artifacts: readonly ArtifactRef[],
-  ): Promise<boolean>
+  ): Promise<ToolEffectCommitResult>
+}
+
+export interface ToolInvocationEffectCommit {
+  invocationId: string
+  expectedVersion: number
+  terminalAt: string
+  checkpointImmediately: boolean
+}
+
+export interface ToolEffectCommitResult {
+  committed: boolean
+  invocation: ToolInvocationRecord
+}
+
+export interface StartToolInvocationInput {
+  runId: string
+  invocationId: string
+  expectedVersion: number
+  runningAt: string
+  approvalDecision: 'not_required' | 'approved'
+}
+
+export interface TerminalToolInvocationInput {
+  runId: string
+  invocationId: string
+  expectedVersion: number
+  outcome: ToolInvocationTerminalOutcome
+  resultId: string | null
+  error: string | null
+  terminalAt: string
+  checkpointImmediately: boolean
+  approvalDecision?: 'rejected'
+}
+
+export interface ToolInvocationRepository {
+  prepareToolInvocation(invocation: ToolInvocationRecord): Promise<ToolInvocationRecord>
+  getToolInvocation(runId: string, callId: string): Promise<ToolInvocationRecord | null>
+  listToolInvocations(runId: string): Promise<ToolInvocationRecord[]>
+  startToolInvocation(input: StartToolInvocationInput): Promise<ToolInvocationRecord>
+  terminateToolInvocation(input: TerminalToolInvocationInput): Promise<ToolInvocationRecord>
 }
 
 export interface ObjectReferenceRepository {
@@ -249,5 +294,6 @@ export interface ConversationPersistence extends
   ObjectReferenceRepository,
   RunInputRepository,
   ModelRequestRepository,
+  ToolInvocationRepository,
   ToolResultCommitter,
   RunDomainJournalRepository {}

@@ -36,7 +36,12 @@ describe('RuntimeTranscriptProjector objective revision lineage', () => {
         objectiveRevision: 1,
       }),
     }))
-    expect(coordinator.markSdkToolCallTerminal).toHaveBeenCalledWith('call_legacy')
+    expect(coordinator.markSdkToolCallTerminal).toHaveBeenCalledWith({
+      callId: 'call_legacy',
+      outcome: 'succeeded',
+      resultId: null,
+      error: null,
+    })
   })
 
   it('rejects an SDK result that has no canonical tool_call lineage', async () => {
@@ -106,8 +111,13 @@ function projectorStore(
 }
 
 function projectorAssembly(coordinator: {
-  markSdkToolCallTerminal(callId: string): Promise<void>
-  markSdkToolCallPending?(callId: string): Promise<void>
+  markSdkToolCallTerminal(input: {
+    callId: string
+    outcome: 'succeeded' | 'failed' | 'rejected' | 'aborted'
+    resultId: string | null
+    error: string | null
+  }): Promise<void>
+  markSdkToolCallPending?(toolName: string, args: Record<string, unknown>, callId: string): Promise<void>
 }): RuntimeAssembly {
   return {
     threadId: 'thread_1',

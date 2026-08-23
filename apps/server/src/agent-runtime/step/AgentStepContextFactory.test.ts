@@ -228,7 +228,13 @@ function mcpServer(name: string): AgentRuntimeConfig['sdk']['mcp']['servers'][nu
 
 function toolPlan(entries: AgentToolPlanEntry[]): AgentToolPlanSnapshot {
   const sorted = [...entries].sort((left, right) => left.name.localeCompare(right.name))
-  return { entries: sorted, catalogDigest: agentContextDigest(sorted) }
+  const plan = {
+    entries: sorted,
+    namespaces: [],
+    deferredCatalogObjectHash: null,
+    unavailableReasons: {},
+  }
+  return { ...plan, catalogDigest: agentContextDigest(plan) }
 }
 
 function toolEntry(
@@ -238,12 +244,19 @@ function toolEntry(
   return {
     name,
     kind,
+    namespace: kind === 'mcp' ? 'mcp' : 'layers',
     providerId: kind === 'mcp' ? name.split('_')[0] ?? null : 'layers',
     schemaDigest: `sha256:schema:${name}`,
     definitionDigest: `sha256:definition:${name}`,
-    requiresApproval: kind === 'mcp',
-    readOnly: true,
-    destructive: false,
+    exposure: 'immediate',
+    effect: 'read',
+    parallelism: kind === 'mcp' ? 'exclusive' : 'shared',
+    approvalAction: kind === 'mcp' ? `tool:${name}` : null,
+    replayPolicy: 'safe',
+    requiredCapabilities: [],
+    requiredValueRefKinds: [],
+    executionSurfaces: ['agent'],
+    deferLoading: false,
   }
 }
 

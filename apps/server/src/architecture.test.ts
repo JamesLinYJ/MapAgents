@@ -105,6 +105,50 @@ describe('platform architecture', () => {
     expect(serverTsconfig.compilerOptions?.noUncheckedIndexedAccess).toBe(true)
   })
 
+  it('keeps the tool runtime split into plan, fact, workflow and projection owners', async () => {
+    const sourceRoot = path.join(process.cwd(), 'src')
+    const toolsRoot = path.join(sourceRoot, 'agent-runtime/tools')
+    const coordinatorSource = await readFile(
+      path.join(sourceRoot, 'agent/toolExecutionCoordinator.ts'),
+      'utf8',
+    )
+
+    for (const owner of [
+      'ToolCatalog',
+      'ToolPlanCompiler',
+      'ToolRouter',
+      'ToolPolicy',
+      'ToolExecutionGate',
+      'ToolInvocationLedger',
+      'ToolEffectCommitter',
+      'WorkflowBinder',
+      'ToolProjectionPublisher',
+    ]) {
+      await expect(stat(path.join(toolsRoot, `${owner}.ts`))).resolves.toBeDefined()
+    }
+    for (const retired of [
+      'agent-runtime/step/AgentToolPlan.ts',
+      'agent/runToolConcurrencyGate.ts',
+      'agent/toolCallRecoveryLedger.ts',
+      'agent/toolExecutionPolicy.ts',
+    ]) {
+      await expect(stat(path.join(sourceRoot, retired))).rejects.toMatchObject({ code: 'ENOENT' })
+    }
+    expect(coordinatorSource).toContain('new WorkflowBinder')
+    expect(coordinatorSource).toContain('new ToolProjectionPublisher')
+    for (const retiredResponsibility of [
+      'startAgentWorkflowStep',
+      'completeAgentWorkflowStep',
+      'failAgentWorkflowStep',
+      'appendToolResult(',
+      'appendToolFailure(',
+      'claimedWorkflowSteps =',
+      'outputMetadata =',
+    ]) {
+      expect(coordinatorSource.includes(retiredResponsibility), retiredResponsibility).toBe(false)
+    }
+  })
+
   it('keeps the Drizzle schema and fresh database baseline aligned on ownership foreign keys', async () => {
     const repositoryRoot = path.resolve(process.cwd(), '..', '..')
     const schemaSource = await readFile(path.join(repositoryRoot, 'packages/db/src/schema.ts'), 'utf8')

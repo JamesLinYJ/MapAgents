@@ -42,7 +42,7 @@ function context(): Record<string, unknown> {
     networkPolicy: 'provider_only',
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     identity: { stepId: 'step_1', turnId: 'turn_1', segmentId: 'segment_1', modelRequestIndex: 1 },
     runId: 'run_1',
     turnId: 'turn_1',
@@ -80,14 +80,24 @@ function context(): Record<string, unknown> {
     tools: {
       entries: [{
         name: 'list_layers',
+        namespace: 'layers',
         kind: 'platform',
         providerId: 'layers',
         schemaDigest: 'sha256:schema',
+        exposure: 'immediate',
+        effect: 'read',
+        parallelism: 'shared',
+        approvalAction: null,
+        replayPolicy: 'safe',
+        requiredCapabilities: [],
+        requiredValueRefKinds: [],
+        executionSurfaces: ['agent'],
         definitionDigest: 'sha256:definition',
-        requiresApproval: false,
-        readOnly: true,
-        destructive: false,
+        deferLoading: false,
       }],
+      namespaces: [],
+      deferredCatalogObjectHash: null,
+      unavailableReasons: {},
       catalogDigest: 'sha256:tools',
     },
     world: {

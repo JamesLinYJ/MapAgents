@@ -24,7 +24,8 @@ export function createGeminiAdapter(opts: GeminiOptions): ModelAdapter {
     agentToolSchemaMode: 'compatible',
     agentRuntimeCapabilities: {
       transport: 'none',
-      structuredOutput: 'none', functionTools: false, localMcp: false,
+      structuredOutput: 'none', functionTools: false, deferredTools: false,
+      toolNamespaces: false, localMcp: false,
       hostedTools: false, handoffs: false, multiToolResponse: false,
       providerParallelToolControl: false, remoteConversation: false, serverCompaction: false,
     },

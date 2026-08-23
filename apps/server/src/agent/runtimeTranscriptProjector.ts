@@ -121,6 +121,13 @@ export class RuntimeTranscriptProjector {
         && !this.isPlatformManagedTool(raw.name, assembly)
         && isSdkRejectedToolCall(raw.name, raw.callId, assembly)
       ) {
+        const rejection = assembly.coordinator.formatUnavailableToolForModel(raw.name)
+        await assembly.coordinator.recordSdkRejectedToolCall(
+          raw.name,
+          parseArguments(raw.arguments),
+          raw.callId,
+          rejection,
+        )
         const transcript = await this.store.activeTranscript(assembly.threadId)
         const existing = transcript.find(entry => (
           entry.kind === 'tool_call' && entry.payload.callId === raw.callId
@@ -213,7 +220,11 @@ export class RuntimeTranscriptProjector {
         )
       }
       if (raw.type === 'function_call' && !this.isPlatformManagedTool(raw.name, assembly)) {
-        await assembly.coordinator.markSdkToolCallPending(raw.callId)
+        await assembly.coordinator.markSdkToolCallPending(
+          raw.name,
+          parseArguments(raw.arguments),
+          raw.callId,
+        )
       }
       const eventLabel = raw.type === 'function_call'
         ? assembly.subAgentToolNames.has(raw.name)
@@ -250,13 +261,13 @@ export class RuntimeTranscriptProjector {
         && !this.isPlatformManagedTool(raw.name, assembly)
         && isSdkRejectedToolCall(raw.name, raw.callId, assembly)
       ) {
+        const content = toolResultText(raw.output)
         const transcript = await this.store.activeTranscript(assembly.threadId)
         const objectiveRevision = objectiveRevisionForCall(transcript, raw.callId)
         const exists = transcript.some(entry => (
           entry.kind === 'tool_result' && entry.payload.callId === raw.callId
         ))
         if (!exists) {
-          const content = toolResultText(raw.output)
           await this.store.appendTranscript({
             threadId: assembly.threadId,
             runId: assembly.context.runId,
@@ -276,7 +287,12 @@ export class RuntimeTranscriptProjector {
             },
           })
         }
-        await assembly.coordinator.markSdkToolCallTerminal(raw.callId)
+        await assembly.coordinator.markSdkToolCallTerminal({
+          callId: raw.callId,
+          outcome: 'rejected',
+          resultId: null,
+          error: content,
+        })
         return
       }
       const metadata = event.item.type === 'tool_call_output_item'
@@ -382,7 +398,13 @@ export class RuntimeTranscriptProjector {
         }
       }
       if (raw.type === 'function_call_result') {
-        await assembly.coordinator.markSdkToolCallTerminal(raw.callId)
+        const content = toolResultText(raw.output)
+        await assembly.coordinator.markSdkToolCallTerminal({
+          callId: raw.callId,
+          outcome: raw.status === 'incomplete' ? 'failed' : 'succeeded',
+          resultId: metadata?.resultId ?? null,
+          error: raw.status === 'incomplete' ? content : null,
+        })
       }
       return
     }

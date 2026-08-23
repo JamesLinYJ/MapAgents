@@ -49,7 +49,7 @@ import { RuntimeAssemblyFactory } from './runtimeAssembly.js'
 import { GoalJudge, type GoalJudgePort } from './goalJudge.js'
 import { SubAgentControlPlane, type SubAgentControlInput } from './subAgentControlPlane.js'
 import { authorizedAttachmentSummaries } from './multimodalInput.js'
-import { withToolAuthorizationLease } from './runToolConcurrencyGate.js'
+import { withToolAuthorizationLease } from '../agent-runtime/tools/ToolExecutionGate.js'
 import type { AgentStepContextRecorder } from '../agent-runtime/step/AgentStepContextFactory.js'
 
 export type { SandboxClientFactory } from './runtimeSandbox.js'
@@ -391,12 +391,14 @@ export class OpenAIAgentsRuntime {
           const callId = requireString(approval.payload.callId, '审批 payload.callId')
           const interruption = this.sdk.interruptions(state).find(item => functionCallId(item) === callId)
           if (!interruption) throw new Error(`SDK 状态中不存在待审批调用 '${callId}'`)
+          const rejectionMessage = approvalRejectionMessage(approval.action)
           this.sdk.resolveApproval({
             state,
             interruption,
             approved,
-            rejectionMessage: approvalRejectionMessage(approval.action),
+            rejectionMessage,
           })
+          if (!approved) await assembly.coordinator.rejectToolApproval(callId, rejectionMessage)
           return this.sdkExecutor.execute(options, assembly, state, abort.signal, eventSink, itemSink)
         },
       )

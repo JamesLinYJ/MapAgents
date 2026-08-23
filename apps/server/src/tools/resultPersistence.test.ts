@@ -15,7 +15,11 @@ import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import { createTestPersistenceFacade } from '../../test-support/persistenceFacadeHarness.js'
-import { persistToolExecutionResult, ToolResultCommitService } from './resultPersistence.js'
+import { ToolResultCommitService } from './resultPersistence.js'
+import type { ToolResult } from '../framework/types.js'
+import { ToolInvocationLedger } from '../agent-runtime/tools/ToolInvocationLedger.js'
+import { ToolEffectCommitter } from '../agent-runtime/tools/ToolEffectCommitter.js'
+import { agentContextDigest } from '../agent-runtime/step/agentContextDigest.js'
 
 describe('tool result persistence', () => {
   it('preserves all results from concurrent tool completions', async () => {
@@ -431,15 +435,13 @@ describe('tool result persistence', () => {
         objectiveRevision: 2,
         todos: [{ todoId: 'todo_current', title: '当前版本任务', status: 'running' }],
       })
-      const service = new ToolResultCommitService(store)
-
-      const workflowCommit = await service.commit({
-        runId: run.id,
-        toolName: 'submit_agent_workflow',
-        toolLabel: '提交智能体工作流',
-        args: {},
-        objectiveRevision: 1,
-        result: {
+      const workflowCommit = await persistToolExecutionResult(
+        store,
+        run.id,
+        'submit_agent_workflow',
+        '提交智能体工作流',
+        {},
+        {
           message: '旧版本工作流迟到',
           payload: {
             route: line(),
@@ -463,14 +465,15 @@ describe('tool result persistence', () => {
           source: 'test',
           valueRefs: [{ refId: 'ref_old', kind: 'route', label: '旧版本路线', value: line() }],
         },
-      })
-      const clarificationCommit = await service.commit({
-        runId: run.id,
-        toolName: 'request_clarification',
-        toolLabel: '请求澄清',
-        args: {},
-        objectiveRevision: 1,
-        result: {
+        1,
+      )
+      const clarificationCommit = await persistToolExecutionResult(
+        store,
+        run.id,
+        'request_clarification',
+        '请求澄清',
+        {},
+        {
           message: '旧版本澄清迟到',
           payload: {
             clarification: {
@@ -482,7 +485,8 @@ describe('tool result persistence', () => {
           resultId: 'result_old_clarification',
           source: 'test',
         },
-      })
+        1,
+      )
 
       const latest = store.getRun(run.id).state
       expect(workflowCommit.controlsApplied).toBe(false)
@@ -508,6 +512,62 @@ describe('tool result persistence', () => {
     }
   })
 })
+
+async function persistToolExecutionResult(
+  store: PlatformPersistenceFacade,
+  runId: string,
+  toolName: string,
+  toolLabel: string,
+  args: Record<string, unknown>,
+  result: ToolResult,
+  objectiveRevision = store.getRun(runId).state.objectiveRevision,
+): Promise<{ controlsApplied: boolean }> {
+  const run = store.getRun(runId)
+  const callId = `call_${result.resultId}`
+  const ledger = new ToolInvocationLedger(store, runId)
+  const planDigest = agentContextDigest({
+    executionSurface: 'developer',
+    toolName,
+  })
+  const prepared = await ledger.prepare({
+    runId,
+    turnId: `turn_${result.resultId}`,
+    callId,
+    stepId: null,
+    objectiveRevision,
+    toolPlanDigest: planDigest,
+    descriptor: {
+      name: toolName,
+      namespace: 'test',
+      providerId: 'test',
+      kind: 'platform',
+      exposure: 'immediate',
+      effect: 'world_write',
+      parallelism: 'exclusive',
+      approvalAction: null,
+      replayPolicy: 'manual_recovery',
+      requiredCapabilities: [],
+      requiredValueRefKinds: [],
+      executionSurfaces: ['developer'],
+    },
+    args,
+    executionSurface: 'developer',
+  })
+  if (prepared.status === 'prepared') await ledger.start(callId)
+  return new ToolEffectCommitter(
+    ledger,
+    new ToolResultCommitService(store),
+  ).commit({
+    runId,
+    callId,
+    toolName,
+    toolLabel,
+    args,
+    result,
+    objectiveRevision,
+    checkpointImmediately: true,
+  })
+}
 
 function line() {
   return { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[120, 30], [121, 31]] } }

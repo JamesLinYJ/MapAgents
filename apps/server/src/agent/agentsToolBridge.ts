@@ -18,7 +18,11 @@ import type { ToolRegistry } from '../framework/registry.js'
 import type { ToolDef } from '../framework/types.js'
 import { enrichValueRefDescriptions, ensureToolSchemas, isRecord, parametersForAgentsSdk, parametersForCompatibleAgentsSdk, stripNullObjectValues, valueRefRules } from '../framework/schema.js'
 import type { AgentToolSchemaMode } from '../model/registry.js'
-import { toolExecutionLane, type ToolExecutionLane } from './runToolConcurrencyGate.js'
+import { platformToolDescriptorSource } from '../agent-runtime/tools/ToolCatalog.js'
+import {
+  executionLaneForDescriptor,
+  type ToolExecutionLane,
+} from '../agent-runtime/tools/ToolExecutionGate.js'
 
 export interface AgentsExecutionContext {
   runId: string
@@ -69,6 +73,9 @@ export function createAgentsTools(
     : registry.list().filter(supportsAgentExecution)
 
   return definitions.map(definition => {
+    const executionLane = executionLaneForDescriptor(platformToolDescriptorSource(definition, {
+      approvalRequired: approvalTools.has(definition.name),
+    }))
     const schemaMode = definition.agentSchemaMode ?? options.schemaMode
     const { jsonSchema } = ensureToolSchemas(definition)
     const enrichedSchema = withWorkflowStepIdentity(enrichValueRefDescriptions(jsonSchema), definition.name)
@@ -101,9 +108,8 @@ export function createAgentsTools(
       const callId = details?.toolCall?.callId
       if (!callId) throw new Error(`工具 '${definition.name}' 缺少 callId`)
       await execution.prepareToolCall(definition.name, args, callId)
-      const lane = toolExecutionLane(definition, approvalTools.has(definition.name))
       return execution.runToolExecution(
-        lane,
+        executionLane,
         () => execution.executeTool(definition.name, args, callId),
       )
     }

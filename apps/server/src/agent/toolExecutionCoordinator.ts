@@ -17,27 +17,27 @@ import { runSdkStructuredOutput } from '../model/sdkStructuredOutput.js'
 import type { ToolExecutionStore } from '../store/runtimePorts.js'
 import type { AuthContext } from '../security/types.js'
 import {
-  agentToolOutputMetadataSchema,
   subAgentInvocationSchema,
   type AgentToolOutputMetadata,
-  type AgentWorkflow,
-  type AgentWorkflowStep,
-  type TodoItem,
 } from '../schemas/types.js'
 import { resolveRuntimeValueRef, type ToolResultCommitService } from '../tools/resultPersistence.js'
 import { makeId } from '../utils/ids.js'
 import { ItemSink } from '../conversation/itemSink.js'
 import { RunEventSink } from './turnRunner.js'
-import { developerToolsEnabledForRuntime, ToolExecutionPolicy } from './toolExecutionPolicy.js'
-import {
-  AGENT_WORKFLOW_CONTROL_TOOLS,
-  completeAgentWorkflowStep,
-  failAgentWorkflowStep,
-  findRunnableAgentWorkflowStep,
-  startAgentWorkflowStep,
-} from './agentWorkflowState.js'
+import { developerToolsEnabledForRuntime, ToolPolicy } from '../agent-runtime/tools/ToolPolicy.js'
+import { AGENT_WORKFLOW_CONTROL_TOOLS } from './agentWorkflowState.js'
 import { validateGeospatialComposeWorkflowDraft } from './geospatialCompose.js'
-import { ToolCallRecoveryLedger } from './toolCallRecoveryLedger.js'
+import type { AgentStepContext } from '@geo-agent-platform/shared-types/agent-step-context'
+import { ToolCatalog } from '../agent-runtime/tools/ToolCatalog.js'
+import {
+  descriptorSourceFromPlanEntry,
+  ToolRouter,
+} from '../agent-runtime/tools/ToolRouter.js'
+import { ToolInvocationLedger } from '../agent-runtime/tools/ToolInvocationLedger.js'
+import { ToolEffectCommitter } from '../agent-runtime/tools/ToolEffectCommitter.js'
+import { WorkflowBinder } from '../agent-runtime/tools/WorkflowBinder.js'
+import { ToolProjectionPublisher } from '../agent-runtime/tools/ToolProjectionPublisher.js'
+import { agentContextDigest } from '../agent-runtime/step/agentContextDigest.js'
 
 interface CoordinatorOptions {
   store: ToolExecutionStore
@@ -60,16 +60,6 @@ interface CoordinatorOptions {
   valueState: Map<string, unknown>
   signal: AbortSignal
   onPlanModeChanged?: (enabled: boolean) => void
-  initialPendingToolCallIds?: readonly string[]
-}
-
-interface ClaimedWorkflowStep {
-  readonly agentWorkflowId: string
-  readonly workflowRevision: number
-  readonly objectiveRevision: number
-  readonly stepId: string
-  readonly attempt: number
-  readonly startedAt: string
 }
 
 // ToolExecutionCoordinator
@@ -78,32 +68,53 @@ interface ClaimedWorkflowStep {
 // 都先落盘再推进，未知副作用状态不会被包装成成功结果。
 export class ToolExecutionCoordinator {
   private readonly preparedCalls = new Set<string>()
+  private readonly preparedCallRoutes = new Map<string, 'step' | 'catalog'>()
   private readonly preparingCalls = new Map<string, Promise<void>>()
-  private readonly callItems = new Map<string, string>()
-  private readonly claimedWorkflowSteps = new Map<string, ClaimedWorkflowStep>()
   private readonly externalAgentCalls = new Map<string, string>()
-  private readonly outputMetadata = new Map<string, AgentToolOutputMetadata>()
   private readonly callObjectiveRevisions = new Map<string, number>()
   private modelInputObjectiveRevision: number
-  private workflowMutation: Promise<void> = Promise.resolve()
-  private resultMutation: Promise<void> = Promise.resolve()
-  private readonly policy: ToolExecutionPolicy
-  private readonly recoveryLedger: ToolCallRecoveryLedger
+  private readonly policy: ToolPolicy
+  private readonly invocationLedger: ToolInvocationLedger
+  private readonly effectCommitter: ToolEffectCommitter
+  private readonly catalog: ToolCatalog
+  private readonly router: ToolRouter
+  private readonly workflowBinder: WorkflowBinder
+  private readonly projectionPublisher: ToolProjectionPublisher
 
   constructor(private readonly options: CoordinatorOptions) {
     const objectiveRevision = options.store.getRun(options.runId).state.objectiveRevision
     this.modelInputObjectiveRevision = Number.isInteger(objectiveRevision) && objectiveRevision > 0
       ? objectiveRevision
       : 1
-    this.recoveryLedger = new ToolCallRecoveryLedger(
-      options.store,
-      options.runId,
-      options.initialPendingToolCallIds,
+    this.invocationLedger = new ToolInvocationLedger(options.store, options.runId)
+    this.effectCommitter = new ToolEffectCommitter(
+      this.invocationLedger,
+      options.resultCommitService,
     )
-    this.policy = new ToolExecutionPolicy({
+    this.catalog = new ToolCatalog(options.registry)
+    this.router = new ToolRouter(this.catalog)
+    this.workflowBinder = new WorkflowBinder({
+      store: options.store,
+      registry: options.registry,
+      runId: options.runId,
+      eventSink: options.eventSink,
+    })
+    this.projectionPublisher = new ToolProjectionPublisher({
+      store: options.store,
+      registry: options.registry,
+      runId: options.runId,
+      threadId: options.threadId,
+      turnId: options.turnId,
+      inlineToolResultMaxChars: options.inlineToolResultMaxChars,
+      eventSink: options.eventSink,
+      itemSink: options.itemSink,
+      valueState: options.valueState,
+      ...(options.onPlanModeChanged ? { onPlanModeChanged: options.onPlanModeChanged } : {}),
+    })
+    this.policy = new ToolPolicy({
       registry: options.registry,
       state: () => this.options.store.getRun(this.options.runId).state,
-      claimedWorkflowSteps: () => this.activeClaimedWorkflowStepIds(
+      claimedWorkflowSteps: () => this.workflowBinder.activeClaimedStepIds(
         this.options.store.getRun(this.options.runId).state.agentWorkflow,
       ),
       externalAgentCalls: () => this.externalAgentCalls,
@@ -111,6 +122,10 @@ export class ToolExecutionCoordinator {
         ? developerToolsEnabledForRuntime(this.options.runtimeConfig)
         : false,
     })
+  }
+
+  bindStepContext(context: AgentStepContext): void {
+    this.router.bindStepContext(context)
   }
 
   bindModelInputObjectiveRevision(objectiveRevision: number): void {
@@ -125,12 +140,8 @@ export class ToolExecutionCoordinator {
     this.modelInputObjectiveRevision = objectiveRevision
   }
 
-  acceptCheckpointedToolCalls(callIds: Iterable<string>): Promise<void> {
-    return this.recoveryLedger.acceptCheckpointTerminals(callIds)
-  }
-
   checkpointTerminalToolCallIds(): Promise<string[]> {
-    return this.recoveryLedger.checkpointTerminalCallIds()
+    return this.invocationLedger.checkpointTerminalCallIds()
   }
 
   currentModelInputObjectiveRevision(): number {
@@ -141,15 +152,79 @@ export class ToolExecutionCoordinator {
     return this.policy.isExecutionEnabled()
   }
 
-  markSdkToolCallPending(callId: string): Promise<void> {
-    return this.recoveryLedger.markPending(callId)
+  async markSdkToolCallPending(
+    toolName: string,
+    args: Record<string, unknown>,
+    callId: string,
+  ): Promise<void> {
+    const routed = this.router.prepareCall(callId, toolName)
+    await this.invocationLedger.prepare({
+      runId: this.options.runId,
+      turnId: this.options.turnId,
+      callId,
+      stepId: routed.stepId,
+      objectiveRevision: routed.objectiveRevision,
+      toolPlanDigest: routed.toolPlanDigest,
+      descriptor: descriptorSourceFromPlanEntry(routed.descriptor),
+      args,
+      executionSurface: 'agent',
+    })
+    await this.invocationLedger.start(callId)
   }
 
-  markSdkToolCallTerminal(callId: string): Promise<void> {
-    // 公开 SDK result 回调只登记“可随下一 checkpoint 收敛”的候选。
-    // Durable pending ledger 仍保持不变，直到 opaque RunState checkpoint
-    // 与这些 callId 在同一个 PostgreSQL 事务中提交。
-    return this.recoveryLedger.observeSdkTerminal(callId)
+  async recordSdkRejectedToolCall(
+    toolName: string,
+    args: Record<string, unknown>,
+    callId: string,
+    error: string,
+  ): Promise<void> {
+    const context = this.router.currentStepContext()
+    const planned = context.tools.entries.some(entry => entry.name === toolName)
+    if (!planned) {
+      await this.invocationLedger.rejectUnplanned({
+        runId: this.options.runId,
+        turnId: this.options.turnId,
+        callId,
+        toolName,
+        objectiveRevision: context.objectiveRevision,
+        toolPlanDigest: context.toolPlanDigest,
+        args,
+        error,
+      })
+      return
+    }
+    const routed = this.router.prepareCall(callId, toolName)
+    await this.invocationLedger.prepare({
+      runId: this.options.runId,
+      turnId: this.options.turnId,
+      callId,
+      stepId: routed.stepId,
+      objectiveRevision: routed.objectiveRevision,
+      toolPlanDigest: routed.toolPlanDigest,
+      descriptor: descriptorSourceFromPlanEntry(routed.descriptor),
+      args,
+      executionSurface: 'agent',
+    })
+    await this.invocationLedger.reject(callId, error, false)
+  }
+
+  async markSdkToolCallTerminal(input: {
+    callId: string
+    outcome: 'succeeded' | 'failed' | 'rejected' | 'aborted'
+    resultId: string | null
+    error: string | null
+  }): Promise<void> {
+    const current = await this.options.store.getToolInvocation(this.options.runId, input.callId)
+    if (!current || current.status === 'checkpointed' || current.terminalOutcome !== null) return
+    if (input.outcome === 'succeeded') {
+      await this.invocationLedger.succeed(input.callId, input.resultId, false)
+    } else if (input.outcome === 'failed') {
+      await this.invocationLedger.fail(input.callId, input.error ?? 'SDK 工具调用失败', false)
+    } else if (input.outcome === 'rejected') {
+      await this.invocationLedger.reject(input.callId, input.error ?? 'SDK 拒绝工具调用', false)
+    } else {
+      await this.invocationLedger.abort(input.callId, input.error ?? 'SDK 中止工具调用', false)
+    }
   }
 
   formatToolFailureForModel(toolName: string, message: string): string {
@@ -244,27 +319,62 @@ export class ToolExecutionCoordinator {
   }
 
   async rejectPreparedToolCall(toolName: string, callId: string, message: string): Promise<void> {
-    const itemId = this.callItems.get(callId)
-    if (itemId) {
-      this.options.itemSink.completeItem(itemId, {
-        callId,
-        name: toolName,
-        body: message,
-        isError: true,
-        metadata: { toolLabel: this.toolLabel(toolName), rejectedBy: 'input_guardrail' },
-      })
+    this.projectionPublisher.rejectPrepared(toolName, callId, message)
+    const invocation = await this.options.store.getToolInvocation(this.options.runId, callId)
+    if (invocation && invocation.terminalOutcome === null) {
+      await this.invocationLedger.reject(callId, message, false)
     }
-    await this.updatePendingToolCall(callId, false)
+  }
+
+  async rejectToolApproval(callId: string, message: string): Promise<void> {
+    const invocation = await this.options.store.getToolInvocation(this.options.runId, callId)
+    if (!invocation) throw new Error(`审批工具调用 '${callId}' 尚未进入持久账本`)
+    if (invocation.terminalOutcome === 'rejected') return
+    if (invocation.terminalOutcome !== null) {
+      throw new Error(
+        `审批工具调用 '${callId}' 已以 ${invocation.terminalOutcome} 终结，不能改为 rejected`,
+      )
+    }
+    await this.invocationLedger.reject(callId, message, false)
+    await this.projectionPublisher.publishApprovalRejected({
+      callId,
+      toolName: invocation.toolName,
+      objectiveRevision: invocation.objectiveRevision,
+      message,
+    })
   }
 
   async prepare(toolName: string, args: Record<string, unknown>, callId: string): Promise<void> {
-    if (this.preparedCalls.has(callId)) return
+    return this.prepareWithRoute(toolName, args, callId, 'step')
+  }
+
+  async prepareCatalogTool(
+    toolName: string,
+    args: Record<string, unknown>,
+    callId: string,
+  ): Promise<void> {
+    return this.prepareWithRoute(toolName, args, callId, 'catalog')
+  }
+
+  private async prepareWithRoute(
+    toolName: string,
+    args: Record<string, unknown>,
+    callId: string,
+    route: 'step' | 'catalog',
+  ): Promise<void> {
+    if (this.preparedCalls.has(callId)) {
+      const preparedRoute = this.preparedCallRoutes.get(callId)
+      if (preparedRoute !== route) {
+        throw new Error(`工具调用 '${callId}' 已通过 ${preparedRoute} 路由准备，不能改为 ${route}`)
+      }
+      return
+    }
     const preparing = this.preparingCalls.get(callId)
     if (preparing) {
       await preparing
       return
     }
-    const operation = this.preparePlatformToolCall(toolName, args, callId)
+    const operation = this.preparePlatformToolCall(toolName, args, callId, route)
     this.preparingCalls.set(callId, operation)
     try {
       await operation
@@ -277,45 +387,43 @@ export class ToolExecutionCoordinator {
     toolName: string,
     args: Record<string, unknown>,
     callId: string,
+    route: 'step' | 'catalog',
   ): Promise<void> {
-    const tool = this.options.registry.get(toolName)
-    if (!tool) throw new Error(`工具 '${toolName}' 未注册`)
+    const routed = route === 'step' ? this.router.preparePlatformCall(callId, toolName) : null
+    const descriptor = routed
+      ? descriptorSourceFromPlanEntry(routed.descriptor)
+      : this.catalog.platformSource(toolName)
+    const tool = routed?.definition ?? this.catalog.assertPlatformBinding(descriptor)
     const invocation = splitWorkflowStepIdentity(args)
-    const existing = (await this.options.store.activeTranscript(this.options.threadId))
-      .find(entry => entry.kind === 'tool_call' && entry.payload.callId === callId)
-    if (existing) {
-      this.callObjectiveRevisions.set(callId, objectiveRevisionFromPayload(
-        existing.payload,
-        1,
-      ))
-      this.preparedCalls.add(callId)
-      return
-    }
-    const objectiveRevision = this.modelInputObjectiveRevision
-    await this.options.store.appendTranscript({
-      threadId: this.options.threadId,
+    const preparedInvocation = await this.invocationLedger.prepare({
       runId: this.options.runId,
       turnId: this.options.turnId,
-      kind: 'tool_call',
-      payload: {
-        callId,
-        name: toolName,
-        label: tool.label,
-        arguments: invocation.toolArgs,
-        workflowStepId: invocation.workflowStepId,
-        objectiveRevision,
-        ledgerStatus: 'prepared',
-      },
-    })
-    const item = this.options.itemSink.startItem('function_call', {
-      name: toolName,
       callId,
-      arguments: JSON.stringify(invocation.toolArgs),
-      metadata: { toolLabel: tool.label, objectiveRevision },
+      stepId: routed?.stepId ?? null,
+      objectiveRevision: routed?.objectiveRevision ?? this.modelInputObjectiveRevision,
+      toolPlanDigest: routed?.toolPlanDigest ?? agentContextDigest({
+        executionSurface: 'agent',
+        descriptor,
+      }),
+      descriptor,
+      args: invocation.toolArgs,
+      executionSurface: 'agent',
     })
+    const objectiveRevision = await this.projectionPublisher.ensurePrepared({
+      callId,
+      toolName,
+      toolLabel: tool.label,
+      args: invocation.toolArgs,
+      workflowStepId: invocation.workflowStepId,
+      objectiveRevision: preparedInvocation.objectiveRevision,
+      createConversationItem: true,
+    })
+    if (objectiveRevision !== preparedInvocation.objectiveRevision) {
+      throw new Error(`工具调用 '${callId}' 的 transcript 与 invocation objective revision 不一致`)
+    }
     this.callObjectiveRevisions.set(callId, objectiveRevision)
     this.preparedCalls.add(callId)
-    this.callItems.set(callId, item.itemId)
+    this.preparedCallRoutes.set(callId, route)
   }
 
   async prepareExternalAgentCall(
@@ -326,34 +434,36 @@ export class ToolExecutionCoordinator {
   ): Promise<void> {
     if (this.preparedCalls.has(callId)) return
     const invocation = splitWorkflowStepIdentity(args)
-    const existing = (await this.options.store.activeTranscript(this.options.threadId))
-      .find(entry => entry.kind === 'tool_call' && entry.payload.callId === callId)
-    if (existing) {
-      this.callObjectiveRevisions.set(callId, objectiveRevisionFromPayload(
-        existing.payload,
-        1,
-      ))
-      this.preparedCalls.add(callId)
-      return
+    const routed = this.router.prepareCall(callId, agentId)
+    if (routed.descriptor.kind !== 'subagent') {
+      throw new Error(`工具 '${agentId}' 的 StepContext 类型不是 subagent`)
     }
-    const objectiveRevision = this.modelInputObjectiveRevision
-    await this.options.store.appendTranscript({
-      threadId: this.options.threadId,
+    const preparedInvocation = await this.invocationLedger.prepare({
       runId: this.options.runId,
       turnId: this.options.turnId,
-      kind: 'tool_call',
-      payload: {
-        callId,
-        name: agentId,
-        label: agentName,
-        arguments: invocation.toolArgs,
-        workflowStepId: invocation.workflowStepId,
-        objectiveRevision,
-        ledgerStatus: 'prepared',
-      },
+      callId,
+      stepId: routed.stepId,
+      objectiveRevision: routed.objectiveRevision,
+      toolPlanDigest: routed.toolPlanDigest,
+      descriptor: descriptorSourceFromPlanEntry(routed.descriptor),
+      args: invocation.toolArgs,
+      executionSurface: 'agent',
     })
+    const objectiveRevision = await this.projectionPublisher.ensurePrepared({
+      callId,
+      toolName: agentId,
+      toolLabel: agentName,
+      args: invocation.toolArgs,
+      workflowStepId: invocation.workflowStepId,
+      objectiveRevision: preparedInvocation.objectiveRevision,
+      createConversationItem: false,
+    })
+    if (objectiveRevision !== preparedInvocation.objectiveRevision) {
+      throw new Error(`工具调用 '${callId}' 的 transcript 与 invocation objective revision 不一致`)
+    }
     this.callObjectiveRevisions.set(callId, objectiveRevision)
     this.preparedCalls.add(callId)
+    this.preparedCallRoutes.set(callId, 'step')
   }
 
   async executeForModel(toolName: string, args: Record<string, unknown>, callId: string): Promise<string> {
@@ -375,8 +485,8 @@ export class ToolExecutionCoordinator {
 
   async executeDirect(toolName: string, args: Record<string, unknown>): Promise<ToolResult> {
     const callId = makeId('call')
-    await this.prepare(toolName, args, callId)
-    return this.execute(toolName, args, callId, undefined, 'immediate')
+    await this.prepareWithRoute(toolName, args, callId, 'catalog')
+    return this.execute(toolName, args, callId, undefined, 'immediate', 'catalog')
   }
 
   async beginExternalAgentStep(
@@ -386,9 +496,9 @@ export class ToolExecutionCoordinator {
   ): Promise<string | null> {
     this.policy.assertExecutionPhaseAllowsExternalAgent(agentId)
     const { workflowStepId } = splitWorkflowStepIdentity(args)
-    const stepId = await this.claimAgentWorkflowStep(agentId, callId, agentId, workflowStepId)
+    const stepId = await this.workflowBinder.claim(agentId, callId, agentId, workflowStepId)
     this.externalAgentCalls.set(callId, agentId)
-    await this.updatePendingToolCall(callId, true)
+    await this.invocationLedger.start(callId)
     return stepId
   }
 
@@ -397,37 +507,20 @@ export class ToolExecutionCoordinator {
     callId: string,
     stepId: string | null,
   ): void {
-    const state = this.options.store.getRun(this.options.runId).state
-    if (stepId) {
-      const workflow = state.agentWorkflow
-      const step = workflow?.steps.find(candidate => candidate.stepId === stepId)
-      if (!workflow
-        || !step
-        || step.status !== 'running'
-        || step.kind !== 'agent'
-        || step.toolName !== agentId
-        || step.ownerAgentId !== agentId) {
-        throw new Error(`子智能体 '${agentId}' 的运行中工作流步骤 '${stepId}' 无法恢复`)
-      }
-      this.claimedWorkflowSteps.set(callId, workflowStepClaim(workflow, step))
-    } else if (state.agentWorkflow) {
-      throw new Error(`子智能体 '${agentId}' 缺少可恢复的工作流步骤`)
-    }
+    this.workflowBinder.restoreExternalAgent(agentId, callId, stepId)
     this.externalAgentCalls.set(callId, agentId)
   }
 
   async completeExternalAgentStep(callId: string, summary: string): Promise<void> {
     try {
-      await this.completeClaimedAgentWorkflowStep(callId, summary)
+      await this.workflowBinder.complete(callId, summary)
     } finally {
       this.externalAgentCalls.delete(callId)
     }
   }
 
   toolOutputMetadata(callId: string): AgentToolOutputMetadata {
-    const metadata = this.outputMetadata.get(callId)
-    if (!metadata) throw new Error(`工具调用 '${callId}' 尚无可投影的输出元数据`)
-    return metadata
+    return this.projectionPublisher.toolOutputMetadata(callId)
   }
 
   private requireCallObjectiveRevision(callId: string): number {
@@ -440,7 +533,7 @@ export class ToolExecutionCoordinator {
 
   async failExternalAgentStep(callId: string, message: string): Promise<void> {
     try {
-      await this.failClaimedAgentWorkflowStep(callId, message)
+      await this.workflowBinder.fail(callId, message)
     } finally {
       this.externalAgentCalls.delete(callId)
     }
@@ -455,7 +548,7 @@ export class ToolExecutionCoordinator {
     // 子 Agent 内层工具不会进入父 RunState；其整个 Agent-as-tool
     // 外层 callId 已保持 pending，直到父 SDK checkpoint 包含外层 result。
     // 因此内层终态可立即收敛，崩溃时仍由外层 pending 禁止自动重放。
-    const result = await this.execute(toolName, args, callId, agentId, 'immediate')
+    const result = await this.execute(toolName, args, callId, agentId, 'immediate', 'catalog')
     const tool = this.options.registry.get(toolName)
     if (!tool) throw new Error(`工具 '${toolName}' 未注册`)
     if (tool.agentResultMode === 'return_direct') {
@@ -477,131 +570,117 @@ export class ToolExecutionCoordinator {
     callId: string,
     ownerAgentId?: string,
     recoveryTerminal: 'checkpoint' | 'immediate' = 'checkpoint',
+    route: 'step' | 'catalog' = 'step',
   ): Promise<ToolResult> {
     this.options.signal.throwIfAborted()
-    await this.prepare(toolName, args, callId)
+    await this.prepareWithRoute(toolName, args, callId, route)
+    if (route === 'step') this.router.requirePlatformCall(callId, toolName)
+    else this.catalog.assertPlatformBinding(this.catalog.platformSource(toolName))
     const objectiveRevision = this.requireCallObjectiveRevision(callId)
     const invocation = splitWorkflowStepIdentity(args)
-    const itemId = this.callItems.get(callId)
+    const toolLabel = this.toolLabel(toolName)
+    let result: ToolResult
+    let controlsApplied = false
+    let existingArtifactIds: ReadonlySet<string> = new Set()
     try {
       this.policy.assertPlanModeAllows(toolName)
       if (ownerAgentId) this.policy.assertExternalAgentIsRunning(ownerAgentId)
-      else await this.claimAgentWorkflowStep(toolName, callId, undefined, invocation.workflowStepId)
-      await this.updatePendingToolCall(callId, true)
-      await this.appendLedger(callId, toolName, 'started', objectiveRevision)
-      const toolLabel = this.toolLabel(toolName)
-      this.options.eventSink.emit('tool.started', toolLabel, {
-        tool: toolName,
-        toolLabel,
-        callId,
-        objectiveRevision,
-      })
-      const existingArtifactIds = new Set(
+      else await this.workflowBinder.claim(toolName, callId, undefined, invocation.workflowStepId)
+      await this.invocationLedger.start(callId)
+      await this.projectionPublisher.publishStarted(callId, toolName, toolLabel, objectiveRevision)
+      existingArtifactIds = new Set(
         this.options.store.getRun(this.options.runId).state.artifacts.map(artifact => artifact.artifactId),
       )
-      const result = await this.options.registry.execute(toolName, invocation.toolArgs, this.createToolContext())
-      await this.enqueueResultMutation(async () => {
-        const commit = await this.options.resultCommitService.commit({
-          runId: this.options.runId,
-          toolName,
-          toolLabel: this.toolLabel(toolName),
-          args: invocation.toolArgs,
-          result,
-          objectiveRevision,
-        })
-        if (commit.controlsApplied && typeof result.payload.planMode === 'boolean') {
-          this.options.onPlanModeChanged?.(result.payload.planMode)
-        }
-        if (commit.controlsApplied) this.emitAgentWorkflowControlEvent(toolName)
-        await this.completeClaimedAgentWorkflowStep(callId, result.message)
-        for (const ref of result.valueRefs ?? []) this.options.valueState.set(ref.refId, ref)
-        this.options.eventSink.emit('tool.completed', result.message, {
-          tool: toolName,
-          toolLabel,
-          callId,
-          result: result.payload,
-          objectiveRevision,
-        })
-        if (itemId) {
-          this.options.itemSink.completeItem(itemId, {
-            callId,
-            name: toolName,
-            output: JSON.stringify(result.payload),
-            metadata: { toolLabel: this.toolLabel(toolName), resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [], objectiveRevision },
-          })
-        }
-        const outputItemId = this.options.itemSink.startItem('function_call_output', {
-          callId,
-          name: toolName,
-          role: 'tool',
-          metadata: { toolLabel: this.toolLabel(toolName), resultId: result.resultId, source: result.source, artifacts: result.artifacts ?? [], objectiveRevision },
-        }).itemId
-        this.options.itemSink.completeItem(outputItemId, {
-          callId,
-          name: toolName,
-          output: JSON.stringify(result.payload),
-          metadata: { toolLabel: this.toolLabel(toolName), resultId: result.resultId, source: result.source, valueRefs: result.valueRefs ?? [], artifacts: result.artifacts ?? [], objectiveRevision },
-        })
-        await this.appendToolResult(callId, toolName, result, objectiveRevision)
-        const generatedArtifactIds = this.options.store.getRun(this.options.runId).state.artifacts
-          .map(artifact => artifact.artifactId)
-          .filter(artifactId => !existingArtifactIds.has(artifactId))
-        this.outputMetadata.set(callId, agentToolOutputMetadataSchema.parse({
-          schemaVersion: 1,
-          callId,
-          toolName,
-          resultId: result.resultId,
-          valueRefIds: (result.valueRefs ?? []).map(reference => reference.refId),
-          artifactIds: [...new Set([
-            ...(result.artifacts ?? []).map(artifact => artifact.artifactId),
-            ...generatedArtifactIds,
-          ])],
-          display: {
-            label: toolLabel,
-            summary: result.message,
-            source: result.source,
-          },
-        }))
-        if (recoveryTerminal === 'immediate') await this.updatePendingToolCall(callId, false)
+      result = await this.options.registry.execute(toolName, invocation.toolArgs, this.createToolContext())
+      const commit = await this.effectCommitter.commit({
+        runId: this.options.runId,
+        callId,
+        toolName,
+        toolLabel,
+        args: invocation.toolArgs,
+        result,
+        objectiveRevision,
+        checkpointImmediately: recoveryTerminal === 'immediate',
       })
-      return result
+      controlsApplied = commit.controlsApplied
     } catch (error) {
       const message = errorMessage(error)
-      await this.enqueueResultMutation(async () => {
-        await this.failClaimedAgentWorkflowStep(callId, message)
-        await this.appendLedger(callId, toolName, 'failed', objectiveRevision, message)
-        await this.appendToolFailure(callId, toolName, message, objectiveRevision)
-        this.outputMetadata.set(callId, agentToolOutputMetadataSchema.parse({
-          schemaVersion: 1,
+      const settlementErrors: string[] = []
+      try {
+        await this.workflowBinder.fail(callId, message)
+      } catch (settlementError) {
+        settlementErrors.push(errorMessage(settlementError))
+      }
+      try {
+        const invocationRecord = await this.options.store.getToolInvocation(this.options.runId, callId)
+        if (invocationRecord?.terminalOutcome === null) {
+          if (invocationRecord.status === 'prepared') {
+            await this.invocationLedger.reject(
+              callId,
+              message,
+              recoveryTerminal === 'immediate',
+            )
+          } else if (invocationRecord.status === 'running') {
+            await this.invocationLedger.fail(
+              callId,
+              message,
+              recoveryTerminal === 'immediate',
+            )
+          }
+        }
+      } catch (settlementError) {
+        settlementErrors.push(errorMessage(settlementError))
+      }
+      try {
+        await this.projectionPublisher.publishFailed({
           callId,
           toolName,
-          resultId: null,
-          valueRefIds: [],
-          artifactIds: [],
-          display: {
-            label: this.toolLabel(toolName),
-            summary: message,
-            source: null,
-          },
-        }))
-        await this.options.store.mutateRunState(this.options.runId, state => ({
-          warnings: [...state.warnings, `工具“${this.toolLabel(toolName)}”调用失败：${message}`],
-          errors: [...state.errors, message],
-          failedTool: toolName,
-        }))
-        if (itemId) this.options.itemSink.completeItem(itemId, {
-          callId,
-          name: toolName,
-          isError: true,
-          body: message,
-          metadata: { toolLabel: this.toolLabel(toolName), objectiveRevision },
+          toolLabel,
+          message,
+          objectiveRevision,
         })
-        // 失败输出同样要先进入可恢复 SDK RunState；否则平台日志已失败
-        // 而 checkpoint 仍在调用前，崩溃恢复依然会重放工具。
-        if (recoveryTerminal === 'immediate') await this.updatePendingToolCall(callId, false)
-      })
+      } catch (settlementError) {
+        settlementErrors.push(errorMessage(settlementError))
+      }
+      if (settlementErrors.length) {
+        try {
+          await this.options.store.mutateRunState(this.options.runId, state => ({
+            warnings: [...state.warnings, `工具失败收敛不完整：${settlementErrors.join('；')}`],
+          }))
+        } catch {
+          // 原始工具错误是调用者需要处理的主因，不用投影失败覆盖。
+        }
+      }
       throw error
     }
+
+    const postCommitErrors: string[] = []
+    try {
+      await this.workflowBinder.complete(callId, result.message)
+    } catch (error) {
+      postCommitErrors.push(errorMessage(error))
+    }
+    try {
+      await this.projectionPublisher.publishSucceeded({
+        callId,
+        toolName,
+        toolLabel,
+        result,
+        objectiveRevision,
+        controlsApplied,
+        existingArtifactIds,
+      })
+    } catch (error) {
+      postCommitErrors.push(errorMessage(error))
+    }
+    for (const message of postCommitErrors) {
+      try {
+        await this.projectionPublisher.recordPostCommitWarning(toolName, message)
+      } catch {
+        // 调用结果与副作用已是权威事实；不得因可重建投影再失败而重放工具。
+      }
+    }
+    return result
   }
 
   async executeForHandoff(
@@ -613,7 +692,7 @@ export class ToolExecutionCoordinator {
     if (this.policy.activeHandoffAgent() !== agentId) {
       throw new Error(`子智能体 '${agentId}' 尚未取得 handoff 所有权`)
     }
-    const result = await this.execute(toolName, args, callId)
+    const result = await this.execute(toolName, args, callId, undefined, 'checkpoint', 'catalog')
     const tool = this.options.registry.get(toolName)
     if (!tool) throw new Error(`工具 '${toolName}' 未注册`)
     if (tool.agentResultMode === 'return_direct') {
@@ -626,228 +705,6 @@ export class ToolExecutionCoordinator {
       result,
       this.options.inlineToolResultMaxChars,
       false,
-    )
-  }
-
-  private claimAgentWorkflowStep(
-    toolName: string,
-    callId: string,
-    ownerAgentId?: string,
-    workflowStepId?: string | null,
-  ): Promise<string | null> {
-    if (AGENT_WORKFLOW_CONTROL_TOOLS.has(toolName)) return Promise.resolve(null)
-    return this.enqueueWorkflowMutation(async () => {
-      let claimedStepId: string | null = null
-      const updated = await this.options.store.mutateRunState(this.options.runId, state => {
-        const workflow = state.agentWorkflow
-        if (!workflow) return {}
-        if (workflow.status === 'adjusting' || workflow.status === 'completed') {
-          const tool = this.options.registry.get(toolName)
-          if (tool?.isReadOnly && !tool.isDestructive) return {}
-          const phase = workflow.status === 'completed' ? '已完成当前计划步骤' : '正在等待调整'
-          throw new Error(`智能体工作流${phase}。请先调用 revise_agent_workflow，再执行新的写入或外部操作。`)
-        }
-        if (workflow.status === 'cancelled' || workflow.status === 'failed') {
-          throw new Error(`智能体工作流已经处于 ${workflow.status} 状态，不能继续调用工具。`)
-        }
-        const claimed = this.activeClaimedWorkflowStepIds(workflow)
-        const invocation = {
-          toolName,
-          ...(ownerAgentId ? { ownerAgentId } : {}),
-          ...(workflowStepId ? { workflowStepId } : {}),
-        }
-        const step = findRunnableAgentWorkflowStep(workflow, invocation, claimed)
-        if (!step) {
-          const planned = workflow.steps.filter(item => item.toolName === toolName && item.status === 'pending')
-          const dependenciesSatisfied = planned.filter(item => item.dependsOn.every(dependency => (
-            workflow.steps.some(candidate => (
-              candidate.stepId === dependency
-              && (candidate.status === 'completed' || candidate.status === 'skipped')
-            ))
-          )))
-          if (ownerAgentId && dependenciesSatisfied.some(item => item.ownerAgentId !== ownerAgentId)) {
-            throw new Error(`子智能体 '${ownerAgentId}' 不能领取分配给其他负责人的步骤。请先调用 revise_agent_workflow 调整负责人。`)
-          }
-          if (workflowStepId) {
-            const requested = workflow.steps.find(item => item.stepId === workflowStepId)
-            if (!requested) throw new Error(`工作流步骤 '${workflowStepId}' 不存在。`)
-            if (requested.toolName !== toolName) {
-              throw new Error(`工作流步骤 '${workflowStepId}' 声明的工具是 '${requested.toolName}'，不能绑定到 '${toolName}'。`)
-            }
-            if (requested.ownerAgentId !== (ownerAgentId ?? 'supervisor')) {
-              throw new Error(`工作流步骤 '${workflowStepId}' 不属于当前执行者。`)
-            }
-            if (requested.status !== 'pending' || claimed.has(requested.stepId)) {
-              throw new Error(`工作流步骤 '${workflowStepId}' 当前不可领取。`)
-            }
-            throw new Error(`工作流步骤 '${workflowStepId}' 的依赖尚未完成，不能提前执行。`)
-          }
-          const readyForOwner = dependenciesSatisfied.filter(item => (
-            item.ownerAgentId === (ownerAgentId ?? 'supervisor')
-            && !claimed.has(item.stepId)
-          ))
-          if (readyForOwner.length > 1) {
-            throw new Error(
-              `工具 '${toolName}' 同时对应多个可执行步骤（${readyForOwner.map(item => item.stepId).join('、')}），`
-              + '必须通过 workflowStepId 指定本次执行步骤。',
-            )
-          }
-          if (planned.length) {
-            throw new Error(`工具 '${toolName}' 对应的计划步骤依赖尚未完成，不能提前执行。`)
-          }
-          throw new Error(`工具 '${toolName}' 不在当前智能体工作流的可执行步骤中。请先调用 revise_agent_workflow 显式调整工作流。`)
-        }
-        claimedStepId = step.stepId
-        const next = startAgentWorkflowStep(workflow, { stepId: step.stepId })
-        const nextStep = next.steps.find(item => item.stepId === step.stepId)
-        if (!nextStep) throw new Error(`工具开始时智能体工作流步骤 '${step.stepId}' 不存在。`)
-        return {
-          agentWorkflow: next,
-          todos: projectWorkflowStepToTodos(state.todos, nextStep),
-        }
-      })
-      if (!claimedStepId) return null
-      const next = updated.state.agentWorkflow
-      if (!next) throw new Error('工具开始后智能体工作流状态缺失。')
-      const step = next.steps.find(item => item.stepId === claimedStepId)
-      if (!step) throw new Error(`工具开始后智能体工作流步骤 '${claimedStepId}' 不存在。`)
-      const nextStep = next.steps.find(item => item.stepId === step.stepId)
-      if (!nextStep) throw new Error(`工具开始时智能体工作流步骤 '${step.stepId}' 不存在。`)
-      this.claimedWorkflowSteps.set(callId, workflowStepClaim(next, step))
-      this.options.eventSink.emit('step.started', step.title, {
-        agentWorkflowId: next.agentWorkflowId,
-        revision: next.revision,
-        objectiveRevision: next.objectiveRevision,
-        stepId: step.stepId,
-        attempt: step.attempt,
-        toolName,
-      })
-      return step.stepId
-    })
-  }
-
-  private completeClaimedAgentWorkflowStep(callId: string, summary: string): Promise<void> {
-    const claim = this.claimedWorkflowSteps.get(callId)
-    if (!claim) return Promise.resolve()
-    return this.enqueueWorkflowMutation(async () => {
-      const completion: {
-        value?: { workflow: AgentWorkflow; step: AgentWorkflowStep }
-      } = {}
-      await this.options.store.mutateRunState(this.options.runId, state => {
-        const workflow = state.agentWorkflow
-        if (!matchingClaimedWorkflowStep(workflow, claim)) return {}
-        const next = completeAgentWorkflowStep(workflow, {
-          stepId: claim.stepId,
-          resultSummary: summary,
-        })
-        const nextStep = next.steps.find(item => item.stepId === claim.stepId)
-        if (!nextStep) return {}
-        completion.value = { workflow: next, step: nextStep }
-        return {
-          agentWorkflow: next,
-          todos: projectWorkflowStepToTodos(state.todos, nextStep),
-        }
-      })
-      this.clearWorkflowClaim(callId, claim)
-      const completed = completion.value
-      if (!completed) return
-      this.options.eventSink.emit('step.completed', completed.step.title, {
-        agentWorkflowId: completed.workflow.agentWorkflowId,
-        revision: completed.workflow.revision,
-        objectiveRevision: completed.workflow.objectiveRevision,
-        stepId: claim.stepId,
-        attempt: claim.attempt,
-        toolName: completed.step.toolName,
-      })
-      if (completed.workflow.status === 'completed') {
-        this.options.eventSink.emit('agent_workflow.completed', completed.workflow.goal, {
-          agentWorkflowId: completed.workflow.agentWorkflowId,
-          revision: completed.workflow.revision,
-          objectiveRevision: completed.workflow.objectiveRevision,
-        })
-      }
-    })
-  }
-
-  private failClaimedAgentWorkflowStep(callId: string, message: string): Promise<void> {
-    const claim = this.claimedWorkflowSteps.get(callId)
-    if (!claim) return Promise.resolve()
-    return this.enqueueWorkflowMutation(async () => {
-      const failure: {
-        value?: { workflow: AgentWorkflow; step: AgentWorkflowStep }
-      } = {}
-      await this.options.store.mutateRunState(this.options.runId, state => {
-        const workflow = state.agentWorkflow
-        if (!matchingClaimedWorkflowStep(workflow, claim)) return {}
-        const next = failAgentWorkflowStep(workflow, {
-          stepId: claim.stepId,
-          errorMessage: message,
-        })
-        const nextStep = next.steps.find(item => item.stepId === claim.stepId)
-        if (!nextStep) return {}
-        failure.value = { workflow: next, step: nextStep }
-        return {
-          agentWorkflow: next,
-          todos: projectWorkflowStepToTodos(state.todos, nextStep),
-        }
-      })
-      this.clearWorkflowClaim(callId, claim)
-      const failed = failure.value
-      if (!failed) return
-      this.options.eventSink.emit('warning.raised', `步骤执行失败：${message}`, {
-        agentWorkflowId: failed.workflow.agentWorkflowId,
-        revision: failed.workflow.revision,
-        objectiveRevision: failed.workflow.objectiveRevision,
-        stepId: claim.stepId,
-        attempt: claim.attempt,
-      })
-    })
-  }
-
-  private clearWorkflowClaim(callId: string, claim: ClaimedWorkflowStep): void {
-    if (this.claimedWorkflowSteps.get(callId) === claim) {
-      this.claimedWorkflowSteps.delete(callId)
-    }
-  }
-
-  private activeClaimedWorkflowStepIds(workflow: AgentWorkflow | null): Set<string> {
-    return new Set(
-      [...this.claimedWorkflowSteps.values()]
-        .filter(claim => matchingClaimedWorkflowStep(workflow, claim))
-        .map(claim => claim.stepId),
-    )
-  }
-
-  private enqueueWorkflowMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const pending = this.workflowMutation.then(operation, operation)
-    this.workflowMutation = pending.then(() => undefined, () => undefined)
-    return pending
-  }
-
-  private enqueueResultMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const pending = this.resultMutation.then(operation, operation)
-    this.resultMutation = pending.then(() => undefined, () => undefined)
-    return pending
-  }
-
-  private updatePendingToolCall(callId: string, pending: boolean): Promise<void> {
-    return pending
-      ? this.recoveryLedger.markPending(callId)
-      : this.recoveryLedger.markTerminal(callId)
-  }
-
-  private emitAgentWorkflowControlEvent(toolName: string): void {
-    if (toolName !== 'submit_agent_workflow' && toolName !== 'revise_agent_workflow') return
-    const workflow = this.options.store.getRun(this.options.runId).state.agentWorkflow
-    if (!workflow) throw new Error('智能体工作流控制工具执行后没有写入工作流状态。')
-    this.options.eventSink.emit(
-      toolName === 'submit_agent_workflow' ? 'agent_workflow.created' : 'agent_workflow.revised',
-      workflow.goal,
-      {
-        agentWorkflowId: workflow.agentWorkflowId,
-        revision: workflow.revision,
-        changeReason: workflow.changeReason,
-      },
     )
   }
 
@@ -919,134 +776,6 @@ export class ToolExecutionCoordinator {
     }
   }
 
-  private async appendToolResult(
-    callId: string,
-    toolName: string,
-    result: ToolResult,
-    objectiveRevision: number,
-  ): Promise<void> {
-    const content = JSON.stringify({
-      message: result.message,
-      payload: result.payload,
-      valueRefs: (result.valueRefs ?? []).map(ref => ({ refId: ref.refId, kind: ref.kind, label: ref.label })),
-    })
-    const appendResult = (contentRef: Awaited<ReturnType<ToolExecutionStore['putConversationObject']>> | null) => (
-      this.options.store.appendTranscript({
-      threadId: this.options.threadId,
-      runId: this.options.runId,
-      turnId: this.options.turnId,
-      kind: 'tool_result',
-      payload: {
-        callId,
-        objectiveRevision,
-        name: toolName,
-        label: this.toolLabel(toolName),
-        summary: result.message,
-        content: contentRef ? null : content,
-        contentRef,
-        ledgerStatus: 'completed',
-        resultId: result.resultId,
-        valueRefIds: (result.valueRefs ?? []).map(reference => reference.refId),
-        artifactIds: (result.artifacts ?? []).map(artifact => artifact.artifactId),
-      },
-      })
-    )
-    if (content.length > this.options.inlineToolResultMaxChars) {
-      await this.options.store.publishConversationObject(
-        content,
-        'application/json',
-        reference => appendResult(reference),
-      )
-    } else {
-      await appendResult(null)
-    }
-  }
-
-  private async appendToolFailure(
-    callId: string,
-    toolName: string,
-    message: string,
-    objectiveRevision: number,
-  ): Promise<void> {
-    await this.options.store.appendTranscript({
-      threadId: this.options.threadId,
-      runId: this.options.runId,
-      turnId: this.options.turnId,
-      kind: 'tool_result',
-      payload: {
-        callId,
-        objectiveRevision,
-        name: toolName,
-        label: this.toolLabel(toolName),
-        summary: message,
-        content: message,
-        contentRef: null,
-        ledgerStatus: 'failed',
-        resultId: null,
-      },
-    })
-  }
-
-  private async appendLedger(
-    callId: string,
-    toolName: string,
-    ledgerStatus: 'started' | 'failed',
-    objectiveRevision: number,
-    error?: string,
-  ): Promise<void> {
-    await this.options.store.appendTranscript({
-      threadId: this.options.threadId,
-      runId: this.options.runId,
-      turnId: this.options.turnId,
-      kind: 'checkpoint',
-      payload: {
-        callId,
-        objectiveRevision,
-        name: toolName,
-        label: this.toolLabel(toolName),
-        ledgerStatus,
-        error: error ?? null,
-      },
-    })
-  }
-}
-
-function workflowStepClaim(
-  workflow: AgentWorkflow,
-  step: AgentWorkflowStep,
-): ClaimedWorkflowStep {
-  if (step.status !== 'running' || !step.startedAt) {
-    throw new Error(`工作流步骤 '${step.stepId}' 缺少可恢复的运行身份`)
-  }
-  return Object.freeze({
-    agentWorkflowId: workflow.agentWorkflowId,
-    workflowRevision: workflow.revision,
-    objectiveRevision: workflow.objectiveRevision,
-    stepId: step.stepId,
-    attempt: step.attempt,
-    startedAt: step.startedAt,
-  })
-}
-
-function matchingClaimedWorkflowStep(
-  workflow: AgentWorkflow | null,
-  claim: ClaimedWorkflowStep,
-): workflow is AgentWorkflow {
-  if (!workflow
-    || workflow.agentWorkflowId !== claim.agentWorkflowId
-    || workflow.revision !== claim.workflowRevision
-    || workflow.objectiveRevision !== claim.objectiveRevision) {
-    return false
-  }
-  const step = workflow.steps.find(candidate => candidate.stepId === claim.stepId)
-  return step?.status === 'running'
-    && step.attempt === claim.attempt
-    && step.startedAt === claim.startedAt
-}
-
-function projectWorkflowStepToTodos(todos: TodoItem[], step: AgentWorkflowStep): TodoItem[] {
-  const status = step.status === 'skipped' ? 'completed' : step.status
-  return todos.map(todo => todo.stepId === step.stepId ? { ...todo, status } : todo)
 }
 
 const AGENT_WORKFLOW_DEFINITION_TOOLS = new Set([
@@ -1279,13 +1008,6 @@ function splitWorkflowStepIdentity(args: Record<string, unknown>): {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
-}
-
-function objectiveRevisionFromPayload(payload: Record<string, unknown>, fallback: number): number {
-  const value = payload.objectiveRevision
-  return typeof value === 'number' && Number.isInteger(value) && value > 0
-    ? value
-    : fallback
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

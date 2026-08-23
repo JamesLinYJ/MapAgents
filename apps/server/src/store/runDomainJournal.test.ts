@@ -22,6 +22,8 @@ import {
 } from '../schemas/types.js'
 import { InMemoryConversationPersistence } from '../../test-support/inMemoryConversationPersistence.js'
 import { RunDomainSequenceConflictError } from './storeErrors.js'
+import { ToolInvocationLedger } from '../agent-runtime/tools/ToolInvocationLedger.js'
+import { agentContextDigest } from '../agent-runtime/step/agentContextDigest.js'
 
 const now = '2026-08-20T00:00:00.000Z'
 
@@ -46,7 +48,7 @@ describe('Run domain journal', () => {
     await commitModelRequest(persistence, run.id, '1')
     await persistence.saveAgentsSdkCheckpoint(run.id, {
       contentHash: 'a'.repeat(64),
-      agentsSdkVersion: '0.16.1',
+      agentsSdkVersion: '0.17.0',
       runtimeConfigDigest: 'runtime_1',
       sdkStateSchemaVersion: 5,
       inputLeaseId: 'lease_1',
@@ -64,7 +66,7 @@ describe('Run domain journal', () => {
     await commitModelRequest(persistence, run.id, '2')
     await persistence.saveAgentsSdkCheckpoint(run.id, {
       contentHash: 'b'.repeat(64),
-      agentsSdkVersion: '0.16.1',
+      agentsSdkVersion: '0.17.0',
       runtimeConfigDigest: 'runtime_1',
       sdkStateSchemaVersion: 5,
       inputLeaseId: 'lease_3',
@@ -75,8 +77,52 @@ describe('Run domain journal', () => {
       updatedAt: '2026-08-20T00:00:02.000Z',
       state: { ...beforeTool.state, selectedDataSources: ['dataset_1'] },
     }
-    expect(await persistence.commitToolResult(toolRun, 'result_1', [], [])).toBe(true)
-    expect(await persistence.commitToolResult(toolRun, 'result_1', [], [])).toBe(false)
+    const invocationLedger = new ToolInvocationLedger(persistence, toolRun.id)
+    await invocationLedger.prepare({
+      runId: toolRun.id,
+      turnId: 'turn_tool_1',
+      callId: 'call_tool_1',
+      stepId: null,
+      objectiveRevision: toolRun.state.objectiveRevision,
+      toolPlanDigest: agentContextDigest({ tool: 'inspect_dataset' }),
+      descriptor: {
+        name: 'inspect_dataset',
+        namespace: 'test',
+        providerId: 'test',
+        kind: 'platform',
+        exposure: 'immediate',
+        effect: 'read',
+        parallelism: 'shared',
+        approvalAction: null,
+        replayPolicy: 'safe',
+        requiredCapabilities: [],
+        requiredValueRefKinds: [],
+        executionSurfaces: ['developer'],
+      },
+      args: {},
+      executionSurface: 'developer',
+    })
+    const runningInvocation = await invocationLedger.start('call_tool_1')
+    const invocationCommit = {
+      invocationId: runningInvocation.invocationId,
+      expectedVersion: runningInvocation.version,
+      terminalAt: '2026-08-20T00:00:02.000Z',
+      checkpointImmediately: false,
+    }
+    expect((await persistence.commitToolResult(
+      toolRun,
+      'result_1',
+      invocationCommit,
+      [],
+      [],
+    )).committed).toBe(true)
+    expect((await persistence.commitToolResult(
+      toolRun,
+      'result_1',
+      invocationCommit,
+      [],
+      [],
+    )).committed).toBe(false)
 
     const events = await persistence.listRunDomainEvents(run.id)
     const snapshot = await persistence.getRunDomainSnapshot(run.id)
@@ -106,6 +152,7 @@ describe('Run domain journal', () => {
       'input.included',
       'step.model_request_committed',
       'input.checkpointed',
+      'run.checkpoint_changed',
       'run.checkpoint_changed',
       'tool.succeeded',
     ])

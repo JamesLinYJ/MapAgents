@@ -18,7 +18,7 @@ import {
 } from '../schemas/types.js'
 
 export const SDK_STATE_SCHEMA_VERSION = AGENTS_SDK_STATE_SCHEMA_VERSION
-export const SUPPORTED_AGENTS_SDK_VERSION = '0.16.1'
+export const SUPPORTED_AGENTS_SDK_VERSION = '0.17.0'
 
 let versionPromise: Promise<string> | null = null
 

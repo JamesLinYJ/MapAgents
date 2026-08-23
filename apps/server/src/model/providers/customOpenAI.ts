@@ -82,6 +82,8 @@ export function createCustomOpenAIAdapter(options: CustomOpenAIAdapterOptions): 
       transport: config.protocol === 'responses' ? 'openai_responses' : 'openai_chat_completions',
       structuredOutput: 'json_schema',
       functionTools: true,
+      deferredTools: false,
+      toolNamespaces: false,
       localMcp: true,
       hostedTools: false,
       handoffs: true,

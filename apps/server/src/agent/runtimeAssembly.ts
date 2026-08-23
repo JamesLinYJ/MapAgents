@@ -55,7 +55,7 @@ import {
 import { CanonicalAgentsSession } from '../agent-runtime/sdk/CanonicalAgentsSession.js'
 import { createHandoffAgents } from './handoffAgentFactory.js'
 import { buildPlanningCapabilityCatalog, buildSystemPrompt } from './prompts.js'
-import { RunToolConcurrencyGate } from './runToolConcurrencyGate.js'
+import { ToolExecutionGate } from '../agent-runtime/tools/ToolExecutionGate.js'
 import {
   buildSandboxManifest,
   buildSandboxRunConfig,
@@ -85,7 +85,7 @@ import { ToolExecutionCoordinator } from './toolExecutionCoordinator.js'
 import {
   DEVELOPER_TOOL_PROVIDER_ID,
   developerToolsEnabledForRuntime,
-} from './toolExecutionPolicy.js'
+} from '../agent-runtime/tools/ToolPolicy.js'
 import type { RunEventSink } from './turnRunner.js'
 import { ToolResultCommitService } from '../tools/resultPersistence.js'
 import { makeId } from '../utils/ids.js'
@@ -94,12 +94,11 @@ import type {
   RecordedAgentStepContext,
 } from '../agent-runtime/step/AgentStepContextFactory.js'
 import {
-  createAgentToolPlan,
-  handoffToolPlanSource,
-  platformToolPlanSource,
-  sdkToolPlanSource,
-  type AgentToolPlanSource,
-} from '../agent-runtime/step/AgentToolPlan.js'
+  platformToolDescriptorSource,
+  sdkToolDescriptorSource,
+  type AgentToolDescriptorSource,
+} from '../agent-runtime/tools/ToolCatalog.js'
+import { compileToolPlan } from '../agent-runtime/tools/ToolPlanCompiler.js'
 import { ModelRequestJournal } from '../agent-runtime/input/ModelRequestJournal.js'
 
 export interface RuntimeAssemblyFactoryOptions {
@@ -178,13 +177,17 @@ export class RuntimeAssemblyFactory {
     }
     const segmentId = activeModelRequest?.segmentId ?? makeId('segment')
     const modelRequestJournal = new ModelRequestJournal(store)
+    let coordinator: ToolExecutionCoordinator
     let latestCheckpointContext: RecordedAgentStepContext | null = null
     let checkpointContextListener: ((context: RecordedAgentStepContext) => Promise<void>) | null = null
     const checkpointContext = {
       current: (): RecordedAgentStepContext | null => latestCheckpointContext,
       adopt: (context: RecordedAgentStepContext): void => {
         if (latestCheckpointContext) throw new Error('Agent StepContext checkpoint 已初始化')
-        latestCheckpointContext = structuredClone(context)
+        const restored = structuredClone(context)
+        coordinator.bindModelInputObjectiveRevision(restored.objectiveRevision)
+        coordinator.bindStepContext(restored)
+        latestCheckpointContext = restored
       },
       subscribe: (listener: (context: RecordedAgentStepContext) => Promise<void>): (() => void) => {
         if (checkpointContextListener) throw new Error('Agent StepContext checkpoint listener 已绑定')
@@ -296,8 +299,7 @@ export class RuntimeAssemblyFactory {
     })
 
     const valueState = createThreadValueState(store, threadId, options.runId)
-    const executionGate = new RunToolConcurrencyGate()
-    let coordinator: ToolExecutionCoordinator
+    const executionGate = new ToolExecutionGate()
     const sandboxEnabled = options.runtimeConfig.sandbox.backend !== 'disabled'
     const coreSandboxCapabilities = sandboxEnabled
       ? planAwareSandboxCapabilities(executionGate)
@@ -316,7 +318,6 @@ export class RuntimeAssemblyFactory {
       runToolExecution: (lane, operation) => executionGate.run(lane, operation),
       toolOutputMetadata: callId => coordinator.toolOutputMetadata(callId),
     }
-    const recoveryCheckpoint = await store.getRunCheckpoint(options.runId)
     coordinator = new ToolExecutionCoordinator({
       store,
       resultCommitService: new ToolResultCommitService(store),
@@ -337,7 +338,6 @@ export class RuntimeAssemblyFactory {
       itemSink,
       valueState,
       signal,
-      initialPendingToolCallIds: recoveryCheckpoint.pendingToolCallIds,
     })
 
     const approvalTools = new Set(options.runtimeConfig.supervisor.approvalInterruptTools)
@@ -417,10 +417,12 @@ export class RuntimeAssemblyFactory {
       executionGate,
     )
     const mcpConfigs = new Map(options.runtimeConfig.sdk.mcp.servers.map(server => [server.name, server]))
-    const requestToolSources: AgentToolPlanSource[] = [
-      ...supervisorToolDefinitions.map(platformToolPlanSource),
-      ...subAgentTools.map(tool => sdkToolPlanSource({
-        tool,
+    const requestToolSources: AgentToolDescriptorSource[] = [
+      ...supervisorToolDefinitions.map(definition => platformToolDescriptorSource(definition, {
+        approvalRequired: approvalTools.has(definition.name),
+      })),
+      ...subAgentTools.map(tool => sdkToolDescriptorSource({
+        name: tool.name,
         kind: 'subagent',
         providerId: tool.name,
       })),
@@ -429,28 +431,33 @@ export class RuntimeAssemblyFactory {
         if (!serverName) throw new Error(`MCP 工具 '${tool.name}' 缺少 server 来源`)
         const server = mcpConfigs.get(serverName)
         if (!server) throw new Error(`MCP 工具 '${tool.name}' 引用了未知 server '${serverName}'`)
-        return sdkToolPlanSource({
-          tool,
+        return sdkToolDescriptorSource({
+          name: tool.name,
           kind: 'mcp',
           providerId: serverName,
-          requiresApproval: server.approval === 'always',
+          approvalAction: server.approval === 'always' ? `tool:${tool.name}` : null,
         })
       }),
-      ...hostedTools.map(tool => sdkToolPlanSource({
-        tool,
+      ...hostedTools.map(tool => sdkToolDescriptorSource({
+        name: tool.name,
         kind: 'hosted',
         providerId: adapter.provider,
-        readOnly: true,
-        destructive: false,
+        effect: 'read',
+        parallelism: 'shared',
+        replayPolicy: 'safe',
       })),
-      ...sandboxTools.map(tool => sdkToolPlanSource({
-        tool,
+      ...sandboxTools.map(tool => sdkToolDescriptorSource({
+        name: tool.name,
         kind: 'sandbox',
         providerId: options.runtimeConfig.sandbox.backend,
-        requiresApproval: true,
+        approvalAction: `tool:${tool.name}`,
       })),
       ...[...handoffIntegration.toolAgentIds].map(([toolName, agentId]) => (
-        handoffToolPlanSource({ toolName, agentId })
+        sdkToolDescriptorSource({
+          name: toolName,
+          kind: 'handoff',
+          providerId: agentId,
+        })
       )),
     ]
     captureModelRequest = async request => {
@@ -477,12 +484,20 @@ export class RuntimeAssemblyFactory {
           throw new Error(`活动模型请求 '${durableRequest.requestId}' 的 StepContext 不一致`)
         }
         coordinator.bindModelInputObjectiveRevision(recorded.objectiveRevision)
+        coordinator.bindStepContext(recorded)
         latestCheckpointContext = recorded
         await checkpointContextListener?.(recorded)
         return modelRequestJournal.replay(durableRequest, request)
       }
       const objectiveRevision = coordinator.currentModelInputObjectiveRevision()
-      const toolPlan = createAgentToolPlan({ request, sources: requestToolSources })
+      const toolPlan = compileToolPlan({
+        request,
+        sources: requestToolSources,
+        providerCapabilities: {
+          nativeDeferredTools: adapter.agentRuntimeCapabilities.deferredTools,
+          nativeToolNamespaces: adapter.agentRuntimeCapabilities.toolNamespaces,
+        },
+      })
       const captured = await stepContexts.record({
         runId: options.runId,
         turnId,
@@ -508,6 +523,7 @@ export class RuntimeAssemblyFactory {
         throw new Error(`Agent StepContext segment '${captured.identity.segmentId}' 与运行段 '${segmentId}' 不一致`)
       }
       latestCheckpointContext = captured
+      coordinator.bindStepContext(captured)
       await checkpointContextListener?.(captured)
       return (await modelRequestJournal.commit({
         runId: options.runId,
@@ -773,7 +789,7 @@ function createHostedTools(
   ]
 }
 
-function planAwareSandboxCapabilities(executionGate: RunToolConcurrencyGate): Capability[] {
+function planAwareSandboxCapabilities(executionGate: ToolExecutionGate): Capability[] {
   return [
     filesystem({
       configureTools: tools => gateSandboxTools(tools, new Set(['view_image']), executionGate),
@@ -787,7 +803,7 @@ function planAwareSandboxCapabilities(executionGate: RunToolConcurrencyGate): Ca
 function gateSandboxTools<TContext>(
   tools: Tool<TContext>[],
   planModeDiscoveryTools: ReadonlySet<string>,
-  executionGate: RunToolConcurrencyGate,
+  executionGate: ToolExecutionGate,
 ): Tool<TContext>[] {
   return tools.map(tool => {
     if (tool.type !== 'function') return tool

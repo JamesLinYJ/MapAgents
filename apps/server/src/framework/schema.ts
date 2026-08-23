@@ -16,6 +16,15 @@ export type ToolParameterSchema = z.ZodObject
 
 const toolExecutionSurfaceSchema = z.enum(['agent', 'automation', 'debug'])
 const agentToolResultModeSchema = z.enum(['continue', 'return_direct'])
+const toolRuntimePolicySchema = z.object({
+  namespace: z.string().trim().min(1).optional(),
+  exposure: z.enum(['immediate', 'deferred', 'hidden', 'plan_readonly']).optional(),
+  effect: z.enum(['read', 'world_write', 'external_write', 'destructive']).optional(),
+  parallelism: z.enum(['shared', 'exclusive']).optional(),
+  approvalAction: z.string().trim().min(1).nullable().optional(),
+  replayPolicy: z.enum(['safe', 'idempotency_key', 'manual_recovery']).optional(),
+  requiredCapabilities: z.array(z.string().trim().min(1)).optional(),
+}).strict()
 
 export const toolManifestSchema = z.object({
   id: z.string().min(1),
@@ -39,6 +48,7 @@ export const toolManifestSchema = z.object({
     requiresApproval: z.boolean().default(false),
     executionSurfaces: z.array(toolExecutionSurfaceSchema).min(1).optional(),
     agentResultMode: agentToolResultModeSchema.optional(),
+    runtimePolicy: toolRuntimePolicySchema.optional(),
     jsonSchema: z.record(z.string(), z.unknown()),
   })).min(1),
 })
@@ -68,8 +78,25 @@ export function parseToolManifest(value: unknown): ToolManifest {
       requiresApproval: tool.requiresApproval,
       ...(tool.executionSurfaces ? { executionSurfaces: tool.executionSurfaces } : {}),
       ...(tool.agentResultMode ? { agentResultMode: tool.agentResultMode } : {}),
+      ...(tool.runtimePolicy ? { runtimePolicy: normalizeRuntimePolicy(tool.runtimePolicy) } : {}),
       jsonSchema: tool.jsonSchema,
     })),
+  }
+}
+
+function normalizeRuntimePolicy(
+  policy: z.output<typeof toolRuntimePolicySchema>,
+): NonNullable<ToolManifest['tools'][number]['runtimePolicy']> {
+  return {
+    ...(policy.namespace === undefined ? {} : { namespace: policy.namespace }),
+    ...(policy.exposure === undefined ? {} : { exposure: policy.exposure }),
+    ...(policy.effect === undefined ? {} : { effect: policy.effect }),
+    ...(policy.parallelism === undefined ? {} : { parallelism: policy.parallelism }),
+    ...(policy.approvalAction === undefined ? {} : { approvalAction: policy.approvalAction }),
+    ...(policy.replayPolicy === undefined ? {} : { replayPolicy: policy.replayPolicy }),
+    ...(policy.requiredCapabilities === undefined
+      ? {}
+      : { requiredCapabilities: policy.requiredCapabilities }),
   }
 }
 

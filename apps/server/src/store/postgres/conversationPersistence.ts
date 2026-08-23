@@ -26,6 +26,7 @@ import {
   type ToolValueRef,
   type TranscriptEntry,
 } from '../../schemas/types.js'
+import type { ToolInvocationRecord } from '@geo-agent-platform/shared-types/tool-runtime'
 import type { Database } from '../../db/connection.js'
 import { RunMutationQueue } from '../runMutationQueue.js'
 import type {
@@ -44,6 +45,11 @@ import type {
   RunLifecycleResult,
   RunRepository,
   ToolResultCommitter,
+  ToolInvocationRepository,
+  StartToolInvocationInput,
+  TerminalToolInvocationInput,
+  ToolEffectCommitResult,
+  ToolInvocationEffectCommit,
   ThreadHistoryPage,
   ThreadLifecycleResult,
   ThreadMemoryVersionReference,
@@ -72,7 +78,7 @@ export class PostgresConversationPersistence implements ConversationPersistence 
   private readonly snapshots: ConversationSnapshotRepository
   private readonly sessions: SessionRepository
   private readonly threads: ThreadRepository
-  private readonly runs: RunRepository & ToolResultCommitter
+  private readonly runs: RunRepository & ToolResultCommitter & ToolInvocationRepository
   private readonly domainJournal: RunDomainJournalRepository
   private readonly objectReferences: ObjectReferenceRepository
 
@@ -209,10 +215,31 @@ export class PostgresConversationPersistence implements ConversationPersistence 
   async commitToolResult(
     run: AnalysisRun,
     resultId: string,
+    invocation: ToolInvocationEffectCommit,
     values: readonly ToolValueRef[],
     artifacts: readonly ArtifactRef[],
-  ): Promise<boolean> {
-    return this.runs.commitToolResult(run, resultId, values, artifacts)
+  ): Promise<ToolEffectCommitResult> {
+    return this.runs.commitToolResult(run, resultId, invocation, values, artifacts)
+  }
+
+  prepareToolInvocation(invocation: ToolInvocationRecord): Promise<ToolInvocationRecord> {
+    return this.runs.prepareToolInvocation(invocation)
+  }
+
+  getToolInvocation(runId: string, callId: string): Promise<ToolInvocationRecord | null> {
+    return this.runs.getToolInvocation(runId, callId)
+  }
+
+  listToolInvocations(runId: string): Promise<ToolInvocationRecord[]> {
+    return this.runs.listToolInvocations(runId)
+  }
+
+  startToolInvocation(input: StartToolInvocationInput): Promise<ToolInvocationRecord> {
+    return this.runs.startToolInvocation(input)
+  }
+
+  terminateToolInvocation(input: TerminalToolInvocationInput): Promise<ToolInvocationRecord> {
+    return this.runs.terminateToolInvocation(input)
   }
 
   async listToolValues(runId: string): Promise<ToolValueRef[]> {

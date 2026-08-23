@@ -33,7 +33,7 @@ import {
   SubAgentStateController,
   type SubAgentRuntimeDependencies,
 } from './subAgentRuntimeSupport.js'
-import { toolExecutionLane } from './runToolConcurrencyGate.js'
+import { platformToolDescriptorSource } from '../agent-runtime/tools/ToolCatalog.js'
 
 const AGENT_TOOL_NAME = /^[a-zA-Z0-9_-]+$/u
 
@@ -283,7 +283,7 @@ function assertParallelSafeConfiguration(
     const definition = options.toolRegistry.get(toolName)
     if (!definition) throw new Error(`并发安全子 Agent '${config.agentId}' 引用了未知工具 '${toolName}'`)
     const approvalRequired = options.approvalTools.has(toolName)
-    if (toolExecutionLane(definition, approvalRequired) !== 'shared') {
+    if (approvalRequired || platformToolDescriptorSource(definition).parallelism !== 'shared') {
       throw new Error(
         `子 Agent '${config.agentId}' 只有在全部工具都显式 parallelSafe、只读、无破坏且免审批时才能共享并发；'${toolName}' 不符合。`,
       )

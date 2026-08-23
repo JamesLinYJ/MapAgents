@@ -12,9 +12,9 @@ import { describe, expect, it } from 'vitest'
 
 import type { ToolDef } from '../framework/types.js'
 import type { ToolRegistry } from '../framework/registry.js'
-import { ToolExecutionPolicy } from './toolExecutionPolicy.js'
+import { ToolPolicy } from '../agent-runtime/tools/ToolPolicy.js'
 
-describe('ToolExecutionPolicy', () => {
+describe('ToolPolicy', () => {
   it('keeps plan mode narrow while leaving normal execution flexible', () => {
     const readOnly = tool('inspect_dataset', { isReadOnly: true, isDestructive: false })
     const write = tool('update_layer', { isReadOnly: false, isDestructive: true })
@@ -79,11 +79,11 @@ function createPolicy(input: {
   state: () => AgentState
   tools: Record<string, ToolDef>
   externalAgentCalls?: Map<string, string>
-}): ToolExecutionPolicy {
+}): ToolPolicy {
   const registry = {
     get: (name: string) => input.tools[name],
   } as unknown as ToolRegistry
-  return new ToolExecutionPolicy({
+  return new ToolPolicy({
     registry,
     state: input.state,
     claimedWorkflowSteps: () => new Set(),
@@ -99,6 +99,7 @@ function tool(name: string, flags: Pick<ToolDef, 'isReadOnly' | 'isDestructive'>
     prompt: name,
     group: 'test',
     tags: [],
+    jsonSchema: { type: 'object', properties: {}, additionalProperties: false },
     ...flags,
     handler: async () => ({
       message: 'ok',

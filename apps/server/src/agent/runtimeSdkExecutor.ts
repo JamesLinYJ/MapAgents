@@ -149,9 +149,6 @@ export class RuntimeSdkExecutor {
             stepContext,
             terminalToolCallIds,
           }, leaseId)
-          // Durable checkpoint 事务已把公开 SDK result 回调确认的 callId 与
-          // pending tool ledger 绑定提交；进程内快照只接受该事务的返回值。
-          await assembly.coordinator.acceptCheckpointedToolCalls(commit.terminalToolCallIds)
           if (leaseId) {
             pendingInputLeaseId = null
             await steering.recordCheckpointedInputs(options.runId, commit.acknowledgedInputs)

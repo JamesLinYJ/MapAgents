@@ -69,6 +69,7 @@ function validateManifestParity(manifestTool: ToolManifestEntry, runtimeTool: To
         'tags',
         'executionSurfaces',
         'agentResultMode',
+        'runtimePolicy',
         'jsonSchema',
     ];
     for (const field of fields) {

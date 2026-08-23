@@ -1,20 +1,25 @@
 // +-------------------------------------------------------------------------
 //
-//   地理智能平台 - 单次运行工具并发安全闸门测试
+//   地理智能平台 - 工具共享/独占执行闸门测试
 //
-//   文件:       runToolConcurrencyGate.test.ts
+//   文件:       ToolExecutionGate.test.ts
 //
-//   日期:       2026年07月23日
+//   日期:       2026年08月23日
 //   作者:       JamesLinYJ
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 import { describe, expect, it } from 'vitest'
-import { RunToolConcurrencyGate, toolExecutionLane, withToolAuthorizationLease } from './runToolConcurrencyGate.js'
 
-describe('RunToolConcurrencyGate', () => {
-  it('allows explicitly safe read-only calls to overlap', async () => {
-    const gate = new RunToolConcurrencyGate()
+import {
+  executionLaneForDescriptor,
+  ToolExecutionGate,
+  withToolAuthorizationLease,
+} from './ToolExecutionGate.js'
+
+describe('ToolExecutionGate', () => {
+  it('allows shared reads to overlap', async () => {
+    const gate = new ToolExecutionGate()
     let active = 0
     let maxActive = 0
     const execute = () => gate.run('shared', async () => {
@@ -25,12 +30,11 @@ describe('RunToolConcurrencyGate', () => {
     })
 
     await Promise.all([execute(), execute()])
-
     expect(maxActive).toBe(2)
   })
 
-  it('serializes ordinary, write, approval, and MCP-style exclusive calls', async () => {
-    const gate = new RunToolConcurrencyGate()
+  it('serializes exclusive effects', async () => {
+    const gate = new ToolExecutionGate()
     let active = 0
     let maxActive = 0
     const execute = () => gate.run('exclusive', async () => {
@@ -41,12 +45,29 @@ describe('RunToolConcurrencyGate', () => {
     })
 
     await Promise.all([execute(), execute(), execute()])
-
     expect(maxActive).toBe(1)
   })
 
-  it('revalidates authorization after a queued tool acquires its execution lease', async () => {
-    const gate = new RunToolConcurrencyGate()
+  it('does not let new shared work overtake a queued exclusive call', async () => {
+    const gate = new ToolExecutionGate()
+    const order: string[] = []
+    let releaseFirst!: () => void
+    const first = gate.run('shared', async () => {
+      order.push('read-a:start')
+      await new Promise<void>(resolve => { releaseFirst = resolve })
+      order.push('read-a:end')
+    })
+    await until(() => order.includes('read-a:start'))
+    const write = gate.run('exclusive', async () => { order.push('write') })
+    const secondRead = gate.run('shared', async () => { order.push('read-b') })
+    releaseFirst()
+    await Promise.all([first, write, secondRead])
+
+    expect(order).toEqual(['read-a:start', 'read-a:end', 'write', 'read-b'])
+  })
+
+  it('revalidates authorization after a queued call acquires its lease', async () => {
+    const gate = new ToolExecutionGate()
     let authorized = true
     let checks = 0
     let releaseFirst!: () => void
@@ -65,7 +86,6 @@ describe('RunToolConcurrencyGate', () => {
       checks += 1
       if (!authorized) throw new Error('authorization_revoked')
     }, () => gate.run('shared', async () => 'should-not-run'))
-
     authorized = false
     releaseFirst()
 
@@ -73,19 +93,12 @@ describe('RunToolConcurrencyGate', () => {
     expect(checks).toBe(2)
   })
 
-  it('requires every safety property before assigning the shared lane', () => {
-    const safe = {
-      parallelSafe: true,
-      isReadOnly: true,
-      isDestructive: false,
-      requiresApproval: false,
-    }
-    expect(toolExecutionLane(safe, false)).toBe('shared')
-    expect(toolExecutionLane({ ...safe, parallelSafe: undefined }, false)).toBe('shared')
-    expect(toolExecutionLane({ ...safe, parallelSafe: false }, false)).toBe('exclusive')
-    expect(toolExecutionLane({ ...safe, isReadOnly: false }, false)).toBe('exclusive')
-    expect(toolExecutionLane({ ...safe, isDestructive: true }, false)).toBe('exclusive')
-    expect(toolExecutionLane({ ...safe, requiresApproval: true }, false)).toBe('exclusive')
-    expect(toolExecutionLane(safe, true)).toBe('exclusive')
+  it('routes only the descriptor parallelism declared in the immutable plan', () => {
+    expect(executionLaneForDescriptor({ parallelism: 'shared' })).toBe('shared')
+    expect(executionLaneForDescriptor({ parallelism: 'exclusive' })).toBe('exclusive')
   })
 })
+
+async function until(predicate: () => boolean): Promise<void> {
+  while (!predicate()) await new Promise(resolve => setTimeout(resolve, 0))
+}

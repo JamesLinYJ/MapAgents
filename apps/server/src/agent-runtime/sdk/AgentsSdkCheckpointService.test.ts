@@ -31,7 +31,7 @@ import { assertCheckpointCompatibility } from './AgentsSdkCheckpointService.js'
 const validCheckpoint = {
   orchestrationEngine: 'openai_agents',
   sdkStateSchemaVersion: SDK_STATE_SCHEMA_VERSION,
-  agentsSdkVersion: '0.16.1',
+  agentsSdkVersion: '0.17.0',
   runtimeConfigDigest: 'sha256:config',
 }
 
@@ -41,7 +41,7 @@ describe('Agents SDK checkpoint anti-corruption boundary', () => {
     const envelope = {
       envelopeVersion: AGENTS_SDK_CHECKPOINT_ENVELOPE_VERSION,
       publicSerializedState: '{"sdk":"opaque"}',
-      sdkVersion: '0.16.1',
+      sdkVersion: '0.17.0',
       sdkStateSchemaVersion: SDK_STATE_SCHEMA_VERSION,
       runtimeConfigDigest: 'sha256:config',
       toolPlanDigest: 'sha256:tools',
@@ -107,7 +107,7 @@ describe('Agents SDK checkpoint anti-corruption boundary', () => {
   it('接受完全匹配的 SDK 检查点', () => {
     expect(() => assertCheckpointCompatibility(validCheckpoint, {
       runId: 'run_1',
-      sdkVersion: '0.16.1',
+      sdkVersion: '0.17.0',
       configDigest: 'sha256:config',
     })).not.toThrow()
   })
@@ -120,7 +120,7 @@ describe('Agents SDK checkpoint anti-corruption boundary', () => {
   ])('拒绝不兼容检查点', (checkpoint, message) => {
     expect(() => assertCheckpointCompatibility(checkpoint, {
       runId: 'run_1',
-      sdkVersion: '0.16.1',
+      sdkVersion: '0.17.0',
       configDigest: 'sha256:config',
     })).toThrow(message)
   })

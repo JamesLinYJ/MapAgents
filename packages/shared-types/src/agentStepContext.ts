@@ -13,8 +13,13 @@ import { z } from 'zod'
 
 import { geoWorldCapabilitiesSchema } from './geoWorld.js'
 import { modelCapabilitySnapshotSchema } from './resources.js'
+import {
+  agentToolPlanSnapshotSchema,
+  type AgentToolPlanEntry,
+  type AgentToolPlanSnapshot,
+} from './toolRuntime.js'
 
-export const AGENT_STEP_CONTEXT_SCHEMA_VERSION = 1 as const
+export const AGENT_STEP_CONTEXT_SCHEMA_VERSION = 2 as const
 
 export const agentStepIdentitySchema = z.object({
   stepId: z.string().trim().min(1),
@@ -22,30 +27,6 @@ export const agentStepIdentitySchema = z.object({
   segmentId: z.string().trim().min(1),
   modelRequestIndex: z.number().int().positive(),
 }).strict()
-
-export const agentToolPlanEntrySchema = z.object({
-  name: z.string().trim().min(1),
-  kind: z.enum(['platform', 'subagent', 'handoff', 'mcp', 'hosted', 'sandbox']),
-  providerId: z.string().trim().min(1).nullable(),
-  schemaDigest: z.string().trim().min(1),
-  definitionDigest: z.string().trim().min(1),
-  requiresApproval: z.boolean(),
-  readOnly: z.boolean().nullable(),
-  destructive: z.boolean().nullable(),
-}).strict()
-
-export const agentToolPlanSnapshotSchema = z.object({
-  entries: z.array(agentToolPlanEntrySchema),
-  catalogDigest: z.string().trim().min(1),
-}).strict().superRefine((plan, context) => {
-  const names = new Set<string>()
-  for (const [index, entry] of plan.entries.entries()) {
-    if (names.has(entry.name)) {
-      context.addIssue({ code: 'custom', path: ['entries', index, 'name'], message: '模型可见工具名不能重复' })
-    }
-    names.add(entry.name)
-  }
-})
 
 export const agentPermissionSnapshotSchema = z.object({
   principalId: z.string().trim().min(1).nullable(),
@@ -145,8 +126,7 @@ export const agentStepContextSchema = z.object({
 })
 
 export type AgentStepIdentity = z.infer<typeof agentStepIdentitySchema>
-export type AgentToolPlanEntry = z.infer<typeof agentToolPlanEntrySchema>
-export type AgentToolPlanSnapshot = z.infer<typeof agentToolPlanSnapshotSchema>
+export type { AgentToolPlanEntry, AgentToolPlanSnapshot }
 export type AgentPermissionSnapshot = z.infer<typeof agentPermissionSnapshotSchema>
 export type AgentApprovalPolicySnapshot = z.infer<typeof agentApprovalPolicySnapshotSchema>
 export type AgentSandboxSnapshot = z.infer<typeof agentSandboxSnapshotSchema>

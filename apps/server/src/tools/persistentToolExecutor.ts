@@ -19,6 +19,11 @@ import type { ModelAdapterRegistry } from '../model/registry.js'
 import { recordModelCompletionUsage, type ModelCompletionService } from '../model/modelResultCache.js'
 import { runSdkStructuredOutput } from '../model/sdkStructuredOutput.js'
 import type { AgentRuntimeConfig } from '../schemas/types.js'
+import type { AgentToolExecutionSurface } from '@geo-agent-platform/shared-types/tool-runtime'
+import { ToolCatalog } from '../agent-runtime/tools/ToolCatalog.js'
+import { compileDirectToolPlan } from '../agent-runtime/tools/ToolPlanCompiler.js'
+import { ToolInvocationLedger } from '../agent-runtime/tools/ToolInvocationLedger.js'
+import { ToolEffectCommitter } from '../agent-runtime/tools/ToolEffectCommitter.js'
 import { scopeRuntimeConfigToPrincipal } from '../security/runtimePrincipalScope.js'
 import type { AuthContext } from '../security/types.js'
 import type { PersistentToolStore } from '../store/runtimePorts.js'
@@ -32,6 +37,7 @@ export interface PersistedToolExecutionInput {
   toolName: string
   args: Record<string, unknown>
   auth: AuthContext
+  executionSurface: Extract<AgentToolExecutionSurface, 'automation' | 'developer'>
   signal?: AbortSignal
 }
 export async function executePersistedTool(
@@ -119,8 +125,31 @@ export async function executePersistedTool(
   }
 
   const callId = makeId('call')
+  const turnId = makeId('turn')
   const tool = deps.registry.get(input.toolName)
   if (!tool) throw new Error(`工具 '${input.toolName}' 未注册`)
+  const catalog = new ToolCatalog(deps.registry)
+  const source = catalog.platformSource(input.toolName)
+  const definition = catalog.assertPlatformBinding(source)
+  const toolPlan = compileDirectToolPlan({
+    definition,
+    source,
+    executionSurface: input.executionSurface,
+  })
+  const invocationLedger = new ToolInvocationLedger(deps.store, run.id)
+  const effectCommitter = new ToolEffectCommitter(invocationLedger, deps.resultCommitService)
+  await invocationLedger.prepare({
+    runId: run.id,
+    turnId,
+    callId,
+    stepId: null,
+    objectiveRevision,
+    toolPlanDigest: toolPlan.catalogDigest,
+    descriptor: source,
+    args: input.args,
+    executionSurface: input.executionSurface,
+  })
+  await invocationLedger.start(callId)
   const itemSink = new ItemSink(item => deps.store.appendItem(item), run.id, run.threadId)
   const callItem = itemSink.startItem('function_call', {
     name: input.toolName,
@@ -130,13 +159,15 @@ export async function executePersistedTool(
   })
   try {
     const result = await deps.registry.execute(input.toolName, input.args, context)
-    await deps.resultCommitService.commit({
+    await effectCommitter.commit({
       runId: run.id,
+      callId,
       toolName: input.toolName,
       toolLabel: tool.label,
       args: input.args,
       result,
       objectiveRevision,
+      checkpointImmediately: true,
     })
     itemSink.completeItem(callItem.itemId, {
       callId,
@@ -176,6 +207,14 @@ export async function executePersistedTool(
     })
     await Promise.allSettled(pendingLogWrites)
     await itemSink.flush()
+    const invocation = await invocationLedger.require(callId)
+    if (invocation.status === 'running') {
+      await invocationLedger.fail(
+        callId,
+        error instanceof Error && error.message.trim() ? error.message : '工具执行失败。',
+        true,
+      )
+    }
     throw error
   }
 }

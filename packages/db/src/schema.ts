@@ -460,12 +460,120 @@ export const platformRunRecords = pgTable('platform_run_records', {
   traceIdx: index('idx_run_records_trace').on(table.traceId),
 }))
 
+export const platformToolInvocations = pgTable('platform_tool_invocations', {
+  invocationId: text('invocation_id').primaryKey(),
+  runId: text('run_id').notNull().references(() => platformRuns.runId, { onDelete: 'cascade' }),
+  turnId: text('turn_id').notNull(),
+  callId: text('call_id').notNull(),
+  stepId: text('step_id'),
+  toolName: text('tool_name').notNull(),
+  toolKind: text('tool_kind').notNull(),
+  executionSurface: text('execution_surface').notNull(),
+  objectiveRevision: integer('objective_revision').notNull(),
+  toolPlanDigest: text('tool_plan_digest').notNull(),
+  descriptorDigest: text('descriptor_digest').notNull(),
+  argsDigest: text('args_digest').notNull(),
+  effect: text('effect').notNull(),
+  replayPolicy: text('replay_policy').notNull(),
+  idempotencyKey: text('idempotency_key'),
+  approvalAction: text('approval_action'),
+  approvalDecision: text('approval_decision'),
+  status: text('status').notNull(),
+  terminalOutcome: text('terminal_outcome'),
+  resultId: text('result_id'),
+  error: text('error'),
+  preparedAt: timestamp('prepared_at', { withTimezone: true }).notNull().defaultNow(),
+  runningAt: timestamp('running_at', { withTimezone: true }),
+  terminalAt: timestamp('terminal_at', { withTimezone: true }),
+  checkpointedAt: timestamp('checkpointed_at', { withTimezone: true }),
+  version: integer('version').notNull().default(1),
+}, (table) => ({
+  runCallIdx: uniqueIndex('idx_tool_invocations_run_call_unique').on(table.runId, table.callId),
+  runStatusIdx: index('idx_tool_invocations_run_status').on(table.runId, table.status, table.preparedAt),
+  objectiveRevisionCheck: check(
+    'platform_tool_invocations_objective_revision_check',
+    sql`${table.objectiveRevision} > 0`,
+  ),
+  versionCheck: check('platform_tool_invocations_version_check', sql`${table.version} > 0`),
+  kindCheck: check(
+    'platform_tool_invocations_kind_check',
+    sql`${table.toolKind} IN ('platform', 'subagent', 'handoff', 'mcp', 'hosted', 'sandbox', 'unavailable')`,
+  ),
+  surfaceCheck: check(
+    'platform_tool_invocations_surface_check',
+    sql`${table.executionSurface} IN ('agent', 'automation', 'developer')`,
+  ),
+  effectCheck: check(
+    'platform_tool_invocations_effect_check',
+    sql`${table.effect} IN ('read', 'world_write', 'external_write', 'destructive')`,
+  ),
+  replayPolicyCheck: check(
+    'platform_tool_invocations_replay_policy_check',
+    sql`${table.replayPolicy} IN ('safe', 'idempotency_key', 'manual_recovery')`,
+  ),
+  approvalDecisionCheck: check(
+    'platform_tool_invocations_approval_decision_check',
+    sql`${table.approvalDecision} IS NULL OR ${table.approvalDecision} IN ('not_required', 'approved', 'rejected')`,
+  ),
+  statusCheck: check(
+    'platform_tool_invocations_status_check',
+    sql`${table.status} IN ('prepared', 'running', 'succeeded', 'failed', 'rejected', 'aborted', 'checkpointed')`,
+  ),
+  stateCheck: check(
+    'platform_tool_invocations_state_check',
+    sql`(
+      ${table.status} = 'prepared'
+      AND ${table.runningAt} IS NULL
+      AND ${table.terminalAt} IS NULL
+      AND ${table.checkpointedAt} IS NULL
+      AND ${table.resultId} IS NULL
+      AND ${table.error} IS NULL
+      AND ${table.terminalOutcome} IS NULL
+    ) OR (
+      ${table.status} = 'running'
+      AND ${table.runningAt} IS NOT NULL
+      AND ${table.terminalAt} IS NULL
+      AND ${table.checkpointedAt} IS NULL
+      AND ${table.resultId} IS NULL
+      AND ${table.error} IS NULL
+      AND ${table.terminalOutcome} IS NULL
+    ) OR (
+      ${table.status} = 'succeeded'
+      AND ${table.runningAt} IS NOT NULL
+      AND ${table.terminalAt} IS NOT NULL
+      AND ${table.checkpointedAt} IS NULL
+      AND ${table.error} IS NULL
+      AND ${table.terminalOutcome} = 'succeeded'
+    ) OR (
+      ${table.status} IN ('failed', 'rejected', 'aborted')
+      AND ${table.terminalAt} IS NOT NULL
+      AND ${table.checkpointedAt} IS NULL
+      AND ${table.resultId} IS NULL
+      AND ${table.error} IS NOT NULL
+      AND ${table.terminalOutcome} = ${table.status}
+    ) OR (
+      ${table.status} = 'checkpointed'
+      AND ${table.terminalAt} IS NOT NULL
+      AND ${table.checkpointedAt} IS NOT NULL
+      AND ${table.terminalOutcome} IN ('succeeded', 'failed', 'rejected', 'aborted')
+      AND (
+        (${table.terminalOutcome} = 'succeeded' AND ${table.error} IS NULL)
+        OR (${table.terminalOutcome} <> 'succeeded' AND ${table.error} IS NOT NULL)
+      )
+    )`,
+  ),
+}))
+
 export const platformToolResultCommits = pgTable('platform_tool_result_commits', {
   runId: text('run_id').notNull().references(() => platformRuns.runId, { onDelete: 'cascade' }),
+  invocationId: text('invocation_id').notNull().references(
+    () => platformToolInvocations.invocationId,
+    { onDelete: 'cascade' },
+  ),
   resultId: text('result_id').notNull(),
   committedAt: timestamp('committed_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
-  primaryKey: primaryKey({ columns: [table.runId, table.resultId] }),
+  primaryKey: primaryKey({ columns: [table.runId, table.invocationId] }),
 }))
 
 export const platformRunInputs = pgTable('platform_run_inputs', {

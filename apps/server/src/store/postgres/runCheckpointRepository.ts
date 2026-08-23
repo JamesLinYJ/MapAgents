@@ -11,7 +11,7 @@
 
 import { isDeepStrictEqual } from 'node:util'
 
-import { and, asc, eq, isNull } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm'
 
 import {
   runCheckpointSchema,
@@ -20,7 +20,7 @@ import {
   type RunSteeringRecord,
 } from '../../schemas/types.js'
 import type { Database, DatabaseTransaction } from '../../db/connection.js'
-import { platformRunInputs, platformRuns } from '../../db/schema.js'
+import { platformRunInputs, platformRuns, platformToolInvocations } from '../../db/schema.js'
 import type { RunMutationQueue } from '../runMutationQueue.js'
 import {
   assertRunDomainCheckpointProjection,
@@ -116,6 +116,7 @@ export class PostgresRunCheckpointRepository implements RunCheckpointRepository 
 
       const updatedAt = new Date()
       const terminalToolCallIds = new Set(input.terminalToolCallIds ?? [])
+      await checkpointToolInvocations(tx, runId, terminalToolCallIds, updatedAt)
       const pendingToolCallIds = run.pendingToolCallIds
         .filter(callId => !terminalToolCallIds.has(callId))
       const checkpointFields = {
@@ -293,6 +294,53 @@ export class PostgresRunCheckpointRepository implements RunCheckpointRepository 
     assertRunDomainProjection(snapshot, run)
     assertRunDomainCheckpointProjection(snapshot, checkpoint)
     if (acknowledged.length) assertRunDomainInputProjection(snapshot, acknowledged)
+  }
+}
+
+async function checkpointToolInvocations(
+  tx: DatabaseTransaction,
+  runId: string,
+  callIds: ReadonlySet<string>,
+  checkpointedAt: Date,
+): Promise<void> {
+  if (!callIds.size) return
+  const rows = await tx.select().from(platformToolInvocations)
+    .where(and(
+      eq(platformToolInvocations.runId, runId),
+      inArray(platformToolInvocations.callId, [...callIds]),
+    ))
+    .for('update')
+  const byCallId = new Map(rows.map(row => [row.callId, row]))
+  const missing = [...callIds].filter(callId => !byCallId.has(callId))
+  if (missing.length) {
+    throw new Error(`SDK checkpoint 引用了不存在的工具调用：${missing.join('、')}`)
+  }
+  const invalid = rows.filter(row => ![
+    'succeeded',
+    'failed',
+    'rejected',
+    'aborted',
+    'checkpointed',
+  ].includes(row.status))
+  if (invalid.length) {
+    throw new Error(
+      `SDK checkpoint 不能确认非终态工具调用：`
+      + invalid.map(row => `${row.callId}=${row.status}`).join('、'),
+    )
+  }
+  const terminal = rows.filter(row => row.status !== 'checkpointed')
+  if (!terminal.length) return
+  const updated = await tx.update(platformToolInvocations).set({
+    status: 'checkpointed',
+    checkpointedAt,
+    version: sql`${platformToolInvocations.version} + 1`,
+  }).where(and(
+    eq(platformToolInvocations.runId, runId),
+    inArray(platformToolInvocations.invocationId, terminal.map(row => row.invocationId)),
+    inArray(platformToolInvocations.status, ['succeeded', 'failed', 'rejected', 'aborted']),
+  )).returning({ invocationId: platformToolInvocations.invocationId })
+  if (updated.length !== terminal.length) {
+    throw new Error(`运行 '${runId}' 的工具调用 checkpoint CAS 失败`)
   }
 }
 

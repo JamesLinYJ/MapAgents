@@ -65,6 +65,8 @@ export const agentRuntimeCapabilitiesSchema = z.object({
   transport: z.enum(['deepseek_responses', 'openai_responses', 'openai_chat_completions', 'none']),
   structuredOutput: z.enum(['json_object', 'json_schema', 'none']),
   functionTools: z.boolean(),
+  deferredTools: z.boolean(),
+  toolNamespaces: z.boolean(),
   localMcp: z.boolean(),
   hostedTools: z.boolean(),
   handoffs: z.boolean(),

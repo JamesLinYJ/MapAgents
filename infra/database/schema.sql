@@ -914,11 +914,61 @@ CREATE TABLE public.platform_threads (
 
 
 --
+-- Name: platform_tool_invocations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.platform_tool_invocations (
+    invocation_id text NOT NULL,
+    run_id text NOT NULL,
+    turn_id text NOT NULL,
+    call_id text NOT NULL,
+    step_id text,
+    tool_name text NOT NULL,
+    tool_kind text NOT NULL,
+    execution_surface text NOT NULL,
+    objective_revision integer NOT NULL,
+    tool_plan_digest text NOT NULL,
+    descriptor_digest text NOT NULL,
+    args_digest text NOT NULL,
+    effect text NOT NULL,
+    replay_policy text NOT NULL,
+    idempotency_key text,
+    approval_action text,
+    approval_decision text,
+    status text NOT NULL,
+    terminal_outcome text,
+    result_id text,
+    error text,
+    prepared_at timestamp with time zone DEFAULT now() NOT NULL,
+    running_at timestamp with time zone,
+    terminal_at timestamp with time zone,
+    checkpointed_at timestamp with time zone,
+    version integer DEFAULT 1 NOT NULL,
+    CONSTRAINT platform_tool_invocations_pkey PRIMARY KEY (invocation_id),
+    CONSTRAINT platform_tool_invocations_run_call_unique UNIQUE (run_id, call_id),
+    CONSTRAINT platform_tool_invocations_objective_revision_check CHECK ((objective_revision > 0)),
+    CONSTRAINT platform_tool_invocations_version_check CHECK ((version > 0)),
+    CONSTRAINT platform_tool_invocations_kind_check CHECK ((tool_kind = ANY (ARRAY['platform'::text, 'subagent'::text, 'handoff'::text, 'mcp'::text, 'hosted'::text, 'sandbox'::text, 'unavailable'::text]))),
+    CONSTRAINT platform_tool_invocations_surface_check CHECK ((execution_surface = ANY (ARRAY['agent'::text, 'automation'::text, 'developer'::text]))),
+    CONSTRAINT platform_tool_invocations_effect_check CHECK ((effect = ANY (ARRAY['read'::text, 'world_write'::text, 'external_write'::text, 'destructive'::text]))),
+    CONSTRAINT platform_tool_invocations_replay_policy_check CHECK ((replay_policy = ANY (ARRAY['safe'::text, 'idempotency_key'::text, 'manual_recovery'::text]))),
+    CONSTRAINT platform_tool_invocations_approval_decision_check CHECK (((approval_decision IS NULL) OR (approval_decision = ANY (ARRAY['not_required'::text, 'approved'::text, 'rejected'::text])))),
+    CONSTRAINT platform_tool_invocations_status_check CHECK ((status = ANY (ARRAY['prepared'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'rejected'::text, 'aborted'::text, 'checkpointed'::text]))),
+    CONSTRAINT platform_tool_invocations_state_check CHECK (((status = 'prepared'::text) AND (running_at IS NULL) AND (terminal_at IS NULL) AND (checkpointed_at IS NULL) AND (result_id IS NULL) AND (error IS NULL) AND (terminal_outcome IS NULL)) OR ((status = 'running'::text) AND (running_at IS NOT NULL) AND (terminal_at IS NULL) AND (checkpointed_at IS NULL) AND (result_id IS NULL) AND (error IS NULL) AND (terminal_outcome IS NULL)) OR ((status = 'succeeded'::text) AND (running_at IS NOT NULL) AND (terminal_at IS NOT NULL) AND (checkpointed_at IS NULL) AND (error IS NULL) AND (terminal_outcome = 'succeeded'::text)) OR ((status = ANY (ARRAY['failed'::text, 'rejected'::text, 'aborted'::text])) AND (terminal_at IS NOT NULL) AND (checkpointed_at IS NULL) AND (result_id IS NULL) AND (error IS NOT NULL) AND (terminal_outcome = status)) OR ((status = 'checkpointed'::text) AND (terminal_at IS NOT NULL) AND (checkpointed_at IS NOT NULL) AND (terminal_outcome = ANY (ARRAY['succeeded'::text, 'failed'::text, 'rejected'::text, 'aborted'::text])) AND (((terminal_outcome = 'succeeded'::text) AND (error IS NULL)) OR ((terminal_outcome <> 'succeeded'::text) AND (error IS NOT NULL))))),
+    CONSTRAINT platform_tool_invocations_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.platform_runs(run_id) ON DELETE CASCADE
+);
+
+
+CREATE INDEX idx_tool_invocations_run_status ON public.platform_tool_invocations USING btree (run_id, status, prepared_at);
+
+
+--
 -- Name: platform_tool_result_commits; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.platform_tool_result_commits (
     run_id text NOT NULL,
+    invocation_id text NOT NULL,
     result_id text NOT NULL,
     committed_at timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -1340,7 +1390,7 @@ ALTER TABLE ONLY public.platform_threads
 --
 
 ALTER TABLE ONLY public.platform_tool_result_commits
-    ADD CONSTRAINT platform_tool_result_commits_pkey PRIMARY KEY (run_id, result_id);
+    ADD CONSTRAINT platform_tool_result_commits_pkey PRIMARY KEY (run_id, invocation_id);
 
 
 --
@@ -2493,6 +2543,14 @@ ALTER TABLE ONLY public.platform_threads
 
 ALTER TABLE ONLY public.platform_tool_result_commits
     ADD CONSTRAINT platform_tool_result_commits_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.platform_runs(run_id) ON DELETE CASCADE;
+
+
+--
+-- Name: platform_tool_result_commits platform_tool_result_commits_invocation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_tool_result_commits
+    ADD CONSTRAINT platform_tool_result_commits_invocation_id_fkey FOREIGN KEY (invocation_id) REFERENCES public.platform_tool_invocations(invocation_id) ON DELETE CASCADE;
 
 
 --

@@ -10,12 +10,23 @@
 // --------------------------------------------------------------------------
 
 import { describe, expect, it, vi } from 'vitest'
+import { agentStepContextSchema, type AgentStepContext } from '@geo-agent-platform/shared-types/agent-step-context'
+import {
+  toolInvocationRecordSchema,
+  type AgentToolPlanEntry,
+  type ToolInvocationRecord,
+} from '@geo-agent-platform/shared-types/tool-runtime'
 import { ItemSink } from '../conversation/itemSink.js'
 import { ToolRegistry } from '../framework/registry.js'
 import type { ToolProvider, ToolResult } from '../framework/types.js'
 import type { AgentWorkflow, ConversationItem } from '../schemas/types.js'
 import type { ConversationItemWrite } from '../conversation/itemUpdates.js'
 import type { ToolExecutionStore } from '../store/runtimePorts.js'
+import type {
+  StartToolInvocationInput,
+  TerminalToolInvocationInput,
+  ToolInvocationEffectCommit,
+} from '../store/postgres/conversationPersistencePorts.js'
 import { ToolResultCommitService } from '../tools/resultPersistence.js'
 import { formatToolResultForModel, ToolExecutionCoordinator, validateAgentWorkflowDraft } from './toolExecutionCoordinator.js'
 import { RunEventSink } from './turnRunner.js'
@@ -26,6 +37,9 @@ import {
   reviseAgentWorkflow,
   startAgentWorkflowStep,
 } from './agentWorkflowState.js'
+import { agentContextDigest } from '../agent-runtime/step/agentContextDigest.js'
+import { ToolCatalog, sdkToolDescriptorSource } from '../agent-runtime/tools/ToolCatalog.js'
+import { compileDirectToolPlan } from '../agent-runtime/tools/ToolPlanCompiler.js'
 
 describe('formatToolResultForModel', () => {
   it('keeps valueRefs visible while summarizing oversized payloads', () => {
@@ -234,7 +248,9 @@ describe('ToolExecutionCoordinator', () => {
   it('persists the Chinese tool label with transcript and conversation items', async () => {
     const transcriptWrites: Array<Record<string, unknown>> = []
     const conversationItems: ConversationItem[] = []
+    const invocations = testInvocationStore()
     const store = {
+      ...invocations.methods,
       getRun: () => ({ state: { objectiveRevision: 1 } }),
       activeTranscript: vi.fn(async () => []),
       appendTranscript: vi.fn(async (input: Record<string, unknown>) => {
@@ -279,6 +295,7 @@ describe('ToolExecutionCoordinator', () => {
       valueState: new Map(),
       signal: new AbortController().signal,
     })
+    bindTestStepContext(coordinator, registry, 'run_1', 'turn_1')
 
     await coordinator.prepare('inspect_dataset', { datasetId: 'dataset_1' }, 'call_1')
     await itemSink.flush()
@@ -294,7 +311,9 @@ describe('ToolExecutionCoordinator', () => {
     const transcriptWrites: Array<Record<string, unknown>> = []
     const transcriptRead = deferredSignal()
     let reads = 0
+    const invocations = testInvocationStore()
     const store = {
+      ...invocations.methods,
       runtimeRoot: '/tmp/runtime',
       activeTranscript: vi.fn(async () => {
         reads += 1
@@ -336,6 +355,7 @@ describe('ToolExecutionCoordinator', () => {
       valueState: new Map(),
       signal: new AbortController().signal,
     })
+    bindTestStepContext(coordinator, registry, 'run_1', 'turn_1')
 
     const sessionPreparation = coordinator.prepare(
       'inspect_dataset',
@@ -364,7 +384,9 @@ describe('ToolExecutionCoordinator', () => {
     let warnings: string[] = []
     let errors: string[] = []
     let failedTool: string | null = null
+    const invocations = testInvocationStore()
     const store = {
+      ...invocations.methods,
       runtimeRoot: 'C:/runtime',
       activeTranscript: vi.fn(async () => []),
       appendTranscript: vi.fn(async (input: Record<string, unknown>) => {
@@ -724,6 +746,35 @@ describe('ToolExecutionCoordinator', () => {
     expect(harness.getEvents().some(event => event.type === 'agent_workflow.created')).toBe(false)
   })
 
+  it('does not reinterpret an atomically committed tool effect as failed when a projection fails', async () => {
+    const harness = coordinatorHarness(
+      testProvider(),
+      false,
+      [],
+      null,
+      undefined,
+      input => input.kind === 'tool_result'
+        && isTestRecord(input.payload)
+        && input.payload.ledgerStatus === 'completed',
+    )
+
+    await expect(harness.coordinator.executeDirect('inspect_dataset', { datasetId: 'dataset_1' }))
+      .resolves.toMatchObject({ resultId: 'result_1' })
+
+    await expect(harness.getInvocation('call_missing')).resolves.toBeNull()
+    const invocations = await harness.listInvocations()
+    expect(invocations).toHaveLength(1)
+    expect(invocations[0]).toMatchObject({
+      terminalOutcome: 'succeeded',
+      resultId: 'result_1',
+    })
+    expect(harness.getState().toolResults).toContainEqual(expect.objectContaining({
+      resultId: 'result_1',
+    }))
+    expect(harness.getState().failedTool).toBeNull()
+    expect(harness.getState().warnings).toContainEqual(expect.stringContaining('后续投影失败'))
+  })
+
   it('derives planning access from the tool read/write contract', async () => {
     const { coordinator } = coordinatorHarness(testProvider(), true)
 
@@ -998,9 +1049,26 @@ describe('ToolExecutionCoordinator', () => {
       }],
     })
     const { coordinator } = coordinatorHarness(testProvider(), false, [], workflow)
+    bindTestStepContext(
+      coordinator,
+      (() => {
+        const registry = new ToolRegistry()
+        registry.register(testProvider())
+        return registry
+      })(),
+      'run_plan_boundary',
+      'turn_1',
+      [testSdkToolEntry('spatial_analyst', 'subagent')],
+    )
 
     expect(coordinator.isExternalAgentEnabled('spatial_analyst')).toBe(true)
     expect(coordinator.isToolEnabledForSubAgent('spatial_analyst', 'inspect_dataset')).toBe(false)
+    await coordinator.prepareExternalAgentCall(
+      'spatial_analyst',
+      '空间智能体',
+      subAgentArgs('检查数据集'),
+      'call_subagent',
+    )
     await coordinator.beginExternalAgentStep(
       'spatial_analyst',
       subAgentArgs('检查数据集'),
@@ -1028,6 +1096,7 @@ function coordinatorHarness(
   approvals: Array<{ action: string; status: string; payload: Record<string, unknown> }> = [],
   agentWorkflow: AgentWorkflow | null = null,
   onPlanModeChanged?: (enabled: boolean) => void,
+  failProjection?: (input: Record<string, unknown>) => boolean,
 ) {
   let state = {
     objectiveRevision: 1,
@@ -1048,10 +1117,13 @@ function coordinatorHarness(
   const transcriptWrites: Array<Record<string, unknown>> = []
   const events: Array<{ type: string }> = []
   const eventSink = new RunEventSink(event => { events.push(event) }, 'run_plan_boundary', 'thread_1')
+  const invocations = testInvocationStore()
   const store = {
+    ...invocations.methods,
     runtimeRoot: 'C:/runtime',
     activeTranscript: vi.fn(async () => []),
     appendTranscript: vi.fn(async (input: Record<string, unknown>) => {
+      if (failProjection?.(input)) throw new Error('注入投影写入失败')
       transcriptWrites.push(input)
       return { entryId: `entry_${++transcriptSequence}` }
     }),
@@ -1063,11 +1135,15 @@ function coordinatorHarness(
       _runId: string,
       _resultId: string,
       mutation: (current: typeof state) => Partial<typeof state>,
+      invocation: ToolInvocationEffectCommit,
       _values: readonly unknown[],
       _artifacts: readonly unknown[],
     ) => {
       state = { ...state, ...mutation(state) }
-      return true
+      return {
+        committed: true,
+        invocation: invocations.commitSuccess(invocation, _resultId),
+      }
     }),
     mutateRunState: vi.fn(async (_runId: string, mutation: (current: typeof state) => Partial<typeof state>) => {
       state = { ...state, ...mutation(state) }
@@ -1079,23 +1155,25 @@ function coordinatorHarness(
   } as unknown as ToolExecutionStore
   const registry = new ToolRegistry()
   registry.register(provider)
+  const coordinator = new ToolExecutionCoordinator({
+    store,
+    resultCommitService: new ToolResultCommitService(store),
+    registry,
+    adapter: null,
+    runId: 'run_plan_boundary',
+    sessionId: 'session_1',
+    threadId: 'thread_1',
+    turnId: 'turn_1',
+    inlineToolResultMaxChars: 4_000,
+    eventSink,
+    itemSink: new ItemSink(async () => undefined, 'run_plan_boundary', 'thread_1'),
+    valueState: new Map(),
+    signal: new AbortController().signal,
+    ...(onPlanModeChanged ? { onPlanModeChanged } : {}),
+  })
+  bindTestStepContext(coordinator, registry, 'run_plan_boundary', 'turn_1')
   return {
-    coordinator: new ToolExecutionCoordinator({
-      store,
-      resultCommitService: new ToolResultCommitService(store),
-      registry,
-      adapter: null,
-      runId: 'run_plan_boundary',
-      sessionId: 'session_1',
-      threadId: 'thread_1',
-      turnId: 'turn_1',
-      inlineToolResultMaxChars: 4_000,
-      eventSink,
-      itemSink: new ItemSink(async () => undefined, 'run_plan_boundary', 'thread_1'),
-      valueState: new Map(),
-      signal: new AbortController().signal,
-      ...(onPlanModeChanged ? { onPlanModeChanged } : {}),
-    }),
+    coordinator,
     getState: () => state,
     setObjectiveRevision: (objectiveRevision: number) => { state = { ...state, objectiveRevision } },
     setWorkflow: (workflow: AgentWorkflow) => {
@@ -1108,6 +1186,8 @@ function coordinatorHarness(
     getTranscriptWrites: () => transcriptWrites,
     getEvents: () => events,
     flushEvents: () => eventSink.flush(),
+    getInvocation: (callId: string) => invocations.methods.getToolInvocation('run_plan_boundary', callId),
+    listInvocations: () => invocations.methods.listToolInvocations('run_plan_boundary'),
   }
 }
 
@@ -1115,6 +1195,10 @@ function deferredSignal(): { promise: Promise<void>; resolve: () => void } {
   let resolve = (): void => {}
   const promise = new Promise<void>(settle => { resolve = settle })
   return { promise, resolve }
+}
+
+function isTestRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function inspectionProvider(handler: () => Promise<ToolResult>): ToolProvider {
@@ -1212,5 +1296,221 @@ function testProvider(): ToolProvider {
         source: 'test',
       }),
     }],
+  }
+}
+
+function testInvocationStore(): {
+  methods: Pick<ToolExecutionStore,
+    | 'prepareToolInvocation'
+    | 'getToolInvocation'
+    | 'listToolInvocations'
+    | 'startToolInvocation'
+    | 'terminateToolInvocation'
+  >
+  commitSuccess(input: ToolInvocationEffectCommit, resultId: string): ToolInvocationRecord
+} {
+  const records = new Map<string, ToolInvocationRecord>()
+  const key = (runId: string, callId: string): string => `${runId}\u0000${callId}`
+  const byInvocationId = (runId: string, invocationId: string): ToolInvocationRecord => {
+    const record = [...records.values()].find(candidate => (
+      candidate.runId === runId && candidate.invocationId === invocationId
+    ))
+    if (!record) throw new Error(`测试工具调用 '${invocationId}' 不存在`)
+    return record
+  }
+  const save = (record: ToolInvocationRecord): ToolInvocationRecord => {
+    const parsed = toolInvocationRecordSchema.parse(record)
+    records.set(key(parsed.runId, parsed.callId), structuredClone(parsed))
+    return structuredClone(parsed)
+  }
+  const methods = {
+    prepareToolInvocation: async (record: ToolInvocationRecord) => {
+      const parsed = toolInvocationRecordSchema.parse(record)
+      const existing = records.get(key(parsed.runId, parsed.callId))
+      if (existing) {
+        const immutable = (value: ToolInvocationRecord) => ({
+          invocationId: value.invocationId,
+          runId: value.runId,
+          turnId: value.turnId,
+          callId: value.callId,
+          stepId: value.stepId,
+          toolName: value.toolName,
+          toolKind: value.toolKind,
+          executionSurface: value.executionSurface,
+          objectiveRevision: value.objectiveRevision,
+          toolPlanDigest: value.toolPlanDigest,
+          descriptorDigest: value.descriptorDigest,
+          argsDigest: value.argsDigest,
+          effect: value.effect,
+          replayPolicy: value.replayPolicy,
+          idempotencyKey: value.idempotencyKey,
+          approvalAction: value.approvalAction,
+        })
+        if (JSON.stringify(immutable(existing)) !== JSON.stringify(immutable(parsed))) {
+          throw new Error(`工具调用 '${parsed.callId}' 的持久身份冲突`)
+        }
+        return structuredClone(existing)
+      }
+      return save(parsed)
+    },
+    getToolInvocation: async (runId: string, callId: string) => {
+      const record = records.get(key(runId, callId))
+      return record ? structuredClone(record) : null
+    },
+    listToolInvocations: async (runId: string) => [...records.values()]
+      .filter(record => record.runId === runId)
+      .map(record => structuredClone(record)),
+    startToolInvocation: async (input: StartToolInvocationInput) => {
+      const current = byInvocationId(input.runId, input.invocationId)
+      if (current.status === 'running') return structuredClone(current)
+      if (current.status !== 'prepared' || current.version !== input.expectedVersion) {
+        throw new Error(`测试工具调用 '${current.callId}' running CAS 失败`)
+      }
+      return save({
+        ...current,
+        status: 'running',
+        approvalDecision: input.approvalDecision,
+        runningAt: input.runningAt,
+        version: current.version + 1,
+      })
+    },
+    terminateToolInvocation: async (input: TerminalToolInvocationInput) => {
+      const current = byInvocationId(input.runId, input.invocationId)
+      if (current.terminalOutcome === input.outcome) return structuredClone(current)
+      if (current.version !== input.expectedVersion) {
+        throw new Error(`测试工具调用 '${current.callId}' terminal CAS 失败`)
+      }
+      return save({
+        ...current,
+        status: input.checkpointImmediately ? 'checkpointed' : input.outcome,
+        terminalOutcome: input.outcome,
+        resultId: input.resultId,
+        error: input.error,
+        terminalAt: input.terminalAt,
+        checkpointedAt: input.checkpointImmediately ? input.terminalAt : null,
+        ...(input.approvalDecision ? { approvalDecision: input.approvalDecision } : {}),
+        version: current.version + 1,
+      })
+    },
+  }
+  return {
+    methods,
+    commitSuccess: (input, resultId) => {
+      const current = [...records.values()].find(record => record.invocationId === input.invocationId)
+      if (!current || current.status !== 'running' || current.version !== input.expectedVersion) {
+        throw new Error(`测试工具结果 '${resultId}' invocation CAS 失败`)
+      }
+      return save({
+        ...current,
+        status: input.checkpointImmediately ? 'checkpointed' : 'succeeded',
+        terminalOutcome: 'succeeded',
+        resultId,
+        error: null,
+        terminalAt: input.terminalAt,
+        checkpointedAt: input.checkpointImmediately ? input.terminalAt : null,
+        version: current.version + 1,
+      })
+    },
+  }
+}
+
+function bindTestStepContext(
+  coordinator: ToolExecutionCoordinator,
+  registry: ToolRegistry,
+  runId: string,
+  turnId: string,
+  extraEntries: AgentToolPlanEntry[] = [],
+): void {
+  const catalog = new ToolCatalog(registry)
+  const entries = [
+    ...registry.list().map(definition => compileDirectToolPlan({
+      definition,
+      source: catalog.platformSource(definition.name),
+      executionSurface: 'agent',
+    }).entries[0]!),
+    ...extraEntries,
+  ].sort((left, right) => left.name.localeCompare(right.name))
+  const planWithoutDigest = {
+    entries,
+    namespaces: [],
+    deferredCatalogObjectHash: null,
+    unavailableReasons: {},
+  }
+  const tools: AgentStepContext['tools'] = {
+    ...planWithoutDigest,
+    catalogDigest: agentContextDigest(planWithoutDigest),
+  }
+  coordinator.bindStepContext(agentStepContextSchema.parse({
+    schemaVersion: 2,
+    identity: { stepId: 'step_test', turnId, segmentId: 'segment_test', modelRequestIndex: 1 },
+    runId,
+    turnId,
+    objectiveRevision: 1,
+    inputCursor: 0,
+    model: {
+      provider: 'test',
+      modelId: 'test-model',
+      transport: 'responses',
+      capabilities: {
+        modelId: 'test-model',
+        contextWindowTokens: 128_000,
+        capabilities: { reasoning: true, structuredOutput: true, toolCalls: true },
+        modalities: ['text'],
+      },
+      reasoningEffort: 'none',
+      serviceTier: null,
+      timeoutMs: 30_000,
+    },
+    runtimeConfigDigest: 'sha256:runtime',
+    toolPlanDigest: tools.catalogDigest,
+    worldRevision: 1,
+    contextWindowId: 'context_window_test',
+    permissions: {
+      principalId: 'user_test',
+      workspaceId: 'workspace_1',
+      roles: ['member'],
+      toolRules: [],
+    },
+    approvalPolicy: { interruptToolNames: [], destructiveToolsRequireApproval: true },
+    sandbox: {
+      backend: 'disabled',
+      writableRoots: [],
+      networkPolicy: 'provider_and_registered_tools',
+    },
+    mcp: { servers: [] },
+    skills: { skillIds: [], catalogDigest: 'sha256:skills' },
+    plugins: { pluginIds: [], catalogDigest: 'sha256:plugins' },
+    tools,
+    world: {
+      revision: 1,
+      stateDigest: 'sha256:world',
+      layerIds: [],
+      datasetIds: [],
+      fileIds: [],
+      artifactIds: [],
+      valueRefIds: [],
+      capabilities: {
+        toolNames: entries.map(entry => entry.name),
+        mcpServerNames: [],
+        sandboxBackend: 'disabled',
+        writableRoots: [],
+        networkPolicy: 'provider_and_registered_tools',
+      },
+    },
+    capturedAt: '2026-08-23T00:00:00.000Z',
+    contextDigest: agentContextDigest({ runId, turnId, tools }),
+  }))
+}
+
+function testSdkToolEntry(
+  name: string,
+  kind: 'subagent' | 'handoff' | 'mcp' | 'hosted' | 'sandbox',
+): AgentToolPlanEntry {
+  const source = sdkToolDescriptorSource({ name, kind, executionSurfaces: ['agent'] })
+  return {
+    ...source,
+    schemaDigest: agentContextDigest({ type: 'object' }),
+    definitionDigest: agentContextDigest({ name, kind }),
+    deferLoading: false,
   }
 }

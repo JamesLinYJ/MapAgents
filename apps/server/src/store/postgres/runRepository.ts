@@ -18,6 +18,7 @@ import type {
   RunSteeringRecord,
   ToolValueRef,
 } from '../../schemas/types.js'
+import type { ToolInvocationRecord } from '@geo-agent-platform/shared-types/tool-runtime'
 import type { Database } from '../../db/connection.js'
 import type { RunMutationQueue } from '../runMutationQueue.js'
 import type {
@@ -26,6 +27,12 @@ import type {
   RunRecordRepository,
   RunRepository,
   RunStateRepository,
+  StartToolInvocationInput,
+  TerminalToolInvocationInput,
+  ToolEffectCommitResult,
+  ToolInvocationEffectCommit,
+  ToolInvocationRepository,
+  ToolResultCommitter,
 } from './conversationPersistencePorts.js'
 import { PostgresRunCheckpointRepository } from './runCheckpointRepository.js'
 import { RunInputDeliveryRecorder } from './runInputDeliveryRecorder.js'
@@ -34,13 +41,15 @@ import { PostgresRunRecordRepository } from './runRecordRepository.js'
 import { PostgresRunStateRepository } from './runStateRepository.js'
 import { PostgresToolResultCommitRepository } from './toolResultCommitRepository.js'
 import type { PostgresRunDomainJournalRepository } from './runDomainJournalRepository.js'
+import { PostgresToolInvocationRepository } from './toolInvocationRepository.js'
 
 /** 组合 Run 状态、checkpoint 和记录流端口，不直接访问数据库表。 */
-export class PostgresRunRepository implements RunRepository {
+export class PostgresRunRepository implements RunRepository, ToolInvocationRepository, ToolResultCommitter {
   private readonly state: RunStateRepository
   private readonly checkpoints: RunCheckpointRepository
   private readonly records: RunRecordRepository
   private readonly toolResults: PostgresToolResultCommitRepository
+  private readonly toolInvocations: PostgresToolInvocationRepository
 
   constructor(
     db: Database,
@@ -62,6 +71,7 @@ export class PostgresRunRepository implements RunRepository {
       runMutations,
       domainJournal,
     )
+    this.toolInvocations = new PostgresToolInvocationRepository(db, runMutations, domainJournal)
   }
 
   createRunLifecycle(run: AnalysisRun): Promise<RunLifecycleResult> {
@@ -132,9 +142,30 @@ export class PostgresRunRepository implements RunRepository {
   commitToolResult(
     run: AnalysisRun,
     resultId: string,
+    invocation: ToolInvocationEffectCommit,
     values: readonly ToolValueRef[],
     artifacts: readonly ArtifactRef[],
-  ): Promise<boolean> {
-    return this.toolResults.commit(run, resultId, values, artifacts)
+  ): Promise<ToolEffectCommitResult> {
+    return this.toolResults.commit(run, resultId, invocation, values, artifacts)
+  }
+
+  prepareToolInvocation(invocation: ToolInvocationRecord): Promise<ToolInvocationRecord> {
+    return this.toolInvocations.prepareToolInvocation(invocation)
+  }
+
+  getToolInvocation(runId: string, callId: string): Promise<ToolInvocationRecord | null> {
+    return this.toolInvocations.getToolInvocation(runId, callId)
+  }
+
+  listToolInvocations(runId: string): Promise<ToolInvocationRecord[]> {
+    return this.toolInvocations.listToolInvocations(runId)
+  }
+
+  startToolInvocation(input: StartToolInvocationInput): Promise<ToolInvocationRecord> {
+    return this.toolInvocations.startToolInvocation(input)
+  }
+
+  terminateToolInvocation(input: TerminalToolInvocationInput): Promise<ToolInvocationRecord> {
+    return this.toolInvocations.terminateToolInvocation(input)
   }
 }

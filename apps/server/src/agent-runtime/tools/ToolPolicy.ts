@@ -1,17 +1,19 @@
 // +-------------------------------------------------------------------------
 //
-//   地理智能平台 - 工具执行策略
+//   地理智能平台 - 工具可见性与执行策略
 //
-//   文件:       toolExecutionPolicy.ts
+//   文件:       ToolPolicy.ts
 //
-//   日期:       2026年08月04日
+//   日期:       2026年08月23日
 //   作者:       JamesLinYJ
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
 import type { AgentState } from '@geo-agent-platform/shared-types'
 import type { AgentRuntimeConfig } from '@geo-agent-platform/shared-types/runtime'
-import type { ToolRegistry } from '../framework/registry.js'
+
+import type { ToolRegistry } from '../../framework/registry.js'
+import { platformToolDescriptorSource } from './ToolCatalog.js'
 
 export const DEVELOPER_TOOL_PROVIDER_ID = 'geo-platform-developer-tools'
 
@@ -19,7 +21,7 @@ export function developerToolsEnabledForRuntime(config: AgentRuntimeConfig): boo
   return config.developer.enabled && config.developer.allowedRoots.length > 0
 }
 
-export interface ToolExecutionPolicyDependencies {
+export interface ToolPolicyDependencies {
   registry: ToolRegistry
   state: () => AgentState
   claimedWorkflowSteps: () => ReadonlySet<string>
@@ -28,14 +30,13 @@ export interface ToolExecutionPolicyDependencies {
 }
 
 /**
- * 只拥有“当前运行允许什么”的策略，不写 Run、Transcript 或 checkpoint。
- * Coordinator 负责执行和提交；将这组规则隔离后，计划/工作流边界可以单独
- * 测试，也不会因新增一种 transport 而复制副作用判断。
+ * ToolPolicy 只回答“当前不可变运行视图允许什么”，不执行、不写数据库、
+ * 不发布 UI 投影。Effect 判断来自 ToolDescriptor，而不是重复猜测旧布尔字段。
  */
-export class ToolExecutionPolicy {
+export class ToolPolicy {
   private activeHandoffAgentId: string | null = null
 
-  constructor(private readonly dependencies: ToolExecutionPolicyDependencies) {}
+  constructor(private readonly dependencies: ToolPolicyDependencies) {}
 
   isExecutionEnabled(): boolean {
     return !this.dependencies.state().planMode
@@ -48,15 +49,15 @@ export class ToolExecutionPolicy {
 
   isToolEnabled(toolName: string): boolean {
     const tool = this.dependencies.registry.get(toolName)
-    if (!tool) return false
-    if (!this.isDeveloperToolAllowed(tool.providerId)) return false
+    if (!tool || !this.isDeveloperToolAllowed(tool.providerId)) return false
+    const descriptor = platformToolDescriptorSource(tool)
     const state = this.dependencies.state()
-    if (state.planMode) return tool.isReadOnly && !tool.isDestructive
+    if (state.planMode) return planReadable(descriptor)
     if (!state.agentWorkflow) return true
-    if (state.agentWorkflow.status === 'cancelled') return false
+    if (state.agentWorkflow.status === 'cancelled' || state.agentWorkflow.status === 'failed') return false
     if (ACTIVE_WORKFLOW_CONTROL_TOOLS.has(toolName)) return true
     if (state.agentWorkflow.status === 'adjusting' || state.agentWorkflow.status === 'completed') {
-      return tool.isReadOnly && !tool.isDestructive
+      return planReadable(descriptor)
     }
     return this.hasReadyWorkflowStep(toolName, 'supervisor')
   }
@@ -122,8 +123,7 @@ export class ToolExecutionPolicy {
   }
 
   assertHandoffToolExecutionAllowed(agentId: string, toolName: string): void {
-    const state = this.dependencies.state()
-    const owner = state.subAgents.find(candidate => candidate.agentId === agentId)
+    const owner = this.dependencies.state().subAgents.find(candidate => candidate.agentId === agentId)
     if (owner?.status === 'cancelling' || owner?.status === 'cancelled') {
       throw new Error(`subagent_cancelled: Handoff 子智能体 '${agentId}' 已接受取消请求，禁止启动新的工具 '${toolName}'。`)
     }
@@ -148,7 +148,7 @@ export class ToolExecutionPolicy {
     if (!state.planMode) return
     const tool = this.dependencies.registry.get(toolName)
     if (!tool) throw new Error(`工具 '${toolName}' 未注册`)
-    if (tool.isReadOnly && !tool.isDestructive) return
+    if (planReadable(platformToolDescriptorSource(tool))) return
     throw new Error(`计划模式只允许无副作用的读取工具，工具 '${toolName}' 会产生写入或外部影响。请先提交工作流结束规划阶段。`)
   }
 
@@ -201,6 +201,11 @@ export class ToolExecutionPolicy {
     return providerId !== DEVELOPER_TOOL_PROVIDER_ID
       || this.dependencies.developerModeEnabled?.() === true
   }
+}
+
+function planReadable(descriptor: ReturnType<typeof platformToolDescriptorSource>): boolean {
+  return descriptor.effect === 'read'
+    && (descriptor.exposure === 'plan_readonly' || descriptor.exposure === 'immediate')
 }
 
 const ACTIVE_WORKFLOW_CONTROL_TOOLS = new Set([

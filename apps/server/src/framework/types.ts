@@ -10,12 +10,28 @@
 // --------------------------------------------------------------------------
 
 import type { z } from 'zod'
+import type {
+    AgentToolEffect,
+    AgentToolExposure,
+    AgentToolParallelism,
+    AgentToolReplayPolicy,
+} from '@geo-agent-platform/shared-types/tool-runtime'
 import type { AgentRuntimeConfig, ArtifactDisplay, MeteorologicalDatasetRecord } from '../schemas/types.js'
 import type { AuthContext } from '../security/types.js'
 
 export type ToolExecutionSurface = 'agent' | 'automation' | 'debug'
 export type AgentToolResultMode = 'continue' | 'return_direct'
 export type AgentToolSchemaOverride = 'strict' | 'compatible'
+
+export interface ToolRuntimePolicy {
+    namespace?: string;
+    exposure?: AgentToolExposure;
+    effect?: AgentToolEffect;
+    parallelism?: AgentToolParallelism;
+    approvalAction?: string | null;
+    replayPolicy?: AgentToolReplayPolicy;
+    requiredCapabilities?: string[];
+}
 
 export interface ToolManifest {
     id: string;
@@ -42,6 +58,7 @@ export interface ToolManifestEntry {
     executionSurfaces?: ToolExecutionSurface[];
     agentResultMode?: AgentToolResultMode;
     agentSchemaMode?: AgentToolSchemaOverride;
+    runtimePolicy?: ToolRuntimePolicy;
     jsonSchema: Record<string, unknown>;
 }
 export interface ToolDef {
@@ -58,6 +75,7 @@ export interface ToolDef {
     executionSurfaces?: ToolExecutionSurface[];
     agentResultMode?: AgentToolResultMode;
     agentSchemaMode?: AgentToolSchemaOverride;
+    runtimePolicy?: ToolRuntimePolicy;
     parameters?: z.ZodObject;
     jsonSchema?: Record<string, unknown>;
     handler: ToolHandler;

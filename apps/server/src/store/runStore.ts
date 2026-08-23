@@ -28,6 +28,7 @@ import type {
   RunSummary,
   ToolValueRef,
 } from '../schemas/types.js'
+import type { ToolInvocationRecord } from '@geo-agent-platform/shared-types/tool-runtime'
 import {
   AGENTS_SDK_STATE_SCHEMA_VERSION,
   agentStateSchema,
@@ -59,6 +60,11 @@ import type {
   RunRepository,
   ThreadLifecycleRepository,
   ToolResultCommitter,
+  ToolInvocationRepository,
+  StartToolInvocationInput,
+  TerminalToolInvocationInput,
+  ToolEffectCommitResult,
+  ToolInvocationEffectCommit,
 } from './postgres/conversationPersistencePorts.js'
 
 export interface RunStoreEvents {
@@ -97,7 +103,7 @@ export class RunStore {
     private readonly index: ConversationProjectionIndex,
     private readonly payloadStore: ConversationPayloadStore,
     private readonly sessionStore: SessionStore,
-    private readonly repository: RunRepository & ToolResultCommitter & ModelRequestRepository,
+    private readonly repository: RunRepository & ToolResultCommitter & ToolInvocationRepository & ModelRequestRepository,
     private readonly threadWriter: Pick<ThreadLifecycleRepository, 'saveThread'>,
     private readonly events: RunStoreEvents,
     private readonly objectPublication = new ObjectPublicationCoordinator(),
@@ -294,10 +300,11 @@ export class RunStore {
     runId: string,
     resultId: string,
     mutation: (state: AgentState) => Partial<AgentState>,
+    invocation: ToolInvocationEffectCommit,
     values: readonly ToolValueRef[],
     artifacts: readonly ArtifactRef[],
-  ): Promise<boolean> {
-    let committed = false
+  ): Promise<ToolEffectCommitResult> {
+    let outcome: ToolEffectCommitResult | null = null
     await this.serializeStateMutation(runId, async () => {
       const run = this.get(runId)
       const updates = mutation(run.state)
@@ -306,13 +313,34 @@ export class RunStore {
         state: agentStateSchema.parse({ ...run.state, ...updates }),
         updatedAt: nowUtc(),
       }
-      committed = await this.repository.commitToolResult(next, resultId, values, artifacts)
-      if (!committed) return
+      outcome = await this.repository.commitToolResult(next, resultId, invocation, values, artifacts)
+      if (!outcome.committed) return
       this.index.setRun(next)
       this.updateThreadProjectionFromArtifacts(next, artifacts)
       this.events.runBus.publish(runId, structuredClone(next))
     })
-    return committed
+    if (!outcome) throw new Error(`运行 '${runId}' 的工具结果提交没有返回事务结果`)
+    return outcome
+  }
+
+  prepareToolInvocation(invocation: ToolInvocationRecord): Promise<ToolInvocationRecord> {
+    return this.repository.prepareToolInvocation(invocation)
+  }
+
+  getToolInvocation(runId: string, callId: string): Promise<ToolInvocationRecord | null> {
+    return this.repository.getToolInvocation(runId, callId)
+  }
+
+  listToolInvocations(runId: string): Promise<ToolInvocationRecord[]> {
+    return this.repository.listToolInvocations(runId)
+  }
+
+  startToolInvocation(input: StartToolInvocationInput): Promise<ToolInvocationRecord> {
+    return this.repository.startToolInvocation(input)
+  }
+
+  terminateToolInvocation(input: TerminalToolInvocationInput): Promise<ToolInvocationRecord> {
+    return this.repository.terminateToolInvocation(input)
   }
 
   // Run 状态的读-改-写必须在同一串行边界内完成。仅序列化数据库 save

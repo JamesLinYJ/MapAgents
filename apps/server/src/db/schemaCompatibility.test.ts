@@ -25,6 +25,7 @@ function currentCapabilities(overrides: Record<string, unknown> = {}) {
     geo_world_diffs_table: 'platform_geo_world_diffs',
     agent_step_contexts_table: 'platform_agent_step_contexts',
     model_request_records_table: 'platform_model_request_records',
+    tool_invocations_table: 'platform_tool_invocations',
     geo_world_snapshot_primary_key: true,
     agent_step_world_foreign_key: true,
     run_input_mailbox: true,

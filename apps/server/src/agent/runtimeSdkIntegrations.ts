@@ -44,7 +44,7 @@ import type {
   RuntimeMcpServerConfig,
 } from '../schemas/types.js'
 import type { AgentsExecutionContext } from './agentsToolBridge.js'
-import { RunToolConcurrencyGate } from './runToolConcurrencyGate.js'
+import { ToolExecutionGate } from '../agent-runtime/tools/ToolExecutionGate.js'
 import {
   buildSkillRegistry,
   buildSkillSandboxEntry,
@@ -90,7 +90,7 @@ export function buildRuntimeSdkSandboxIntegration(
   config: AgentRuntimeConfig,
   options: {
     baseDir?: string
-    executionGate?: RunToolConcurrencyGate
+    executionGate?: ToolExecutionGate
     query?: string
   } = {},
 ): RuntimeSdkSandboxIntegration {
@@ -131,7 +131,7 @@ export function buildRuntimeSdkSandboxIntegration(
     capabilities: [
       new SkillLoadingCapability(
         createSkillsCapability,
-        options.executionGate ?? new RunToolConcurrencyGate(),
+        options.executionGate ?? new ToolExecutionGate(),
       ),
     ],
     pathGrants: [],
@@ -143,7 +143,7 @@ export function buildRuntimeSdkSandboxIntegration(
 export async function createRuntimeSdkIntegration(
   config: AgentRuntimeConfig,
   reservedToolNames: ReadonlySet<string>,
-  executionGate: RunToolConcurrencyGate,
+  executionGate: ToolExecutionGate,
   factory: RuntimeSdkMcpFactory = {},
 ): Promise<RuntimeSdkIntegration> {
   const mcpConfig = config.sdk.mcp
@@ -219,7 +219,7 @@ class SkillLoadingCapability extends Capability {
 
   constructor(
     private readonly createCapability: () => Capability,
-    private readonly executionGate: RunToolConcurrencyGate,
+    private readonly executionGate: ToolExecutionGate,
   ) {
     super()
     this.type = createCapability().type
@@ -276,7 +276,7 @@ class SkillLoadingCapability extends Capability {
 
 function serializeSkillLoading<TContext>(
   tools: Tool<TContext>[],
-  executionGate: RunToolConcurrencyGate,
+  executionGate: ToolExecutionGate,
 ): Tool<TContext>[] {
   return tools.map(tool => {
     if (tool.type !== 'function') return tool
@@ -289,7 +289,7 @@ function serializeSkillLoading<TContext>(
 
 function applyMcpExecutionPolicy(
   tool: Tool<AgentsExecutionContext>,
-  executionGate: RunToolConcurrencyGate,
+  executionGate: ToolExecutionGate,
 ): Tool<AgentsExecutionContext> {
   if (tool.type !== 'function') return tool
   const isEnabled = async (

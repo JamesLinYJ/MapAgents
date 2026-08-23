@@ -17,6 +17,7 @@ import type {
   ThreadMemoryDocument, CompactionRecord, ToolValueRef, MeteorologicalDatasetRecord,
   ModelRequestRecord,
 } from '../schemas/types.js'
+import type { ToolInvocationRecord } from '@geo-agent-platform/shared-types/tool-runtime'
 import type { ConversationItemStoreUpdate } from '../conversation/itemUpdates.js'
 import { ArtifactStore, type VisibleArtifactOptions } from './artifactStore.js'
 import { ConversationProjectionIndex } from './conversationProjectionIndex.js'
@@ -48,6 +49,10 @@ import type {
   ConversationSnapshotRepository,
   DeletedThreadRecord,
   RunInputRepository,
+  StartToolInvocationInput,
+  TerminalToolInvocationInput,
+  ToolEffectCommitResult,
+  ToolInvocationEffectCommit,
 } from './postgres/conversationPersistencePorts.js'
 
 export type { ResourceOwner } from './sessionStore.js'
@@ -189,10 +194,31 @@ export class PlatformPersistenceFacade {
     runId: string,
     resultId: string,
     mutation: (state: AgentState) => Partial<AgentState>,
+    invocation: ToolInvocationEffectCommit,
     values: readonly ToolValueRef[],
     artifacts: readonly ArtifactRef[],
-  ): Promise<boolean> {
-    return this.runStore.commitToolResult(runId, resultId, mutation, values, artifacts)
+  ): Promise<ToolEffectCommitResult> {
+    return this.runStore.commitToolResult(runId, resultId, mutation, invocation, values, artifacts)
+  }
+
+  prepareToolInvocation(invocation: ToolInvocationRecord): Promise<ToolInvocationRecord> {
+    return this.runStore.prepareToolInvocation(invocation)
+  }
+
+  getToolInvocation(runId: string, callId: string): Promise<ToolInvocationRecord | null> {
+    return this.runStore.getToolInvocation(runId, callId)
+  }
+
+  listToolInvocations(runId: string): Promise<ToolInvocationRecord[]> {
+    return this.runStore.listToolInvocations(runId)
+  }
+
+  startToolInvocation(input: StartToolInvocationInput): Promise<ToolInvocationRecord> {
+    return this.runStore.startToolInvocation(input)
+  }
+
+  terminateToolInvocation(input: TerminalToolInvocationInput): Promise<ToolInvocationRecord> {
+    return this.runStore.terminateToolInvocation(input)
   }
 
   async listArtifactsVisibleToRun(

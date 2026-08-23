@@ -35,7 +35,7 @@ import { errorMessage, modelSettings } from './runtimeSdkProjection.js'
 import { protectModelTransportFromRunInputMarkers } from './runtimeModelInput.js'
 import type { ToolExecutionCoordinator } from './toolExecutionCoordinator.js'
 import type { RunEventSink } from './turnRunner.js'
-import type { RunToolConcurrencyGate } from './runToolConcurrencyGate.js'
+import type { ToolExecutionGate } from '../agent-runtime/tools/ToolExecutionGate.js'
 import type { SubAgentControlPlane } from './subAgentControlPlane.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 
@@ -51,7 +51,7 @@ export interface SubAgentRuntimeDependencies {
   threadId: string
   eventSink: RunEventSink
   coordinator: ToolExecutionCoordinator
-  executionGate: RunToolConcurrencyGate
+  executionGate: ToolExecutionGate
   subAgentControls: SubAgentControlPlane
   agentTracing?: LocalAgentTracing
 }
@@ -108,7 +108,11 @@ export function createSubAgentExecutionContext(
     validateToolCall: (toolName, args) => dependencies.coordinator.validateToolCall(toolName, args),
     formatToolFailureForModel: (toolName, message) => dependencies.coordinator.formatToolFailureForModel(toolName, message),
     rejectPreparedToolCall: (toolName, callId, message) => dependencies.coordinator.rejectPreparedToolCall(toolName, callId, message),
-    prepareToolCall: (toolName, args, callId) => dependencies.coordinator.prepare(toolName, args, callId),
+    prepareToolCall: (toolName, args, callId) => dependencies.coordinator.prepareCatalogTool(
+      toolName,
+      args,
+      callId,
+    ),
     executeTool: (toolName, args, callId) => dependencies.coordinator.executeForSubAgent(
       config.agentId,
       toolName,

@@ -26,6 +26,13 @@ import type {
   ConversationItem,
   ModelRequestRecord,
 } from '../schemas/types.js'
+import type { ToolInvocationRecord } from '@geo-agent-platform/shared-types/tool-runtime'
+import type {
+  StartToolInvocationInput,
+  TerminalToolInvocationInput,
+  ToolEffectCommitResult,
+  ToolInvocationEffectCommit,
+} from './postgres/conversationPersistencePorts.js'
 import type { ConversationItemStoreUpdate } from '../conversation/itemUpdates.js'
 import type { VisibleArtifactResource } from './postgres/artifactRepository.js'
 import type { FileLifecyclePort } from './fileLifecycleService.js'
@@ -126,9 +133,15 @@ export interface AgentRuntimeStore {
     runId: string,
     resultId: string,
     mutation: (state: AgentState) => Partial<AgentState>,
+    invocation: ToolInvocationEffectCommit,
     values: readonly ToolValueRef[],
     artifacts: readonly ArtifactRef[],
-  ) => Promise<boolean>
+  ) => Promise<ToolEffectCommitResult>
+  prepareToolInvocation(invocation: ToolInvocationRecord): Promise<ToolInvocationRecord>
+  getToolInvocation(runId: string, callId: string): Promise<ToolInvocationRecord | null>
+  listToolInvocations(runId: string): Promise<ToolInvocationRecord[]>
+  startToolInvocation(input: StartToolInvocationInput): Promise<ToolInvocationRecord>
+  terminateToolInvocation(input: TerminalToolInvocationInput): Promise<ToolInvocationRecord>
   listArtifactsVisibleToRun(
     runId: string,
     options?: { artifactIds?: readonly string[]; limit?: number },
@@ -163,13 +176,18 @@ export type ToolExecutionStore = Pick<AgentRuntimeStore,
   | 'appendToolValue'
   | 'appendTranscript'
   | 'commitToolResult'
+  | 'getToolInvocation'
   | 'getRun'
+  | 'listToolInvocations'
   | 'meteorology'
   | 'persistArtifact'
+  | 'prepareToolInvocation'
   | 'putConversationObject'
   | 'publishConversationObject'
   | 'runtimeRoot'
   | 'saveRunCheckpoint'
+  | 'startToolInvocation'
+  | 'terminateToolInvocation'
   | 'mutateRunState'
   | 'updateRunState'
 >

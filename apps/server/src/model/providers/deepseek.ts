@@ -74,6 +74,8 @@ export function createDeepSeekAdapter(opts: DeepSeekOptions): ModelAdapter {
       transport: 'deepseek_responses',
       structuredOutput: 'json_schema',
       functionTools: true,
+      deferredTools: false,
+      toolNamespaces: false,
       localMcp: true,
       hostedTools: true,
       handoffs: true,

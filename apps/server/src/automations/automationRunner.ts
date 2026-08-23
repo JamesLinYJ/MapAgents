@@ -384,6 +384,7 @@ export class AutomationRunner {
           toolName: node.config.toolName,
           args,
           auth,
+          executionSurface: 'automation',
           signal,
         }, {
           store: this.options.toolExecutionStore,

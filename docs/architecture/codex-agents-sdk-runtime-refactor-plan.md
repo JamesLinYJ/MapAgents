@@ -2,15 +2,15 @@
 
 > 本文是面向 Codex 执行的架构 RFC、迁移手册和逐 PR 验收清单。
 >
-> **状态**：In progress（WP-00 至 WP-05 已完成；下一包为 WP-06）
+> **状态**：In progress（WP-00 至 WP-06 已完成；下一包为 WP-07）
 >
 > **Newmap 基线**：`JamesLinYJ/Newmap@ffa50bbe1bd0e8de82f7f40448bafbe3f1eb751a`
 >
 > **Codex 参考基线**：`openai/codex@4a7b51c560aaef0a89298272d3fff1aefe3dd666`
 >
-> **当前 SDK**：`@openai/agents@0.16.1`
+> **当前 SDK**：`@openai/agents@0.17.0`
 >
-> **计划验证目标 SDK**：`@openai/agents@0.16.1`；升级只能在兼容性契约测试通过后落地。
+> **已验证目标 SDK**：`@openai/agents@0.17.0`；后续升级仍只能在兼容性契约测试通过后落地。
 >
 > **执行原则**：每次 Codex 任务只实施本文一个 Work Package，不跨包顺手重写，不以“文件已移动”代替架构完成。
 
@@ -1520,6 +1520,16 @@ apps/server/src/agent-runtime/
 - effect 原子提交测试。
 - crash recovery matrix。
 - provider-aware deferred tool 测试。
+
+**实施证据**：
+
+- `ToolCatalog` 把平台工具、SDK 扩展、MCP 和子智能体统一为 `ToolDescriptor`；`ToolPlanCompiler` 从同一份不可变 `AgentStepContext` 生成模型暴露目录和 Router 许可集。
+- `ToolRouter + ToolExecutionGate + ToolPolicy` 分别持有路由身份、共享/独占并发语义和纯策略判定；Automation、Developer 和 Agent 直达调用使用显式 execution surface。
+- `platform_tool_invocations` 是 `prepared → running → terminal → checkpointed` 的唯一账本；`ToolEffectCommitter` 把 invocation 终态、工具结果、artifact、valueRef 和 Run 效果收敛在同一事务。
+- 工具结果幂等键使用 invocation identity，不再把两次合法读调用的相同 `resultId` 误判为重放。
+- `WorkflowBinder` 以 workflow id/revision、objective revision、step attempt 和 startedAt 绑定调用；迟到结果只保留自身工具事实，不得改写新 revision 或新 attempt。
+- `ToolProjectionPublisher` 独立发布 Transcript、ConversationItem、RunEvent 和热 value 投影；投影失败不得把已原子提交的工具效果改判失败或触发副作用重放。
+- 单一权威 `infra/database/schema.sql` 直接定义工具调用与结果提交结构，不新增增量 migration SQL。
 
 ### WP-07：审批、权限和 Sandbox policy
 

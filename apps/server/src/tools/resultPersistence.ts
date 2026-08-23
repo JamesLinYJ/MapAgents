@@ -26,6 +26,7 @@ import {
 import { atomicWriteText } from '../store/durableFileIo.js'
 import { makeId, nowUtc } from '../utils/ids.js'
 import { createAgentWorkflow, reviseAgentWorkflow } from '../agent/agentWorkflowState.js'
+import type { ToolInvocationEffectCommit } from '../store/postgres/conversationPersistencePorts.js'
 
 export interface ToolResultCommitInput {
   runId: string
@@ -34,6 +35,7 @@ export interface ToolResultCommitInput {
   args: Record<string, unknown>
   result: ToolResult
   objectiveRevision: number
+  invocation: ToolInvocationEffectCommit
 }
 
 export interface ToolResultCommitOutcome {
@@ -53,7 +55,7 @@ export class ToolResultCommitService {
   constructor(private readonly store: ToolExecutionStore) {}
 
   async commit(input: ToolResultCommitInput): Promise<ToolResultCommitOutcome> {
-    const { runId, toolName, toolLabel, args, result, objectiveRevision } = input
+    const { runId, toolName, toolLabel, args, result, objectiveRevision, invocation } = input
     const { store } = this
     const refs: ToolValueRef[] = (result.valueRefs ?? []).map(ref => ({
       ...ref,
@@ -131,8 +133,15 @@ export class ToolResultCommitService {
           ],
         }
       }
-      const committed = await store.commitToolResult(runId, result.resultId, mutation, refs, artifacts)
-      if (!committed) {
+      const commit = await store.commitToolResult(
+        runId,
+        result.resultId,
+        mutation,
+        invocation,
+        refs,
+        artifacts,
+      )
+      if (!commit.committed) {
         // 并发幂等重放可能复用同一个显式 artifact path。重新读取 durable
         // 所有权，只清理没有被任何已提交 Artifact 引用的显式文件；自动生成
         // 文件使用本次唯一 ID，可以直接清理。
@@ -141,7 +150,7 @@ export class ToolResultCommitService {
           ...unownedExplicitArtifacts(store, runId, explicitArtifacts),
         ])
       }
-      return { controlsApplied: committed && controlsEligible }
+      return { controlsApplied: commit.committed && controlsEligible }
     } catch (error) {
       // PostgreSQL 事务失败时，文件已经完成原子写入但没有对应的 durable
       // metadata。立即清理本次请求的对象，避免把“未提交”误留成可读结果；
@@ -173,26 +182,6 @@ function unownedExplicitArtifacts(
     const relativePath = artifact.metadata.relativePath
     return !durableIds.has(artifact.artifactId)
       && (typeof relativePath !== 'string' || !durablePaths.has(relativePath))
-  })
-}
-
-/** Compatibility entry point for callers still being migrated to the service. */
-export async function persistToolExecutionResult(
-  store: ToolExecutionStore,
-  runId: string,
-  toolName: string,
-  toolLabel: string,
-  args: Record<string, unknown>,
-  result: ToolResult,
-): Promise<void> {
-  const objectiveRevision = store.getRun(runId).state.objectiveRevision
-  await new ToolResultCommitService(store).commit({
-    runId,
-    toolName,
-    toolLabel,
-    args,
-    result,
-    objectiveRevision,
   })
 }
 
