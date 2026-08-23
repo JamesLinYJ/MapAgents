@@ -84,6 +84,10 @@ export const runCheckpointSchema = z.object({
   activeInputLeaseId: z.string().nullable().default(null),
   activeInputLeaseFrom: z.number().int().positive().nullable().default(null),
   activeInputLeaseTo: z.number().int().positive().nullable().default(null),
+  terminalInputClaimId: z.string().nullable().default(null),
+  terminalObjectiveRevision: z.number().int().positive().nullable().default(null),
+  terminalInputCursor: z.number().int().nonnegative().nullable().default(null),
+  terminalClaimedAt: z.string().nullable().default(null),
 })
 
 export const compactionRecordSchema = z.object({

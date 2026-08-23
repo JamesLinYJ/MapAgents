@@ -161,13 +161,24 @@ export class OpenAIAgentsRuntime {
         async () => {
           await this.refreshAuthorization(options)
           const assembly = await this.assemblyFactory.create(options, threadId, turnId, eventSink, itemSink, abort.signal)
-          const restored = options.resume
+          const checkpoint = options.resume
+            ? await this.store.getRunCheckpoint(options.runId)
+            : null
+          if (
+            options.resume
+            && !checkpoint?.sdkStateContentHash
+            && !assembly.replayInputLeaseId
+          ) {
+            throw new Error(`run '${options.runId}' 缺少可恢复 SDK checkpoint 或 included ModelRequest`)
+          }
+          const restored = options.resume && checkpoint?.sdkStateContentHash
             ? await this.checkpoints.restore({
               runId: options.runId,
               agent: assembly.agent,
               context: assembly.context,
               sdkVersion: assembly.sdkVersion,
               configDigest: assembly.configDigest,
+              resolveStepContext: stepId => this.runtimeOptions.stepContexts.get(stepId),
             })
             : null
           if (restored) assembly.checkpointContext.adopt(restored.stepContext)
@@ -373,6 +384,7 @@ export class OpenAIAgentsRuntime {
             context: assembly.context,
             sdkVersion: assembly.sdkVersion,
             configDigest: assembly.configDigest,
+            resolveStepContext: stepId => this.runtimeOptions.stepContexts.get(stepId),
           })
           assembly.checkpointContext.adopt(restored.stepContext)
           const state = restored.state

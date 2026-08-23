@@ -43,6 +43,7 @@ describe('Run domain journal', () => {
       content: '继续分析',
     })
     await persistence.leaseRunInputs(run.id, 'lease_1')
+    await commitModelRequest(persistence, run.id, '1')
     await persistence.saveAgentsSdkCheckpoint(run.id, {
       contentHash: 'a'.repeat(64),
       agentsSdkVersion: '0.16.1',
@@ -60,6 +61,7 @@ describe('Run domain journal', () => {
     await persistence.leaseRunInputs(run.id, 'lease_2')
     await persistence.requeueLeasedRunInputs(run.id)
     await persistence.leaseRunInputs(run.id, 'lease_3')
+    await commitModelRequest(persistence, run.id, '2')
     await persistence.saveAgentsSdkCheckpoint(run.id, {
       contentHash: 'b'.repeat(64),
       agentsSdkVersion: '0.16.1',
@@ -89,6 +91,8 @@ describe('Run domain journal', () => {
       'run.checkpoint_changed',
       'input.leased',
       'run.checkpoint_changed',
+      'input.included',
+      'step.model_request_committed',
       'input.checkpointed',
       'run.checkpoint_changed',
       'input.queued',
@@ -99,6 +103,8 @@ describe('Run domain journal', () => {
       'run.checkpoint_changed',
       'input.leased',
       'run.checkpoint_changed',
+      'input.included',
+      'step.model_request_committed',
       'input.checkpointed',
       'run.checkpoint_changed',
       'tool.succeeded',
@@ -111,8 +117,8 @@ describe('Run domain journal', () => {
         selectedDataSources: ['dataset_1'],
       },
       inputDeliveries: {
-        input_1: { status: 'acked', leaseId: 'lease_1' },
-        input_2: { status: 'acked', leaseId: 'lease_3' },
+        input_1: { status: 'checkpointed', leaseId: 'lease_1', modelRequestId: 'request_1' },
+        input_2: { status: 'checkpointed', leaseId: 'lease_3', modelRequestId: 'request_2' },
       },
       checkpoint: { checkpointInputCursor: 2, activeInputLeaseId: null },
     })
@@ -194,6 +200,30 @@ async function fixture(): Promise<InMemoryConversationPersistence> {
     }),
   }))
   return persistence
+}
+
+async function commitModelRequest(
+  persistence: InMemoryConversationPersistence,
+  runId: string,
+  suffix: string,
+): Promise<void> {
+  await persistence.commitModelRequest({
+    schemaVersion: 1,
+    requestId: `request_${suffix}`,
+    runId,
+    turnId: 'turn_1',
+    stepId: `step_${suffix}`,
+    segmentId: 'segment_1',
+    provider: 'test',
+    modelId: 'test-model',
+    inputObjectHash: suffix.padEnd(64, suffix),
+    inputDigest: `sha256:${'a'.repeat(64)}`,
+    instructionsDigest: `sha256:${'b'.repeat(64)}`,
+    toolPlanDigest: `sha256:${'c'.repeat(64)}`,
+    worldRevision: 1,
+    summaryObjectHashes: [],
+    createdAt: `2026-08-20T00:00:0${suffix}.000Z`,
+  })
 }
 
 function warningEvent(sequence: number, code: string): RunDomainEvent {

@@ -45,6 +45,10 @@ export interface RunDomainCheckpointSource {
   nextInputSequence: number
   checkpointInputCursor: number
   activeInputLeaseId: string | null
+  terminalInputClaimId: string | null
+  terminalObjectiveRevision: number | null
+  terminalInputCursor: number | null
+  terminalClaimedAt: Date | null
 }
 
 export function buildRunCreatedEvents(
@@ -112,11 +116,13 @@ export function buildRunTransitionEvents(input: {
 export function buildInputTransitionEvent(input: {
   run: AnalysisRun
   expectedSequence: number
-  type: 'input.queued' | 'input.leased' | 'input.checkpointed' | 'input.requeued'
+  type: 'input.queued' | 'input.leased' | 'input.included' | 'input.checkpointed' | 'input.requeued'
   records: readonly RunSteeringRecord[]
 }): RunDomainEvent {
   const status = input.type === 'input.checkpointed'
-    ? 'acked'
+    ? 'checkpointed'
+    : input.type === 'input.included'
+      ? 'included'
     : input.type === 'input.leased'
       ? 'leased'
       : 'queued'
@@ -126,10 +132,59 @@ export function buildInputTransitionEvent(input: {
       inputSequence: record.inputSequence,
       status,
       leaseId: status === 'queued' ? null : record.leaseId,
+      modelRequestId: status === 'included' || status === 'checkpointed'
+        ? record.modelRequestId
+        : null,
     })),
   } as RunDomainEventPayload<typeof input.type>, undefined, null, input.type === 'input.queued'
     ? { kind: 'user', id: input.run.createdByUserId }
     : { kind: 'system', id: null })
+}
+
+export function buildModelRequestCommittedEvent(input: {
+  run: AnalysisRun
+  expectedSequence: number
+  requestId: string
+  stepId: string
+  inputObjectHash: string
+  inputEntryIds: readonly string[]
+}): RunDomainEvent {
+  return domainEvent(input.run, input.expectedSequence + 1, 'step.model_request_committed', {
+    requestId: input.requestId,
+    stepId: input.stepId,
+    inputObjectHash: input.inputObjectHash,
+    inputEntryIds: [...input.inputEntryIds],
+  })
+}
+
+export function buildTerminalClaimedEvent(input: {
+  run: AnalysisRun
+  expectedSequence: number
+  claimId: string
+  objectiveRevision: number
+  inputCursor: number
+}): RunDomainEvent {
+  return domainEvent(input.run, input.expectedSequence + 1, 'terminal.claimed', {
+    claimId: input.claimId,
+    objectiveRevision: input.objectiveRevision,
+    inputCursor: input.inputCursor,
+  })
+}
+
+export function buildTerminalCandidateSupersededEvent(input: {
+  run: AnalysisRun
+  expectedSequence: number
+  objectiveRevision: number
+  inputCursor: number
+  durableObjectiveRevision: number
+  durableInputCursor: number
+}): RunDomainEvent {
+  return domainEvent(input.run, input.expectedSequence + 1, 'terminal.candidate_superseded', {
+    objectiveRevision: input.objectiveRevision,
+    inputCursor: input.inputCursor,
+    durableObjectiveRevision: input.durableObjectiveRevision,
+    durableInputCursor: input.durableInputCursor,
+  })
 }
 
 export function buildCheckpointChangedEvent(input: {
@@ -155,6 +210,10 @@ export function toRunDomainCheckpoint(source: RunDomainCheckpointSource): RunDom
     nextInputSequence: source.nextInputSequence,
     checkpointInputCursor: source.checkpointInputCursor,
     activeInputLeaseId: source.activeInputLeaseId,
+    terminalInputClaimId: source.terminalInputClaimId,
+    terminalObjectiveRevision: source.terminalObjectiveRevision,
+    terminalInputCursor: source.terminalInputCursor,
+    terminalClaimedAt: source.terminalClaimedAt?.toISOString() ?? null,
   }
 }
 
@@ -260,6 +319,9 @@ function inputDelivery(record: RunSteeringRecord): RunDomainInputDelivery {
     inputSequence: record.inputSequence,
     status: record.status,
     leaseId: record.status === 'queued' ? null : record.leaseId,
+    modelRequestId: record.status === 'included' || record.status === 'checkpointed'
+      ? record.modelRequestId
+      : null,
   }
 }
 

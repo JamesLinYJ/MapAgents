@@ -14,6 +14,7 @@ import type {
   ArtifactRef,
   CompactionRecord,
   ConversationItem,
+  ModelRequestRecord,
   RunCheckpoint,
   RunDomainEvent,
   RunDomainSnapshot,
@@ -74,6 +75,13 @@ export interface EnqueueRunInput {
   itemId: string
   runId: string
   content: string
+}
+
+export type CommitModelRequestInput = Omit<ModelRequestRecord, 'inputEntryIds'>
+
+export interface CommitModelRequestResult {
+  record: ModelRequestRecord
+  includedInputs: RunSteeringRecord[]
 }
 
 export interface AppendConversationEntryInput {
@@ -218,6 +226,19 @@ export interface RunInputRepository {
   leaseRunInputs(runId: string, leaseId: string): Promise<RunSteeringRecord[]>
   requeueLeasedRunInputs(runId: string): Promise<RunSteeringRecord[]>
   listRunInputs(runId: string): Promise<RunSteeringRecord[]>
+  tryClaimTerminalInput(input: {
+    runId: string
+    claimId: string
+    objectiveRevision: number
+    inputCursor: number
+  }): Promise<boolean>
+}
+
+export interface ModelRequestRepository {
+  commitModelRequest(input: CommitModelRequestInput): Promise<CommitModelRequestResult>
+  getModelRequest(requestId: string): Promise<ModelRequestRecord | null>
+  getActiveModelRequest(runId: string): Promise<ModelRequestRecord | null>
+  listModelRequests(runId: string): Promise<ModelRequestRecord[]>
 }
 
 export interface ConversationPersistence extends
@@ -227,5 +248,6 @@ export interface ConversationPersistence extends
   RunRepository,
   ObjectReferenceRepository,
   RunInputRepository,
+  ModelRequestRepository,
   ToolResultCommitter,
   RunDomainJournalRepository {}

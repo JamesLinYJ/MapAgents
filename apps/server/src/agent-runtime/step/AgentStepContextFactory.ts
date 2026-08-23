@@ -50,14 +50,11 @@ export interface CaptureAgentStepContextInput {
   auth: AuthContext | null
 }
 
-export interface RecordedAgentStepContext {
-  identity: Pick<AgentStepContext['identity'], 'segmentId'>
-  toolPlanDigest: string
-  worldRevision: number
-}
+export type RecordedAgentStepContext = AgentStepContext
 
 export interface AgentStepContextRecorder {
   record(input: CaptureAgentStepContextInput): Promise<RecordedAgentStepContext>
+  get(stepId: string): Promise<RecordedAgentStepContext | null>
 }
 
 interface AgentStepContextWriter {
@@ -65,6 +62,7 @@ interface AgentStepContextWriter {
     runId: string,
     build: (modelRequestIndex: number) => AgentStepContext,
   ): Promise<AgentStepContext>
+  get(stepId: string): Promise<AgentStepContext | null>
 }
 
 interface GeoWorldStore {
@@ -90,6 +88,10 @@ export class AgentStepContextFactory implements AgentStepContextRecorder {
 
   async record(input: CaptureAgentStepContextInput): Promise<AgentStepContext> {
     return this.capture(input)
+  }
+
+  get(stepId: string): Promise<AgentStepContext | null> {
+    return this.contexts.get(stepId)
   }
 
   async capture(input: CaptureAgentStepContextInput): Promise<AgentStepContext> {

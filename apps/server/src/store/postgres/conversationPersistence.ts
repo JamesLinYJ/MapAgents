@@ -14,6 +14,7 @@ import {
   type ArtifactRef,
   type CompactionRecord,
   type ConversationItem,
+  type ModelRequestRecord,
   type RunCheckpoint,
   type RunDomainEvent,
   type RunDomainSnapshot,
@@ -34,6 +35,9 @@ import type {
   ConversationSnapshotRepository,
   DeletedThreadRecord,
   EnqueueRunInput,
+  CommitModelRequestInput,
+  CommitModelRequestResult,
+  ModelRequestRepository,
   ObjectReferenceRepository,
   RunInputRepository,
   RunDomainJournalRepository,
@@ -56,6 +60,7 @@ import { PostgresThreadRepository } from './threadRepository.js'
 import { PostgresRunRepository } from './runRepository.js'
 import { PostgresObjectReferenceRepository } from './objectReferenceRepository.js'
 import { PostgresRunDomainJournalRepository } from './runDomainJournalRepository.js'
+import { PostgresModelRequestRepository } from './modelRequestRepository.js'
 
 // PostgreSQL 是结构化会话事实源。Repository 只处理数据库语义；Agent 运行时、
 // WS 推送和诊断导出通过更窄的 Service 组合这些原子操作。
@@ -63,6 +68,7 @@ export class PostgresConversationPersistence implements ConversationPersistence 
   private readonly runMutations = new RunMutationQueue()
   private readonly runRecords = new RunRecordAppender()
   private readonly runInputs: RunInputRepository
+  private readonly modelRequests: ModelRequestRepository
   private readonly snapshots: ConversationSnapshotRepository
   private readonly sessions: SessionRepository
   private readonly threads: ThreadRepository
@@ -75,6 +81,12 @@ export class PostgresConversationPersistence implements ConversationPersistence 
     const domainJournal = new PostgresRunDomainJournalRepository(db)
     this.domainJournal = domainJournal
     this.runInputs = new PostgresRunInputRepository(
+      db,
+      this.runMutations,
+      inputDelivery,
+      domainJournal,
+    )
+    this.modelRequests = new PostgresModelRequestRepository(
       db,
       this.runMutations,
       inputDelivery,
@@ -278,6 +290,31 @@ export class PostgresConversationPersistence implements ConversationPersistence 
 
   async listRunInputs(runId: string): Promise<RunSteeringRecord[]> {
     return this.runInputs.listRunInputs(runId)
+  }
+
+  async tryClaimTerminalInput(input: {
+    runId: string
+    claimId: string
+    objectiveRevision: number
+    inputCursor: number
+  }): Promise<boolean> {
+    return this.runInputs.tryClaimTerminalInput(input)
+  }
+
+  async commitModelRequest(input: CommitModelRequestInput): Promise<CommitModelRequestResult> {
+    return this.modelRequests.commitModelRequest(input)
+  }
+
+  async getModelRequest(requestId: string): Promise<ModelRequestRecord | null> {
+    return this.modelRequests.getModelRequest(requestId)
+  }
+
+  async getActiveModelRequest(runId: string): Promise<ModelRequestRecord | null> {
+    return this.modelRequests.getActiveModelRequest(runId)
+  }
+
+  async listModelRequests(runId: string): Promise<ModelRequestRecord[]> {
+    return this.modelRequests.listModelRequests(runId)
   }
 
   appendRunDomainEvents(input: {

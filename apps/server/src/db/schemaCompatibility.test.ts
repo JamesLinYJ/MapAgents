@@ -24,9 +24,10 @@ function currentCapabilities(overrides: Record<string, unknown> = {}) {
     geo_world_snapshots_table: 'platform_geo_world_snapshots',
     geo_world_diffs_table: 'platform_geo_world_diffs',
     agent_step_contexts_table: 'platform_agent_step_contexts',
+    model_request_records_table: 'platform_model_request_records',
     geo_world_snapshot_primary_key: true,
     agent_step_world_foreign_key: true,
-    run_input_delivery_ack: true,
+    run_input_mailbox: true,
     ...overrides,
   }
 }
@@ -63,10 +64,10 @@ describe('verifyDatabaseSchemaCompatibility', () => {
   })
 
   it('拒绝 Run input mailbox 列不完整的数据库', async () => {
-    const db = databaseWithCapabilities(currentCapabilities({ run_input_delivery_ack: false }))
+    const db = databaseWithCapabilities(currentCapabilities({ run_input_mailbox: false }))
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
-      .rejects.toThrow(/Run input sequence\/cursor\/lease/u)
+      .rejects.toThrow(/Run input mailbox\/model-request\/terminal claim/u)
   })
 
   it('拒绝 Run domain journal 表缺失的数据库', async () => {
@@ -81,6 +82,13 @@ describe('verifyDatabaseSchemaCompatibility', () => {
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
       .rejects.toThrow(/GeoWorld\/Agent StepContext/u)
+  })
+
+  it('拒绝精确 ModelRequest journal 表缺失的数据库', async () => {
+    const db = databaseWithCapabilities(currentCapabilities({ model_request_records_table: null }))
+
+    await expect(verifyDatabaseSchemaCompatibility(db as never))
+      .rejects.toThrow(/GeoWorld\/Agent StepContext\/ModelRequest/u)
   })
 
   it('拒绝仍会覆盖历史 GeoWorld 的单列主键草案', async () => {

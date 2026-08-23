@@ -34,6 +34,7 @@ export function runInputConversationItem(record: RunSteeringRecord): Conversatio
       transcriptEntryId: record.entryId,
       inputSequence: record.inputSequence,
       leaseId: record.leaseId,
+      modelRequestId: record.modelRequestId,
     },
     timestamp: record.queuedAt,
   })

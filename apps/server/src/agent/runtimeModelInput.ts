@@ -170,7 +170,7 @@ export class RuntimeModelInputController {
 
 const protectedModels = new WeakMap<Model, Model>()
 
-export type ModelRequestObserver = (request: ModelRequest) => Promise<void>
+export type ModelRequestObserver = (request: ModelRequest) => Promise<ModelRequest>
 
 // filter 的返回值同时用于 SDK Session 持久化，不能在这里删除 delivery
 // marker；否则外层 Runner 会把无 marker 副本再次写入历史。模型边界仅对
@@ -186,8 +186,10 @@ export function protectModelTransportFromRunInputMarkers(
   const protectedModel: Model = {
     getResponse: async request => {
       const protectedRequest = stripRunInputMarkersFromRequest(request)
-      await observeRequest?.(protectedRequest)
-      return model.getResponse(protectedRequest)
+      const committedRequest = observeRequest
+        ? await observeRequest(protectedRequest)
+        : protectedRequest
+      return model.getResponse(committedRequest)
     },
     getStreamedResponse: request => observeStreamedRequest(
       model,
@@ -208,8 +210,8 @@ async function* observeStreamedRequest(
   request: ModelRequest,
   observer: ModelRequestObserver | undefined,
 ): ReturnType<Model['getStreamedResponse']> {
-  await observer?.(request)
-  yield* model.getStreamedResponse(request)
+  const committedRequest = observer ? await observer(request) : request
+  yield* model.getStreamedResponse(committedRequest)
 }
 
 function stripRunInputMarkersFromRequest(request: ModelRequest): ModelRequest {

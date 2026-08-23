@@ -37,15 +37,48 @@ describe('run domain journal contract', () => {
         ],
       }),
       event(4, 'input.queued', {
-        inputs: [{ inputId: 'input_1', inputSequence: 1, status: 'queued', leaseId: null }],
+        inputs: [{
+          inputId: 'input_1',
+          inputSequence: 1,
+          status: 'queued',
+          leaseId: null,
+          modelRequestId: null,
+        }],
       }),
       event(5, 'input.leased', {
-        inputs: [{ inputId: 'input_1', inputSequence: 1, status: 'leased', leaseId: 'lease_1' }],
+        inputs: [{
+          inputId: 'input_1',
+          inputSequence: 1,
+          status: 'leased',
+          leaseId: 'lease_1',
+          modelRequestId: null,
+        }],
       }),
-      event(6, 'input.checkpointed', {
-        inputs: [{ inputId: 'input_1', inputSequence: 1, status: 'acked', leaseId: 'lease_1' }],
+      event(6, 'input.included', {
+        inputs: [{
+          inputId: 'input_1',
+          inputSequence: 1,
+          status: 'included',
+          leaseId: 'lease_1',
+          modelRequestId: 'model_request_1',
+        }],
       }),
-      event(7, 'run.checkpoint_changed', {
+      event(7, 'step.model_request_committed', {
+        requestId: 'model_request_1',
+        stepId: 'step_1',
+        inputObjectHash: 'b'.repeat(64),
+        inputEntryIds: ['entry_1'],
+      }),
+      event(8, 'input.checkpointed', {
+        inputs: [{
+          inputId: 'input_1',
+          inputSequence: 1,
+          status: 'checkpointed',
+          leaseId: 'lease_1',
+          modelRequestId: 'model_request_1',
+        }],
+      }),
+      event(9, 'run.checkpoint_changed', {
         checkpoint: {
           activeEntryId: null,
           pendingToolCallIds: [],
@@ -58,6 +91,10 @@ describe('run domain journal contract', () => {
           nextInputSequence: 2,
           checkpointInputCursor: 1,
           activeInputLeaseId: null,
+          terminalInputClaimId: null,
+          terminalObjectiveRevision: null,
+          terminalInputCursor: null,
+          terminalClaimedAt: null,
         },
       }),
     ]
@@ -66,11 +103,15 @@ describe('run domain journal contract', () => {
 
     expect(replayed).toMatchObject({
       runId: 'run_1',
-      sequence: 7,
+      sequence: 9,
       status: 'running',
       state: { warnings: ['运行中警告'], currentStep: 2 },
       inputDeliveries: {
-        input_1: { status: 'acked', leaseId: 'lease_1' },
+        input_1: {
+          status: 'checkpointed',
+          leaseId: 'lease_1',
+          modelRequestId: 'model_request_1',
+        },
       },
       checkpoint: { checkpointInputCursor: 1 },
     })

@@ -8,7 +8,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { and, asc, desc, eq, gt, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
 import type { Database, DatabaseTransaction } from '../../db/connection.js'
 import {
   platformConversationEntries,
@@ -31,6 +31,8 @@ import {
   assertRunDomainProjection,
   buildCheckpointChangedEvent,
   buildInputTransitionEvent,
+  buildTerminalCandidateSupersededEvent,
+  buildTerminalClaimedEvent,
   toRunDomainCheckpoint,
 } from '../runDomainProjection.js'
 import type { EnqueueRunInput, RunInputRepository } from './conversationPersistencePorts.js'
@@ -68,6 +70,7 @@ export class PostgresRunInputRepository implements RunInputRepository {
       if (!run) throw new Error(`运行 '${input.runId}' 不存在`)
       const currentSnapshot = await this.domainJournal.requireSnapshotInTransaction(tx, input.runId)
       if (run.status !== 'running') throw new Error(`运行 '${input.runId}' 已结束接收引导消息`)
+      if (run.terminalInputClaimId) throw new Error(`运行 '${input.runId}' 已提交终态游标，不再接收引导消息`)
       if (!run.threadId) throw new Error(`运行 '${input.runId}' 缺少 threadId`)
       const inputSequence = run.nextInputSequence
 
@@ -133,7 +136,7 @@ export class PostgresRunInputRepository implements RunInputRepository {
       const afterRow = sequenceClaim[0]
       if (!afterRow) throw new Error(`运行 '${run.runId}' 的 input sequence CAS 失败`)
       const record = runSteeringRecordSchema.parse({
-        schemaVersion: 2,
+        schemaVersion: 3,
         steeringId: input.inputId,
         entryId: input.entryId,
         itemId: input.itemId,
@@ -145,7 +148,9 @@ export class PostgresRunInputRepository implements RunInputRepository {
         queuedAt: queuedAt.toISOString(),
         leaseId: null,
         leasedAt: null,
-        ackedAt: null,
+        modelRequestId: null,
+        includedAt: null,
+        checkpointedAt: null,
       })
       await this.inputDelivery.recordTransition(tx, 'queued', run.runId, run.threadId, [record])
       await this.appendInputProjection(
@@ -177,7 +182,7 @@ export class PostgresRunInputRepository implements RunInputRepository {
         const existingLease = await tx.select().from(platformRunInputs)
           .where(and(
             eq(platformRunInputs.runId, runId),
-            eq(platformRunInputs.status, 'leased'),
+            inArray(platformRunInputs.status, ['leased', 'included']),
             eq(platformRunInputs.leaseId, leaseId),
           ))
           .orderBy(asc(platformRunInputs.inputSequence))
@@ -188,6 +193,8 @@ export class PostgresRunInputRepository implements RunInputRepository {
           run.activeInputLeaseTo - run.activeInputLeaseFrom + 1,
           runId,
         )
+        const statuses = new Set(existingLease.map(row => row.status))
+        if (statuses.size !== 1) throw new Error(`运行 '${runId}' 的活动输入 lease 状态不一致`)
         const records = existingLease.map(mapRunSteeringRow)
         this.assertUnchangedProjection(currentSnapshot, run, records)
         return records
@@ -230,7 +237,14 @@ export class PostgresRunInputRepository implements RunInputRepository {
       const afterRow = claimed[0]
       if (!afterRow) throw new Error(`运行 '${runId}' 的输入 lease CAS 失败`)
       const leasedRows = await tx.update(platformRunInputs)
-        .set({ status: 'leased', leaseId, leasedAt, ackedAt: null })
+        .set({
+          status: 'leased',
+          leaseId,
+          leasedAt,
+          modelRequestId: null,
+          includedAt: null,
+          checkpointedAt: null,
+        })
         .where(and(
           eq(platformRunInputs.runId, runId),
           eq(platformRunInputs.status, 'queued'),
@@ -287,7 +301,7 @@ export class PostgresRunInputRepository implements RunInputRepository {
       const rows = await tx.select().from(platformRunInputs)
         .where(and(
           eq(platformRunInputs.runId, runId),
-          eq(platformRunInputs.status, 'leased'),
+          inArray(platformRunInputs.status, ['leased', 'included']),
           eq(platformRunInputs.leaseId, activeLeaseId),
         ))
         .orderBy(asc(platformRunInputs.inputSequence))
@@ -295,8 +309,22 @@ export class PostgresRunInputRepository implements RunInputRepository {
       if (!rows.length) throw new Error(`运行 '${runId}' 的活动输入 lease '${activeLeaseId}' 没有对应记录`)
       const expectedCount = run.activeInputLeaseTo - run.activeInputLeaseFrom + 1
       assertContiguousInputPrefix(rows, run.activeInputLeaseFrom, expectedCount, runId)
+      if (rows.some(row => row.status === 'included')) {
+        if (rows.some(row => row.status !== 'included')) {
+          throw new Error(`运行 '${runId}' 的活动输入 lease 同时包含 leased 与 included 记录`)
+        }
+        this.assertUnchangedProjection(currentSnapshot, run, rows.map(mapRunSteeringRow))
+        return []
+      }
       const requeuedRows = await tx.update(platformRunInputs)
-        .set({ status: 'queued', leaseId: null, leasedAt: null, ackedAt: null })
+        .set({
+          status: 'queued',
+          leaseId: null,
+          leasedAt: null,
+          modelRequestId: null,
+          includedAt: null,
+          checkpointedAt: null,
+        })
         .where(and(
           eq(platformRunInputs.runId, runId),
           eq(platformRunInputs.status, 'leased'),
@@ -343,6 +371,102 @@ export class PostgresRunInputRepository implements RunInputRepository {
       .where(eq(platformRunInputs.runId, runId))
       .orderBy(asc(platformRunInputs.inputSequence))
     return rows.map(mapRunSteeringRow)
+  }
+
+  async tryClaimTerminalInput(input: {
+    runId: string
+    claimId: string
+    objectiveRevision: number
+    inputCursor: number
+  }): Promise<boolean> {
+    if (!input.claimId.trim()) throw new Error('terminal claimId 不能为空')
+    if (input.objectiveRevision !== input.inputCursor + 1) {
+      throw new Error('terminal objectiveRevision 必须等于 inputCursor + 1')
+    }
+    return this.mutations.run(input.runId, () => this.db.transaction(async tx => {
+      const runRows = await tx.select().from(platformRuns)
+        .where(eq(platformRuns.runId, input.runId)).for('update').limit(1)
+      const run = runRows[0]
+      if (!run) throw new Error(`运行 '${input.runId}' 不存在`)
+      const currentSnapshot = await this.domainJournal.requireSnapshotInTransaction(tx, input.runId)
+      if (run.terminalInputClaimId) {
+        if (
+          run.terminalInputClaimId === input.claimId
+          && run.terminalObjectiveRevision === input.objectiveRevision
+          && run.terminalInputCursor === input.inputCursor
+        ) {
+          this.assertUnchangedProjection(currentSnapshot, run, [])
+          return true
+        }
+        return false
+      }
+
+      const durableRevision = run.nextInputSequence
+      const durableCursor = run.checkpointInputCursor
+      if (
+        run.status !== 'running'
+        || run.activeInputLeaseId !== null
+        || durableRevision !== input.objectiveRevision
+        || durableCursor !== input.inputCursor
+      ) {
+        const projectedRun = mapAnalysisRunRow(run)
+        const event = buildTerminalCandidateSupersededEvent({
+          run: projectedRun,
+          expectedSequence: currentSnapshot.sequence,
+          objectiveRevision: input.objectiveRevision,
+          inputCursor: input.inputCursor,
+          durableObjectiveRevision: durableRevision,
+          durableInputCursor: durableCursor,
+        })
+        await this.domainJournal.appendInTransaction(tx, {
+          runId: input.runId,
+          expectedSequence: currentSnapshot.sequence,
+          events: [event],
+        })
+        return false
+      }
+
+      const claimedAt = new Date()
+      const claimedRows = await tx.update(platformRuns).set({
+        terminalInputClaimId: input.claimId,
+        terminalObjectiveRevision: input.objectiveRevision,
+        terminalInputCursor: input.inputCursor,
+        terminalClaimedAt: claimedAt,
+        updatedAt: claimedAt,
+      }).where(and(
+        eq(platformRuns.runId, input.runId),
+        isNull(platformRuns.terminalInputClaimId),
+        isNull(platformRuns.activeInputLeaseId),
+        eq(platformRuns.nextInputSequence, input.objectiveRevision),
+        eq(platformRuns.checkpointInputCursor, input.inputCursor),
+      )).returning()
+      const afterRow = claimedRows[0]
+      if (!afterRow) return false
+      const projectedRun = mapAnalysisRunRow(afterRow)
+      const checkpoint = toRunDomainCheckpoint(afterRow)
+      const events: RunDomainEvent[] = [
+        buildTerminalClaimedEvent({
+          run: projectedRun,
+          expectedSequence: currentSnapshot.sequence,
+          claimId: input.claimId,
+          objectiveRevision: input.objectiveRevision,
+          inputCursor: input.inputCursor,
+        }),
+        buildCheckpointChangedEvent({
+          run: projectedRun,
+          expectedSequence: currentSnapshot.sequence + 1,
+          checkpoint,
+        }),
+      ]
+      const snapshot = await this.domainJournal.appendInTransaction(tx, {
+        runId: input.runId,
+        expectedSequence: currentSnapshot.sequence,
+        events,
+      })
+      assertRunDomainProjection(snapshot, projectedRun)
+      assertRunDomainCheckpointProjection(snapshot, checkpoint)
+      return true
+    }))
   }
 
   private async appendInputProjection(
@@ -400,10 +524,12 @@ export function mapRunSteeringRow(row: {
   queuedAt: Date
   leaseId: string | null
   leasedAt: Date | null
-  ackedAt: Date | null
+  modelRequestId: string | null
+  includedAt: Date | null
+  checkpointedAt: Date | null
 }): RunSteeringRecord {
   return runSteeringRecordSchema.parse({
-    schemaVersion: 2,
+    schemaVersion: 3,
     steeringId: row.inputId,
     entryId: row.entryId,
     itemId: row.itemId,
@@ -415,7 +541,9 @@ export function mapRunSteeringRow(row: {
     queuedAt: row.queuedAt.toISOString(),
     leaseId: row.leaseId,
     leasedAt: row.leasedAt?.toISOString() ?? null,
-    ackedAt: row.ackedAt?.toISOString() ?? null,
+    modelRequestId: row.modelRequestId,
+    includedAt: row.includedAt?.toISOString() ?? null,
+    checkpointedAt: row.checkpointedAt?.toISOString() ?? null,
   })
 }
 

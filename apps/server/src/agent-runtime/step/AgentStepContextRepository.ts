@@ -74,6 +74,13 @@ export class AgentStepContextRepository {
       .orderBy(platformAgentStepContexts.modelRequestIndex)
     return rows.map(row => mapContextRow(row))
   }
+
+  async get(stepId: string): Promise<AgentStepContext | null> {
+    const rows = await this.db.select().from(platformAgentStepContexts)
+      .where(eq(platformAgentStepContexts.stepId, stepId))
+      .limit(1)
+    return rows[0] ? mapContextRow(rows[0]) : null
+  }
 }
 
 function mapContextRow(

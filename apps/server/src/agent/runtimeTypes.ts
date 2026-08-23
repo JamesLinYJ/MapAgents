@@ -58,6 +58,7 @@ export interface RuntimeAssembly {
   threadId: string
   turnId: string
   segmentId: string
+  replayInputLeaseId: string | null
   checkpointContext: {
     current(): RecordedAgentStepContext | null
     adopt(context: RecordedAgentStepContext): void

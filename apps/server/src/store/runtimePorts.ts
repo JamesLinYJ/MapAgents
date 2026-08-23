@@ -24,6 +24,7 @@ import type {
   TranscriptEntry,
   TranscriptEntryKind,
   ConversationItem,
+  ModelRequestRecord,
 } from '../schemas/types.js'
 import type { ConversationItemStoreUpdate } from '../conversation/itemUpdates.js'
 import type { VisibleArtifactResource } from './postgres/artifactRepository.js'
@@ -71,6 +72,13 @@ export interface AgentRuntimeStore {
     },
   ): Promise<RunSteeringRecord[]>
   readAgentsSdkCheckpointEnvelope(runId: string): Promise<string>
+  publishModelRequestSnapshot(
+    serializedRequest: string,
+    input: Omit<ModelRequestRecord, 'inputObjectHash' | 'inputEntryIds'>,
+  ): Promise<{ record: ModelRequestRecord; includedInputs: RunSteeringRecord[] }>
+  readModelRequestSnapshot(record: ModelRequestRecord): Promise<string>
+  getActiveModelRequest(runId: string): Promise<ModelRequestRecord | null>
+  listModelRequests(runId: string): Promise<ModelRequestRecord[]>
   appendEvent(runId: string, event: RunEvent): Promise<void>
   listEvents(runId: string): Promise<RunEvent[]>
   appendItem(update: ConversationItemStoreUpdate): Promise<void>
@@ -87,6 +95,12 @@ export interface AgentRuntimeStore {
   leaseRunInputs(runId: string, leaseId: string): Promise<RunSteeringRecord[]>
   requeueLeasedRunInputs(runId: string): Promise<RunSteeringRecord[]>
   listRunInputs(runId: string): Promise<RunSteeringRecord[]>
+  tryClaimTerminalInput(input: {
+    runId: string
+    claimId: string
+    objectiveRevision: number
+    inputCursor: number
+  }): Promise<boolean>
   activeTranscript(threadId: string, leafEntryId?: string | null): Promise<TranscriptEntry[]>
   appendTranscript(input: AppendTranscriptInput): Promise<TranscriptEntry>
   getThreadManifest(threadId: string): Promise<ThreadManifest>

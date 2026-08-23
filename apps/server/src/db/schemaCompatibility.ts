@@ -34,6 +34,7 @@ export async function verifyDatabaseSchemaCompatibility(
     to_regclass('public.platform_geo_world_snapshots') AS geo_world_snapshots_table,
     to_regclass('public.platform_geo_world_diffs') AS geo_world_diffs_table,
     to_regclass('public.platform_agent_step_contexts') AS agent_step_contexts_table,
+    to_regclass('public.platform_model_request_records') AS model_request_records_table,
     COALESCE((
       SELECT array_agg(attribute.attname::text ORDER BY key_column.ordinality)
         = ARRAY['run_id', 'revision']::text[]
@@ -55,21 +56,26 @@ export async function verifyDatabaseSchemaCompatibility(
         AND contype = 'f'
     ) AS agent_step_world_foreign_key,
     (
-      SELECT COUNT(*) = 4
+      SELECT COUNT(*) = 6
       FROM information_schema.columns
       WHERE table_schema = 'public'
         AND table_name = 'platform_run_inputs'
-        AND column_name IN ('input_sequence', 'lease_id', 'leased_at', 'acked_at')
+        AND column_name IN (
+          'input_sequence', 'lease_id', 'leased_at',
+          'model_request_id', 'included_at', 'checkpointed_at'
+        )
     ) AND (
-      SELECT COUNT(*) = 5
+      SELECT COUNT(*) = 9
       FROM information_schema.columns
       WHERE table_schema = 'public'
         AND table_name = 'platform_runs'
         AND column_name IN (
           'next_input_sequence', 'checkpoint_input_cursor', 'active_input_lease_id',
-          'active_input_lease_from', 'active_input_lease_to'
+          'active_input_lease_from', 'active_input_lease_to',
+          'terminal_input_claim_id', 'terminal_objective_revision',
+          'terminal_input_cursor', 'terminal_claimed_at'
         )
-    ) AS run_input_delivery_ack
+    ) AS run_input_mailbox
   `)
   const vectorTileFunction = (
     capabilityResult.rows[0] as {
@@ -82,9 +88,10 @@ export async function verifyDatabaseSchemaCompatibility(
       geo_world_snapshots_table?: unknown
       geo_world_diffs_table?: unknown
       agent_step_contexts_table?: unknown
+      model_request_records_table?: unknown
       geo_world_snapshot_primary_key?: unknown
       agent_step_world_foreign_key?: unknown
-      run_input_delivery_ack?: unknown
+      run_input_mailbox?: unknown
     } | undefined
   )?.vector_tile_function
   if (typeof vectorTileFunction !== 'string') {
@@ -121,12 +128,12 @@ export async function verifyDatabaseSchemaCompatibility(
       + '请使用空数据库执行 infra/database/schema.sql。',
     )
   }
-  const runInputDeliveryAck = (
-    capabilityResult.rows[0] as { run_input_delivery_ack?: unknown } | undefined
-  )?.run_input_delivery_ack
-  if (runInputDeliveryAck !== true) {
+  const runInputMailbox = (
+    capabilityResult.rows[0] as { run_input_mailbox?: unknown } | undefined
+  )?.run_input_mailbox
+  if (runInputMailbox !== true) {
     throw new Error(
-      '数据库结构与当前应用契约不一致：Run input sequence/cursor/lease 列不完整。'
+      '数据库结构与当前应用契约不一致：Run input mailbox/model-request/terminal claim 列不完整。'
       + '请使用空数据库执行 infra/database/schema.sql。',
     )
   }
@@ -151,6 +158,9 @@ export async function verifyDatabaseSchemaCompatibility(
   const agentStepContextsTable = (
     capabilityResult.rows[0] as { agent_step_contexts_table?: unknown } | undefined
   )?.agent_step_contexts_table
+  const modelRequestRecordsTable = (
+    capabilityResult.rows[0] as { model_request_records_table?: unknown } | undefined
+  )?.model_request_records_table
   const geoWorldSnapshotPrimaryKey = (
     capabilityResult.rows[0] as { geo_world_snapshot_primary_key?: unknown } | undefined
   )?.geo_world_snapshot_primary_key
@@ -161,11 +171,12 @@ export async function verifyDatabaseSchemaCompatibility(
     typeof geoWorldSnapshotsTable !== 'string'
     || typeof geoWorldDiffsTable !== 'string'
     || typeof agentStepContextsTable !== 'string'
+    || typeof modelRequestRecordsTable !== 'string'
     || geoWorldSnapshotPrimaryKey !== true
     || agentStepWorldForeignKey !== true
   ) {
     throw new Error(
-      '数据库结构与当前应用契约不一致：GeoWorld/Agent StepContext 表或追加式主键不完整。'
+      '数据库结构与当前应用契约不一致：GeoWorld/Agent StepContext/ModelRequest 表或追加式主键不完整。'
       + '请使用空数据库执行 infra/database/schema.sql。',
     )
   }

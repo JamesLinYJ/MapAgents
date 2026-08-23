@@ -15,6 +15,7 @@ import type {
   RunEvent, ConversationItem, AgentRuntimeConfig, ArtifactRef, ContentRef, ContextReference,
   RunCheckpoint, RunGoalInput, RunSteeringRecord, TranscriptEntry, TranscriptEntryKind, ThreadManifest,
   ThreadMemoryDocument, CompactionRecord, ToolValueRef, MeteorologicalDatasetRecord,
+  ModelRequestRecord,
 } from '../schemas/types.js'
 import type { ConversationItemStoreUpdate } from '../conversation/itemUpdates.js'
 import { ArtifactStore, type VisibleArtifactOptions } from './artifactStore.js'
@@ -321,6 +322,25 @@ export class PlatformPersistenceFacade {
     return this.runStore.readAgentsSdkCheckpointEnvelope(runId)
   }
 
+  async publishModelRequestSnapshot(
+    serializedRequest: string,
+    input: Omit<ModelRequestRecord, 'inputObjectHash' | 'inputEntryIds'>,
+  ): Promise<{ record: ModelRequestRecord; includedInputs: RunSteeringRecord[] }> {
+    return this.runStore.publishModelRequestSnapshot(serializedRequest, input)
+  }
+
+  async readModelRequestSnapshot(record: ModelRequestRecord): Promise<string> {
+    return this.runStore.readModelRequestSnapshot(record)
+  }
+
+  async getActiveModelRequest(runId: string): Promise<ModelRequestRecord | null> {
+    return this.runStore.getActiveModelRequest(runId)
+  }
+
+  async listModelRequests(runId: string): Promise<ModelRequestRecord[]> {
+    return this.runStore.listModelRequests(runId)
+  }
+
   async putConversationObject(
     content: string | Uint8Array,
     mediaType = 'application/octet-stream',
@@ -401,6 +421,15 @@ export class PlatformPersistenceFacade {
 
   async listRunInputs(runId: string): Promise<RunSteeringRecord[]> {
     return this.runInputRepository.listRunInputs(runId)
+  }
+
+  async tryClaimTerminalInput(input: {
+    runId: string
+    claimId: string
+    objectiveRevision: number
+    inputCursor: number
+  }): Promise<boolean> {
+    return this.runInputRepository.tryClaimTerminalInput(input)
   }
 
   async listItems(runId: string): Promise<ConversationItem[]> {

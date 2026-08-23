@@ -16,6 +16,7 @@ import {
   runCheckpointSchema,
   runEventSchema,
   runSteeringRecordSchema,
+  modelRequestRecordSchema,
   reduceRunDomainEvents,
   runDomainEventSchema,
   threadManifestSchema,
@@ -26,6 +27,7 @@ import {
   type ArtifactRef,
   type CompactionRecord,
   type ConversationItem,
+  type ModelRequestRecord,
   type RunEvent,
   type RunDomainCheckpoint,
   type RunDomainEvent,
@@ -44,6 +46,8 @@ import type {
   ConversationSnapshot,
   DeletedThreadRecord,
   EnqueueRunInput,
+  CommitModelRequestInput,
+  CommitModelRequestResult,
   RunLifecycleResult,
   ToolResultCommitter,
   ThreadLifecycleResult,
@@ -64,6 +68,9 @@ import {
   assertRunDomainProjection,
   buildCheckpointChangedEvent,
   buildInputTransitionEvent,
+  buildModelRequestCommittedEvent,
+  buildTerminalCandidateSupersededEvent,
+  buildTerminalClaimedEvent,
   buildRunCreatedEvents,
   buildRunTransitionEvents,
 } from '../src/store/runDomainProjection.js'
@@ -100,6 +107,7 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
   private readonly values = new Map<string, ToolValueRef[]>()
   private readonly committedToolResults = new Set<string>()
   private readonly inputs = new Map<string, RunSteeringRecord[]>()
+  private readonly modelRequests = new Map<string, ModelRequestRecord>()
   private readonly memoryVersions = new Map<string, ThreadMemoryVersionReference[]>()
   private readonly compactions = new Map<string, CompactionRecord[]>()
   private readonly domainEvents = new Map<string, RunDomainEvent[]>()
@@ -398,7 +406,7 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
     if (!leaseId && current.activeInputLeaseId) {
       throw new Error(`运行 '${runId}' 存在未确认输入 lease '${current.activeInputLeaseId}'`)
     }
-    let acked: RunSteeringRecord[] = []
+    let checkpointed: RunSteeringRecord[] = []
     if (leaseId) {
       const leaseRows = (this.inputs.get(runId) ?? [])
         .filter(record => record.leaseId === leaseId)
@@ -407,7 +415,7 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
       const leaseTo = leaseRows.at(-1)!.inputSequence
       if (
         current.activeInputLeaseId === null
-        && leaseRows.every(record => record.status === 'acked')
+        && leaseRows.every(record => record.status === 'checkpointed')
         && leaseTo <= current.checkpointInputCursor
       ) {
         if (current.sdkStateContentHash !== input.contentHash) {
@@ -434,16 +442,16 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
         current.activeInputLeaseTo - current.activeInputLeaseFrom + 1,
         runId,
       )
-      const ackedAt = nowUtc()
+      const checkpointedAt = nowUtc()
       const byId = new Map(leaseRows.map(record => [record.steeringId, record]))
       const next = (this.inputs.get(runId) ?? []).map(record => {
         if (!byId.has(record.steeringId)) return record
-        if (record.status !== 'leased') throw new Error(`运行 '${runId}' 的 lease 包含非 leased 记录`)
-        return runSteeringRecordSchema.parse({ ...record, status: 'acked', ackedAt })
+        if (record.status !== 'included') throw new Error(`运行 '${runId}' 的 lease 尚未绑定 ModelRequest`)
+        return runSteeringRecordSchema.parse({ ...record, status: 'checkpointed', checkpointedAt })
       })
       this.inputs.set(runId, next)
-      acked = next.filter(record => byId.has(record.steeringId))
-      this.persistRunInputItems(acked)
+      checkpointed = next.filter(record => byId.has(record.steeringId))
+      this.persistRunInputItems(checkpointed)
     }
     const updatedAt = nowUtc()
     this.checkpoints.set(runId, {
@@ -457,13 +465,13 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
       sdkStateUpdatedAt: updatedAt,
       pendingToolCallIds,
       recoveryStatus: pendingToolCallIds.length ? 'requires_action' : 'clean',
-      checkpointInputCursor: acked.at(-1)?.inputSequence ?? current.checkpointInputCursor,
+      checkpointInputCursor: checkpointed.at(-1)?.inputSequence ?? current.checkpointInputCursor,
       activeInputLeaseId: leaseId ? null : current.activeInputLeaseId,
       activeInputLeaseFrom: leaseId ? null : current.activeInputLeaseFrom,
       activeInputLeaseTo: leaseId ? null : current.activeInputLeaseTo,
     })
-    this.recordMemoryCheckpoint(runId, domainBefore, acked)
-    return clone(acked)
+    this.recordMemoryCheckpoint(runId, domainBefore, checkpointed)
+    return clone(checkpointed)
   }
 
   async appendConversationItem(item: ConversationItem): Promise<void> {
@@ -679,6 +687,7 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
   async listReferencedObjectHashes(): Promise<string[]> {
     const hashes = new Set<string>()
     for (const checkpoint of this.checkpoints.values()) collectSha256Strings(checkpoint, hashes)
+    for (const request of this.modelRequests.values()) collectSha256Strings(request, hashes)
     for (const versions of this.memoryVersions.values()) collectSha256Strings(versions, hashes)
     for (const entries of this.entries.values()) collectSha256Strings(entries, hashes)
     for (const items of this.items.values()) collectSha256Strings(items, hashes)
@@ -789,7 +798,7 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
       entryId: input.entryId,
     })
     const record = runSteeringRecordSchema.parse({
-      schemaVersion: 2,
+      schemaVersion: 3,
       steeringId: input.inputId,
       entryId: entry.entryId,
       itemId: input.itemId,
@@ -801,7 +810,9 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
       queuedAt: entry.timestamp,
       leaseId: null,
       leasedAt: null,
-      ackedAt: null,
+      modelRequestId: null,
+      includedAt: null,
+      checkpointedAt: null,
     })
     this.inputs.set(run.id, [...(this.inputs.get(run.id) ?? []), record])
     this.persistRunInputItems([record])
@@ -818,7 +829,10 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
     if (checkpoint.activeInputLeaseId) {
       if (checkpoint.activeInputLeaseId === leaseId) {
         const existing = (this.inputs.get(runId) ?? [])
-          .filter(record => record.status === 'leased' && record.leaseId === leaseId)
+          .filter(record => (
+            (record.status === 'leased' || record.status === 'included')
+            && record.leaseId === leaseId
+          ))
           .sort((left, right) => left.inputSequence - right.inputSequence)
         if (checkpoint.activeInputLeaseFrom === null || checkpoint.activeInputLeaseTo === null) {
           throw new Error(`运行 '${runId}' 的活动输入 lease 范围不完整`)
@@ -876,7 +890,10 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
     const leaseId = checkpoint.activeInputLeaseId
     if (!leaseId) return []
     const leased = (this.inputs.get(runId) ?? [])
-      .filter(record => record.status === 'leased' && record.leaseId === leaseId)
+      .filter(record => (
+        (record.status === 'leased' || record.status === 'included')
+        && record.leaseId === leaseId
+      ))
       .sort((left, right) => left.inputSequence - right.inputSequence)
     if (checkpoint.activeInputLeaseFrom === null || checkpoint.activeInputLeaseTo === null) {
       throw new Error(`运行 '${runId}' 的活动输入 lease 范围不完整`)
@@ -887,6 +904,12 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
       checkpoint.activeInputLeaseTo - checkpoint.activeInputLeaseFrom + 1,
       runId,
     )
+    if (leased.some(record => record.status === 'included')) {
+      if (leased.some(record => record.status !== 'included')) {
+        throw new Error(`运行 '${runId}' 的活动 lease 状态不一致`)
+      }
+      return []
+    }
     const leasedIds = new Set(leased.map(record => record.steeringId))
     const requeued: RunSteeringRecord[] = []
     const next = (this.inputs.get(runId) ?? []).map(record => {
@@ -896,7 +919,9 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
         status: 'queued',
         leaseId: null,
         leasedAt: null,
-        ackedAt: null,
+        modelRequestId: null,
+        includedAt: null,
+        checkpointedAt: null,
       })
       requeued.push(updated)
       return updated
@@ -916,6 +941,181 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
   async listRunInputs(runId: string): Promise<RunSteeringRecord[]> {
     this.requireRun(runId)
     return clone(this.inputs.get(runId) ?? [])
+  }
+
+  async commitModelRequest(input: CommitModelRequestInput): Promise<CommitModelRequestResult> {
+    const run = this.requireRun(input.runId)
+    const checkpoint = this.requireCheckpoint(input.runId)
+    const domainBefore = this.requireDomainSnapshot(input.runId)
+    if (checkpoint.terminalInputClaimId) throw new Error(`运行 '${input.runId}' 已提交终态游标`)
+    const activeInputs = checkpoint.activeInputLeaseId
+      ? (this.inputs.get(input.runId) ?? [])
+        .filter(record => (
+          record.leaseId === checkpoint.activeInputLeaseId
+          && (record.status === 'leased' || record.status === 'included')
+        ))
+        .sort((left, right) => left.inputSequence - right.inputSequence)
+      : []
+    if (checkpoint.activeInputLeaseId) {
+      if (checkpoint.activeInputLeaseFrom === null || checkpoint.activeInputLeaseTo === null) {
+        throw new Error(`运行 '${input.runId}' 的活动输入 lease 范围不完整`)
+      }
+      assertContiguousRecords(
+        activeInputs,
+        checkpoint.activeInputLeaseFrom,
+        checkpoint.activeInputLeaseTo - checkpoint.activeInputLeaseFrom + 1,
+        input.runId,
+      )
+    }
+    const proposed = modelRequestRecordSchema.parse({
+      ...input,
+      inputEntryIds: activeInputs.map(record => record.entryId),
+    })
+    const existing = [...this.modelRequests.values()].find(record => (
+      record.requestId === proposed.requestId
+      || (record.runId === proposed.runId && record.stepId === proposed.stepId)
+    ))
+    if (existing) {
+      if (!isDeepStrictEqual(existing, proposed)) {
+        throw new Error(`模型请求 '${proposed.requestId}' 的幂等键或 stepId 已被其它内容使用`)
+      }
+      return { record: clone(existing), includedInputs: clone(activeInputs) }
+    }
+
+    const activeIds = new Set(activeInputs.map(record => record.steeringId))
+    const includedAt = nowUtc()
+    const includedInputs: RunSteeringRecord[] = []
+    const next = (this.inputs.get(input.runId) ?? []).map(record => {
+      if (!activeIds.has(record.steeringId)) return record
+      if (record.status !== 'leased') throw new Error(`运行 '${input.runId}' 的输入已绑定其它模型请求`)
+      const included = runSteeringRecordSchema.parse({
+        ...record,
+        status: 'included',
+        modelRequestId: proposed.requestId,
+        includedAt,
+      })
+      includedInputs.push(included)
+      return included
+    })
+    this.modelRequests.set(proposed.requestId, clone(proposed))
+    this.inputs.set(input.runId, next)
+    this.persistRunInputItems(includedInputs)
+    const events: RunDomainEvent[] = []
+    if (includedInputs.length) {
+      events.push(buildInputTransitionEvent({
+        run,
+        expectedSequence: domainBefore.sequence,
+        type: 'input.included',
+        records: includedInputs,
+      }))
+    }
+    events.push(buildModelRequestCommittedEvent({
+      run,
+      expectedSequence: domainBefore.sequence + events.length,
+      requestId: proposed.requestId,
+      stepId: proposed.stepId,
+      inputObjectHash: proposed.inputObjectHash,
+      inputEntryIds: proposed.inputEntryIds,
+    }))
+    const snapshot = this.appendDomainEvents({
+      runId: input.runId,
+      expectedSequence: domainBefore.sequence,
+      events,
+    })
+    assertRunDomainProjection(snapshot, run)
+    assertRunDomainCheckpointProjection(snapshot, memoryDomainCheckpoint(checkpoint))
+    if (includedInputs.length) assertRunDomainInputProjection(snapshot, includedInputs)
+    return { record: clone(proposed), includedInputs: clone(includedInputs) }
+  }
+
+  async getModelRequest(requestId: string): Promise<ModelRequestRecord | null> {
+    const record = this.modelRequests.get(requestId)
+    return record ? clone(record) : null
+  }
+
+  async getActiveModelRequest(runId: string): Promise<ModelRequestRecord | null> {
+    const checkpoint = this.requireCheckpoint(runId)
+    if (!checkpoint.activeInputLeaseId) return null
+    const input = (this.inputs.get(runId) ?? []).find(record => (
+      record.leaseId === checkpoint.activeInputLeaseId && record.status === 'included'
+    ))
+    if (!input?.modelRequestId) return null
+    return this.getModelRequest(input.modelRequestId)
+  }
+
+  async listModelRequests(runId: string): Promise<ModelRequestRecord[]> {
+    this.requireRun(runId)
+    return clone([...this.modelRequests.values()]
+      .filter(record => record.runId === runId)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt)))
+  }
+
+  async tryClaimTerminalInput(input: {
+    runId: string
+    claimId: string
+    objectiveRevision: number
+    inputCursor: number
+  }): Promise<boolean> {
+    const run = this.requireRun(input.runId)
+    const checkpoint = this.requireCheckpoint(input.runId)
+    const domainBefore = this.requireDomainSnapshot(input.runId)
+    if (checkpoint.terminalInputClaimId) {
+      return checkpoint.terminalInputClaimId === input.claimId
+        && checkpoint.terminalObjectiveRevision === input.objectiveRevision
+        && checkpoint.terminalInputCursor === input.inputCursor
+    }
+    if (
+      run.status !== 'running'
+      || checkpoint.activeInputLeaseId !== null
+      || checkpoint.nextInputSequence !== input.objectiveRevision
+      || checkpoint.checkpointInputCursor !== input.inputCursor
+      || input.objectiveRevision !== input.inputCursor + 1
+    ) {
+      this.appendDomainEvents({
+        runId: input.runId,
+        expectedSequence: domainBefore.sequence,
+        events: [buildTerminalCandidateSupersededEvent({
+          run,
+          expectedSequence: domainBefore.sequence,
+          objectiveRevision: input.objectiveRevision,
+          inputCursor: input.inputCursor,
+          durableObjectiveRevision: checkpoint.nextInputSequence,
+          durableInputCursor: checkpoint.checkpointInputCursor,
+        })],
+      })
+      return false
+    }
+    const terminalClaimedAt = nowUtc()
+    const updated = {
+      ...checkpoint,
+      terminalInputClaimId: input.claimId,
+      terminalObjectiveRevision: input.objectiveRevision,
+      terminalInputCursor: input.inputCursor,
+      terminalClaimedAt,
+    }
+    this.checkpoints.set(input.runId, updated)
+    const projectedCheckpoint = memoryDomainCheckpoint(updated)
+    const events: RunDomainEvent[] = [
+      buildTerminalClaimedEvent({
+        run,
+        expectedSequence: domainBefore.sequence,
+        claimId: input.claimId,
+        objectiveRevision: input.objectiveRevision,
+        inputCursor: input.inputCursor,
+      }),
+      buildCheckpointChangedEvent({
+        run,
+        expectedSequence: domainBefore.sequence + 1,
+        checkpoint: projectedCheckpoint,
+      }),
+    ]
+    const snapshot = this.appendDomainEvents({
+      runId: input.runId,
+      expectedSequence: domainBefore.sequence,
+      events,
+    })
+    assertRunDomainCheckpointProjection(snapshot, projectedCheckpoint)
+    return true
   }
 
   private recordMemoryInputTransition(
@@ -1097,6 +1297,10 @@ function initialCheckpoint(updatedAt: string): CheckpointMetadata {
     activeInputLeaseId: null,
     activeInputLeaseFrom: null,
     activeInputLeaseTo: null,
+    terminalInputClaimId: null,
+    terminalObjectiveRevision: null,
+    terminalInputCursor: null,
+    terminalClaimedAt: null,
   }
 }
 
@@ -1113,6 +1317,10 @@ function memoryDomainCheckpoint(checkpoint: CheckpointMetadata): RunDomainCheckp
     nextInputSequence: checkpoint.nextInputSequence,
     checkpointInputCursor: checkpoint.checkpointInputCursor,
     activeInputLeaseId: checkpoint.activeInputLeaseId,
+    terminalInputClaimId: checkpoint.terminalInputClaimId,
+    terminalObjectiveRevision: checkpoint.terminalObjectiveRevision,
+    terminalInputCursor: checkpoint.terminalInputCursor,
+    terminalClaimedAt: checkpoint.terminalClaimedAt,
   }
 }
 

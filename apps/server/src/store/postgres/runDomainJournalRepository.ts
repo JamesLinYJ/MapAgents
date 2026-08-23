@@ -67,6 +67,9 @@ export class PostgresRunDomainJournalRepository implements RunDomainJournalRepos
         inputSequence: row.inputSequence,
         status: row.status,
         leaseId: row.status === 'queued' ? null : row.leaseId,
+        modelRequestId: row.status === 'included' || row.status === 'checkpointed'
+          ? row.modelRequestId
+          : null,
       })))
       return snapshot
     })

@@ -92,6 +92,10 @@ export class PostgresRunCheckpointRepository implements RunCheckpointRepository 
       activeInputLeaseId: row.activeInputLeaseId,
       activeInputLeaseFrom: row.activeInputLeaseFrom,
       activeInputLeaseTo: row.activeInputLeaseTo,
+      terminalInputClaimId: row.terminalInputClaimId,
+      terminalObjectiveRevision: row.terminalObjectiveRevision,
+      terminalInputCursor: row.terminalInputCursor,
+      terminalClaimedAt: row.terminalClaimedAt?.toISOString() ?? null,
     })
   }
 
@@ -158,10 +162,10 @@ export class PostgresRunCheckpointRepository implements RunCheckpointRepository 
       }
 
       const lastSequence = leasedRows.at(-1)!.inputSequence
-      const isIdempotentAck = run.activeInputLeaseId === null
-        && leasedRows.every(row => row.status === 'acked')
+      const isIdempotentCheckpoint = run.activeInputLeaseId === null
+        && leasedRows.every(row => row.status === 'checkpointed')
         && lastSequence <= run.checkpointInputCursor
-      if (isIdempotentAck) {
+      if (isIdempotentCheckpoint) {
         if (run.sdkStateContentHash !== input.contentHash) {
           throw new Error(`运行 '${runId}' 的旧输入 lease '${leaseId}' 不能覆盖更新的 SDK checkpoint`)
         }
@@ -204,21 +208,21 @@ export class PostgresRunCheckpointRepository implements RunCheckpointRepository 
         run.activeInputLeaseTo - run.activeInputLeaseFrom + 1,
         runId,
       )
-      if (leasedRows.some(row => row.status !== 'leased')) {
-        throw new Error(`运行 '${runId}' 的活动输入 lease 包含非 leased 记录`)
+      if (leasedRows.some(row => row.status !== 'included')) {
+        throw new Error(`运行 '${runId}' 的活动输入 lease 尚未绑定精确 ModelRequest`)
       }
 
-      const ackedRows = await tx.update(platformRunInputs)
-        .set({ status: 'acked', ackedAt: updatedAt })
+      const checkpointedRows = await tx.update(platformRunInputs)
+        .set({ status: 'checkpointed', checkpointedAt: updatedAt })
         .where(and(
           eq(platformRunInputs.runId, runId),
-          eq(platformRunInputs.status, 'leased'),
+          eq(platformRunInputs.status, 'included'),
           eq(platformRunInputs.leaseId, leaseId),
         ))
         .returning()
-      ackedRows.sort((left, right) => left.inputSequence - right.inputSequence)
+      checkpointedRows.sort((left, right) => left.inputSequence - right.inputSequence)
       assertAckPrefix(
-        ackedRows,
+        checkpointedRows,
         run.activeInputLeaseFrom,
         run.activeInputLeaseTo - run.activeInputLeaseFrom + 1,
         runId,
@@ -237,21 +241,21 @@ export class PostgresRunCheckpointRepository implements RunCheckpointRepository 
       const afterRow = checkpointRows[0]
       if (!afterRow) throw new Error(`运行 '${runId}' 的 checkpoint/input cursor CAS 失败`)
 
-      await this.inputDelivery.recordAcknowledged(
+      await this.inputDelivery.recordCheckpointed(
         tx,
         runId,
-        run.threadId ?? ackedRows[0]?.threadId ?? null,
-        ackedRows.map(mapRunSteeringRow),
+        run.threadId ?? checkpointedRows[0]?.threadId ?? null,
+        checkpointedRows.map(mapRunSteeringRow),
       )
 
       await this.appendCheckpointProjection(
         tx,
         currentSnapshot,
         afterRow,
-        ackedRows.map(mapRunSteeringRow),
+        checkpointedRows.map(mapRunSteeringRow),
       )
 
-      return ackedRows.map(mapRunSteeringRow)
+      return checkpointedRows.map(mapRunSteeringRow)
     }))
   }
 

@@ -41,6 +41,7 @@ describe('AgentStepContextFactory', () => {
           contexts.push(context)
           return context
         },
+        get: async stepId => contexts.find(context => context.identity.stepId === stepId) ?? null,
       },
       {
         get: async () => world,
@@ -108,7 +109,7 @@ describe('AgentStepContextFactory', () => {
 
   it('rejects an MCP tool that is not bound to an active server', async () => {
     const factory = new AgentStepContextFactory(
-      { appendNext: async (_runId, build) => build(1) },
+      { appendNext: async (_runId, build) => build(1), get: async () => null },
       {
         get: async () => snapshot(worldState({
           toolNames: [],
@@ -134,7 +135,7 @@ describe('AgentStepContextFactory', () => {
 
   it('rejects a runtime digest that does not describe the captured configuration', async () => {
     const factory = new AgentStepContextFactory(
-      { appendNext: async (_runId, build) => build(1) },
+      { appendNext: async (_runId, build) => build(1), get: async () => null },
       {
         get: async () => { throw new Error('配置摘要失败前不应读取 world') },
         ensureBaseline: async () => { throw new Error('配置摘要失败前不应建立 baseline') },

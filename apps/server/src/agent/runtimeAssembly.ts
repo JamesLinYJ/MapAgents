@@ -100,6 +100,7 @@ import {
   sdkToolPlanSource,
   type AgentToolPlanSource,
 } from '../agent-runtime/step/AgentToolPlan.js'
+import { ModelRequestJournal } from '../agent-runtime/input/ModelRequestJournal.js'
 
 export interface RuntimeAssemblyFactoryOptions {
   createSandboxClient?: SandboxClientFactory
@@ -157,7 +158,26 @@ export class RuntimeAssemblyFactory {
     const modelCapabilities = resolveAdapterModelCapabilities(adapter, selectedModel)
     assertAgentRuntimeCapabilities(adapter, modelCapabilities, options.runtimeConfig)
     const configDigest = runtimeConfigDigest(options.runtimeConfig)
-    const segmentId = makeId('segment')
+    const activeModelRequest = await store.getActiveModelRequest(options.runId)
+    if (activeModelRequest && (
+      activeModelRequest.provider !== adapter.provider
+      || activeModelRequest.modelId !== selectedModel
+      || activeModelRequest.turnId !== turnId
+    )) {
+      throw new Error(`运行 '${options.runId}' 的活动模型请求与当前 provider/model/turn 不一致`)
+    }
+    const activeInputCheckpoint = activeModelRequest
+      ? await store.getRunCheckpoint(options.runId)
+      : null
+    if (activeModelRequest && (
+      !activeInputCheckpoint?.activeInputLeaseId
+      || activeInputCheckpoint.activeInputLeaseFrom === null
+      || activeInputCheckpoint.activeInputLeaseTo === null
+    )) {
+      throw new Error(`活动模型请求 '${activeModelRequest.requestId}' 缺少输入 lease`)
+    }
+    const segmentId = activeModelRequest?.segmentId ?? makeId('segment')
+    const modelRequestJournal = new ModelRequestJournal(store)
     let latestCheckpointContext: RecordedAgentStepContext | null = null
     let checkpointContextListener: ((context: RecordedAgentStepContext) => Promise<void>) | null = null
     const checkpointContext = {
@@ -176,7 +196,7 @@ export class RuntimeAssemblyFactory {
     }
     const providerModel = adapter.createAgentModel(selectedModel)
     const subAgentRootModel = protectModelTransportFromRunInputMarkers(providerModel)
-    let captureModelRequest: ((request: ModelRequest) => Promise<void>) | null = null
+    let captureModelRequest: ((request: ModelRequest) => Promise<ModelRequest>) | null = null
     const model = protectModelTransportFromRunInputMarkers(providerModel, request => {
       if (!captureModelRequest) {
         throw new Error('Agent StepContext 记录器尚未绑定模型请求')
@@ -434,6 +454,33 @@ export class RuntimeAssemblyFactory {
       )),
     ]
     captureModelRequest = async request => {
+      const durableRequest = await store.getActiveModelRequest(options.runId)
+      if (durableRequest) {
+        if (
+          durableRequest.provider !== adapter.provider
+          || durableRequest.modelId !== selectedModel
+          || durableRequest.segmentId !== segmentId
+        ) {
+          throw new Error(`活动模型请求 '${durableRequest.requestId}' 与当前运行段不一致`)
+        }
+        const recorded = await stepContexts.get(durableRequest.stepId)
+        if (!recorded) throw new Error(`活动模型请求 '${durableRequest.requestId}' 缺少 StepContext`)
+        if (
+          recorded.runId !== options.runId
+          || recorded.turnId !== turnId
+          || recorded.identity.segmentId !== segmentId
+          || recorded.toolPlanDigest !== durableRequest.toolPlanDigest
+          || recorded.worldRevision !== durableRequest.worldRevision
+          || recorded.inputCursor !== activeInputCheckpoint?.activeInputLeaseTo
+          || recorded.objectiveRevision !== (activeInputCheckpoint?.activeInputLeaseTo ?? 0) + 1
+        ) {
+          throw new Error(`活动模型请求 '${durableRequest.requestId}' 的 StepContext 不一致`)
+        }
+        coordinator.bindModelInputObjectiveRevision(recorded.objectiveRevision)
+        latestCheckpointContext = recorded
+        await checkpointContextListener?.(recorded)
+        return modelRequestJournal.replay(durableRequest, request)
+      }
       const objectiveRevision = coordinator.currentModelInputObjectiveRevision()
       const toolPlan = createAgentToolPlan({ request, sources: requestToolSources })
       const captured = await stepContexts.record({
@@ -462,6 +509,13 @@ export class RuntimeAssemblyFactory {
       }
       latestCheckpointContext = captured
       await checkpointContextListener?.(captured)
+      return (await modelRequestJournal.commit({
+        runId: options.runId,
+        provider: adapter.provider,
+        modelId: selectedModel,
+        context: captured,
+        request,
+      })).request
     }
 
     const inputTranscript = await store.activeTranscript(threadId)
@@ -615,6 +669,7 @@ export class RuntimeAssemblyFactory {
       threadId,
       turnId,
       segmentId,
+      replayInputLeaseId: activeInputCheckpoint?.activeInputLeaseId ?? null,
       checkpointContext,
       subAgentToolNames: new Set(subAgentConfigs
         .filter(config => config.delegationMode === 'as_tool')

@@ -21,6 +21,7 @@ import { advanceAgentWorkflowObjectiveRevision } from './agentWorkflowState.js'
 type RunSteeringStore = Pick<AgentRuntimeStore,
   | 'appendItem'
   | 'enqueueRunInput'
+  | 'getActiveModelRequest'
   | 'getRun'
   | 'getRunCheckpoint'
   | 'getRunInput'
@@ -30,6 +31,7 @@ type RunSteeringStore = Pick<AgentRuntimeStore,
   | 'mutateRunState'
   | 'projectPersistedItems'
   | 'requeueLeasedRunInputs'
+  | 'tryClaimTerminalInput'
 >
 
 interface ObjectiveRevisionSnapshot {
@@ -67,8 +69,12 @@ export class RunSteeringController {
         }
       }
       await this.reconcileInputItems(runId)
-      await this.synchronizeObjectiveRevision(runId)
-      this.acceptingRuns.add(runId)
+      const snapshot = await this.synchronizeObjectiveRevision(runId)
+      if (snapshot.checkpoint.terminalInputClaimId) {
+        this.acceptingRuns.delete(runId)
+      } else {
+        this.acceptingRuns.add(runId)
+      }
     })
   }
 
@@ -119,22 +125,66 @@ export class RunSteeringController {
       const snapshot = await this.synchronizeObjectiveRevision(runId)
       await this.projectItems(leased)
       return {
-        items: leased.map(record => ({
-          type: 'message',
-          role: 'user',
-          content: record.content,
-          providerData: {
-            geoAgentRunInput: {
-              runId,
-              inputId: record.steeringId,
-              inputSequence: record.inputSequence,
-            },
-          },
-        })),
+        items: leased.map(runInputModelItem),
         objectiveRevision: leased.at(-1)?.inputSequence
           ? leased.at(-1)!.inputSequence + 1
           : snapshot.checkpoint.checkpointInputCursor + 1,
         leaseId: leased.length ? leaseId : null,
+      }
+    })
+  }
+
+  // included 表示精确 ModelRequest 已提交、但 SDK checkpoint 尚未推进。
+  // 恢复不能重新 lease 或按文本重建；必须按活动 lease 的持久身份把同一批
+  // 输入重新放回公开 RunState，再由 ModelRequest Journal 重放 provider 请求。
+  async replayIncludedInputs(runId: string, leaseId: string): Promise<{
+    items: AgentInputItem[]
+    objectiveRevision: number
+  }> {
+    return this.serialized(runId, async () => {
+      const checkpoint = await this.store.getRunCheckpoint(runId)
+      if (
+        checkpoint.activeInputLeaseId !== leaseId
+        || checkpoint.activeInputLeaseFrom !== checkpoint.checkpointInputCursor + 1
+        || checkpoint.activeInputLeaseTo === null
+      ) {
+        throw new Error(`运行 '${runId}' 的 included 恢复 lease 与 checkpoint 不一致`)
+      }
+      const leaseFrom = checkpoint.activeInputLeaseFrom
+      const leaseTo = checkpoint.activeInputLeaseTo
+      const records = (await this.store.listRunInputs(runId))
+        .filter(record => record.leaseId === leaseId)
+        .sort((left, right) => left.inputSequence - right.inputSequence)
+      const expectedCount = leaseTo - leaseFrom + 1
+      if (records.length !== expectedCount) {
+        throw new Error(`运行 '${runId}' 的 included 恢复输入存在空洞`)
+      }
+      const modelRequestIds = new Set(records.map(record => record.modelRequestId))
+      records.forEach((record, index) => {
+        if (
+          record.status !== 'included'
+          || !record.modelRequestId
+          || record.inputSequence !== leaseFrom + index
+        ) {
+          throw new Error(`运行 '${runId}' 的 included 恢复输入状态不完整`)
+        }
+      })
+      if (modelRequestIds.size !== 1) {
+        throw new Error(`运行 '${runId}' 的 included 恢复输入未绑定同一 ModelRequest`)
+      }
+      const activeRequest = await this.store.getActiveModelRequest(runId)
+      if (
+        !activeRequest
+        || !modelRequestIds.has(activeRequest.requestId)
+        || activeRequest.inputEntryIds.length !== records.length
+        || activeRequest.inputEntryIds.some((entryId, index) => entryId !== records[index]?.entryId)
+      ) {
+        throw new Error(`运行 '${runId}' 的 included 恢复输入与 ModelRequest 日志不一致`)
+      }
+      await this.projectItems(records)
+      return {
+        items: records.map(runInputModelItem),
+        objectiveRevision: leaseTo + 1,
       }
     })
   }
@@ -147,15 +197,15 @@ export class RunSteeringController {
     })
   }
 
-  async recordCheckpointAcknowledgements(
+  async recordCheckpointedInputs(
     runId: string,
     records: readonly RunSteeringRecord[],
   ): Promise<void> {
     if (!records.length) return
     await this.serialized(runId, async () => {
       for (const record of records) {
-        if (record.runId !== runId || record.status !== 'acked') {
-          throw new Error(`运行 '${runId}' 收到非当前 Run 的 input ack 投影`)
+        if (record.runId !== runId || record.status !== 'checkpointed') {
+          throw new Error(`运行 '${runId}' 收到非当前 Run 的 input checkpoint 投影`)
         }
       }
       await this.projectItems(records)
@@ -208,9 +258,26 @@ export class RunSteeringController {
   async tryClaimTerminal(runId: string, objectiveRevision: number): Promise<boolean> {
     return this.serialized(runId, async () => {
       const snapshot = await this.synchronizeObjectiveRevision(runId)
+      const existingClaim = snapshot.checkpoint.terminalInputClaimId
+      if (existingClaim) {
+        const claimed = snapshot.state.objectiveRevision === objectiveRevision
+          && snapshot.checkpoint.nextInputSequence === objectiveRevision
+          && snapshot.checkpoint.terminalObjectiveRevision === objectiveRevision
+          && snapshot.checkpoint.terminalInputCursor === objectiveRevision - 1
+          && snapshot.checkpoint.checkpointInputCursor === objectiveRevision - 1
+          && snapshot.checkpoint.activeInputLeaseId === null
+        if (claimed) this.acceptingRuns.delete(runId)
+        return claimed
+      }
       if (!revisionMatches(snapshot, objectiveRevision)) return false
-      this.acceptingRuns.delete(runId)
-      return true
+      const claimed = await this.store.tryClaimTerminalInput({
+        runId,
+        claimId: makeId('terminal_claim'),
+        objectiveRevision,
+        inputCursor: objectiveRevision - 1,
+      })
+      if (claimed) this.acceptingRuns.delete(runId)
+      return claimed
     })
   }
 
@@ -282,6 +349,21 @@ export class RunSteeringController {
   }
 }
 
+function runInputModelItem(record: RunSteeringRecord): AgentInputItem {
+  return {
+    type: 'message',
+    role: 'user',
+    content: record.content,
+    providerData: {
+      geoAgentRunInput: {
+        runId: record.runId,
+        inputId: record.steeringId,
+        inputSequence: record.inputSequence,
+      },
+    },
+  }
+}
+
 function checkpointObjectiveRevision(checkpoint: RunCheckpoint): number {
   return checkpoint.checkpointInputCursor + 1
 }
@@ -290,6 +372,7 @@ function revisionMatches(snapshot: ObjectiveRevisionSnapshot, expected: number):
   return snapshot.state.objectiveRevision === expected
     && snapshot.checkpoint.nextInputSequence === expected
     && snapshot.checkpoint.activeInputLeaseId === null
+    && snapshot.checkpoint.terminalInputClaimId === null
     && checkpointObjectiveRevision(snapshot.checkpoint) === expected
 }
 

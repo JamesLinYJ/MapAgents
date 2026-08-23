@@ -90,7 +90,7 @@ export class RuntimeSdkExecutor {
     let activeModelTelemetry: ModelRequestTelemetry | null = null
     let terminalRepairAttempts = 0
     let terminalRepairObjectiveRevision: number | null = null
-    let pendingInputLeaseId: string | null = null
+    let pendingInputLeaseId: string | null = assembly.replayInputLeaseId
     const inputCheckpointQueue = new PQueue({ concurrency: 1 })
     const serializeInputCheckpoint = async <T>(work: () => Promise<T>): Promise<T> => {
       const result = await inputCheckpointQueue.add(async () => ({ value: await work() }))
@@ -99,8 +99,20 @@ export class RuntimeSdkExecutor {
     }
 
     try {
+      if (pendingInputLeaseId) {
+        const replay = await steering.replayIncludedInputs(options.runId, pendingInputLeaseId)
+        assembly.coordinator.bindModelInputObjectiveRevision(replay.objectiveRevision)
+        if (this.sdk.isState<AgentsExecutionContext>(nextInput)) {
+          this.sdk.stageInput(nextInput, replay.items)
+        } else {
+          nextInput = appendSegmentInput(nextInput, replay.items)
+        }
+      }
       while (true) {
-        if (!pendingInputLeaseId && assembly.checkpointContext.current()) {
+        // Fresh segment 也必须在第一次 provider 请求前租取已排队输入。
+        // StepContext 会在 transport 边界基于这份最终 ModelRequest 创建；若反过来
+        // 等已有 StepContext 才租取，首次请求窗口内到达的 steering 只能迟到下一轮。
+        if (!pendingInputLeaseId) {
           const delivery = await steering.consumePendingWithRevision(options.runId)
           assembly.coordinator.bindModelInputObjectiveRevision(delivery.objectiveRevision)
           if (delivery.leaseId) {
@@ -142,7 +154,7 @@ export class RuntimeSdkExecutor {
           await assembly.coordinator.acceptCheckpointedToolCalls(commit.terminalToolCallIds)
           if (leaseId) {
             pendingInputLeaseId = null
-            await steering.recordCheckpointAcknowledgements(options.runId, commit.acknowledgedInputs)
+            await steering.recordCheckpointedInputs(options.runId, commit.acknowledgedInputs)
           }
           stateCheckpointed = true
         }

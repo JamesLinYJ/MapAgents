@@ -11,7 +11,7 @@
 
 import { z } from 'zod'
 
-export const AGENTS_SDK_CHECKPOINT_ENVELOPE_VERSION = 1 as const
+export const AGENTS_SDK_CHECKPOINT_ENVELOPE_VERSION = 2 as const
 
 const agentsSdkCheckpointEnvelopeSchema = z.object({
   envelopeVersion: z.literal(AGENTS_SDK_CHECKPOINT_ENVELOPE_VERSION),
@@ -23,6 +23,7 @@ const agentsSdkCheckpointEnvelopeSchema = z.object({
   worldRevision: z.number().int().positive(),
   inputCursor: z.number().int().nonnegative(),
   segmentId: z.string().min(1),
+  stepId: z.string().min(1),
 }).strict()
 
 export type AgentsSdkCheckpointEnvelope = z.infer<typeof agentsSdkCheckpointEnvelopeSchema>

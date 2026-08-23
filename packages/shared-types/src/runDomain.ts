@@ -54,8 +54,9 @@ export const agentStateFieldChangeSchema = z.object({
 export const runDomainInputDeliverySchema = z.object({
   inputId: z.string().min(1),
   inputSequence: z.number().int().positive(),
-  status: z.enum(['queued', 'leased', 'acked']),
+  status: z.enum(['queued', 'leased', 'included', 'checkpointed']),
   leaseId: z.string().min(1).nullable(),
+  modelRequestId: z.string().min(1).nullable(),
 }).strict()
 
 export const runDomainCheckpointSchema = z.object({
@@ -70,6 +71,10 @@ export const runDomainCheckpointSchema = z.object({
   nextInputSequence: z.number().int().positive(),
   checkpointInputCursor: z.number().int().nonnegative(),
   activeInputLeaseId: z.string().min(1).nullable(),
+  terminalInputClaimId: z.string().min(1).nullable(),
+  terminalObjectiveRevision: z.number().int().positive().nullable(),
+  terminalInputCursor: z.number().int().nonnegative().nullable(),
+  terminalClaimedAt: z.string().nullable(),
 }).strict()
 
 const runDomainEnvelopeShape = {
@@ -123,8 +128,8 @@ const toolSucceededEventSchema = z.object({
 }).strict()
 
 function inputTransitionEventSchema<
-  TType extends 'input.queued' | 'input.leased' | 'input.checkpointed' | 'input.requeued',
-  TStatus extends 'queued' | 'leased' | 'acked',
+  TType extends 'input.queued' | 'input.leased' | 'input.included' | 'input.checkpointed' | 'input.requeued',
+  TStatus extends 'queued' | 'leased' | 'included' | 'checkpointed',
 >(type: TType, status: TStatus) {
   return z.object({
     ...runDomainEnvelopeShape,
@@ -150,6 +155,38 @@ const projectionWarningEventSchema = z.object({
   }).strict(),
 }).strict()
 
+const modelRequestCommittedEventSchema = z.object({
+  ...runDomainEnvelopeShape,
+  type: z.literal('step.model_request_committed'),
+  payload: z.object({
+    requestId: z.string().min(1),
+    stepId: z.string().min(1),
+    inputObjectHash: z.string().regex(/^[a-f0-9]{64}$/u),
+    inputEntryIds: z.array(z.string().min(1)),
+  }).strict(),
+}).strict()
+
+const terminalClaimedEventSchema = z.object({
+  ...runDomainEnvelopeShape,
+  type: z.literal('terminal.claimed'),
+  payload: z.object({
+    claimId: z.string().min(1),
+    objectiveRevision: z.number().int().positive(),
+    inputCursor: z.number().int().nonnegative(),
+  }).strict(),
+}).strict()
+
+const terminalCandidateSupersededEventSchema = z.object({
+  ...runDomainEnvelopeShape,
+  type: z.literal('terminal.candidate_superseded'),
+  payload: z.object({
+    objectiveRevision: z.number().int().positive(),
+    inputCursor: z.number().int().nonnegative(),
+    durableObjectiveRevision: z.number().int().positive(),
+    durableInputCursor: z.number().int().nonnegative(),
+  }).strict(),
+}).strict()
+
 export const runDomainEventSchema = z.discriminatedUnion('type', [
   runCreatedEventSchema,
   runStatusChangedEventSchema,
@@ -157,8 +194,12 @@ export const runDomainEventSchema = z.discriminatedUnion('type', [
   toolSucceededEventSchema,
   inputTransitionEventSchema('input.queued', 'queued'),
   inputTransitionEventSchema('input.leased', 'leased'),
-  inputTransitionEventSchema('input.checkpointed', 'acked'),
+  inputTransitionEventSchema('input.included', 'included'),
+  inputTransitionEventSchema('input.checkpointed', 'checkpointed'),
   inputTransitionEventSchema('input.requeued', 'queued'),
+  modelRequestCommittedEventSchema,
+  terminalClaimedEventSchema,
+  terminalCandidateSupersededEventSchema,
   runCheckpointChangedEventSchema,
   projectionWarningEventSchema,
 ])
@@ -233,9 +274,14 @@ export function reduceRunDomainEvent(
       break
     case 'input.queued':
     case 'input.leased':
+    case 'input.included':
     case 'input.checkpointed':
     case 'input.requeued':
       for (const input of event.payload.inputs) inputDeliveries[input.inputId] = input
+      break
+    case 'step.model_request_committed':
+    case 'terminal.claimed':
+    case 'terminal.candidate_superseded':
       break
     case 'run.checkpoint_changed':
       checkpoint = event.payload.checkpoint

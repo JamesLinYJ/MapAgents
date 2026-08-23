@@ -12,7 +12,7 @@ import { makeId } from '../../utils/ids.js'
 import { runInputConversationItem } from '../runInputConversationItem.js'
 import type { RunRecordAppender, DatabaseTransaction } from './runRecordAppender.js'
 
-type InputTransition = 'queued' | 'leased' | 'requeued' | 'acked'
+type InputTransition = 'queued' | 'leased' | 'included' | 'requeued' | 'checkpointed'
 
 export class RunInputDeliveryRecorder {
   constructor(private readonly runRecords: RunRecordAppender) {}
@@ -32,6 +32,7 @@ export class RunInputDeliveryRecorder {
       itemId: record.itemId,
       inputSequence: record.inputSequence,
       leaseId: record.leaseId,
+      modelRequestId: record.modelRequestId,
     }))
     const items = records.map(runInputConversationItem)
     await this.runRecords.append(
@@ -64,13 +65,13 @@ export class RunInputDeliveryRecorder {
     }]))
   }
 
-  async recordAcknowledged(
+  async recordCheckpointed(
     tx: DatabaseTransaction,
     runId: string,
     threadId: string | null,
     records: readonly RunSteeringRecord[],
   ): Promise<void> {
-    await this.recordTransition(tx, 'acked', runId, threadId, records)
+    await this.recordTransition(tx, 'checkpointed', runId, threadId, records)
   }
 }
 

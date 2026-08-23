@@ -48,6 +48,7 @@ describe('Agents SDK checkpoint anti-corruption boundary', () => {
       worldRevision: 7,
       inputCursor: 3,
       segmentId: 'segment_1',
+      stepId: 'step_1',
     } as const
 
     expect(codec.decode(codec.encode(envelope))).toEqual(envelope)

@@ -197,6 +197,10 @@ export const platformRuns = pgTable('platform_runs', {
   activeInputLeaseId: text('active_input_lease_id'),
   activeInputLeaseFrom: integer('active_input_lease_from'),
   activeInputLeaseTo: integer('active_input_lease_to'),
+  terminalInputClaimId: text('terminal_input_claim_id'),
+  terminalObjectiveRevision: integer('terminal_objective_revision'),
+  terminalInputCursor: integer('terminal_input_cursor'),
+  terminalClaimedAt: timestamp('terminal_claimed_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
@@ -204,6 +208,37 @@ export const platformRuns = pgTable('platform_runs', {
   sessionUpdatedIdx: index('idx_platform_runs_session_updated').on(table.sessionId, table.updatedAt),
   workspaceUpdatedIdx: index('idx_platform_runs_workspace_updated').on(table.workspaceId, table.updatedAt),
   statusUpdatedIdx: index('idx_platform_runs_status_updated').on(table.status, table.updatedAt),
+  inputCursorCheck: check(
+    'platform_runs_input_cursor_check',
+    sql`${table.nextInputSequence} > 0
+      AND ${table.checkpointInputCursor} >= 0
+      AND ${table.checkpointInputCursor} < ${table.nextInputSequence}
+      AND (
+        (${table.activeInputLeaseId} IS NULL AND ${table.activeInputLeaseFrom} IS NULL AND ${table.activeInputLeaseTo} IS NULL)
+        OR (
+          ${table.activeInputLeaseId} IS NOT NULL
+          AND ${table.activeInputLeaseFrom} = ${table.checkpointInputCursor} + 1
+          AND ${table.activeInputLeaseTo} >= ${table.activeInputLeaseFrom}
+          AND ${table.activeInputLeaseTo} < ${table.nextInputSequence}
+        )
+      )`,
+  ),
+  terminalClaimCheck: check(
+    'platform_runs_terminal_input_claim_check',
+    sql`(
+      ${table.terminalInputClaimId} IS NULL
+      AND ${table.terminalObjectiveRevision} IS NULL
+      AND ${table.terminalInputCursor} IS NULL
+      AND ${table.terminalClaimedAt} IS NULL
+    ) OR (
+      ${table.terminalInputClaimId} IS NOT NULL
+      AND ${table.terminalObjectiveRevision} = ${table.terminalInputCursor} + 1
+      AND ${table.terminalObjectiveRevision} = ${table.nextInputSequence}
+      AND ${table.terminalInputCursor} = ${table.checkpointInputCursor}
+      AND ${table.activeInputLeaseId} IS NULL
+      AND ${table.terminalClaimedAt} IS NOT NULL
+    )`,
+  ),
 }))
 
 // Agent control plane 的 append-only 领域事件与 reducer snapshot。
@@ -315,6 +350,30 @@ export const platformAgentStepContexts = pgTable('platform_agent_step_contexts',
   worldRevisionCheck: check('platform_agent_step_contexts_world_revision_check', sql`${table.worldRevision} > 0`),
 }))
 
+// Provider 发包前提交的精确模型请求日志。完整请求正文保存在内容寻址对象中，
+// 此表只保存恢复、归属和一致性校验所需的结构化摘要。
+export const platformModelRequestRecords = pgTable('platform_model_request_records', {
+  requestId: text('request_id').primaryKey(),
+  runId: text('run_id').notNull().references(() => platformRuns.runId, { onDelete: 'cascade' }),
+  turnId: text('turn_id').notNull(),
+  stepId: text('step_id').notNull().references(() => platformAgentStepContexts.stepId, { onDelete: 'cascade' }),
+  segmentId: text('segment_id').notNull(),
+  provider: text('provider').notNull(),
+  modelId: text('model_id').notNull(),
+  inputObjectHash: text('input_object_hash').notNull(),
+  inputDigest: text('input_digest').notNull(),
+  instructionsDigest: text('instructions_digest').notNull(),
+  toolPlanDigest: text('tool_plan_digest').notNull(),
+  worldRevision: integer('world_revision').notNull(),
+  inputEntryIds: jsonb('input_entry_ids').notNull().$type<string[]>().default([]),
+  summaryObjectHashes: jsonb('summary_object_hashes').notNull().$type<string[]>().default([]),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+}, (table) => ({
+  runStepIdx: uniqueIndex('idx_model_request_records_run_step_unique').on(table.runId, table.stepId),
+  runCreatedIdx: index('idx_model_request_records_run_created').on(table.runId, table.createdAt),
+  worldRevisionCheck: check('platform_model_request_records_world_revision_check', sql`${table.worldRevision} > 0`),
+}))
+
 // 纯辅助模型结果缓存不是对话事实源；删除或过期不会影响 Run/Thread 恢复。
 // 仅保存内容哈希与已校验的小型结果，避免持久化原始提示词。
 export const platformModelResultCache = pgTable('platform_model_result_cache', {
@@ -422,10 +481,51 @@ export const platformRunInputs = pgTable('platform_run_inputs', {
   queuedAt: timestamp('queued_at', { withTimezone: true }).notNull().defaultNow(),
   leaseId: text('lease_id'),
   leasedAt: timestamp('leased_at', { withTimezone: true }),
-  ackedAt: timestamp('acked_at', { withTimezone: true }),
+  modelRequestId: text('model_request_id').references(() => platformModelRequestRecords.requestId, { onDelete: 'restrict' }),
+  includedAt: timestamp('included_at', { withTimezone: true }),
+  checkpointedAt: timestamp('checkpointed_at', { withTimezone: true }),
 }, (table) => ({
   runStatusQueuedIdx: index('idx_run_inputs_run_status_queued').on(table.runId, table.status, table.inputSequence),
+  runModelRequestIdx: index('idx_run_inputs_run_model_request').on(table.runId, table.modelRequestId),
   entryIdx: uniqueIndex('idx_run_inputs_entry_unique').on(table.entryId),
+  sequenceCheck: check('platform_run_inputs_sequence_check', sql`${table.inputSequence} > 0`),
+  contentCheck: check('platform_run_inputs_content_check', sql`length(btrim(${table.content})) > 0`),
+  statusCheck: check(
+    'platform_run_inputs_status_check',
+    sql`${table.status} IN ('queued', 'leased', 'included', 'checkpointed')`,
+  ),
+  deliveryStateCheck: check(
+    'platform_run_inputs_delivery_state_check',
+    sql`(
+      ${table.status} = 'queued'
+      AND ${table.leaseId} IS NULL
+      AND ${table.leasedAt} IS NULL
+      AND ${table.modelRequestId} IS NULL
+      AND ${table.includedAt} IS NULL
+      AND ${table.checkpointedAt} IS NULL
+    ) OR (
+      ${table.status} = 'leased'
+      AND ${table.leaseId} IS NOT NULL
+      AND ${table.leasedAt} IS NOT NULL
+      AND ${table.modelRequestId} IS NULL
+      AND ${table.includedAt} IS NULL
+      AND ${table.checkpointedAt} IS NULL
+    ) OR (
+      ${table.status} = 'included'
+      AND ${table.leaseId} IS NOT NULL
+      AND ${table.leasedAt} IS NOT NULL
+      AND ${table.modelRequestId} IS NOT NULL
+      AND ${table.includedAt} IS NOT NULL
+      AND ${table.checkpointedAt} IS NULL
+    ) OR (
+      ${table.status} = 'checkpointed'
+      AND ${table.leaseId} IS NOT NULL
+      AND ${table.leasedAt} IS NOT NULL
+      AND ${table.modelRequestId} IS NOT NULL
+      AND ${table.includedAt} IS NOT NULL
+      AND ${table.checkpointedAt} IS NOT NULL
+    )`,
+  ),
 }))
 
 export const platformEventOutbox = pgTable('platform_event_outbox', {

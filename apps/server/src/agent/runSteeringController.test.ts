@@ -15,6 +15,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { PersistenceFacadeTestHarness } from '../../test-support/persistenceFacadeHarness.js'
+import type { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
 import {
   completeAgentWorkflowStep,
   createAgentWorkflow,
@@ -63,13 +64,14 @@ describe('RunSteeringController', () => {
         agentsSdkVersion: 'test-sdk',
         runtimeConfigDigest: 'test-runtime',
       })).rejects.toThrow(/input|lease/u)
+      await includeActiveLeaseInModelRequest(store, run.id, 'first')
       const acked = await store.saveAgentsSdkCheckpointEnvelope(run.id, '{"response":"durable"}', {
         agentsSdkVersion: 'test-sdk',
         runtimeConfigDigest: 'test-runtime',
         inputLeaseId: delivery.leaseId,
       })
-      await controller.recordCheckpointAcknowledgements(run.id, acked)
-      expect((await store.listRunInputs(run.id))[0]?.status).toBe('acked')
+      await controller.recordCheckpointedInputs(run.id, acked)
+      expect((await store.listRunInputs(run.id))[0]?.status).toBe('checkpointed')
       expect(await controller.consumedObjectiveRevision(run.id)).toBe(2)
       expect((await store.activeTranscript(thread.id)).at(-1)?.payload.content).toBe('重点检查最近三十分钟')
       const steeringItem = (await store.listItems(run.id)).find(item => item.itemId === first.itemId)
@@ -81,9 +83,66 @@ describe('RunSteeringController', () => {
 
       await controller.close(run.id)
       await expect(controller.enqueue(run.id, 'steer_1', '重点检查最近三十分钟'))
-        .resolves.toMatchObject({ steeringId: 'steer_1', status: 'acked' })
+        .resolves.toMatchObject({ steeringId: 'steer_1', status: 'checkpointed' })
       await expect(controller.enqueue(run.id, 'steer_2', '再检查空间范围'))
         .rejects.toThrow('已结束接收引导消息')
+    } finally {
+      await store.flushConversationStore()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('uses steeringId as the idempotency key and never deduplicates distinct inputs by text', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-steering-identity-'))
+    const store = new PersistenceFacadeTestHarness().create(root)
+    try {
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '运行输入身份')
+      const run = await store.createRun(session.id, '保留相同文本的独立输入', { threadId: thread.id })
+      await store.updateRunStatus(run.id, 'running')
+      const controller = new RunSteeringController(store)
+      await controller.open(run.id)
+
+      const first = await controller.enqueue(run.id, 'steer_same_1', '请检查相同范围')
+      const second = await controller.enqueue(run.id, 'steer_same_2', '请检查相同范围')
+      expect(first.inputSequence).toBe(1)
+      expect(second.inputSequence).toBe(2)
+      await expect(controller.enqueue(run.id, 'steer_same_1', '篡改后的不同内容'))
+        .rejects.toThrow(/内容.*不一致|幂等键.*其它内容/u)
+
+      const delivery = await controller.consumePendingWithRevision(run.id)
+      expect(delivery.objectiveRevision).toBe(3)
+      expect(delivery.items).toEqual([
+        expect.objectContaining({ role: 'user', content: '请检查相同范围' }),
+        expect.objectContaining({ role: 'user', content: '请检查相同范围' }),
+      ])
+      expect((await store.listRunInputs(run.id)).map(record => ({
+        steeringId: record.steeringId,
+        inputSequence: record.inputSequence,
+        status: record.status,
+      }))).toEqual([
+        { steeringId: first.steeringId, inputSequence: 1, status: 'leased' },
+        { steeringId: second.steeringId, inputSequence: 2, status: 'leased' },
+      ])
+
+      await includeActiveLeaseInModelRequest(store, run.id, 'same-text')
+      const activeRequest = await store.getActiveModelRequest(run.id)
+      expect(activeRequest?.inputEntryIds).toEqual([first.entryId, second.entryId])
+      const checkpointed = await store.saveAgentsSdkCheckpointEnvelope(run.id, '{"response":"same-text"}', {
+        agentsSdkVersion: 'test-sdk',
+        runtimeConfigDigest: 'test-runtime',
+        inputLeaseId: delivery.leaseId,
+      })
+      await controller.recordCheckpointedInputs(run.id, checkpointed)
+      expect((await store.listRunInputs(run.id)).map(record => record.status))
+        .toEqual(['checkpointed', 'checkpointed'])
+      expect((await store.activeTranscript(thread.id)).filter(entry => (
+        entry.kind === 'message'
+        && entry.payload.role === 'user'
+        && entry.payload.content === '请检查相同范围'
+      ))).toHaveLength(2)
+      await controller.close(run.id)
     } finally {
       await store.flushConversationStore()
       await rm(root, { recursive: true, force: true })
@@ -177,18 +236,29 @@ describe('RunSteeringController', () => {
       expect(await controller.tryClaimTerminal(run.id, 1)).toBe(false)
 
       const delivery = await controller.consumePendingWithRevision(run.id)
+      await includeActiveLeaseInModelRequest(store, run.id, 'revision')
       const acked = await store.saveAgentsSdkCheckpointEnvelope(run.id, '{"response":"revision-2"}', {
         agentsSdkVersion: 'test-sdk',
         runtimeConfigDigest: 'test-runtime',
         inputLeaseId: delivery.leaseId,
       })
-      await controller.recordCheckpointAcknowledgements(run.id, acked)
+      await controller.recordCheckpointedInputs(run.id, acked)
       expect(await controller.consumedObjectiveRevision(run.id)).toBe(2)
       expect(await controller.stateForRevision(run.id, 2)).toMatchObject({ objectiveRevision: 2 })
       expect(await controller.tryClaimTerminal(run.id, 2)).toBe(true)
+      expect(await store.getRunCheckpoint(run.id)).toMatchObject({
+        terminalObjectiveRevision: 2,
+      })
       await expect(controller.enqueue(run.id, 'steer_after_claim', '终态 flush 期间的新输入'))
         .rejects.toThrow('已结束接收引导消息')
       await controller.close(run.id)
+      const reopened = new RunSteeringController(store)
+      await reopened.open(run.id)
+      await expect(reopened.tryClaimTerminal(run.id, 2)).resolves.toBe(true)
+      await expect(reopened.tryClaimTerminal(run.id, 1)).resolves.toBe(false)
+      await expect(reopened.enqueue(run.id, 'steer_after_restart', '重启后的新输入'))
+        .rejects.toThrow('已结束接收引导消息')
+      await reopened.close(run.id)
     } finally {
       await store.flushConversationStore()
       await rm(root, { recursive: true, force: true })
@@ -245,13 +315,14 @@ describe('RunSteeringController', () => {
       const idempotentLease = await store.leaseRunInputs(run.id, replay.leaseId!)
       expect(idempotentLease.map(record => record.inputSequence)).toEqual([1, 2])
 
+      await includeActiveLeaseInModelRequest(store, run.id, 'replay')
       const acked = await store.saveAgentsSdkCheckpointEnvelope(run.id, '{"response":"replayed"}', {
         agentsSdkVersion: 'test-sdk',
         runtimeConfigDigest: 'test-runtime',
         inputLeaseId: replay.leaseId,
       })
       // 模拟 DB 事务已提交、但 item 投影前进程崩溃。新恢复所有者
-      // 必须保留 acked 事实，不能再次交付该输入。
+      // 必须保留 checkpointed 事实，不能再次交付该输入。
       await recoveredController.close(run.id)
       await store.flushConversationStore()
       // 共用结构化持久化替身，但创建全新 Facade/RunStore，丢弃旧进程的
@@ -261,10 +332,13 @@ describe('RunSteeringController', () => {
       await restoredStore.updateRunStatus(run.id, 'running')
       expect((await restoredStore.listItems(run.id)).filter(item => (
         item.itemId === first.itemId || item.itemId === second.itemId
-      )).map(item => item.status)).toEqual(['acked', 'acked'])
+      )).map(item => item.status)).toEqual(['checkpointed', 'checkpointed'])
       const postAckRecovery = new RunSteeringController(restoredStore)
       await postAckRecovery.open(run.id, { recoverLeased: true })
-      expect((await restoredStore.listRunInputs(run.id)).map(record => record.status)).toEqual(['acked', 'acked'])
+      expect((await restoredStore.listRunInputs(run.id)).map(record => record.status)).toEqual([
+        'checkpointed',
+        'checkpointed',
+      ])
       expect((await restoredStore.getRunCheckpoint(run.id))).toMatchObject({
         nextInputSequence: 3,
         checkpointInputCursor: 2,
@@ -290,3 +364,27 @@ describe('RunSteeringController', () => {
     }
   })
 })
+
+async function includeActiveLeaseInModelRequest(
+  store: PlatformPersistenceFacade,
+  runId: string,
+  suffix: string,
+): Promise<void> {
+  const digest = `sha256:${'1'.repeat(64)}`
+  await store.publishModelRequestSnapshot('{"input":[]}', {
+    schemaVersion: 1,
+    requestId: `model_request_${suffix}`,
+    runId,
+    turnId: `turn_${suffix}`,
+    stepId: `step_${suffix}`,
+    segmentId: `segment_${suffix}`,
+    provider: 'test',
+    modelId: 'test-model',
+    inputDigest: digest,
+    instructionsDigest: digest,
+    toolPlanDigest: digest,
+    worldRevision: 1,
+    summaryObjectHashes: [],
+    createdAt: '2026-08-23T00:00:00.000Z',
+  })
+}

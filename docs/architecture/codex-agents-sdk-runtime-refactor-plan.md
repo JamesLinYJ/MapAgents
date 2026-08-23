@@ -2,7 +2,7 @@
 
 > 本文是面向 Codex 执行的架构 RFC、迁移手册和逐 PR 验收清单。
 >
-> **状态**：In progress（WP-00 至 WP-04 已完成；下一包为 WP-05）
+> **状态**：In progress（WP-00 至 WP-05 已完成；下一包为 WP-06）
 >
 > **Newmap 基线**：`JamesLinYJ/Newmap@ffa50bbe1bd0e8de82f7f40448bafbe3f1eb751a`
 >
@@ -1474,7 +1474,7 @@ apps/server/src/agent-runtime/
 - `AgentsSdkCheckpointCodec.ts` 使用 strict envelope；`AgentsSdkCheckpointService.ts` 同时校验数据库元数据、envelope 和 input cursor。
 - `CanonicalAgentsSession.ts` 只保存 replay history；`runtimeAssembly.ts` 已删除 Session 到 canonical transcript 的反向投影。
 - 活动 steering 通过 public `RunState.addInput()` 与 `AgentsSdkSegmentRotation` 切换 segment，不再访问 `_originalInput`。
-- `015_agents_sdk_checkpoint_envelope.sql` 将旧活动 checkpoint 显式失败封口，SDK state schema 升级到 v6。
+- 单一权威 `infra/database/schema.sql` 直接定义 checkpoint envelope v6；不兼容旧库必须导出后从空库重建，不再维护增量迁移 SQL。
 - 架构测试禁止私有字段、内部 JSON 扫描、旧边界文件和 `sdk/` 外的生产 `RunState` 导入。
 
 ### WP-05：Input Mailbox 与 ModelRequest Journal
@@ -1491,6 +1491,14 @@ apps/server/src/agent-runtime/
 - crash at leased/included/checkpointed 三种恢复测试。
 - 重复 steering ID 内容冲突。
 - 模型输入不按文本去重。
+
+**实施证据**：
+
+- `platform_run_inputs` 已收敛为 `queued → leased → included → checkpointed`；`included` 与不可变 `platform_model_request_records`、StepContext 和内容对象在同一 Run 事务边界绑定，checkpoint 再原子推进 cursor。
+- `ModelRequestJournal` 在 provider transport 前保存去除 `AbortSignal` 的 canonical 请求和摘要；included 恢复按持久 lease 把同一身份输入重新注入公开 RunState，再重放原请求，禁止重新拼装或按文本猜测。
+- `RunSteeringController` 使用持久 input sequence/cursor 与 terminal claim 线性化 enqueue、revision commit 和终态；claim 数据库提交后的 ACK 丢失可在新控制器中幂等识别。
+- 确定性交错测试覆盖首次 provider 请求、工具回合后、terminal candidate 前；leased 重排、included 精确重放（含首次尚无旧 checkpoint）、checkpointed 冷恢复；同 ID 异内容硬失败和同文本异 ID 保留。
+- `infra/database/schema.sql` 是仓库唯一 SQL；启动能力探测同时验证 ModelRequest 表、四态 mailbox、terminal claim 字段和 GeoWorld/StepContext 约束。
 
 ### WP-06：工具边界拆分
 
@@ -1820,7 +1828,7 @@ Work Package：WP-XX
 ### 22.2 实现规则
 
 1. 只做一个 Work Package；发现前置工作缺失时停止并报告，不暗中把范围扩成三个 WP。
-2. 先读当前代码、测试、migration、AGENTS 和相关 upstream Codex 文件。
+2. 先读当前代码、测试、单一数据库 schema、AGENTS 和相关 upstream Codex 文件。
 3. 上游 Codex 只作为参考；不能因文件名相同就照抄实现。
 4. 使用 Agents SDK 公开 API；不确定 API 时先查当前官方文档和类型定义。
 5. 不新增长期兼容 wrapper、legacy alias、silent fallback 或 catch-and-success。

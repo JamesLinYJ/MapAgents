@@ -31,6 +31,7 @@ export interface RestoreAgentsCheckpointOptions {
   context: AgentsExecutionContext
   sdkVersion: string
   configDigest: string
+  resolveStepContext(stepId: string): Promise<RecordedAgentStepContext | null>
 }
 
 export interface AgentsCheckpointCommit {
@@ -75,6 +76,7 @@ export class AgentsSdkCheckpointService {
       worldRevision: metadata.stepContext.worldRevision,
       inputCursor,
       segmentId: metadata.stepContext.identity.segmentId,
+      stepId: metadata.stepContext.identity.stepId,
     })
     const acknowledgedInputs = await this.store.saveAgentsSdkCheckpointEnvelope(runId, serializedEnvelope, {
       agentsSdkVersion: metadata.sdkVersion,
@@ -96,17 +98,25 @@ export class AgentsSdkCheckpointService {
     })
     const envelope = this.codec.decode(await this.store.readAgentsSdkCheckpointEnvelope(options.runId))
     assertEnvelopeCompatibility(envelope, checkpoint, options)
+    const stepContext = await options.resolveStepContext(envelope.stepId)
+    if (!stepContext) throw new Error(`run '${options.runId}' 缺少 checkpoint StepContext '${envelope.stepId}'`)
+    if (
+      stepContext.runId !== options.runId
+      || stepContext.identity.segmentId !== envelope.segmentId
+      || stepContext.toolPlanDigest !== envelope.toolPlanDigest
+      || stepContext.worldRevision !== envelope.worldRevision
+      || stepContext.inputCursor !== envelope.inputCursor
+      || stepContext.objectiveRevision !== envelope.inputCursor + 1
+    ) {
+      throw new Error(`run '${options.runId}' checkpoint StepContext 与 envelope 不一致`)
+    }
     return {
       state: await this.bridge.restore({
         agent: options.agent,
         context: options.context,
         publicSerializedState: envelope.publicSerializedState,
       }),
-      stepContext: {
-        identity: { segmentId: envelope.segmentId },
-        toolPlanDigest: envelope.toolPlanDigest,
-        worldRevision: envelope.worldRevision,
-      },
+      stepContext,
     }
   }
 

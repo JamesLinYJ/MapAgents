@@ -180,6 +180,30 @@ CREATE TABLE public.platform_agent_step_contexts (
 
 
 --
+-- Name: platform_model_request_records; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.platform_model_request_records (
+    request_id text NOT NULL,
+    run_id text NOT NULL,
+    turn_id text NOT NULL,
+    step_id text NOT NULL,
+    segment_id text NOT NULL,
+    provider text NOT NULL,
+    model_id text NOT NULL,
+    input_object_hash text NOT NULL,
+    input_digest text NOT NULL,
+    instructions_digest text NOT NULL,
+    tool_plan_digest text NOT NULL,
+    world_revision integer NOT NULL,
+    input_entry_ids jsonb DEFAULT '[]'::jsonb NOT NULL,
+    summary_object_hashes jsonb DEFAULT '[]'::jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT platform_model_request_records_world_revision_check CHECK ((world_revision > 0))
+);
+
+
+--
 -- Name: platform_artifacts; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -659,14 +683,16 @@ CREATE TABLE public.platform_run_inputs (
     content text NOT NULL,
     status text DEFAULT 'queued'::text NOT NULL,
     queued_at timestamp with time zone DEFAULT now() NOT NULL,
-    acked_at timestamp with time zone,
     input_sequence integer NOT NULL,
     lease_id text,
     leased_at timestamp with time zone,
+    model_request_id text,
+    included_at timestamp with time zone,
+    checkpointed_at timestamp with time zone,
     CONSTRAINT platform_run_inputs_content_check CHECK ((length(btrim(content)) > 0)),
-    CONSTRAINT platform_run_inputs_delivery_state_check CHECK ((((status = 'queued'::text) AND (lease_id IS NULL) AND (leased_at IS NULL) AND (acked_at IS NULL)) OR ((status = 'leased'::text) AND (lease_id IS NOT NULL) AND (leased_at IS NOT NULL) AND (acked_at IS NULL)) OR ((status = 'acked'::text) AND (lease_id IS NOT NULL) AND (leased_at IS NOT NULL) AND (acked_at IS NOT NULL)))),
+    CONSTRAINT platform_run_inputs_delivery_state_check CHECK ((((status = 'queued'::text) AND (lease_id IS NULL) AND (leased_at IS NULL) AND (model_request_id IS NULL) AND (included_at IS NULL) AND (checkpointed_at IS NULL)) OR ((status = 'leased'::text) AND (lease_id IS NOT NULL) AND (leased_at IS NOT NULL) AND (model_request_id IS NULL) AND (included_at IS NULL) AND (checkpointed_at IS NULL)) OR ((status = 'included'::text) AND (lease_id IS NOT NULL) AND (leased_at IS NOT NULL) AND (model_request_id IS NOT NULL) AND (included_at IS NOT NULL) AND (checkpointed_at IS NULL)) OR ((status = 'checkpointed'::text) AND (lease_id IS NOT NULL) AND (leased_at IS NOT NULL) AND (model_request_id IS NOT NULL) AND (included_at IS NOT NULL) AND (checkpointed_at IS NOT NULL)))),
     CONSTRAINT platform_run_inputs_sequence_check CHECK ((input_sequence > 0)),
-    CONSTRAINT platform_run_inputs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'leased'::text, 'acked'::text])))
+    CONSTRAINT platform_run_inputs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'leased'::text, 'included'::text, 'checkpointed'::text])))
 );
 
 
@@ -736,8 +762,13 @@ CREATE TABLE public.platform_runs (
     active_input_lease_id text,
     active_input_lease_from integer,
     active_input_lease_to integer,
+    terminal_input_claim_id text,
+    terminal_objective_revision integer,
+    terminal_input_cursor integer,
+    terminal_claimed_at timestamp with time zone,
     CONSTRAINT platform_runs_input_cursor_check CHECK (((next_input_sequence > 0) AND (checkpoint_input_cursor >= 0) AND (checkpoint_input_cursor < next_input_sequence) AND (((active_input_lease_id IS NULL) AND (active_input_lease_from IS NULL) AND (active_input_lease_to IS NULL)) OR ((active_input_lease_id IS NOT NULL) AND (active_input_lease_from = (checkpoint_input_cursor + 1)) AND (active_input_lease_to >= active_input_lease_from) AND (active_input_lease_to < next_input_sequence))))),
-    CONSTRAINT platform_runs_next_record_sequence_check CHECK ((next_record_sequence > 0))
+    CONSTRAINT platform_runs_next_record_sequence_check CHECK ((next_record_sequence > 0)),
+    CONSTRAINT platform_runs_terminal_input_claim_check CHECK ((((terminal_input_claim_id IS NULL) AND (terminal_objective_revision IS NULL) AND (terminal_input_cursor IS NULL) AND (terminal_claimed_at IS NULL)) OR ((terminal_input_claim_id IS NOT NULL) AND (terminal_objective_revision = (terminal_input_cursor + 1)) AND (terminal_objective_revision = next_input_sequence) AND (terminal_input_cursor = checkpoint_input_cursor) AND (active_input_lease_id IS NULL) AND (terminal_claimed_at IS NOT NULL))))
 );
 
 
@@ -1158,6 +1189,22 @@ ALTER TABLE ONLY public.platform_meteorological_jobs
 
 ALTER TABLE ONLY public.platform_model_providers
     ADD CONSTRAINT platform_model_providers_pkey PRIMARY KEY (provider_id);
+
+
+--
+-- Name: platform_model_request_records platform_model_request_records_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_model_request_records
+    ADD CONSTRAINT platform_model_request_records_pkey PRIMARY KEY (request_id);
+
+
+--
+-- Name: platform_model_request_records platform_model_request_records_run_id_step_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_model_request_records
+    ADD CONSTRAINT platform_model_request_records_run_id_step_id_key UNIQUE (run_id, step_id);
 
 
 --
@@ -1706,10 +1753,24 @@ CREATE INDEX idx_run_inputs_run_lease ON public.platform_run_inputs USING btree 
 
 
 --
+-- Name: idx_run_inputs_run_model_request; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_run_inputs_run_model_request ON public.platform_run_inputs USING btree (run_id, model_request_id);
+
+
+--
 -- Name: idx_run_inputs_run_status_queued; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_run_inputs_run_status_queued ON public.platform_run_inputs USING btree (run_id, status, input_sequence);
+
+
+--
+-- Name: idx_model_request_records_run_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_model_request_records_run_created ON public.platform_model_request_records USING btree (run_id, created_at);
 
 
 --
@@ -2179,6 +2240,22 @@ ALTER TABLE ONLY public.platform_model_result_cache
 
 
 --
+-- Name: platform_model_request_records platform_model_request_records_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_model_request_records
+    ADD CONSTRAINT platform_model_request_records_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.platform_runs(run_id) ON DELETE CASCADE;
+
+
+--
+-- Name: platform_model_request_records platform_model_request_records_step_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_model_request_records
+    ADD CONSTRAINT platform_model_request_records_step_id_fkey FOREIGN KEY (step_id) REFERENCES public.platform_agent_step_contexts(step_id) ON DELETE CASCADE;
+
+
+--
 -- Name: platform_run_domain_events platform_run_domain_events_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2200,6 +2277,14 @@ ALTER TABLE ONLY public.platform_run_inputs
 
 ALTER TABLE ONLY public.platform_run_inputs
     ADD CONSTRAINT platform_run_inputs_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.platform_runs(run_id) ON DELETE CASCADE;
+
+
+--
+-- Name: platform_run_inputs platform_run_inputs_model_request_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_run_inputs
+    ADD CONSTRAINT platform_run_inputs_model_request_id_fkey FOREIGN KEY (model_request_id) REFERENCES public.platform_model_request_records(request_id) ON DELETE RESTRICT;
 
 
 --

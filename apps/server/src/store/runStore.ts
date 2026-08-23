@@ -21,6 +21,7 @@ import type {
   RunCheckpoint,
   RunEvent,
   RunGoalInput,
+  ModelRequestRecord,
   RunItemStreamSnapshot,
   RunItemUpsert,
   RunSteeringRecord,
@@ -51,7 +52,14 @@ import {
 } from './runProjection.js'
 import type { SessionStore } from './sessionStore.js'
 import { ObjectPublicationCoordinator } from './objectPublicationCoordinator.js'
-import type { RunRepository, ThreadLifecycleRepository, ToolResultCommitter } from './postgres/conversationPersistencePorts.js'
+import type {
+  CommitModelRequestInput,
+  CommitModelRequestResult,
+  ModelRequestRepository,
+  RunRepository,
+  ThreadLifecycleRepository,
+  ToolResultCommitter,
+} from './postgres/conversationPersistencePorts.js'
 
 export interface RunStoreEvents {
   runBus: InMemoryEventBus<AnalysisRun>
@@ -89,7 +97,7 @@ export class RunStore {
     private readonly index: ConversationProjectionIndex,
     private readonly payloadStore: ConversationPayloadStore,
     private readonly sessionStore: SessionStore,
-    private readonly repository: RunRepository & ToolResultCommitter,
+    private readonly repository: RunRepository & ToolResultCommitter & ModelRequestRepository,
     private readonly threadWriter: Pick<ThreadLifecycleRepository, 'saveThread'>,
     private readonly events: RunStoreEvents,
     private readonly objectPublication = new ObjectPublicationCoordinator(),
@@ -428,6 +436,39 @@ export class RunStore {
     if (!hash) throw new Error(`run '${runId}' 缺少 Agents SDK checkpoint envelope，不能恢复`)
     const bytes = await this.payloadStore.readObjectByHash(hash)
     return Buffer.from(bytes).toString('utf8')
+  }
+
+  async publishModelRequestSnapshot(
+    serializedRequest: string,
+    input: Omit<CommitModelRequestInput, 'inputObjectHash'>,
+  ): Promise<CommitModelRequestResult> {
+    this.get(input.runId)
+    return this.objectPublication.publish(async () => {
+      const reference = await this.payloadStore.putObject(
+        serializedRequest,
+        'application/vnd.geo-agent-platform.model-request+json',
+      )
+      return this.repository.commitModelRequest({
+        ...input,
+        inputObjectHash: reference.hash,
+      })
+    })
+  }
+
+  async readModelRequestSnapshot(record: ModelRequestRecord): Promise<string> {
+    this.get(record.runId)
+    const bytes = await this.payloadStore.readObjectByHash(record.inputObjectHash)
+    return Buffer.from(bytes).toString('utf8')
+  }
+
+  async getActiveModelRequest(runId: string): Promise<ModelRequestRecord | null> {
+    this.get(runId)
+    return this.repository.getActiveModelRequest(runId)
+  }
+
+  async listModelRequests(runId: string): Promise<ModelRequestRecord[]> {
+    this.get(runId)
+    return this.repository.listModelRequests(runId)
   }
 
   async appendToolValue(runId: string, value: ToolValueRef): Promise<void> {

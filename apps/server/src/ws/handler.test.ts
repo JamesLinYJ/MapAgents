@@ -58,6 +58,9 @@ import { StartRunService } from '../conversation/startRunService.js'
 import { ToolResultCommitService } from '../tools/resultPersistence.js'
 import type { FileLifecyclePort } from '../store/fileLifecycleService.js'
 import type { AgentStepContextRecorder } from '../agent-runtime/step/AgentStepContextFactory.js'
+import {
+  createTestAgentStepContextRecorder,
+} from '../../test-support/agentStepContextRecorder.js'
 
 const TEST_ORIGIN = 'http://127.0.0.1:5173'
 const TEST_CSRF = 'csrf_test'
@@ -83,13 +86,7 @@ async function removeTempRoot(root: string): Promise<void> {
 }
 
 function testStepContextRecorder(): AgentStepContextRecorder {
-  return {
-    record: async input => ({
-      identity: { segmentId: input.segmentId },
-      toolPlanDigest: input.toolPlan.catalogDigest,
-      worldRevision: 1,
-    }),
-  }
+  return createTestAgentStepContextRecorder()
 }
 
 function createWsHandler(server: Parameters<typeof createWsHandlerBase>[0], dependencies: TestWsDependencies) {
@@ -829,10 +826,13 @@ describe('WebSocket run subscriptions', () => {
     const models = registryWith(fakeAdapter(scriptedModel(request => hasToolResult(request)
       ? { text: '工具已执行。' }
       : { toolCalls: [{ id: 'call_sensitive', name: 'sensitive_tool', arguments: '{"value":1}' }] })))
-    const waiting = await new OpenAIAgentsRuntime(store, tools, models, {
-      stepContexts: testStepContextRecorder(),
+    const stepContexts = testStepContextRecorder()
+    const runtime = new OpenAIAgentsRuntime(store, tools, models, {
+      stepContexts,
       createSandboxClient: testSandboxClientFactory,
-    }).run({
+      authorizationLease: async auth => auth,
+    })
+    const waiting = await runtime.run({
       runId: run.id,
       threadId: thread.id,
       sessionId: run.sessionId,
@@ -855,6 +855,7 @@ describe('WebSocket run subscriptions', () => {
       runtimeRoot: root,
       createSandboxClient: testSandboxClientFactory,
       security: testSecurity(),
+      runtime,
     })
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     const address = server.address()

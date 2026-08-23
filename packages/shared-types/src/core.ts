@@ -539,12 +539,13 @@ export const conversationItemSchema = z.object({
   timestamp: z.string(),
 })
 
-export const runSteeringStatusSchema = z.enum(['queued', 'leased', 'acked'])
+export const runSteeringStatusSchema = z.enum(['queued', 'leased', 'included', 'checkpointed'])
 
-// 运行中引导消息使用持久化 queued -> leased -> acked 交付状态机。
-// entryId/itemId 在排队时确定，leased 只在 SDK checkpoint 原子提交时转为 acked。
+// 运行中引导消息使用持久化 queued -> leased -> included -> checkpointed
+// 交付状态机。included 已绑定精确 ModelRequest；checkpointed 才表示后继
+// SDK checkpoint 已完整吸收该输入。
 export const runSteeringRecordSchema = z.object({
-  schemaVersion: z.literal(2),
+  schemaVersion: z.literal(3),
   steeringId: z.string().min(1),
   entryId: z.string().min(1),
   itemId: z.string().min(1),
@@ -556,7 +557,9 @@ export const runSteeringRecordSchema = z.object({
   queuedAt: z.string(),
   leaseId: z.string().nullable().default(null),
   leasedAt: z.string().nullable().default(null),
-  ackedAt: z.string().nullable().default(null),
+  modelRequestId: z.string().nullable().default(null),
+  includedAt: z.string().nullable().default(null),
+  checkpointedAt: z.string().nullable().default(null),
 })
 
 export type EventType = z.infer<typeof eventTypeSchema>

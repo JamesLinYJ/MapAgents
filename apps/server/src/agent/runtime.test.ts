@@ -33,6 +33,7 @@ import {
   type RunGoalInput,
 } from '../schemas/types.js'
 import { PlatformPersistenceFacade } from '../store/platformPersistenceFacade.js'
+import type { AuthContext } from '../security/types.js'
 import {
   createTestPersistenceFacade,
   PersistenceFacadeTestHarness,
@@ -49,6 +50,10 @@ import type {
   CaptureAgentStepContextInput,
 } from '../agent-runtime/step/AgentStepContextFactory.js'
 import { AgentsSdkCheckpointCodec } from '../agent-runtime/sdk/AgentsSdkCheckpointCodec.js'
+import { ModelRequestJournal } from '../agent-runtime/input/ModelRequestJournal.js'
+import {
+  createTestAgentStepContextRecorder,
+} from '../../test-support/agentStepContextRecorder.js'
 
 async function removeTempRoot(root: string): Promise<void> {
   await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
@@ -59,23 +64,23 @@ function testRuntime(
   tools: ToolRegistry,
   models: ModelAdapterRegistry,
   goalJudge?: GoalJudgePort,
-  stepContexts: AgentStepContextRecorder = testStepContextRecorder(),
+  stepContexts?: AgentStepContextRecorder,
 ): OpenAIAgentsRuntime {
   return new OpenAIAgentsRuntime(store, tools, models, {
-    stepContexts,
+    stepContexts: stepContexts ?? testStepContextRecorder(store),
     createSandboxClient: testSandboxClientFactory,
     ...(goalJudge ? { goalJudge } : {}),
   })
 }
 
-function testStepContextRecorder(): AgentStepContextRecorder {
-  return {
-    record: async input => ({
-      identity: { segmentId: input.segmentId },
-      toolPlanDigest: input.toolPlan.catalogDigest,
-      worldRevision: 1,
-    }),
-  }
+const testStepContextRecorders = new WeakMap<PlatformPersistenceFacade, AgentStepContextRecorder>()
+
+function testStepContextRecorder(store: PlatformPersistenceFacade): AgentStepContextRecorder {
+  const existing = testStepContextRecorders.get(store)
+  if (existing) return existing
+  const created = createTestAgentStepContextRecorder()
+  testStepContextRecorders.set(store, created)
+  return created
 }
 
 describe('OpenAIAgentsRuntime delivery boundaries', () => {
@@ -143,14 +148,9 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         tools,
         registryWith(fakeAdapter(model)),
         undefined,
-        { record: async input => {
-          captures.push(input)
-          return {
-            identity: { segmentId: input.segmentId },
-            toolPlanDigest: input.toolPlan.catalogDigest,
-            worldRevision: 1,
-          }
-        } },
+        createTestAgentStepContextRecorder({
+          onRecord: input => captures.push(input),
+        }),
       ).run(runOptions(run, thread.id))
 
       expect(completed.status).toBe('completed')
@@ -163,6 +163,187 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       expect(captures[0]?.toolPlan.catalogDigest).toBe(captures[1]?.toolPlan.catalogDigest)
       expect(Object.isFrozen(captures[0]?.toolPlan)).toBe(true)
     } finally {
+      await removeTempRoot(root)
+    }
+  })
+
+  it('includes steering queued after Run open in the very first provider request', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-first-request-steering-'))
+    const releaseAuthorization = deferredSignal()
+    const authorizationReached = deferredSignal()
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '首次模型请求输入')
+      const run = await store.createRun(session.id, '先回答初始问题', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: testRuntimeConfig(),
+      })
+      const requests: ModelRequest[] = []
+      const model = scriptedModel(request => {
+        requests.push(request)
+        return { text: '已同时处理初始问题和补充要求。' }
+      })
+      let authorizationChecks = 0
+      const runtime = new OpenAIAgentsRuntime(
+        store,
+        new ToolRegistry(),
+        registryWith(fakeAdapter(model)),
+        {
+          stepContexts: testStepContextRecorder(store),
+          createSandboxClient: testSandboxClientFactory,
+          authorizationLease: async auth => {
+            authorizationChecks += 1
+            // 第二次授权检查发生在 steering.open 之后、assembly/provider 之前。
+            if (authorizationChecks === 2) {
+              authorizationReached.resolve()
+              await releaseAuthorization.promise
+            }
+            return auth
+          },
+        },
+      )
+      const auth: AuthContext = {
+        userId: 'user_first_input',
+        subject: 'auth_user_first_input',
+        email: 'first-input@example.com',
+        displayName: '首次输入测试',
+        authSessionId: 'auth_session_first_input',
+        authSessionExpiresAt: null,
+        csrfToken: 'csrf_first_input',
+        defaultWorkspaceId: 'workspace_first_input',
+        roles: [{ workspaceId: 'workspace_first_input', role: 'workspace_admin' }],
+      }
+
+      const running = runtime.run({ ...runOptions(run, thread.id), auth })
+      await authorizationReached.promise
+      const steering = await runtime.steer(
+        run.id,
+        'steer_before_first_request',
+        '首次请求就必须包含这个补充要求。',
+      )
+      releaseAuthorization.resolve()
+      const completed = await running
+
+      expect(completed.status).toBe('completed')
+      expect(requests).toHaveLength(1)
+      expect(requestTexts(requests[0]!)).toEqual(expect.arrayContaining([
+        run.userQuery,
+        steering.content,
+      ]))
+      expect(requestTexts(requests[0]!).filter(text => text === steering.content)).toHaveLength(1)
+      expect(JSON.stringify(requests[0])).not.toContain('geoAgentRunInput')
+      expect((await store.listRunInputs(run.id))).toContainEqual(expect.objectContaining({
+        steeringId: steering.steeringId,
+        status: 'checkpointed',
+        modelRequestId: expect.any(String),
+      }))
+      const [modelRequest] = await store.listModelRequests(run.id)
+      expect(modelRequest?.inputEntryIds).toEqual([steering.entryId])
+    } finally {
+      releaseAuthorization.resolve()
+      await removeTempRoot(root)
+    }
+  })
+
+  it('recovers an included first request exactly when no earlier SDK checkpoint exists', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-first-request-recovery-'))
+    const releaseAuthorization = deferredSignal()
+    const authorizationReached = deferredSignal()
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '首次请求 included 恢复')
+      const run = await store.createRun(session.id, '恢复首次请求', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: testRuntimeConfig(),
+      })
+      const requests: ModelRequest[] = []
+      const model = scriptedModel(request => {
+        requests.push(request)
+        if (requests.length === 1) throw new Error('模拟 provider 收到首次请求后进程中断')
+        return { text: '恢复后完成。' }
+      })
+      let authorizationChecks = 0
+      const stepContexts = testStepContextRecorder(store)
+      const runtime = new OpenAIAgentsRuntime(
+        store,
+        new ToolRegistry(),
+        registryWith(fakeAdapter(model)),
+        {
+          stepContexts,
+          createSandboxClient: testSandboxClientFactory,
+          authorizationLease: async auth => {
+            authorizationChecks += 1
+            if (authorizationChecks === 2) {
+              authorizationReached.resolve()
+              await releaseAuthorization.promise
+            }
+            return auth
+          },
+        },
+      )
+      const auth: AuthContext = {
+        userId: 'user_first_recovery',
+        subject: 'auth_user_first_recovery',
+        email: 'first-recovery@example.com',
+        displayName: '首次恢复测试',
+        authSessionId: 'auth_session_first_recovery',
+        authSessionExpiresAt: null,
+        csrfToken: 'csrf_first_recovery',
+        defaultWorkspaceId: 'workspace_first_recovery',
+        roles: [{ workspaceId: 'workspace_first_recovery', role: 'workspace_admin' }],
+      }
+
+      const firstAttempt = runtime.run({ ...runOptions(run, thread.id), auth })
+      await authorizationReached.promise
+      const steering = await runtime.steer(
+        run.id,
+        'steer_first_request_crash',
+        '该输入必须在崩溃恢复后仍出现一次。',
+      )
+      releaseAuthorization.resolve()
+      const failed = await firstAttempt
+
+      expect(failed.status).toBe('failed')
+      expect((await store.listRunInputs(run.id))).toContainEqual(expect.objectContaining({
+        steeringId: steering.steeringId,
+        status: 'included',
+      }))
+      expect((await store.getRunCheckpoint(run.id))).toMatchObject({
+        sdkStateContentHash: null,
+        checkpointInputCursor: 0,
+        activeInputLeaseId: expect.any(String),
+      })
+
+      const completed = await runtime.run({
+        ...runOptions(run, thread.id),
+        auth,
+        resume: true,
+      })
+
+      expect(completed.status).toBe('completed')
+      expect(requests).toHaveLength(2)
+      const { signal: _firstSignal, ...firstPersistedRequest } = requests[0]!
+      const { signal: _replayedSignal, ...replayedPersistedRequest } = requests[1]!
+      expect(replayedPersistedRequest).toEqual(firstPersistedRequest)
+      expect(requestTexts(requests[1]!).filter(text => text === steering.content)).toHaveLength(1)
+      expect((await store.listRunInputs(run.id))).toContainEqual(expect.objectContaining({
+        steeringId: steering.steeringId,
+        status: 'checkpointed',
+      }))
+      expect((await store.listModelRequests(run.id))).toHaveLength(1)
+      expect((await store.activeTranscript(thread.id)).filter(entry => (
+        entry.kind === 'message'
+        && entry.payload.role === 'user'
+        && entry.payload.content === run.userQuery
+      ))).toHaveLength(1)
+    } finally {
+      releaseAuthorization.resolve()
       await removeTempRoot(root)
     }
   })
@@ -320,8 +501,9 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         ? { text: '工具已执行。' }
         : { toolCalls: [{ id: 'call_1', name: 'sensitive_tool', arguments: '{"value":1}' }] })
       const models = registryWith(fakeAdapter(model))
+      const stepContexts = createTestAgentStepContextRecorder()
 
-      const waiting = await testRuntime(store, tools, models).run({
+      const waiting = await testRuntime(store, tools, models, undefined, stepContexts).run({
         ...runOptions(run, thread.id),
         runtimeConfig: config,
       })
@@ -339,7 +521,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
 
       const restoredStore = harness.create(root)
       await restoredStore.initialize()
-      const completed = await testRuntime(restoredStore, tools, models)
+      const completed = await testRuntime(restoredStore, tools, models, undefined, stepContexts)
         .resolveApproval(run.id, waiting.state.approvals[0].approvalId, true)
 
       expect(completed.status).toBe('completed')
@@ -816,7 +998,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         '再扩展到新范围。',
       )
       expect(await store.listRunInputs(run.id)).toEqual(expect.arrayContaining([
-        expect.objectContaining({ inputSequence: 1, status: 'leased' }),
+        expect.objectContaining({ inputSequence: 1, status: 'included' }),
         expect.objectContaining({ inputSequence: 2, status: 'queued' }),
       ]))
       expect(await store.getRunCheckpoint(run.id)).toMatchObject({
@@ -827,8 +1009,8 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       releaseOldCandidate()
       await newCandidateStarted
       expect(await store.listRunInputs(run.id)).toEqual(expect.arrayContaining([
-        expect.objectContaining({ inputSequence: 1, status: 'acked' }),
-        expect.objectContaining({ inputSequence: 2, status: 'leased' }),
+        expect.objectContaining({ inputSequence: 1, status: 'checkpointed' }),
+        expect.objectContaining({ inputSequence: 2, status: 'included' }),
       ]))
       expect(await store.getRunCheckpoint(run.id)).toMatchObject({
         checkpointInputCursor: 1,
@@ -839,7 +1021,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       await newResponseDone
       expect((await store.listRunInputs(run.id))[1]).toMatchObject({
         inputSequence: 2,
-        status: 'leased',
+        status: 'included',
       })
       expect((await store.getRunCheckpoint(run.id)).checkpointInputCursor).toBe(1)
       releaseNewResponseDone()
@@ -851,8 +1033,8 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       expect(firstSteeringOccurrencesAfterOuterContinue).toBe(1)
       expect(secondSteeringOccurrencesAfterOuterContinue).toBe(1)
       expect(await store.listRunInputs(run.id)).toEqual(expect.arrayContaining([
-        expect.objectContaining({ inputSequence: 1, status: 'acked' }),
-        expect.objectContaining({ inputSequence: 2, status: 'acked' }),
+        expect.objectContaining({ inputSequence: 1, status: 'checkpointed' }),
+        expect.objectContaining({ inputSequence: 2, status: 'checkpointed' }),
       ]))
       expect(await store.getRunCheckpoint(run.id)).toMatchObject({
         checkpointInputCursor: 2,
@@ -883,7 +1065,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     }
   })
 
-  it('keeps a model-visible input leased when atomic checkpoint acknowledgement fails and replays it on recovery', async () => {
+  it('keeps a model-visible input included when atomic checkpoint persistence fails and replays its exact request', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-input-ack-failure-'))
     const releaseTool = deferredSignal()
     try {
@@ -907,9 +1089,11 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
         },
       }]))
       let steeringObserved = false
+      let includedProviderRequest: ModelRequest | null = null
       const model = scriptedModel(request => {
         if (hasToolResultNamed(request, 'query_layer')) {
           steeringObserved = requestTexts(request).some(text => text.includes('新范围'))
+          includedProviderRequest = request
           return { text: '已结合新范围完成。' }
         }
         return {
@@ -933,7 +1117,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       expect(steeringObserved).toBe(true)
       expect((await store.listRunInputs(run.id))).toContainEqual(expect.objectContaining({
         steeringId: 'steer_ack_failure',
-        status: 'leased',
+        status: 'included',
       }))
       expect(await store.getRunCheckpoint(run.id)).toMatchObject({
         checkpointInputCursor: 0,
@@ -945,15 +1129,41 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       await store.updateRunStatus(run.id, 'running')
       const recovery = new RunSteeringController(store)
       await recovery.open(run.id, { recoverLeased: true })
-      expect((await store.listRunInputs(run.id))[0]).toMatchObject({ status: 'queued', inputSequence: 1 })
-      const replay = await recovery.consumePendingWithRevision(run.id)
+      expect((await store.listRunInputs(run.id))[0]).toMatchObject({
+        status: 'included',
+        inputSequence: 1,
+      })
+      const activeRequest = await store.getActiveModelRequest(run.id)
+      expect(activeRequest).toMatchObject({
+        runId: run.id,
+        inputEntryIds: [expect.any(String)],
+      })
+      if (!activeRequest) throw new Error('included 输入缺少活动 ModelRequest')
+      if (!includedProviderRequest) throw new Error('测试未捕获 included provider request')
+      expect(await store.readModelRequestSnapshot(activeRequest)).toContain('请同时检查新范围')
+      const replaySignal = new AbortController().signal
+      const replayed = await new ModelRequestJournal(store).replay(activeRequest, {
+        ...includedProviderRequest,
+        input: [{ type: 'message', role: 'user', content: '不得使用的重建请求' }],
+        signal: replaySignal,
+      })
+      const { signal: _capturedSignal, ...capturedPersistedRequest } = includedProviderRequest
+      const { signal: replayedSignal, ...replayedPersistedRequest } = replayed
+      expect(replayedSignal).toBe(replaySignal)
+      expect(replayedPersistedRequest).toEqual(capturedPersistedRequest)
+      expect(requestTexts(replayed)).toContain('请同时检查新范围。')
+      expect(requestTexts(replayed)).not.toContain('不得使用的重建请求')
+      const checkpoint = await store.getRunCheckpoint(run.id)
       const acked = await store.saveAgentsSdkCheckpointEnvelope(run.id, '{"response":"recovered"}', {
         agentsSdkVersion: 'test-sdk',
         runtimeConfigDigest: 'test-runtime',
-        inputLeaseId: replay.leaseId,
+        inputLeaseId: checkpoint.activeInputLeaseId,
       })
-      await recovery.recordCheckpointAcknowledgements(run.id, acked)
-      expect((await store.listRunInputs(run.id))[0]).toMatchObject({ status: 'acked', inputSequence: 1 })
+      await recovery.recordCheckpointedInputs(run.id, acked)
+      expect((await store.listRunInputs(run.id))[0]).toMatchObject({
+        status: 'checkpointed',
+        inputSequence: 1,
+      })
       expect((await store.getRunCheckpoint(run.id)).checkpointInputCursor).toBe(1)
       await recovery.close(run.id)
     } finally {
@@ -2053,7 +2263,7 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
       expect((await store.listRunInputs(run.id))).toContainEqual(expect.objectContaining({
         steeringId: steering.steeringId,
         content: steering.content,
-        status: 'acked',
+        status: 'checkpointed',
       }))
     } finally {
       releaseCollection.resolve()
