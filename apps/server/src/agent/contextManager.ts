@@ -20,14 +20,19 @@ import type {
 import type { ThreadContextStore } from '../store/runtimePorts.js'
 import type { VisibleArtifactResource } from '../store/postgres/artifactRepository.js'
 import { makeId, nowUtc } from '../utils/ids.js'
+import {
+  buildTranscriptContextUnits,
+  dropOldestCompactableTranscriptGroup,
+  flattenContextUnits,
+  selectContextCompactionSlice,
+} from '../agent-runtime/context/ContextUnit.js'
 import { estimateTextTokens } from './tokenEstimate.js'
 
 const USER_NOTES_START = '<!-- user-notes:start -->'
 const USER_NOTES_END = '<!-- user-notes:end -->'
 const MAX_CONTEXT_REFERENCE_HYDRATION_BYTES = 2 * 1024 * 1024
 const CONTEXT_REFERENCE_BYTES_PER_TOKEN = 2
-const MIN_BOUNDED_CONTEXT_CHARS = 96
-const BOUNDED_CONTEXT_MARKER = '\n…[历史上下文已按硬预算截断]'
+const THREAD_COMPACTION_PROMPT_VERSION = 'thread-compaction-v2'
 const EXPLICIT_RESOURCE_ID_PATTERN = /\b(?:artifact|file|ref|layer)_[A-Za-z0-9_-]{1,180}\b/giu
 const RESOURCE_REUSE_NEGATION_PATTERN = /(?:(?:不要|不再|无需|禁止|别|勿).{0,16}(?:使用|沿用|复用|参考|基于).{0,20}(?:之前|先前|上次|刚才|已有|历史|旧)|(?:不沿用|不复用|重新开始|从头开始|全新开始)|\b(?:do not|don't|without)\s+(?:use|reuse).{0,32}(?:previous|prior|old)|\b(?:start over|from scratch)\b)/iu
 const CHINESE_RESOURCE_REUSE_PATTERN = /(?:(?:继续|沿用|复用|接着|基于|参考|使用|查看|打开|分析|处理).{0,20}(?:上次|刚才|之前|先前|已有|已上传|历史|旧的|这个|该|上述|前面的).{0,20}(?:文件|图层|结果|产物|引用|报告|数据集?|资源)|(?:上次|刚才|之前|先前|已有|已上传|历史|旧的|这个|该|上述|前面的).{0,20}(?:文件|图层|结果|产物|引用|报告|数据集?|资源).{0,20}(?:继续|沿用|复用|接着|基于|参考|使用|查看|打开|分析|处理))/u
@@ -84,14 +89,20 @@ export class ContextBudgetExceededError extends Error {
     readonly threadId: string,
     readonly hardBudget: number,
     readonly requiredTokens: number,
-    readonly section: 'mandatory_context',
+    readonly section: 'mandatory_context' | 'compacted_context',
   ) {
-    super(`线程 '${threadId}' 的强制上下文需要 ${requiredTokens} tokens，超过硬限制 ${hardBudget} tokens。`)
+    const label = section === 'mandatory_context' ? '强制上下文' : '压缩后的上下文'
+    super(`线程 '${threadId}' 的${label}需要 ${requiredTokens} tokens，超过硬限制 ${hardBudget} tokens。`)
     this.name = 'ContextBudgetExceededError'
   }
 }
 
 export type ContextSummarizer = (prompt: string) => Promise<string>
+
+export interface ContextSummaryIdentity {
+  provider: string
+  model: string
+}
 
 export interface ThreadContextAssemblyOptions {
   excludeRunId?: string
@@ -185,16 +196,15 @@ export async function assembleThreadContext(
   let transcriptTokens = estimateMessages(transcriptMessages)
 
   // 元数据预算只决定是否值得读取对象；完整 JSON/UTF-8 投影后仍以精确估算
-  // 为准。优先截断历史正文，保留摘要与调用结构；没有可截断正文时才移除
-  // 最老的完整上下文单元，直到返回值满足硬边界。
+  // 为准。超限时只能移除最老的完整协议组，禁止截断正文或拆开调用、结果。
   while (transcriptTokens > transcriptBudget && includedEntries.length) {
-    const bounded = boundOldestContextText(includedEntries)
-    if (bounded.changed) {
-      includedEntries = bounded.entries
-      contextWasBounded = true
-    } else {
-      includedEntries = dropOldestContextUnit(includedEntries)
-    }
+    const next = dropOldestCompactableTranscriptGroup(
+      includedEntries,
+      config.preserveRecentTurns,
+    )
+    if (!next) break
+    includedEntries = next
+    contextWasBounded = true
     transcriptMessages = transcriptEntriesToChatMessages(includedEntries)
     transcriptTokens = estimateMessages(transcriptMessages)
   }
@@ -249,6 +259,7 @@ export async function compactThreadIfNeeded(
   threadId: string,
   config: AgentRuntimeConfig['context'],
   summarize: ContextSummarizer,
+  summaryIdentity: ContextSummaryIdentity,
   force = false,
 ): Promise<CompactionRecord | null> {
   const [manifest, chain] = await Promise.all([
@@ -259,10 +270,13 @@ export async function compactThreadIfNeeded(
   if (!force && ratio < config.compactRatio) return null
 
   const visible = stripCompactionReplay(chain)
-  const preserveIndex = findPreserveStart(visible, config.preserveRecentTurns)
-  if (preserveIndex <= 0) return null
-  const compacted = visible.slice(0, preserveIndex)
-  const preserved = visible.slice(preserveIndex)
+  const selection = selectContextCompactionSlice(
+    buildTranscriptContextUnits(visible),
+    config.preserveRecentTurns,
+  )
+  if (selection.leadingUnits.length || !selection.sourceDigest) return null
+  const compacted = flattenContextUnits(selection.sourceUnits)
+  const preserved = flattenContextUnits(selection.preservedUnits)
   if (!compacted.some(entry => entry.kind === 'message')) return null
   const firstCompacted = compacted[0]
   if (!firstCompacted) return null
@@ -271,6 +285,18 @@ export async function compactThreadIfNeeded(
   const summary = (await summarize(summaryPrompt)).trim()
   if (!summary) throw new Error('摘要模型返回空内容')
   const strategy: CompactionRecord['strategy'] = 'model'
+  const preTokens = manifest.estimatedContextTokens
+  const postTokens = estimateTextTokens(summary)
+    + preserved.reduce((sum, entry) => sum + estimateTextTokens(JSON.stringify(entry.payload)), 0)
+  const hardBudget = Math.floor(config.contextWindowTokens * config.hardLimitRatio)
+  if (postTokens >= hardBudget) {
+    throw new ContextBudgetExceededError(
+      threadId,
+      hardBudget,
+      postTokens,
+      'compacted_context',
+    )
+  }
 
   const compactionId = makeId('compact')
   const boundary = await store.appendTranscript({
@@ -287,7 +313,20 @@ export async function compactThreadIfNeeded(
     threadId,
     kind: 'compact_summary',
     parentEntryId: boundary.entryId,
-    payload: { compactionId, content: summary, strategy },
+    payload: {
+      compactionId,
+      content: summary,
+      strategy,
+      sourceDigest: selection.sourceDigest,
+      sourceEntryIds: selection.sourceEntryIds,
+      sourceUnitIds: selection.sourceUnits.map(unit => unit.unitId),
+      sourceObjectHashes: selection.sourceUnits.flatMap(unit => (
+        unit.objectHash ? [unit.objectHash] : []
+      )),
+      summaryProvider: summaryIdentity.provider,
+      summaryModel: summaryIdentity.model,
+      promptVersion: THREAD_COMPACTION_PROMPT_VERSION,
+    },
   })
 
   let parentEntryId = summaryEntry.entryId
@@ -307,9 +346,6 @@ export async function compactThreadIfNeeded(
     parentEntryId = replay.entryId
   }
 
-  const preTokens = manifest.estimatedContextTokens
-  const postTokens = estimateTextTokens(summary)
-    + preserved.reduce((sum, entry) => sum + estimateTextTokens(JSON.stringify(entry.payload)), 0)
   const record: CompactionRecord = {
     schemaVersion: 2,
     compactionId,
@@ -319,8 +355,17 @@ export async function compactThreadIfNeeded(
     firstCompactedEntryId: firstCompacted.entryId,
     lastCompactedEntryId: compacted.at(-1)?.entryId ?? firstCompacted.entryId,
     preservedFromEntryId: preserved[0]?.entryId ?? null,
+    sourceDigest: selection.sourceDigest,
+    sourceEntryIds: selection.sourceEntryIds,
+    sourceUnitIds: selection.sourceUnits.map(unit => unit.unitId),
+    sourceObjectHashes: selection.sourceUnits.flatMap(unit => (
+      unit.objectHash ? [unit.objectHash] : []
+    )),
     summary,
     strategy,
+    summaryProvider: summaryIdentity.provider,
+    summaryModel: summaryIdentity.model,
+    promptVersion: THREAD_COMPACTION_PROMPT_VERSION,
     preTokens,
     postTokens,
     createdAt: nowUtc(),
@@ -429,96 +474,14 @@ function trimTranscriptEntriesBeforeHydration(
   if (tokenBudget <= 0) return { entries: [], bounded: entries.some(isModelVisibleEntry) }
   let selected = [...entries]
   let bounded = false
-  if (estimateMessages(transcriptEntriesToChatMessages(selected)) > tokenBudget) {
-    selected = preserveRecentTurns(selected, preserveRecentTurnCount)
-  }
   while (selected.length
     && estimateMessages(transcriptEntriesToChatMessages(selected)) > tokenBudget) {
-    const next = boundOldestContextText(selected)
-    if (next.changed) {
-      selected = next.entries
-      bounded = true
-    } else {
-      selected = dropOldestContextUnit(selected)
-    }
+    const next = dropOldestCompactableTranscriptGroup(selected, preserveRecentTurnCount)
+    if (!next) break
+    selected = next
+    bounded = true
   }
   return { entries: selected, bounded }
-}
-
-function boundOldestContextText(
-  entries: TranscriptEntry[],
-): { entries: TranscriptEntry[]; changed: boolean } {
-  // 压缩摘要是经过模型归纳的高价值边界，最后再截断；先收紧普通历史正文。
-  const indexes = [
-    ...entries.map((entry, index) => ({ entry, index }))
-      .filter(item => item.entry.kind !== 'compact_summary')
-      .map(item => item.index),
-    ...entries.map((entry, index) => ({ entry, index }))
-      .filter(item => item.entry.kind === 'compact_summary')
-      .map(item => item.index),
-  ]
-  for (const index of indexes) {
-    const entry = entries[index]
-    if (!entry) continue
-    const bounded = boundEntryText(entry)
-    if (!bounded) continue
-    return {
-      entries: entries.map((candidate, candidateIndex) => (
-        candidateIndex === index ? bounded : candidate
-      )),
-      changed: true,
-    }
-  }
-  return { entries, changed: false }
-}
-
-function boundEntryText(entry: TranscriptEntry): TranscriptEntry | null {
-  const field = entry.kind === 'message' || entry.kind === 'compact_summary'
-    ? 'content'
-    : entry.kind === 'tool_result'
-      ? (typeof entry.payload.content === 'string' ? 'content' : 'summary')
-      : isAssistantContentCheckpoint(entry)
-        ? 'content'
-        : null
-  if (!field) return null
-  const value = entry.payload[field]
-  if (typeof value !== 'string' || value.length <= MIN_BOUNDED_CONTEXT_CHARS) return null
-  const nextLength = Math.max(
-    MIN_BOUNDED_CONTEXT_CHARS,
-    Math.floor((value.length - BOUNDED_CONTEXT_MARKER.length) / 2),
-  )
-  const boundedValue = `${value.slice(0, nextLength)}${BOUNDED_CONTEXT_MARKER}`
-  if (boundedValue.length >= value.length) return null
-  return { ...entry, payload: { ...entry.payload, [field]: boundedValue } }
-}
-
-function dropOldestContextUnit(entries: TranscriptEntry[]): TranscriptEntry[] {
-  const firstVisibleIndex = entries.findIndex(isModelVisibleEntry)
-  if (firstVisibleIndex < 0) return []
-
-  const firstUserIndex = entries.findIndex(entry => (
-    entry.kind === 'message' && entry.payload.role === 'user'
-  ))
-  if (firstUserIndex >= 0) {
-    const nextUserOffset = entries.slice(firstUserIndex + 1).findIndex(entry => (
-      entry.kind === 'message' && entry.payload.role === 'user'
-    ))
-    const end = nextUserOffset >= 0
-      ? firstUserIndex + 1 + nextUserOffset
-      : entries.length
-    return [...entries.slice(0, firstUserIndex), ...entries.slice(end)]
-  }
-
-  const firstVisible = entries[firstVisibleIndex]
-  if (!firstVisible) return []
-  if (firstVisible.kind === 'compact_summary') {
-    return entries.filter((_, index) => index !== firstVisibleIndex)
-  }
-  const callId = stringField(firstVisible.payload.callId)
-  return entries.filter((entry, index) => (
-    index !== firstVisibleIndex
-    && (!callId || stringField(entry.payload.callId) !== callId)
-  ))
 }
 
 // 资源索引只在用户明确要求继续或复用时进入模型上下文，避免把历史事实静默注入新任务。
@@ -703,28 +666,6 @@ function toChatMessages(entry: TranscriptEntry, assistantContentOverride?: strin
   return []
 }
 
-function preserveRecentTurns(entries: TranscriptEntry[], turnCount: number): TranscriptEntry[] {
-  const summary = findLastEntry(entries, entry => entry.kind === 'compact_summary')
-  const visible = entries.filter(entry => entry.kind !== 'compact_boundary'
-    && (entry.kind !== 'checkpoint' || isAssistantContentCheckpoint(entry)))
-  const preserveIndex = findPreserveStart(visible, turnCount)
-  const recent = visible.slice(Math.max(0, preserveIndex))
-  return summary && !recent.some(entry => entry.entryId === summary.entryId) ? [summary, ...recent] : recent
-}
-
-function findPreserveStart(entries: TranscriptEntry[], turnCount: number): number {
-  let userTurns = 0
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index]
-    if (!entry) continue
-    if (entry.kind === 'message' && entry.payload.role === 'user') {
-      userTurns += 1
-      if (userTurns >= turnCount) return index
-    }
-  }
-  return 0
-}
-
 function stripCompactionReplay(entries: TranscriptEntry[]): TranscriptEntry[] {
   return entries.filter(entry => entry.payload.compactionReplay !== true)
 }
@@ -748,7 +689,8 @@ function isCompletedTurnBoundary(entry: TranscriptEntry): boolean {
 }
 
 function buildCompactionPrompt(entries: TranscriptEntry[]): string {
-  return `请压缩以下历史对话，只保留可验证信息，不得推测或补全。\n` +
+  return `摘要协议版本：${THREAD_COMPACTION_PROMPT_VERSION}\n` +
+    `请压缩以下历史对话，只保留可验证信息，不得推测或补全。\n` +
     `严格按以下 Markdown 标题输出：当前目标、用户约束、已确认事实、数据与产物引用、未完成事项、关键术语。\n\n` +
     formatEntriesForSummary(entries)
 }

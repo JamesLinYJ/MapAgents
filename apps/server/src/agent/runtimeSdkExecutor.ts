@@ -36,7 +36,6 @@ import type {
   StreamProjectionState,
 } from './runtimeTypes.js'
 import type { RunSteeringController } from './runSteeringController.js'
-import { evaluateTerminalDelivery } from './terminalDeliveryPolicy.js'
 import type { RunEventSink } from './turnRunner.js'
 import { goalTokenUsage, type GoalJudgePort } from './goalJudge.js'
 import { buildInitialAgentInput } from './multimodalInput.js'
@@ -44,6 +43,12 @@ import { AgentsSdkBridge } from '../agent-runtime/sdk/AgentsSdkBridge.js'
 import type { AgentsSdkCheckpointService } from '../agent-runtime/sdk/AgentsSdkCheckpointService.js'
 import { AgentsSdkSegmentRotation } from '../agent-runtime/sdk/AgentsSdkSegmentRotation.js'
 import type { RecordedAgentStepContext } from '../agent-runtime/step/AgentStepContextFactory.js'
+import {
+  evaluateGoalBeforeJudge,
+  evaluateGoalVerdict,
+  evaluateTerminalCandidateState,
+  evaluateTerminalDeliveryCandidate,
+} from '../agent-runtime/terminal/TerminalPolicy.js'
 
 export type RuntimeSdkOutcome = 'completed' | 'waiting_approval' | 'clarification_needed'
 
@@ -266,8 +271,11 @@ export class RuntimeSdkExecutor {
           terminalRepairObjectiveRevision = candidateObjectiveRevision
           terminalRepairAttempts = 0
         }
-        const candidateState = candidateSnapshot.state
-        if (!candidateState) {
+        const candidateStateDecision = evaluateTerminalCandidateState(
+          candidateSnapshot.state,
+          candidateObjectiveRevision,
+        )
+        if (candidateStateDecision.type === 'supersede') {
           await supersedeAssistantCandidate({
             store,
             checkpoints,
@@ -283,6 +291,8 @@ export class RuntimeSdkExecutor {
           nextInput = []
           continue
         }
+        const candidateState = candidateSnapshot.state
+        if (!candidateState) throw new Error('终态策略返回非 supersede，但候选状态不存在。')
         const supersedeProjectionCandidate = () => supersedeAssistantCandidate({
           store,
           checkpoints,
@@ -296,7 +306,7 @@ export class RuntimeSdkExecutor {
           ...(candidateFinalOutput === null ? {} : { body: candidateFinalOutput }),
         })
 
-        if (candidateState.clarification && !candidateState.clarification.selectedOptionId) {
+        if (candidateStateDecision.type === 'clarification') {
           if (!await steering.tryClaimTerminal(options.runId, candidateObjectiveRevision)) {
             await supersedeAssistantCandidate({
               store,
@@ -313,7 +323,7 @@ export class RuntimeSdkExecutor {
             nextInput = []
             continue
           }
-          if (candidateState.goal && ['active', 'evaluating'].includes(candidateState.goal.status)) {
+          if (candidateStateDecision.cancelActiveGoal && candidateState.goal) {
             const transferredAt = new Date().toISOString()
             await store.updateRunState(options.runId, {
               goal: {
@@ -325,13 +335,13 @@ export class RuntimeSdkExecutor {
               },
             })
           }
-          eventSink.emit('clarification.required', candidateState.clarification.question, {
-            clarification: candidateState.clarification,
+          eventSink.emit('clarification.required', candidateStateDecision.clarification.question, {
+            clarification: candidateStateDecision.clarification,
           })
           itemSink.appendResult('clarification_needed', {
-            decisionId: candidateState.clarification.clarificationId,
-            clarification: candidateState.clarification,
-            message: candidateState.clarification.question,
+            decisionId: candidateStateDecision.clarification.clarificationId,
+            clarification: candidateStateDecision.clarification,
+            message: candidateStateDecision.clarification.question,
             objectiveRevision: candidateObjectiveRevision,
           })
           await eventSink.flush()
@@ -341,46 +351,24 @@ export class RuntimeSdkExecutor {
           return outcome
         }
 
-        const agentWorkflow = candidateState.agentWorkflow
-        if (candidateState.runProfile === 'geospatial_compose' && !agentWorkflow) {
+        if (candidateStateDecision.type === 'reject') {
           if (!await steering.tryClaimTerminal(options.runId, candidateObjectiveRevision)) {
             await supersedeProjectionCandidate()
             nextInput = []
             continue
           }
-          throw new Error('地理分析 Compose 运行必须提交并完成 discover、validate、analyze、verify 阶段工作流后才能交付。')
-        }
-        if (agentWorkflow && (
-          agentWorkflow.status !== 'completed'
-          || agentWorkflow.objectiveRevision !== candidateObjectiveRevision
-        )) {
-          if (!await steering.tryClaimTerminal(options.runId, candidateObjectiveRevision)) {
-            await supersedeProjectionCandidate()
-            nextInput = []
-            continue
-          }
-          throw new Error(`智能体工作流尚未完成，当前状态为 ${agentWorkflow.status}。必须完成或显式调整剩余步骤后再交付最终回答。`)
-        }
-        const incompleteTodos = candidateState.todos
-          .filter(todo => todo.status === 'pending' || todo.status === 'running')
-        if (incompleteTodos.length) {
-          if (!await steering.tryClaimTerminal(options.runId, candidateObjectiveRevision)) {
-            await supersedeProjectionCandidate()
-            nextInput = []
-            continue
-          }
-          throw new Error(`运行仍有未完成 Todo：${incompleteTodos.map(todo => todo.title).join('、')}。请先更新为完成、失败或受阻状态。`)
+          throw new Error(candidateStateDecision.message)
         }
 
         const finalOutput = candidateFinalOutput ?? requireFinalText(stream.finalOutput)
         const delivery = platformDelivery(finalOutput, candidateState)
-        const terminalDecision = options.executionMode === 'plan'
-          ? { accepted: true as const }
-          : evaluateTerminalDelivery({
-              delivery,
-            })
-        if (!terminalDecision.accepted) {
-          if (terminalRepairAttempts >= 2) {
+        const terminalDecision = evaluateTerminalDeliveryCandidate({
+          executionMode: options.executionMode,
+          delivery,
+          repairAttempts: terminalRepairAttempts,
+        })
+        if (terminalDecision.type !== 'accepted') {
+          if (terminalDecision.type === 'reject') {
             if (!await steering.tryClaimTerminal(options.runId, candidateObjectiveRevision)) {
               await supersedeProjectionCandidate()
               nextInput = []
@@ -388,7 +376,7 @@ export class RuntimeSdkExecutor {
             }
             throw new Error(`Agent 最终交付缺少可核验证据：${terminalDecision.reason}`)
           }
-          terminalRepairAttempts += 1
+          terminalRepairAttempts = terminalDecision.nextAttempt
           eventSink.emit('warning.raised', '最终回答缺少可核验证据，正在继续执行。', {
             code: terminalDecision.code,
             repairAttempt: terminalRepairAttempts,
@@ -398,7 +386,7 @@ export class RuntimeSdkExecutor {
           nextInput = [{
             type: 'message',
             role: 'user',
-            content: terminalDecision.repairInstruction,
+            content: terminalDecision.instruction,
           }]
           continue
         }
@@ -432,8 +420,13 @@ export class RuntimeSdkExecutor {
         const persistedGoal = candidateState.goal
         if (persistedGoal && (persistedGoal.status === 'active' || persistedGoal.status === 'evaluating')) {
           const tokenUsageBeforeJudge = goalTokenUsage(candidateState.runtimeStats)
-          const beforeJudgeBoundary = goalBoundaryReason(persistedGoal, tokenUsageBeforeJudge, 'before_judge')
-          if (beforeJudgeBoundary) {
+          const beforeJudgeDecision = evaluateGoalBeforeJudge({
+            goal: persistedGoal,
+            tokenUsage: tokenUsageBeforeJudge,
+            nowEpochMs: Date.now(),
+          })
+          if (beforeJudgeDecision.type === 'exhausted') {
+            const beforeJudgeBoundary = beforeJudgeDecision.reason
             if (!await steering.tryClaimTerminal(options.runId, candidateObjectiveRevision)) {
               await supersedeAssistantCandidate({
                 store,
@@ -536,8 +529,13 @@ export class RuntimeSdkExecutor {
             signal,
           })
           const latestGoal = evaluatingGoal
-          const afterJudgeBoundary = goalBoundaryReason(latestGoal, verdict.tokenUsage, 'after_judge')
-          if (afterJudgeBoundary) {
+          const goalDecision = evaluateGoalVerdict({
+            goal: latestGoal,
+            verdict,
+            nowEpochMs: Date.now(),
+          })
+          if (goalDecision.type === 'exhausted') {
+            const afterJudgeBoundary = goalDecision.reason
             if (!await steering.tryClaimTerminal(options.runId, candidateObjectiveRevision)) {
               await supersedeCurrentCandidate()
               nextInput = []
@@ -575,7 +573,7 @@ export class RuntimeSdkExecutor {
             throw new Error(afterJudgeBoundary)
           }
 
-          if (verdict.status === 'impossible') {
+          if (goalDecision.type === 'impossible') {
             if (!await steering.tryClaimTerminal(options.runId, candidateObjectiveRevision)) {
               await supersedeCurrentCandidate()
               nextInput = []
@@ -613,48 +611,9 @@ export class RuntimeSdkExecutor {
             throw new Error(`Goal 不可达：${verdict.reason}`)
           }
 
-          if (verdict.status === 'incomplete') {
-            const recheckBoundary = goalRecheckBoundaryReason(latestGoal, verdict.tokenUsage)
-            if (recheckBoundary) {
-              if (!await steering.tryClaimTerminal(options.runId, candidateObjectiveRevision)) {
-                await supersedeCurrentCandidate()
-                nextInput = []
-                continue
-              }
-              const completedAt = new Date().toISOString()
-              await store.updateRunState(options.runId, {
-                goal: {
-                  ...latestGoal,
-                  status: 'exhausted',
-                  lastVerdict: verdict,
-                  failureReason: recheckBoundary,
-                  updatedAt: completedAt,
-                  completedAt,
-                },
-              })
-              eventSink.emit('goal.updated', recheckBoundary, {
-                goalId: latestGoal.goalId,
-                status: 'exhausted',
-                verdict,
-                objectiveRevision: candidateObjectiveRevision,
-              })
-              itemSink.completeItem(itemId, {
-                body: finalOutput,
-                metadata: {
-                  transcriptEntryId: persisted.entryId,
-                  goalStatus: 'exhausted',
-                  goalVerdict: verdict,
-                  objectiveRevision: candidateObjectiveRevision,
-                },
-              })
-              await persistCleanCheckpoint(store, checkpoints, options.runId, stream.state, assembly)
-              await eventSink.flush()
-              await itemSink.flush()
-              throw new Error(recheckBoundary)
-            }
-
+          if (goalDecision.type === 'recheck') {
             const recheckAt = new Date().toISOString()
-            const recheckCount = latestGoal.recheckCount + 1
+            const recheckCount = goalDecision.recheckCount
             const recheckCommitted = await steering.commitRevision(
               options.runId,
               candidateObjectiveRevision,
@@ -717,12 +676,14 @@ export class RuntimeSdkExecutor {
             nextInput = [{
               type: 'message',
               role: 'user',
-              content: goalRecheckInstruction(latestGoal, verdict),
+              content: goalDecision.instruction,
             }]
             continue
           }
 
-          satisfiedGoal = { goal: latestGoal, verdict }
+          if (goalDecision.type === 'satisfied') {
+            satisfiedGoal = { goal: latestGoal, verdict }
+          }
         }
 
         if (!await steering.tryClaimTerminal(options.runId, candidateObjectiveRevision)) {
@@ -821,40 +782,6 @@ function deferred<T>(): {
     reject = rejectPromise
   })
   return { promise, resolve, reject }
-}
-
-function goalBoundaryReason(
-  goal: RunGoal,
-  tokenUsage: number,
-  stage: 'before_judge' | 'after_judge',
-): string | null {
-  if (goal.deadlineAt && Date.now() >= Date.parse(goal.deadlineAt)) {
-    return `Goal 已超过截止时间 ${goal.deadlineAt}，停止验收与续跑。`
-  }
-  if (goal.maxTokenBudget === null) return null
-  const exceeded = stage === 'before_judge'
-    ? tokenUsage >= goal.maxTokenBudget
-    : tokenUsage > goal.maxTokenBudget
-  return exceeded
-    ? `Goal 词元预算已用尽：${tokenUsage}/${goal.maxTokenBudget}。`
-    : null
-}
-
-function goalRecheckBoundaryReason(goal: RunGoal, tokenUsage: number): string | null {
-  if (goal.recheckCount >= goal.maxRechecks) {
-    return `Goal 在 ${goal.maxRechecks} 次最大复验续跑后仍未满足。`
-  }
-  return goalBoundaryReason(goal, tokenUsage, 'before_judge')
-}
-
-function goalRecheckInstruction(goal: RunGoal, verdict: RunGoalVerdict): string {
-  return [
-    '独立 Goal 验收器判定当前证据不完整，必须继续真实执行，不得只改写最终结论。',
-    `Goal：${goal.condition}`,
-    `判定原因：${verdict.reason}`,
-    `缺失验收项：${verdict.missingCriteria.join('；')}`,
-    '请在现有 SDK Session 中使用已授权工具、valueRef 与工作流证据补齐缺失项；如果工具或数据真实阻断，保留失败证据并如实说明。',
-  ].join('\n')
 }
 
 async function persistCleanCheckpoint(

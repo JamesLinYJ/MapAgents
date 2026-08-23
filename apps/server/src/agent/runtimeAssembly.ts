@@ -76,6 +76,7 @@ import {
 } from './runtimeSdkIntegrations.js'
 import type { RunOptions, RuntimeAssembly } from './runtimeTypes.js'
 import {
+  assertModelRequestWithinContextBudget,
   protectModelTransportFromRunInputMarkers,
   RuntimeModelInputController,
   type ToolOutputReference,
@@ -102,6 +103,10 @@ import {
 } from '../agent-runtime/tools/ToolCatalog.js'
 import { compileToolPlan } from '../agent-runtime/tools/ToolPlanCompiler.js'
 import { ModelRequestJournal } from '../agent-runtime/input/ModelRequestJournal.js'
+import {
+  assertGeoWorldBaselineBound,
+  reinjectGeoWorldBaseline,
+} from '../agent-runtime/context/WorldBaselineReinjection.js'
 
 export interface RuntimeAssemblyFactoryOptions {
   createSandboxClient?: SandboxClientFactory
@@ -227,14 +232,14 @@ export class RuntimeAssemblyFactory {
       ...options.runtimeConfig.context,
       contextWindowTokens: modelCapabilities.contextWindowTokens,
     }
+    const summaryAdapter = modelRegistry.resolveProvider(
+      options.runtimeConfig.context.summaryProvider ?? options.provider,
+    )
+    const summaryModel = options.runtimeConfig.context.summaryModel
+      ?? summaryAdapter.subagentModel
+      ?? selectedModel
+    if (!summaryModel) throw new Error('未配置摘要模型')
     const summarize = async (prompt: string) => {
-      const summaryAdapter = modelRegistry.resolveProvider(
-        options.runtimeConfig.context.summaryProvider ?? options.provider,
-      )
-      const summaryModel = options.runtimeConfig.context.summaryModel
-        ?? summaryAdapter.subagentModel
-        ?? selectedModel
-      if (!summaryModel) throw new Error('未配置摘要模型')
       if (modelCompletions && workspaceId) {
         const response = await modelCompletions.completeText({
           workspaceId,
@@ -260,7 +265,10 @@ export class RuntimeAssemblyFactory {
     }
 
     if (maintainContext) {
-      await compactThreadIfNeeded(store, threadId, contextConfig, summarize)
+      await compactThreadIfNeeded(store, threadId, contextConfig, summarize, {
+        provider: summaryAdapter.provider,
+        model: summaryModel,
+      })
       try {
         await rebuildSessionMemory(store, threadId, contextConfig, summarize, false, options.runId)
       } catch (error) {
@@ -491,7 +499,10 @@ export class RuntimeAssemblyFactory {
         coordinator.bindStepContext(recorded)
         latestCheckpointContext = recorded
         await checkpointContextListener?.(recorded)
-        return modelRequestJournal.replay(durableRequest, request)
+        const replayed = await modelRequestJournal.replay(durableRequest, request)
+        assertGeoWorldBaselineBound(replayed, recorded)
+        assertModelRequestWithinContextBudget(replayed, contextConfig)
+        return replayed
       }
       const objectiveRevision = coordinator.currentModelInputObjectiveRevision()
       const toolPlan = compileToolPlan({
@@ -529,12 +540,14 @@ export class RuntimeAssemblyFactory {
       latestCheckpointContext = captured
       coordinator.bindStepContext(captured)
       await checkpointContextListener?.(captured)
+      const requestWithWorldBaseline = reinjectGeoWorldBaseline(request, captured)
+      assertModelRequestWithinContextBudget(requestWithWorldBaseline, contextConfig)
       return (await modelRequestJournal.commit({
         runId: options.runId,
         provider: adapter.provider,
         modelId: selectedModel,
         context: captured,
-        request,
+        request: requestWithWorldBaseline,
       })).request
     }
 
@@ -550,6 +563,10 @@ export class RuntimeAssemblyFactory {
     const modelInput = new RuntimeModelInputController({
       config: contextConfig,
       summarize,
+      summaryIdentity: {
+        provider: summaryAdapter.provider,
+        model: summaryModel,
+      },
       existingSummaries: existingInputSummaries,
       resolveToolOutput: callId => resolveToolOutputReference(store, threadId, callId),
       persistSummary: record => store.appendTranscript({
@@ -562,8 +579,14 @@ export class RuntimeAssemblyFactory {
           sourceDigest: record.sourceDigest,
           content: record.summary,
           sourceItemCount: record.sourceItemCount,
+          sourceUnitIds: record.sourceUnitIds,
+          sourceEntryIds: record.sourceEntryIds,
+          sourceObjectHashes: record.sourceObjectHashes,
           estimatedTokensBefore: record.estimatedTokensBefore,
           estimatedTokensAfter: record.estimatedTokensAfter,
+          summaryProvider: record.summaryProvider,
+          summaryModel: record.summaryModel,
+          promptVersion: record.promptVersion,
         },
       }).then(() => undefined),
       updateEstimatedTokens: tokens => store.mutateRunState(options.runId, state => ({

@@ -2,7 +2,7 @@
 
 > 本文是面向 Codex 执行的架构 RFC、迁移手册和逐 PR 验收清单。
 >
-> **状态**：In progress（WP-00 至 WP-07 已完成；下一包为 WP-08）
+> **状态**：In progress（WP-00 至 WP-08 已完成；下一包为 WP-09）
 >
 > **Newmap 基线**：`JamesLinYJ/Newmap@ffa50bbe1bd0e8de82f7f40448bafbe3f1eb751a`
 >
@@ -1552,6 +1552,8 @@ apps/server/src/agent-runtime/
 
 ### WP-08：Context 与终态策略
 
+**状态**：已完成（2026-08-24）。
+
 **修改**：
 
 - 统一 ContextUnit。
@@ -1566,6 +1568,15 @@ apps/server/src/agent-runtime/
 - rollover 恢复。
 - Goal incomplete、impossible、exhausted、satisfied 全路径。
 - 新 steering supersede terminal candidate。
+
+**实施证据**：
+
+- `agent-runtime/context/ContextUnit.ts` 是 Thread context 与 Runner model window 共用的协议分组边界；reasoning、并行 call/result、approval 和同一 turn 只能整组保留、压缩或移除，字符级截断路径已删除。
+- pre-turn `compactThreadIfNeeded` 与 mid-turn `RuntimeModelInputController` 使用同一 source digest 算法；压缩记录持久化来源 entry/unit/object hashes、pre/post tokens、摘要 provider/model 和 prompt version，相同 canonical 单元产生相同 digest。
+- `WorldBaselineReinjection` 在每个不可变 StepContext 的精确模型请求中只注入一份 GeoWorld baseline，并在 included request 冷恢复时核对 revision 与 state digest；最终 transport 请求连同工具目录、handoff 和输出 schema 再执行硬预算检查。
+- `terminal/TerminalPolicy.ts` 持有 clarification、workflow/Todo、交付修复预算和 Goal 边界的纯决策；SDK executor 只执行持久化、事件和 steering claim 副作用，新 objective revision 可线性化 supersede 旧终态候选。
+- 压缩后仍超过硬上限会在追加 transcript 前显式失败；启动 schema 能力探测同时验证压缩审计列。单元回归覆盖协议完整性、摘要幂等、rollover/recovery、Goal 全路径和 steering 竞争。
+- 全仓 `npm test` 通过：Server 852、Operations Console 75、Desktop 462 项及各共享包/依赖合同均为绿色；`npm run test:postgis` 从单一 `infra/database/schema.sql` 初始化真实空库并通过 4/4 集成测试。
 
 ### WP-09：MCP、Skill、Plugin、Hook
 

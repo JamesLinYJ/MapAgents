@@ -19,11 +19,46 @@ import {
 import { describe, expect, it, vi } from 'vitest'
 import { defaultRuntimeConfig } from './defaultRuntimeConfig.js'
 import {
+  assertModelRequestWithinContextBudget,
   protectModelTransportFromRunInputMarkers,
   RuntimeModelInputController,
 } from './runtimeModelInput.js'
 
+const TEST_SUMMARY_IDENTITY = { provider: 'test', model: 'summary-test' }
+
 describe('RuntimeModelInputController', () => {
+  it('fails on the final model-visible request when tool schemas exceed the hard limit', () => {
+    const request = {
+      ...modelRequest([{ type: 'message', role: 'user', content: '执行分析' }]),
+      tools: [{
+        type: 'function' as const,
+        name: 'large_schema_tool',
+        description: '工具说明'.repeat(200),
+        parameters: {
+          type: 'object',
+          properties: { input: { type: 'string', description: '参数说明'.repeat(200) } },
+          additionalProperties: false,
+        },
+        strict: true,
+      }],
+    }
+    let caught: unknown = null
+
+    try {
+      assertModelRequestWithinContextBudget(request, {
+        contextWindowTokens: 100,
+        hardLimitRatio: 0.5,
+      })
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toMatchObject({
+      code: 'model_request_context_budget_exceeded',
+      hardLimitTokens: 50,
+    })
+  })
+
   it('compacts only complete old groups and keeps current input plus unresolved calls intact', async () => {
     const config = {
       ...defaultRuntimeConfig().context,
@@ -37,6 +72,7 @@ describe('RuntimeModelInputController', () => {
     const estimatedUpdates: number[] = []
     const controller = new RuntimeModelInputController({
       config,
+      summaryIdentity: TEST_SUMMARY_IDENTITY,
       summarize: async prompt => {
         expect(prompt).toContain('result_old')
         expect(prompt).toContain('ref_dataset')
@@ -127,6 +163,7 @@ describe('RuntimeModelInputController', () => {
     }
     const controller = new RuntimeModelInputController({
       config,
+      summaryIdentity: TEST_SUMMARY_IDENTITY,
       summarize: async () => '不应调用',
       resolveToolOutput: async () => null,
       persistSummary: async () => undefined,
@@ -144,6 +181,7 @@ describe('RuntimeModelInputController', () => {
     const updates: number[] = []
     const controller = new RuntimeModelInputController({
       config: defaultRuntimeConfig().context,
+      summaryIdentity: TEST_SUMMARY_IDENTITY,
       summarize: async () => '不应调用',
       resolveToolOutput: async () => null,
       persistSummary: async () => undefined,
@@ -162,6 +200,7 @@ describe('RuntimeModelInputController', () => {
   it('keeps checkpoint delivery markers in SDK-persisted filter output', async () => {
     const controller = new RuntimeModelInputController({
       config: defaultRuntimeConfig().context,
+      summaryIdentity: TEST_SUMMARY_IDENTITY,
       summarize: async () => '不应调用',
       resolveToolOutput: async () => null,
       persistSummary: async () => undefined,
@@ -200,6 +239,7 @@ describe('RuntimeModelInputController', () => {
   it('keeps delivery markers out of both OpenAI Responses and Chat request builders', async () => {
     const controller = new RuntimeModelInputController({
       config: defaultRuntimeConfig().context,
+      summaryIdentity: TEST_SUMMARY_IDENTITY,
       summarize: async () => '不应调用',
       resolveToolOutput: async () => null,
       persistSummary: async () => undefined,

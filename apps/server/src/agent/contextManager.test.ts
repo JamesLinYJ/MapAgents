@@ -41,10 +41,26 @@ describe('thread context management', () => {
         await store.appendTranscript({ threadId: thread.id, kind: 'message', payload: { role: 'assistant', content: `回答 ${index} ${'事实'.repeat(80)}` } })
       }
       const before = await store.activeTranscript(thread.id)
-      const config = { ...defaultRuntimeConfig().context, preserveRecentTurns: 2, contextWindowTokens: 800 }
-      const record = await compactThreadIfNeeded(store, thread.id, config, async () => '## 当前目标\n继续回答\n## 已确认事实\n问题 1-6 已处理', true)
+      const config = { ...defaultRuntimeConfig().context, preserveRecentTurns: 2, contextWindowTokens: 1_600 }
+      const record = await compactThreadIfNeeded(
+        store,
+        thread.id,
+        config,
+        async () => '## 当前目标\n继续回答\n## 已确认事实\n问题 1-6 已处理',
+        { provider: 'test', model: 'summary-test' },
+        true,
+      )
 
       expect(record?.strategy).toBe('model')
+      expect(record).toMatchObject({
+        sourceDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        sourceEntryIds: expect.arrayContaining([before[0]!.entryId]),
+        sourceUnitIds: expect.arrayContaining([expect.stringMatching(/^context_unit_/u)]),
+        sourceObjectHashes: expect.arrayContaining([expect.stringMatching(/^[a-f0-9]{64}$/u)]),
+        summaryProvider: 'test',
+        summaryModel: 'summary-test',
+        promptVersion: 'thread-compaction-v2',
+      })
       expect((await store.listCompactions(thread.id))).toHaveLength(1)
       const after = await store.activeTranscript(thread.id)
       expect(after.length).toBeGreaterThan(before.length)
@@ -54,6 +70,51 @@ describe('thread context management', () => {
       expect(assembled.messages.some(message => message.content?.includes('<conversation-summary>'))).toBe(true)
       expect(assembled.messages.some(message => message.content?.startsWith('问题 7'))).toBe(true)
       expect(assembled.messages.some(message => message.content?.startsWith('问题 1 '))).toBe(false)
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
+  it('fails before mutating the transcript when a summary cannot fit the hard limit', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-context-compact-hard-limit-'))
+    try {
+      const store = await createStore(root)
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '压缩后超限')
+      for (let index = 1; index <= 2; index += 1) {
+        await store.appendTranscript({
+          threadId: thread.id,
+          kind: 'message',
+          payload: { role: 'user', content: `问题 ${index}` },
+        })
+        await store.appendTranscript({
+          threadId: thread.id,
+          kind: 'message',
+          payload: { role: 'assistant', content: `回答 ${index}` },
+        })
+      }
+      const before = await store.activeTranscript(thread.id)
+      const config = {
+        ...defaultRuntimeConfig().context,
+        preserveRecentTurns: 1,
+        contextWindowTokens: 100,
+        hardLimitRatio: 0.5,
+      }
+
+      await expect(compactThreadIfNeeded(
+        store,
+        thread.id,
+        config,
+        async () => '无法装入窗口的摘要'.repeat(100),
+        { provider: 'test', model: 'summary-test' },
+        true,
+      )).rejects.toMatchObject({
+        code: 'context_budget_exceeded',
+        section: 'compacted_context',
+      })
+
+      expect(await store.activeTranscript(thread.id)).toEqual(before)
+      expect(await store.listCompactions(thread.id)).toEqual([])
     } finally {
       await removeTempRoot(root)
     }
@@ -189,7 +250,7 @@ describe('thread context management', () => {
     }
   })
 
-  it('never returns oversized preserved history after the final exact budget pass', async () => {
+  it('fails instead of truncating or dropping the preserved recent turn at the hard limit', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-context-hard-inline-'))
     try {
       const store = await createStore(root)
@@ -212,11 +273,12 @@ describe('thread context management', () => {
         preserveRecentTurns: 1,
       }
 
-      const assembled = await assembleThreadContext(store, thread.id, config, '系统提示')
-
-      expect(assembled.report.estimatedTokens).toBeLessThanOrEqual(100)
-      expect(assembled.report.omittedEntryCount).toBe(2)
-      expect(assembled.messages).toEqual([{ role: 'system', content: '系统提示' }])
+      await expect(
+        assembleThreadContext(store, thread.id, config, '系统提示'),
+      ).rejects.toMatchObject({
+        code: 'context_budget_exceeded',
+        threadId: thread.id,
+      })
     } finally {
       await removeTempRoot(root)
     }

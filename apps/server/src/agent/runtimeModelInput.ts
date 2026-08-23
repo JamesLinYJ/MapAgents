@@ -9,14 +9,32 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { createHash } from 'node:crypto'
 import type { AgentInputItem, Model, ModelRequest } from '@openai/agents'
 import type { RuntimeContextConfig } from '../schemas/types.js'
+import {
+  buildAgentInputContextUnits,
+  flattenContextUnits,
+  selectContextCompactionSlice,
+} from '../agent-runtime/context/ContextUnit.js'
 import { estimateTextTokens } from './tokenEstimate.js'
+
+const MODEL_INPUT_SUMMARY_PROMPT_VERSION = 'run-history-summary-v2'
 
 export interface RuntimeModelInputData {
   input: AgentInputItem[]
   instructions?: string
+}
+
+export class ModelRequestContextBudgetExceededError extends Error {
+  readonly code = 'model_request_context_budget_exceeded'
+
+  constructor(
+    readonly estimatedTokens: number,
+    readonly hardLimitTokens: number,
+  ) {
+    super(`精确模型请求需要约 ${estimatedTokens} tokens，超过硬限制 ${hardLimitTokens} tokens。`)
+    this.name = 'ModelRequestContextBudgetExceededError'
+  }
 }
 
 export interface ToolOutputReference {
@@ -32,8 +50,14 @@ export interface PersistedModelInputSummary {
   sourceDigest: string
   summary: string
   sourceItemCount: number
+  sourceUnitIds: string[]
+  sourceEntryIds: string[]
+  sourceObjectHashes: string[]
   estimatedTokensBefore: number
   estimatedTokensAfter: number
+  summaryProvider: string
+  summaryModel: string
+  promptVersion: string
 }
 
 interface RuntimeModelInputControllerOptions {
@@ -42,6 +66,10 @@ interface RuntimeModelInputControllerOptions {
   resolveToolOutput(callId: string): Promise<ToolOutputReference | null>
   persistSummary(record: PersistedModelInputSummary): Promise<void>
   existingSummaries?: ReadonlyMap<string, string>
+  summaryIdentity: {
+    provider: string
+    model: string
+  }
   updateEstimatedTokens(tokens: number): Promise<void>
 }
 
@@ -76,12 +104,14 @@ export class RuntimeModelInputController {
       return withInstructions(reduced, modelData.instructions)
     }
 
-    const boundary = safeCompactionBoundary(
-      reduced,
+    const units = buildAgentInputContextUnits(reduced, {
+      projectItem: stripRunInputMarkerForModel,
+    })
+    const selection = selectContextCompactionSlice(
+      units,
       this.options.config.preserveRecentTurns,
     )
-    const leadingSystemCount = countLeadingSystemMessages(reduced)
-    if (boundary <= leadingSystemCount) {
+    if (!selection.sourceUnits.length || !selection.sourceDigest) {
       await this.reportEstimatedTokens(estimatedBefore)
       if (estimatedBefore >= hardLimit) {
         throw new Error('模型上下文已达到硬上限，且没有可安全压缩的完整旧消息组。请新建任务或减少输入。')
@@ -89,9 +119,9 @@ export class RuntimeModelInputController {
       return withInstructions(reduced, modelData.instructions)
     }
 
-    const sourceItems = reduced.slice(leadingSystemCount, boundary)
+    const sourceItems = flattenContextUnits(selection.sourceUnits)
     const modelVisibleSourceItems = sourceItems.map(stripRunInputMarkerForModel)
-    const sourceDigest = digestItems(modelVisibleSourceItems)
+    const sourceDigest = selection.sourceDigest
     let summary = this.summaries.get(sourceDigest)
     if (!summary) {
       summary = (await this.options.summarize(buildSummaryPrompt(modelVisibleSourceItems))).trim()
@@ -104,9 +134,9 @@ export class RuntimeModelInputController {
       content: `<run-history-summary source-digest="${sourceDigest}">\n${summary}\n</run-history-summary>`,
     }
     const nextInput = [
-      ...reduced.slice(0, leadingSystemCount),
+      ...flattenContextUnits(selection.leadingUnits),
       summaryItem,
-      ...reduced.slice(boundary),
+      ...flattenContextUnits(selection.preservedUnits),
     ]
     const estimatedAfter = estimateInputTokens(nextInput, instructions)
     if (estimatedAfter >= hardLimit) {
@@ -118,8 +148,16 @@ export class RuntimeModelInputController {
         sourceDigest,
         summary,
         sourceItemCount: sourceItems.length,
+        sourceUnitIds: selection.sourceUnits.map(unit => unit.unitId),
+        sourceEntryIds: selection.sourceEntryIds,
+        sourceObjectHashes: selection.sourceUnits.flatMap(unit => (
+          unit.objectHash ? [unit.objectHash] : []
+        )),
         estimatedTokensBefore: estimatedBefore,
         estimatedTokensAfter: estimatedAfter,
+        summaryProvider: this.options.summaryIdentity.provider,
+        summaryModel: this.options.summaryIdentity.model,
+        promptVersion: MODEL_INPUT_SUMMARY_PROMPT_VERSION,
       })
       this.persistedDigests.add(sourceDigest)
     }
@@ -134,14 +172,15 @@ export class RuntimeModelInputController {
   }
 
   private async reduceLargeToolOutputs(items: AgentInputItem[]): Promise<AgentInputItem[]> {
-    const preserveFrom = safeCompactionBoundary(
-      items,
+    const selection = selectContextCompactionSlice(
+      buildAgentInputContextUnits(items, { projectItem: stripRunInputMarkerForModel }),
       this.options.config.preserveRecentTurns,
     )
+    const compactableItems = new Set(flattenContextUnits(selection.sourceUnits))
     const output: AgentInputItem[] = []
-    for (const [index, item] of items.entries()) {
+    for (const item of items) {
       if (
-        index >= preserveFrom
+        !compactableItems.has(item)
         || item.type !== 'function_call_result'
         || serializedOutputLength(item.output) <= this.options.config.inlineToolResultMaxChars
       ) {
@@ -205,6 +244,31 @@ export function protectModelTransportFromRunInputMarkers(
   return protectedModel
 }
 
+/**
+ * transport 边界的请求还包含工具目录、handoff、输出 schema 与 GeoWorld 基线，
+ * 它们不一定出现在 SDK 的 history filter 中。provider I/O 前必须按最终可见
+ * 请求重新核对硬上限，不能只相信压缩前的历史估算。
+ */
+export function assertModelRequestWithinContextBudget(
+  request: ModelRequest,
+  config: Pick<RuntimeContextConfig, 'contextWindowTokens' | 'hardLimitRatio'>,
+): number {
+  const estimatedTokens = estimateTextTokens(JSON.stringify({
+    input: typeof request.input === 'string'
+      ? request.input
+      : request.input.map(stripRunInputMarkerForModel),
+    systemInstructions: request.systemInstructions ?? null,
+    tools: request.tools,
+    handoffs: request.handoffs,
+    outputType: request.outputType,
+  }))
+  const hardLimitTokens = Math.floor(config.contextWindowTokens * config.hardLimitRatio)
+  if (estimatedTokens >= hardLimitTokens) {
+    throw new ModelRequestContextBudgetExceededError(estimatedTokens, hardLimitTokens)
+  }
+  return estimatedTokens
+}
+
 async function* observeStreamedRequest(
   model: Model,
   request: ModelRequest,
@@ -235,53 +299,6 @@ function stripRunInputMarkerForModel(item: AgentInputItem): AgentInputItem {
   return copy
 }
 
-function safeCompactionBoundary(items: AgentInputItem[], preserveRecentTurns: number): number {
-  let boundary = recentTurnBoundary(items, preserveRecentTurns)
-  const calls = new Map<string, number>()
-  const results = new Map<string, number>()
-  for (const [index, item] of items.entries()) {
-    if (item.type === 'function_call') calls.set(item.callId, index)
-    if (item.type === 'function_call_result') results.set(item.callId, index)
-  }
-  for (const [callId, callIndex] of calls) {
-    const resultIndex = results.get(callId)
-    if (resultIndex === undefined) {
-      boundary = Math.min(boundary, callIndex)
-      continue
-    }
-    if ((callIndex < boundary) !== (resultIndex < boundary)) {
-      boundary = Math.min(boundary, callIndex, resultIndex)
-    }
-  }
-  for (const [callId, resultIndex] of results) {
-    const callIndex = calls.get(callId)
-    if (callIndex === undefined) boundary = Math.min(boundary, resultIndex)
-  }
-  while (boundary > 0 && items[boundary - 1]?.type === 'reasoning') boundary -= 1
-  return Math.max(countLeadingSystemMessages(items), boundary)
-}
-
-function recentTurnBoundary(items: AgentInputItem[], preserveRecentTurns: number): number {
-  let remaining = Math.max(1, preserveRecentTurns)
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index]
-    if (item && 'role' in item && item.role === 'user') {
-      remaining -= 1
-      if (remaining === 0) return index
-    }
-  }
-  return countLeadingSystemMessages(items)
-}
-
-function countLeadingSystemMessages(items: AgentInputItem[]): number {
-  let count = 0
-  for (const item of items) {
-    if ('role' in item && item.role === 'system') count += 1
-    else break
-  }
-  return count
-}
-
 function estimateInputTokens(items: AgentInputItem[], instructions: string): number {
   return estimateTextTokens(
     JSON.stringify(items.map(stripRunInputMarkerForModel)),
@@ -293,12 +310,9 @@ function serializedOutputLength(output: Extract<AgentInputItem, { type: 'functio
   return typeof output === 'string' ? output.length : JSON.stringify(output).length
 }
 
-function digestItems(items: AgentInputItem[]): string {
-  return createHash('sha256').update(JSON.stringify(items)).digest('hex')
-}
-
 function buildSummaryPrompt(items: AgentInputItem[]): string {
   return [
+    `摘要协议版本：${MODEL_INPUT_SUMMARY_PROMPT_VERSION}`,
     '请将以下完整旧对话组压缩为可供后续 Agent 继续工作的中文事实摘要。',
     '保留用户约束、已经确认的结论、工具结果引用、失败与未解决事项；不得补充未出现的事实。',
     '不要输出工具调用协议或代码块，只输出信息密集的摘要正文。',

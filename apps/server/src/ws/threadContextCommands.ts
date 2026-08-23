@@ -50,6 +50,16 @@ export function registerThreadContextCommands(registry: WsCommandRegistry): void
     csrf: true,
     handler: async (payload, context) => {
       const config = await resolveRuntimeConfig(context.dependencies.store.runtimeConfiguration, context.dependencies.defaultRuntimeConfig)
+      const provider = payload.provider
+        ?? config.context.summaryProvider
+        ?? context.dependencies.modelRegistry.defaultProvider
+      if (!provider) throw new Error('未配置线程摘要模型 provider')
+      const adapter = context.dependencies.modelRegistry.resolveProvider(provider)
+      const model = payload.modelName
+        ?? config.context.summaryModel
+        ?? adapter.subagentModel
+        ?? adapter.defaultModel
+      if (!model) throw new Error('未配置线程摘要模型')
       return compactThreadIfNeeded(
         context.dependencies.store,
         payload.threadId,
@@ -57,12 +67,13 @@ export function registerThreadContextCommands(registry: WsCommandRegistry): void
         makeSummarizer(
           context.dependencies.modelRegistry,
           config,
-          payload.provider ?? null,
-          payload.modelName ?? null,
+          adapter.provider,
+          model,
           context.dependencies.modelCompletions && context.auth?.defaultWorkspaceId
             ? { service: context.dependencies.modelCompletions, workspaceId: context.auth.defaultWorkspaceId }
             : undefined,
         ),
+        { provider: adapter.provider, model },
         true,
       )
     },

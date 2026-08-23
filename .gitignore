@@ -34,4 +34,5 @@ output/
 .playwright-cli/
 .claude/
 .codex-claude/
+vendor/
 debug.log

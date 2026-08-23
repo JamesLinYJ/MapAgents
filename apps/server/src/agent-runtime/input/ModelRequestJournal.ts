@@ -23,6 +23,7 @@ import type { AgentRuntimeStore } from '../../store/runtimePorts.js'
 import { makeId, nowUtc } from '../../utils/ids.js'
 import type { RecordedAgentStepContext } from '../step/AgentStepContextFactory.js'
 import { agentContextDigest } from '../step/agentContextDigest.js'
+import { buildAgentInputContextUnits } from '../context/ContextUnit.js'
 
 type PersistedModelRequest = Omit<ModelRequest, 'signal'>
 
@@ -38,6 +39,7 @@ export class ModelRequestJournal {
   }): Promise<{ record: ModelRequestRecord; request: ModelRequest }> {
     const snapshot = snapshotRequest(input.request)
     const serialized = stableJson(snapshot)
+    const summaryObjectHashes = await persistSummaryObjects(this.store, snapshot.input)
     const committed = await this.store.publishModelRequestSnapshot(serialized, {
       schemaVersion: MODEL_REQUEST_RECORD_SCHEMA_VERSION,
       requestId: makeId('model_request'),
@@ -51,7 +53,7 @@ export class ModelRequestJournal {
       instructionsDigest: agentContextDigest(snapshot.systemInstructions ?? null),
       toolPlanDigest: input.context.toolPlanDigest,
       worldRevision: input.context.worldRevision,
-      summaryObjectHashes: [],
+      summaryObjectHashes,
       createdAt: nowUtc(),
     })
     await this.store.projectPersistedItems(
@@ -80,6 +82,19 @@ export class ModelRequestJournal {
     }
     return withCurrentSignal(parsed, currentRequest.signal)
   }
+}
+
+async function persistSummaryObjects(
+  store: AgentRuntimeStore,
+  input: PersistedModelRequest['input'],
+): Promise<string[]> {
+  if (typeof input === 'string') return []
+  const summaries = buildAgentInputContextUnits(input)
+    .filter(unit => unit.kind === 'compaction_summary' && unit.objectHash)
+  const references = await Promise.all(summaries.map(unit => (
+    store.putConversationObject(stableJson(unit.items), 'application/json')
+  )))
+  return references.map(reference => reference.hash)
 }
 
 function snapshotRequest(request: ModelRequest): PersistedModelRequest {

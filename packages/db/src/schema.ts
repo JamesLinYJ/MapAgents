@@ -434,13 +434,38 @@ export const platformThreadCompactions = pgTable('platform_thread_compactions', 
   firstCompactedEntryId: text('first_compacted_entry_id').notNull().references(() => platformConversationEntries.entryId, { onDelete: 'cascade' }),
   lastCompactedEntryId: text('last_compacted_entry_id').notNull().references(() => platformConversationEntries.entryId, { onDelete: 'cascade' }),
   preservedFromEntryId: text('preserved_from_entry_id').references(() => platformConversationEntries.entryId, { onDelete: 'set null' }),
+  sourceDigest: text('source_digest').notNull(),
+  sourceEntryIdsJson: jsonb('source_entry_ids_json').notNull().$type<string[]>(),
+  sourceUnitIdsJson: jsonb('source_unit_ids_json').notNull().$type<string[]>(),
+  sourceObjectHashesJson: jsonb('source_object_hashes_json').notNull().$type<string[]>(),
   summary: text('summary').notNull(),
   strategy: text('strategy').notNull(),
+  summaryProvider: text('summary_provider').notNull(),
+  summaryModel: text('summary_model').notNull(),
+  promptVersion: text('prompt_version').notNull(),
   preTokens: integer('pre_tokens').notNull(),
   postTokens: integer('post_tokens').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   threadCreatedIdx: index('idx_thread_compactions_thread_created').on(table.threadId, table.createdAt),
+  sourceDigestCheck: check(
+    'platform_thread_compactions_source_digest_check',
+    sql`${table.sourceDigest} ~ '^[a-f0-9]{64}$'`,
+  ),
+  sourceEntryIdsCheck: check(
+    'platform_thread_compactions_source_entry_ids_json_check',
+    sql`jsonb_typeof(${table.sourceEntryIdsJson}) = 'array' AND jsonb_array_length(${table.sourceEntryIdsJson}) > 0`,
+  ),
+  sourceUnitIdsCheck: check(
+    'platform_thread_compactions_source_unit_ids_json_check',
+    sql`jsonb_typeof(${table.sourceUnitIdsJson}) = 'array' AND jsonb_array_length(${table.sourceUnitIdsJson}) > 0`,
+  ),
+  sourceObjectHashesCheck: check(
+    'platform_thread_compactions_source_object_hashes_json_check',
+    sql`jsonb_typeof(${table.sourceObjectHashesJson}) = 'array' AND jsonb_array_length(${table.sourceObjectHashesJson}) > 0`,
+  ),
+  preTokensCheck: check('platform_thread_compactions_pre_tokens_check', sql`${table.preTokens} >= 0`),
+  postTokensCheck: check('platform_thread_compactions_post_tokens_check', sql`${table.postTokens} >= 0`),
 }))
 
 // 运行记录统一保存 UI item、进度事件、工具 value 和诊断事件；recordType 决定
