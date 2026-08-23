@@ -27,7 +27,10 @@ import type {
   ModelRequestRecord,
 } from '../schemas/types.js'
 import type { ToolInvocationRecord } from '@geo-agent-platform/shared-types/tool-runtime'
+import type { ApprovalRecord } from '@geo-agent-platform/shared-types/approval-runtime'
 import type {
+  ConsumeApprovalRecordInput,
+  ResolveApprovalRecordInput,
   StartToolInvocationInput,
   TerminalToolInvocationInput,
   ToolEffectCommitResult,
@@ -142,6 +145,13 @@ export interface AgentRuntimeStore {
   listToolInvocations(runId: string): Promise<ToolInvocationRecord[]>
   startToolInvocation(input: StartToolInvocationInput): Promise<ToolInvocationRecord>
   terminateToolInvocation(input: TerminalToolInvocationInput): Promise<ToolInvocationRecord>
+  prepareApprovalRecord(record: ApprovalRecord): Promise<ApprovalRecord>
+  getApprovalRecord(approvalId: string): Promise<ApprovalRecord | null>
+  getApprovalRecordForCall(runId: string, callId: string): Promise<ApprovalRecord | null>
+  listApprovalRecords(runId: string): Promise<ApprovalRecord[]>
+  findSessionApproval(sessionId: string, actionKey: string): Promise<ApprovalRecord | null>
+  resolveApprovalRecord(input: ResolveApprovalRecordInput): Promise<ApprovalRecord>
+  consumeApprovalRecord(input: ConsumeApprovalRecordInput): Promise<ApprovalRecord>
   listArtifactsVisibleToRun(
     runId: string,
     options?: { artifactIds?: readonly string[]; limit?: number },
@@ -188,6 +198,13 @@ export type ToolExecutionStore = Pick<AgentRuntimeStore,
   | 'saveRunCheckpoint'
   | 'startToolInvocation'
   | 'terminateToolInvocation'
+  | 'prepareApprovalRecord'
+  | 'getApprovalRecord'
+  | 'getApprovalRecordForCall'
+  | 'listApprovalRecords'
+  | 'findSessionApproval'
+  | 'resolveApprovalRecord'
+  | 'consumeApprovalRecord'
   | 'mutateRunState'
   | 'updateRunState'
 >

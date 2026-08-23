@@ -13,6 +13,10 @@ import {
   toolInvocationRecordSchema,
   type ToolInvocationRecord,
 } from '@geo-agent-platform/shared-types/tool-runtime'
+import {
+  approvalRecordSchema,
+  type ApprovalRecord,
+} from '@geo-agent-platform/shared-types/approval-runtime'
 
 import {
   compactionRecordSchema,
@@ -52,6 +56,8 @@ import type {
   EnqueueRunInput,
   CommitModelRequestInput,
   CommitModelRequestResult,
+  ConsumeApprovalRecordInput,
+  ResolveApprovalRecordInput,
   RunLifecycleResult,
   StartToolInvocationInput,
   TerminalToolInvocationInput,
@@ -115,6 +121,7 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
   private readonly values = new Map<string, ToolValueRef[]>()
   private readonly committedToolResults = new Set<string>()
   private readonly toolInvocations = new Map<string, ToolInvocationRecord>()
+  private readonly approvalRecords = new Map<string, ApprovalRecord>()
   private readonly inputs = new Map<string, RunSteeringRecord[]>()
   private readonly modelRequests = new Map<string, ModelRequestRecord>()
   private readonly memoryVersions = new Map<string, ThreadMemoryVersionReference[]>()
@@ -266,6 +273,9 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
       this.inputs.delete(runId)
       for (const [key, invocation] of this.toolInvocations) {
         if (invocation.runId === runId) this.toolInvocations.delete(key)
+      }
+      for (const [approvalId, approval] of this.approvalRecords) {
+        if (approval.runId === runId) this.approvalRecords.delete(approvalId)
       }
       this.domainEvents.delete(runId)
       this.domainSnapshots.delete(runId)
@@ -690,6 +700,102 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
       })
     }
     this.toolInvocations.set(toolInvocationKey(input.runId, current.callId), updated)
+    return clone(updated)
+  }
+
+  async prepareApprovalRecord(record: ApprovalRecord): Promise<ApprovalRecord> {
+    const prepared = approvalRecordSchema.parse(record)
+    if (prepared.version !== 1 || prepared.status === 'consumed') {
+      throw new Error('新审批记录必须以 version 1 的 pending/resolved 状态建立')
+    }
+    this.requireRun(prepared.runId)
+    const existing = this.getApprovalForCall(prepared.runId, prepared.callId)
+    if (existing) {
+      if (!sameApprovalIdentity(existing, prepared)) {
+        throw new Error(`审批调用 '${prepared.callId}' 的持久身份与重试请求不一致`)
+      }
+      return clone(existing)
+    }
+    if (this.approvalRecords.has(prepared.approvalId)) {
+      throw new Error(`审批 '${prepared.approvalId}' 已绑定其他调用`)
+    }
+    this.approvalRecords.set(prepared.approvalId, clone(prepared))
+    return clone(prepared)
+  }
+
+  async getApprovalRecord(approvalId: string): Promise<ApprovalRecord | null> {
+    const record = this.approvalRecords.get(approvalId)
+    return record ? clone(record) : null
+  }
+
+  async getApprovalRecordForCall(runId: string, callId: string): Promise<ApprovalRecord | null> {
+    this.requireRun(runId)
+    const record = this.getApprovalForCall(runId, callId)
+    return record ? clone(record) : null
+  }
+
+  async listApprovalRecords(runId: string): Promise<ApprovalRecord[]> {
+    this.requireRun(runId)
+    return clone([...this.approvalRecords.values()]
+      .filter(record => record.runId === runId)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt)
+        || left.approvalId.localeCompare(right.approvalId)))
+  }
+
+  async findSessionApproval(sessionId: string, actionKey: string): Promise<ApprovalRecord | null> {
+    const record = [...this.approvalRecords.values()]
+      .filter(candidate => (
+        candidate.sessionId === sessionId
+        && candidate.actionKey === actionKey
+        && candidate.decision === 'approved'
+        && candidate.decisionScope === 'session'
+        && ['resolved', 'consumed'].includes(candidate.status)
+      ))
+      .sort((left, right) => (right.resolvedAt ?? '').localeCompare(left.resolvedAt ?? '')
+        || right.approvalId.localeCompare(left.approvalId))[0]
+    return record ? clone(record) : null
+  }
+
+  async resolveApprovalRecord(input: ResolveApprovalRecordInput): Promise<ApprovalRecord> {
+    const current = this.requireApproval(input.runId, input.approvalId)
+    if (current.status !== 'pending') {
+      if (
+        current.decision === input.decision
+        && current.decisionScope === input.scope
+        && current.decisionReason === input.reason
+      ) return clone(current)
+      throw new Error(`审批 '${input.approvalId}' 已用不同决定处理`)
+    }
+    if (current.version !== input.expectedVersion) {
+      throw new Error(`审批 '${input.approvalId}' 的 resolve CAS 失败`)
+    }
+    const updated = approvalRecordSchema.parse({
+      ...current,
+      status: 'resolved',
+      decision: input.decision,
+      decisionScope: input.scope,
+      decisionReason: input.reason,
+      decidedByUserId: input.decidedByUserId,
+      resolvedAt: input.resolvedAt,
+      version: current.version + 1,
+    })
+    this.approvalRecords.set(updated.approvalId, clone(updated))
+    return clone(updated)
+  }
+
+  async consumeApprovalRecord(input: ConsumeApprovalRecordInput): Promise<ApprovalRecord> {
+    const current = this.requireApproval(input.runId, input.approvalId)
+    if (current.status === 'consumed') return clone(current)
+    if (current.status !== 'resolved' || current.version !== input.expectedVersion) {
+      throw new Error(`审批 '${input.approvalId}' 的 consume CAS 失败`)
+    }
+    const updated = approvalRecordSchema.parse({
+      ...current,
+      status: 'consumed',
+      consumedAt: input.consumedAt,
+      version: current.version + 1,
+    })
+    this.approvalRecords.set(updated.approvalId, clone(updated))
     return clone(updated)
   }
 
@@ -1391,6 +1497,18 @@ export class InMemoryConversationPersistence implements ConversationPersistence,
     return invocation
   }
 
+  private getApprovalForCall(runId: string, callId: string): ApprovalRecord | null {
+    return [...this.approvalRecords.values()].find(record => (
+      record.runId === runId && record.callId === callId
+    )) ?? null
+  }
+
+  private requireApproval(runId: string, approvalId: string): ApprovalRecord {
+    const record = this.approvalRecords.get(approvalId)
+    if (!record || record.runId !== runId) throw new Error(`审批 '${approvalId}' 不存在`)
+    return record
+  }
+
   private assertEntry(threadId: string, entryId: string | null): void {
     if (!entryId) return
     if (!(this.entries.get(threadId) ?? []).some(entry => entry.entryId === entryId)) {
@@ -1440,6 +1558,23 @@ function sameToolInvocationIdentity(
     replayPolicy: value.replayPolicy,
     idempotencyKey: value.idempotencyKey,
     approvalAction: value.approvalAction,
+  })
+  return isDeepStrictEqual(identity(left), identity(right))
+}
+
+function sameApprovalIdentity(left: ApprovalRecord, right: ApprovalRecord): boolean {
+  const identity = (record: ApprovalRecord) => ({
+    approvalId: record.approvalId,
+    runId: record.runId,
+    threadId: record.threadId,
+    sessionId: record.sessionId,
+    workspaceId: record.workspaceId,
+    invocationId: record.invocationId,
+    callId: record.callId,
+    stepId: record.stepId,
+    contextDigest: record.contextDigest,
+    actionKey: record.actionKey,
+    action: record.action,
   })
   return isDeepStrictEqual(identity(left), identity(right))
 }

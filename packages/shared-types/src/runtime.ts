@@ -206,7 +206,7 @@ export const runtimePlanningConfigSchema = z.object({
 })
 
 export const runtimeSandboxConfigSchema = z.object({
-  backend: z.enum(['disabled', 'unix_local']).default('disabled'),
+  backend: z.enum(['disabled', 'unix_local', 'sdk_docker']).default('disabled'),
 })
 
 export const runtimeDeveloperConfigSchema = z.object({

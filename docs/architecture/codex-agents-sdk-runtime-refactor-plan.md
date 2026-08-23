@@ -2,7 +2,7 @@
 
 > 本文是面向 Codex 执行的架构 RFC、迁移手册和逐 PR 验收清单。
 >
-> **状态**：In progress（WP-00 至 WP-06 已完成；下一包为 WP-07）
+> **状态**：In progress（WP-00 至 WP-07 已完成；下一包为 WP-08）
 >
 > **Newmap 基线**：`JamesLinYJ/Newmap@ffa50bbe1bd0e8de82f7f40448bafbe3f1eb751a`
 >
@@ -1540,6 +1540,15 @@ apps/server/src/agent-runtime/
 - denied read 不因 escalation 丢失。
 - Windows 无 sandbox 时危险工具不可见。
 - Docker network 默认关闭。
+
+**实施证据**：
+
+- `ApprovalAction + ApprovalPolicyEngine + ApprovalService` 把工具 effect、资源身份、调用上下文与 exact/session 决策收敛成可审计事实；`platform_approval_records` 持久化 pending、resolved、consumed、来源审批和幂等版本，不再从 UI 或 SDK interruption 反推审批状态。
+- 平台 function tool、Agent-as-tool、MCP 与 Sandbox function tool 都通过 Agents SDK 公共 `needsApproval`、interruptions 和 `RunState.approve/reject` 边界接入；恢复时严格核对 run、call、step、context digest 和 canonical 参数，session approval 只复用同一 action key。
+- `ToolPolicy` 在 reviewer 之前作确定性判定；forbidden 永远不能被批准，审批完成后 `ToolInvocationLedger` 才允许从 prepared 进入 running，rejected 和重复 consumed 都有显式终态。
+- denied read 作为审批 action 的稳定资源集合保留，敏感参数名和值不进入 action key 或持久资源身份；工具 kind 参与 action key，防止跨能力误复用。
+- Windows 无可用本机 sandbox 时，运行时不装配 shell、filesystem write、patch 和 Skill script 能力；可选 `sdk_docker` backend 使用 SDK `DockerSandboxClient`，默认 `networkMode: 'none'`。
+- 单一权威 `infra/database/schema.sql` 直接定义审批事实表和约束；真实 PostgreSQL/PostGIS 空库测试验证 schema 顺序、外键、GeoWorld CAS 与不可变 StepContext，未新增增量 migration SQL。
 
 ### WP-08：Context 与终态策略
 

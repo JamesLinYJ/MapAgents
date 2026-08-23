@@ -13,7 +13,7 @@ import { sql } from 'drizzle-orm'
 
 import type { Database } from './connection.js'
 
-export const DATABASE_SCHEMA_CONTRACT_VERSION = 1
+export const DATABASE_SCHEMA_CONTRACT_VERSION = 2
 
 /**
  * 服务启动只验证数据库结构能力，不在运行时自动执行 DDL。
@@ -36,6 +36,7 @@ export async function verifyDatabaseSchemaCompatibility(
     to_regclass('public.platform_agent_step_contexts') AS agent_step_contexts_table,
     to_regclass('public.platform_model_request_records') AS model_request_records_table,
     to_regclass('public.platform_tool_invocations') AS tool_invocations_table,
+    to_regclass('public.platform_approval_records') AS approval_records_table,
     COALESCE((
       SELECT array_agg(attribute.attname::text ORDER BY key_column.ordinality)
         = ARRAY['run_id', 'revision']::text[]
@@ -91,6 +92,7 @@ export async function verifyDatabaseSchemaCompatibility(
       agent_step_contexts_table?: unknown
       model_request_records_table?: unknown
       tool_invocations_table?: unknown
+      approval_records_table?: unknown
       geo_world_snapshot_primary_key?: unknown
       agent_step_world_foreign_key?: unknown
       run_input_mailbox?: unknown
@@ -166,6 +168,9 @@ export async function verifyDatabaseSchemaCompatibility(
   const toolInvocationsTable = (
     capabilityResult.rows[0] as { tool_invocations_table?: unknown } | undefined
   )?.tool_invocations_table
+  const approvalRecordsTable = (
+    capabilityResult.rows[0] as { approval_records_table?: unknown } | undefined
+  )?.approval_records_table
   const geoWorldSnapshotPrimaryKey = (
     capabilityResult.rows[0] as { geo_world_snapshot_primary_key?: unknown } | undefined
   )?.geo_world_snapshot_primary_key
@@ -178,11 +183,12 @@ export async function verifyDatabaseSchemaCompatibility(
     || typeof agentStepContextsTable !== 'string'
     || typeof modelRequestRecordsTable !== 'string'
     || typeof toolInvocationsTable !== 'string'
+    || typeof approvalRecordsTable !== 'string'
     || geoWorldSnapshotPrimaryKey !== true
     || agentStepWorldForeignKey !== true
   ) {
     throw new Error(
-      '数据库结构与当前应用契约不一致：GeoWorld/Agent StepContext/ModelRequest/ToolInvocation 表或追加式主键不完整。'
+      '数据库结构与当前应用契约不一致：GeoWorld/Agent StepContext/ModelRequest/ToolInvocation/Approval 表或追加式主键不完整。'
       + '请使用空数据库执行 infra/database/schema.sql。',
     )
   }

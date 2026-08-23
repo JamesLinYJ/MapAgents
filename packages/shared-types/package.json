@@ -27,7 +27,8 @@
     "./geo-world": { "types": "./dist/geoWorld.d.ts", "import": "./dist/geoWorld.js", "default": "./dist/geoWorld.js" },
     "./agent-step-context": { "types": "./dist/agentStepContext.d.ts", "import": "./dist/agentStepContext.js", "default": "./dist/agentStepContext.js" },
     "./model-request": { "types": "./dist/modelRequest.d.ts", "import": "./dist/modelRequest.js", "default": "./dist/modelRequest.js" },
-    "./tool-runtime": { "types": "./dist/toolRuntime.d.ts", "import": "./dist/toolRuntime.js", "default": "./dist/toolRuntime.js" }
+    "./tool-runtime": { "types": "./dist/toolRuntime.d.ts", "import": "./dist/toolRuntime.js", "default": "./dist/toolRuntime.js" },
+    "./approval-runtime": { "types": "./dist/approvalRuntime.d.ts", "import": "./dist/approvalRuntime.js", "default": "./dist/approvalRuntime.js" }
   },
   "types": "./dist/index.d.ts",
   "scripts": {

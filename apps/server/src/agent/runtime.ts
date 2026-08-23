@@ -51,6 +51,10 @@ import { SubAgentControlPlane, type SubAgentControlInput } from './subAgentContr
 import { authorizedAttachmentSummaries } from './multimodalInput.js'
 import { withToolAuthorizationLease } from '../agent-runtime/tools/ToolExecutionGate.js'
 import type { AgentStepContextRecorder } from '../agent-runtime/step/AgentStepContextFactory.js'
+import {
+  approvalDecisionInputSchema,
+  type ApprovalDecisionInput,
+} from '@geo-agent-platform/shared-types/approval-runtime'
 
 export type { SandboxClientFactory } from './runtimeSandbox.js'
 export type { RunOptions } from './runtimeTypes.js'
@@ -287,22 +291,42 @@ export class OpenAIAgentsRuntime {
   async acceptApprovalDecision(
     runId: string,
     approvalId: string,
-    approved: boolean,
+    input: boolean | ApprovalDecisionInput,
+    auth?: AuthContext | null,
   ): Promise<{ run: AnalysisRun; accepted: boolean }> {
+    const decision = normalizeApprovalDecision(input)
+    const approved = decision.decision === 'approved'
     const run = this.store.getRun(runId)
     const approval = run.state.approvals.find(candidate => candidate.approvalId === approvalId)
     if (!approval) throw new Error(`审批 '${approvalId}' 不存在`)
-    if (approval.payload.consumed === true) {
+    const durable = await this.store.getApprovalRecord(approvalId)
+    if (!durable || durable.runId !== runId) throw new Error(`审批 '${approvalId}' 缺少持久事实`)
+    if (approval.payload.consumed === true && durable.status === 'consumed') {
       return { run, accepted: false }
+    }
+    if (run.status !== 'waiting_approval' && run.status !== 'queued') {
+      throw new Error(`审批 '${approvalId}' 当前运行状态为 '${run.status}'，不能重新启动续跑`)
     }
 
     const expectedStatus = approved ? 'approved' : 'rejected'
     // WS 在审批已经落盘、后台任务尚未成功登记时断开，可以安全重试同一决定。
     // 只允许 queued 状态重试；一旦续跑进入 running/failed，禁止重放副作用。
-    if (approval.status === expectedStatus) {
-      return { run, accepted: run.status === 'queued' }
+    if (durable.status === 'pending') {
+      await this.store.resolveApprovalRecord({
+        ...decision,
+        runId,
+        approvalId,
+        expectedVersion: durable.version,
+        decidedByUserId: auth?.userId ?? null,
+        resolvedAt: nowUtc(),
+      })
+    } else if (
+      durable.decision !== decision.decision
+      || durable.decisionScope !== decision.scope
+      || durable.decisionReason !== decision.reason
+    ) {
+      throw new Error(`审批 '${approvalId}' 已用不同决定处理`)
     }
-    if (approval.status !== 'pending') return { run, accepted: false }
 
     const resolvedApproval = {
       ...approval,
@@ -313,7 +337,11 @@ export class OpenAIAgentsRuntime {
       approvals: run.state.approvals.map(candidate => candidate.approvalId === approvalId
         ? resolvedApproval
         : candidate),
-      decisions: resolveDecision(run.state.decisions, approvalId, approved ? 'approved' : 'rejected', { approved }),
+      decisions: resolveDecision(run.state.decisions, approvalId, expectedStatus, {
+        approved,
+        scope: decision.scope,
+        reason: decision.reason,
+      }),
     })
     await this.store.updateRunStatus(runId, 'queued')
     return { run: this.store.getRun(runId), accepted: true }
@@ -322,17 +350,29 @@ export class OpenAIAgentsRuntime {
   async continueApprovalDecision(
     runId: string,
     approvalId: string,
-    approved: boolean,
+    input: boolean | ApprovalDecisionInput,
     auth?: AuthContext | null,
     signal?: AbortSignal,
   ): Promise<AnalysisRun> {
+    const decision = normalizeApprovalDecision(input)
+    const approved = decision.decision === 'approved'
     const run = this.store.getRun(runId)
     const threadId = requireThreadId(run.threadId)
     if (!run.runtimeConfigSnapshot) throw new Error(`运行 '${runId}' 缺少 runtimeConfigSnapshot`)
     const approval = run.state.approvals.find(candidate => candidate.approvalId === approvalId)
     if (!approval) throw new Error(`审批 '${approvalId}' 不存在`)
+    const durableApproval = await this.store.getApprovalRecord(approvalId)
+    if (!durableApproval || durableApproval.runId !== runId) {
+      throw new Error(`审批 '${approvalId}' 缺少持久事实`)
+    }
     const expectedStatus = approved ? 'approved' : 'rejected'
-    if (approval.status !== expectedStatus || approval.payload.consumed === true) {
+    if (
+      approval.status !== expectedStatus
+      || !['resolved', 'consumed'].includes(durableApproval.status)
+      || durableApproval.decision !== decision.decision
+      || durableApproval.decisionScope !== decision.scope
+      || durableApproval.decisionReason !== decision.reason
+    ) {
       throw new Error(`审批 '${approvalId}' 未处于可续跑的 ${expectedStatus} 状态`)
     }
     const eventSink = new RunEventSink(event => this.store.appendEvent(runId, event), runId, threadId)
@@ -398,7 +438,18 @@ export class OpenAIAgentsRuntime {
             approved,
             rejectionMessage,
           })
-          if (!approved) await assembly.coordinator.rejectToolApproval(callId, rejectionMessage)
+          if (!approved) {
+            await assembly.coordinator.rejectToolApproval(callId, rejectionMessage)
+            const currentApproval = await this.store.getApprovalRecord(approvalId)
+            if (currentApproval?.status === 'resolved') {
+              await this.store.consumeApprovalRecord({
+                runId,
+                approvalId,
+                expectedVersion: currentApproval.version,
+                consumedAt: nowUtc(),
+              })
+            }
+          }
           return this.sdkExecutor.execute(options, assembly, state, abort.signal, eventSink, itemSink)
         },
       )
@@ -410,7 +461,12 @@ export class OpenAIAgentsRuntime {
         approvals: latest.state.approvals.map(candidate => candidate.approvalId === approvalId
           ? { ...candidate, payload: { ...candidate.payload, consumed: true } }
           : candidate),
-        decisions: resolveDecision(latest.state.decisions, approvalId, approved ? 'approved' : 'rejected', { approved, consumed: true }),
+        decisions: resolveDecision(latest.state.decisions, approvalId, expectedStatus, {
+          approved,
+          scope: decision.scope,
+          reason: decision.reason,
+          consumed: true,
+        }),
       })
       if (result === 'waiting_approval') return this.store.getRun(runId)
       if (result === 'clarification_needed') return this.store.getRun(runId)
@@ -451,10 +507,15 @@ export class OpenAIAgentsRuntime {
     }
   }
 
-  async resolveApproval(runId: string, approvalId: string, approved: boolean, auth?: AuthContext | null): Promise<AnalysisRun> {
-    const receipt = await this.acceptApprovalDecision(runId, approvalId, approved)
+  async resolveApproval(
+    runId: string,
+    approvalId: string,
+    input: boolean | ApprovalDecisionInput,
+    auth?: AuthContext | null,
+  ): Promise<AnalysisRun> {
+    const receipt = await this.acceptApprovalDecision(runId, approvalId, input, auth)
     if (!receipt.accepted) return receipt.run
-    return this.continueApprovalDecision(runId, approvalId, approved, auth)
+    return this.continueApprovalDecision(runId, approvalId, input, auth)
   }
 
   private async refreshAuthorization(options: RunOptions): Promise<void> {
@@ -516,4 +577,12 @@ function linkAbortSignal(source: AbortSignal | undefined, target: AbortControlle
   }
   source.addEventListener('abort', abortTarget, { once: true })
   return () => source.removeEventListener('abort', abortTarget)
+}
+
+function normalizeApprovalDecision(input: boolean | ApprovalDecisionInput): ApprovalDecisionInput {
+  return approvalDecisionInputSchema.parse(typeof input === 'boolean'
+    ? input
+      ? { decision: 'approved', scope: 'exact_call', reason: null }
+      : { decision: 'rejected', scope: 'exact_call', reason: '用户拒绝执行该工具。' }
+    : input)
 }

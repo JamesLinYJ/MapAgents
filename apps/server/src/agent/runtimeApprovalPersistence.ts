@@ -14,12 +14,12 @@ import type { RunToolApprovalItem } from '@openai/agents'
 import type { ItemSink } from '../conversation/itemSink.js'
 import type { ToolRegistry } from '../framework/registry.js'
 import type { AgentRuntimeStore } from '../store/runtimePorts.js'
-import { makeId, nowUtc } from '../utils/ids.js'
 import { approvalDecisionFromRequest, approvalDescription, approvalTitle, upsertDecision } from './runtimeApprovals.js'
 import { functionCallId, parseArguments, requireThreadId } from './runtimeSdkProjection.js'
 import type { RunEventSink } from './turnRunner.js'
 import type { AgentsSdkCheckpointService } from '../agent-runtime/sdk/AgentsSdkCheckpointService.js'
 import type { RunOptions } from './runtimeTypes.js'
+import { agentContextDigest } from '../agent-runtime/step/agentContextDigest.js'
 
 export class RuntimeApprovalPersistence {
   constructor(
@@ -43,9 +43,19 @@ export class RuntimeApprovalPersistence {
       if (!callId || !toolName) throw new Error('SDK 审批中断缺少 callId/toolName')
       if (approvals.some(item => item.payload.callId === callId && item.payload.consumed !== true)) continue
       const args = parseArguments(interruption.arguments)
+      const actionArgs = { ...args }
+      delete actionArgs.workflowStepId
+      const record = await this.store.getApprovalRecordForCall(options.runId, callId)
+      if (!record) throw new Error(`SDK 审批中断 '${callId}' 缺少持久审批事实`)
+      if (record.action.toolName !== toolName || record.action.argsDigest !== agentContextDigest(actionArgs)) {
+        throw new Error(`SDK 审批中断 '${callId}' 与持久审批动作不一致`)
+      }
+      if (record.status !== 'pending') {
+        throw new Error(`SDK 审批中断 '${callId}' 的持久审批状态不是 pending`)
+      }
       const definition = this.toolRegistry.get(toolName)
       const request = {
-        approvalId: makeId('approval'),
+        approvalId: record.approvalId,
         action: toolName,
         title: approvalTitle(toolName, definition?.label),
         description: approvalDescription(toolName, definition?.description),
@@ -55,11 +65,14 @@ export class RuntimeApprovalPersistence {
           toolName,
           args,
           callId,
+          actionKey: record.actionKey,
+          contextDigest: record.contextDigest,
+          decisionScope: record.decisionScope,
           turnId: await this.checkpoints.requireTurnId(requireThreadId(options.threadId), options.runId),
           consumed: false,
         },
-        createdAt: nowUtc(),
-        resolvedAt: null,
+        createdAt: record.createdAt,
+        resolvedAt: record.resolvedAt,
       }
       approvals.push(request)
       decisions = upsertDecision(decisions, approvalDecisionFromRequest(request))

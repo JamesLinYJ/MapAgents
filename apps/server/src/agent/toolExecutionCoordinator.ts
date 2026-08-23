@@ -30,14 +30,18 @@ import { validateGeospatialComposeWorkflowDraft } from './geospatialCompose.js'
 import type { AgentStepContext } from '@geo-agent-platform/shared-types/agent-step-context'
 import { ToolCatalog } from '../agent-runtime/tools/ToolCatalog.js'
 import {
-  descriptorSourceFromPlanEntry,
   ToolRouter,
 } from '../agent-runtime/tools/ToolRouter.js'
 import { ToolInvocationLedger } from '../agent-runtime/tools/ToolInvocationLedger.js'
 import { ToolEffectCommitter } from '../agent-runtime/tools/ToolEffectCommitter.js'
 import { WorkflowBinder } from '../agent-runtime/tools/WorkflowBinder.js'
 import { ToolProjectionPublisher } from '../agent-runtime/tools/ToolProjectionPublisher.js'
-import { agentContextDigest } from '../agent-runtime/step/agentContextDigest.js'
+import {
+  ApprovalService,
+  type ApprovalCallInput,
+  type ApprovalExecutionDecision,
+  type ApprovalRequirement,
+} from '../agent-runtime/approvals/ApprovalService.js'
 
 interface CoordinatorOptions {
   store: ToolExecutionStore
@@ -69,6 +73,7 @@ interface CoordinatorOptions {
 export class ToolExecutionCoordinator {
   private readonly preparedCalls = new Set<string>()
   private readonly preparedCallRoutes = new Map<string, 'step' | 'catalog'>()
+  private readonly preparedArguments = new Map<string, Record<string, unknown>>()
   private readonly preparingCalls = new Map<string, Promise<void>>()
   private readonly externalAgentCalls = new Map<string, string>()
   private readonly callObjectiveRevisions = new Map<string, number>()
@@ -78,6 +83,7 @@ export class ToolExecutionCoordinator {
   private readonly effectCommitter: ToolEffectCommitter
   private readonly catalog: ToolCatalog
   private readonly router: ToolRouter
+  private readonly approvals: ApprovalService
   private readonly workflowBinder: WorkflowBinder
   private readonly projectionPublisher: ToolProjectionPublisher
 
@@ -93,6 +99,12 @@ export class ToolExecutionCoordinator {
     )
     this.catalog = new ToolCatalog(options.registry)
     this.router = new ToolRouter(this.catalog)
+    this.approvals = new ApprovalService({
+      store: options.store,
+      runId: options.runId,
+      threadId: options.threadId,
+      sessionId: options.sessionId,
+    })
     this.workflowBinder = new WorkflowBinder({
       store: options.store,
       registry: options.registry,
@@ -157,19 +169,14 @@ export class ToolExecutionCoordinator {
     args: Record<string, unknown>,
     callId: string,
   ): Promise<void> {
-    const routed = this.router.prepareCall(callId, toolName)
-    await this.invocationLedger.prepare({
-      runId: this.options.runId,
-      turnId: this.options.turnId,
-      callId,
-      stepId: routed.stepId,
-      objectiveRevision: routed.objectiveRevision,
-      toolPlanDigest: routed.toolPlanDigest,
-      descriptor: descriptorSourceFromPlanEntry(routed.descriptor),
-      args,
-      executionSurface: 'agent',
-    })
-    await this.invocationLedger.start(callId)
+    await this.prepareSdkExtensionCall(toolName, args, callId)
+    const requirement = await this.approvalRequirement(toolName, args, callId)
+    if (!requirement.requiresApproval) {
+      await this.invocationLedger.start(
+        callId,
+        await this.approvalExecutionDecision(toolName, args, callId),
+      )
+    }
   }
 
   async recordSdkRejectedToolCall(
@@ -201,7 +208,7 @@ export class ToolExecutionCoordinator {
       stepId: routed.stepId,
       objectiveRevision: routed.objectiveRevision,
       toolPlanDigest: routed.toolPlanDigest,
-      descriptor: descriptorSourceFromPlanEntry(routed.descriptor),
+      descriptor: routed.descriptor,
       args,
       executionSurface: 'agent',
     })
@@ -214,8 +221,22 @@ export class ToolExecutionCoordinator {
     resultId: string | null
     error: string | null
   }): Promise<void> {
-    const current = await this.options.store.getToolInvocation(this.options.runId, input.callId)
+    let current = await this.options.store.getToolInvocation(this.options.runId, input.callId)
     if (!current || current.status === 'checkpointed' || current.terminalOutcome !== null) return
+    if (current.status === 'prepared') {
+      const routed = this.router.requireCall(input.callId, current.toolName)
+      current = await this.invocationLedger.start(
+        input.callId,
+        await this.approvalExecutionDecision(
+          current.toolName,
+          this.requirePreparedArguments(input.callId),
+          input.callId,
+        ),
+      )
+      if (current.stepId !== routed.stepId) {
+        throw new Error(`工具调用 '${input.callId}' 的 invocation 与 StepContext 不一致`)
+      }
+    }
     if (input.outcome === 'succeeded') {
       await this.invocationLedger.succeed(input.callId, input.resultId, false)
     } else if (input.outcome === 'failed') {
@@ -348,6 +369,41 @@ export class ToolExecutionCoordinator {
     return this.prepareWithRoute(toolName, args, callId, 'step')
   }
 
+  async requiresApproval(
+    toolName: string,
+    args: Record<string, unknown>,
+    callId: string,
+  ): Promise<boolean> {
+    await this.prepare(toolName, args, callId)
+    return (await this.approvalRequirement(toolName, args, callId)).requiresApproval
+  }
+
+  async requiresSdkExtensionApproval(
+    toolName: string,
+    args: Record<string, unknown>,
+    callId: string,
+  ): Promise<boolean> {
+    await this.prepareSdkExtensionCall(toolName, args, callId)
+    return (await this.approvalRequirement(toolName, args, callId)).requiresApproval
+  }
+
+  async requiresExternalAgentApproval(
+    agentId: string,
+    args: Record<string, unknown>,
+    callId: string,
+  ): Promise<boolean> {
+    return (await this.approvalRequirement(agentId, args, callId)).requiresApproval
+  }
+
+  async requiresCatalogApproval(
+    toolName: string,
+    args: Record<string, unknown>,
+    callId: string,
+  ): Promise<boolean> {
+    await this.prepareCatalogTool(toolName, args, callId)
+    return (await this.approvalRequirement(toolName, args, callId)).requiresApproval
+  }
+
   async prepareCatalogTool(
     toolName: string,
     args: Record<string, unknown>,
@@ -389,22 +445,19 @@ export class ToolExecutionCoordinator {
     callId: string,
     route: 'step' | 'catalog',
   ): Promise<void> {
-    const routed = route === 'step' ? this.router.preparePlatformCall(callId, toolName) : null
-    const descriptor = routed
-      ? descriptorSourceFromPlanEntry(routed.descriptor)
-      : this.catalog.platformSource(toolName)
-    const tool = routed?.definition ?? this.catalog.assertPlatformBinding(descriptor)
+    const routed = route === 'step'
+      ? this.router.preparePlatformCall(callId, toolName)
+      : this.router.prepareNestedPlatformCall(callId, toolName)
+    const descriptor = routed.descriptor
+    const tool = routed.definition
     const invocation = splitWorkflowStepIdentity(args)
     const preparedInvocation = await this.invocationLedger.prepare({
       runId: this.options.runId,
       turnId: this.options.turnId,
       callId,
-      stepId: routed?.stepId ?? null,
-      objectiveRevision: routed?.objectiveRevision ?? this.modelInputObjectiveRevision,
-      toolPlanDigest: routed?.toolPlanDigest ?? agentContextDigest({
-        executionSurface: 'agent',
-        descriptor,
-      }),
+      stepId: routed.stepId,
+      objectiveRevision: routed.objectiveRevision,
+      toolPlanDigest: routed.toolPlanDigest,
       descriptor,
       args: invocation.toolArgs,
       executionSurface: 'agent',
@@ -422,6 +475,7 @@ export class ToolExecutionCoordinator {
       throw new Error(`工具调用 '${callId}' 的 transcript 与 invocation objective revision 不一致`)
     }
     this.callObjectiveRevisions.set(callId, objectiveRevision)
+    this.preparedArguments.set(callId, structuredClone(invocation.toolArgs))
     this.preparedCalls.add(callId)
     this.preparedCallRoutes.set(callId, route)
   }
@@ -445,7 +499,7 @@ export class ToolExecutionCoordinator {
       stepId: routed.stepId,
       objectiveRevision: routed.objectiveRevision,
       toolPlanDigest: routed.toolPlanDigest,
-      descriptor: descriptorSourceFromPlanEntry(routed.descriptor),
+      descriptor: routed.descriptor,
       args: invocation.toolArgs,
       executionSurface: 'agent',
     })
@@ -462,6 +516,7 @@ export class ToolExecutionCoordinator {
       throw new Error(`工具调用 '${callId}' 的 transcript 与 invocation objective revision 不一致`)
     }
     this.callObjectiveRevisions.set(callId, objectiveRevision)
+    this.preparedArguments.set(callId, structuredClone(invocation.toolArgs))
     this.preparedCalls.add(callId)
     this.preparedCallRoutes.set(callId, 'step')
   }
@@ -498,7 +553,10 @@ export class ToolExecutionCoordinator {
     const { workflowStepId } = splitWorkflowStepIdentity(args)
     const stepId = await this.workflowBinder.claim(agentId, callId, agentId, workflowStepId)
     this.externalAgentCalls.set(callId, agentId)
-    await this.invocationLedger.start(callId)
+    await this.invocationLedger.start(
+      callId,
+      await this.approvalExecutionDecision(agentId, args, callId),
+    )
     return stepId
   }
 
@@ -529,6 +587,72 @@ export class ToolExecutionCoordinator {
       throw new Error(`工具调用 '${callId}' 缺少 objective revision 绑定`)
     }
     return objectiveRevision
+  }
+
+  private requirePreparedArguments(callId: string): Record<string, unknown> {
+    const args = this.preparedArguments.get(callId)
+    if (!args) {
+      throw new Error(`工具调用 '${callId}' 缺少本次 StepContext 的 canonical 参数绑定`)
+    }
+    return structuredClone(args)
+  }
+
+  private async approvalRequirement(
+    toolName: string,
+    args: Record<string, unknown>,
+    callId: string,
+  ): Promise<ApprovalRequirement> {
+    return this.approvals.requirement(await this.approvalCallInput(toolName, args, callId))
+  }
+
+  private async prepareSdkExtensionCall(
+    toolName: string,
+    args: Record<string, unknown>,
+    callId: string,
+  ): Promise<void> {
+    const routed = this.router.prepareCall(callId, toolName)
+    await this.invocationLedger.prepare({
+      runId: this.options.runId,
+      turnId: this.options.turnId,
+      callId,
+      stepId: routed.stepId,
+      objectiveRevision: routed.objectiveRevision,
+      toolPlanDigest: routed.toolPlanDigest,
+      descriptor: routed.descriptor,
+      args,
+      executionSurface: 'agent',
+    })
+    this.preparedArguments.set(callId, structuredClone(args))
+  }
+
+  private async approvalExecutionDecision(
+    toolName: string,
+    args: Record<string, unknown>,
+    callId: string,
+  ): Promise<ApprovalExecutionDecision> {
+    return this.approvals.executionDecision(await this.approvalCallInput(toolName, args, callId))
+  }
+
+  private async approvalCallInput(
+    toolName: string,
+    args: Record<string, unknown>,
+    callId: string,
+  ): Promise<ApprovalCallInput> {
+    const routed = this.router.requireCall(callId, toolName)
+    const invocation = await this.options.store.getToolInvocation(this.options.runId, callId)
+    if (!invocation) throw new Error(`工具调用 '${callId}' 尚未进入持久账本`)
+    if (invocation.stepId !== routed.stepId) {
+      throw new Error(`工具调用 '${callId}' 的 invocation 与 StepContext 不一致`)
+    }
+    const { toolArgs } = splitWorkflowStepIdentity(args)
+    return {
+      context: routed.context,
+      descriptor: routed.descriptor,
+      args: toolArgs,
+      invocationId: invocation.invocationId,
+      callId,
+      stepId: routed.stepId,
+    }
   }
 
   async failExternalAgentStep(callId: string, message: string): Promise<void> {
@@ -574,8 +698,7 @@ export class ToolExecutionCoordinator {
   ): Promise<ToolResult> {
     this.options.signal.throwIfAborted()
     await this.prepareWithRoute(toolName, args, callId, route)
-    if (route === 'step') this.router.requirePlatformCall(callId, toolName)
-    else this.catalog.assertPlatformBinding(this.catalog.platformSource(toolName))
+    this.router.requirePlatformCall(callId, toolName)
     const objectiveRevision = this.requireCallObjectiveRevision(callId)
     const invocation = splitWorkflowStepIdentity(args)
     const toolLabel = this.toolLabel(toolName)
@@ -586,7 +709,10 @@ export class ToolExecutionCoordinator {
       this.policy.assertPlanModeAllows(toolName)
       if (ownerAgentId) this.policy.assertExternalAgentIsRunning(ownerAgentId)
       else await this.workflowBinder.claim(toolName, callId, undefined, invocation.workflowStepId)
-      await this.invocationLedger.start(callId)
+      await this.invocationLedger.start(
+        callId,
+        await this.approvalExecutionDecision(toolName, args, callId),
+      )
       await this.projectionPublisher.publishStarted(callId, toolName, toolLabel, objectiveRevision)
       existingArtifactIds = new Set(
         this.options.store.getRun(this.options.runId).state.artifacts.map(artifact => artifact.artifactId),

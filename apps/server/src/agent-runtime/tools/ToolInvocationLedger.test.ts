@@ -48,7 +48,7 @@ describe('ToolInvocationLedger', () => {
     const { harness, store, runId } = await fixture()
     const ledger = new ToolInvocationLedger(store, runId)
     await ledger.prepare(invocationInput(runId, 'call_checkpoint', {}))
-    await ledger.start('call_checkpoint')
+    await ledger.start('call_checkpoint', 'not_required')
     await ledger.fail('call_checkpoint', '上游执行失败', false)
 
     expect((await store.getRunCheckpoint(runId)).pendingToolCallIds).toEqual(['call_checkpoint'])
@@ -75,7 +75,7 @@ describe('ToolInvocationLedger', () => {
     const { store, runId } = await fixture()
     const ledger = new ToolInvocationLedger(store, runId)
     await ledger.prepare(invocationInput(runId, 'call_effect', { layerId: 'layer_1' }))
-    await ledger.start('call_effect')
+    await ledger.start('call_effect', 'not_required')
     const committer = new ToolEffectCommitter(ledger, new ToolResultCommitService(store))
     const input = {
       runId,
@@ -121,7 +121,7 @@ describe('ToolInvocationLedger', () => {
 
     for (const callId of ['call_read_1', 'call_read_2']) {
       await ledger.prepare(invocationInput(runId, callId, { layerId: 'layer_1' }))
-      await ledger.start(callId)
+      await ledger.start(callId, 'not_required')
       await expect(committer.commit({
         runId,
         callId,

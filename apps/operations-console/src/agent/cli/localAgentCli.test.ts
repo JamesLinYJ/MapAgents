@@ -191,6 +191,8 @@ function snapshot(
       transport: 'deepseek_responses',
       structuredOutput: 'json_schema',
       functionTools: true,
+      deferredTools: false,
+      toolNamespaces: false,
       localMcp: true,
       hostedTools: false,
       handoffs: true,

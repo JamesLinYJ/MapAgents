@@ -32,6 +32,8 @@ import { createInstrumentedTestSandboxClient } from '../../test-support/agentsSa
 import {
   buildSandboxManifest,
   buildSandboxRunConfig,
+  createConfiguredSandboxClient,
+  isSandboxBackendAvailable,
 } from './runtimeSandbox.js'
 
 describe('runtimeSandbox', () => {
@@ -79,6 +81,43 @@ describe('runtimeSandbox', () => {
       factory,
     )).toThrow('当前运行已禁用 SDK 沙箱')
     expect(factory).not.toHaveBeenCalled()
+  })
+
+  it('does not expose the unsupported Unix sandbox on Windows', () => {
+    expect(isSandboxBackendAvailable({ backend: 'unix_local' }, 'win32')).toBe(false)
+    expect(() => createConfiguredSandboxClient(
+      { backend: 'unix_local' },
+      {
+        unixLocal: () => ({ backendId: 'unix_local' }),
+        docker: () => ({ backendId: 'docker' }),
+      },
+      'win32',
+    )).toThrow('Windows 不支持')
+  })
+
+  it('constructs the SDK Docker backend with networking disabled', () => {
+    const docker = vi.fn((): SandboxClient => ({ backendId: 'docker' }))
+    const client = createConfiguredSandboxClient(
+      { backend: 'sdk_docker' },
+      {
+        unixLocal: () => ({ backendId: 'unix_local' }),
+        docker,
+      },
+      'win32',
+    )
+    expect(client.backendId).toBe('docker')
+    expect(docker).toHaveBeenCalledWith({ networkMode: 'none' })
+    expect(isSandboxBackendAvailable({ backend: 'sdk_docker' }, 'win32')).toBe(true)
+
+    const manifest = buildSandboxManifest(
+      { runId: 'run_docker', sessionId: 'session_docker' },
+      'thread_docker',
+    )
+    expect(buildSandboxRunConfig(
+      manifest,
+      { backend: 'sdk_docker' },
+      () => client,
+    )).toEqual({ client, manifest })
   })
 
   it('mounts authorized historical Artifacts at their canonical read-only paths', () => {

@@ -338,15 +338,31 @@ describe.skipIf(!integrationEnabled)('真实 PostgreSQL/PostGIS 集成', () => {
       const config = defaultRuntimeConfig()
       const entries = [{
         name: 'list_layers',
+        namespace: 'layers',
         kind: 'platform' as const,
         providerId: 'layers',
         schemaDigest: 'sha256:list-layers-schema',
         definitionDigest: 'sha256:list-layers-definition',
-        requiresApproval: false,
-        readOnly: true,
-        destructive: false,
+        exposure: 'immediate' as const,
+        effect: 'read' as const,
+        parallelism: 'shared' as const,
+        approvalAction: null,
+        replayPolicy: 'safe' as const,
+        requiredCapabilities: [],
+        requiredValueRefKinds: [],
+        executionSurfaces: ['agent' as const],
+        deferLoading: false,
       }]
-      const toolPlan = { entries, catalogDigest: agentContextDigest(entries) }
+      const toolPlanWithoutDigest = {
+        entries,
+        namespaces: [],
+        deferredCatalogObjectHash: null,
+        unavailableReasons: {},
+      }
+      const toolPlan = {
+        ...toolPlanWithoutDigest,
+        catalogDigest: agentContextDigest(toolPlanWithoutDigest),
+      }
       const stepContexts = new AgentStepContextFactory(
         new AgentStepContextRepository(db),
         worlds,

@@ -454,6 +454,7 @@ describe('ToolExecutionCoordinator', () => {
       valueState: new Map(),
       signal: new AbortController().signal,
     })
+    bindTestStepContext(coordinator, registry, 'run_1', 'turn_1')
 
     await expect(coordinator.executeDirect('inspect_dataset', { datasetId: 'bad' }))
       .rejects.toThrow('数据集参数无效')

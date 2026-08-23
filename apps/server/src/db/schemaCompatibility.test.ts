@@ -26,6 +26,7 @@ function currentCapabilities(overrides: Record<string, unknown> = {}) {
     agent_step_contexts_table: 'platform_agent_step_contexts',
     model_request_records_table: 'platform_model_request_records',
     tool_invocations_table: 'platform_tool_invocations',
+    approval_records_table: 'platform_approval_records',
     geo_world_snapshot_primary_key: true,
     agent_step_world_foreign_key: true,
     run_input_mailbox: true,
@@ -90,6 +91,13 @@ describe('verifyDatabaseSchemaCompatibility', () => {
 
     await expect(verifyDatabaseSchemaCompatibility(db as never))
       .rejects.toThrow(/GeoWorld\/Agent StepContext\/ModelRequest/u)
+  })
+
+  it('拒绝缺少持久审批事实表的数据库', async () => {
+    const db = databaseWithCapabilities(currentCapabilities({ approval_records_table: null }))
+
+    await expect(verifyDatabaseSchemaCompatibility(db as never))
+      .rejects.toThrow(/Approval/u)
   })
 
   it('拒绝仍会覆盖历史 GeoWorld 的单列主键草案', async () => {

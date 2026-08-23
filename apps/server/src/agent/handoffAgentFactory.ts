@@ -64,6 +64,16 @@ export function createHandoffAgents(options: HandoffAgentFactoryOptions): Handof
         args,
         callId,
       ),
+      requiresApproval: (name, args, callId) => options.coordinator.requiresCatalogApproval(
+        name,
+        args,
+        callId,
+      ),
+      requiresSdkExtensionApproval: (name, args, callId) => options.coordinator.requiresSdkExtensionApproval(
+        name,
+        args,
+        callId,
+      ),
       executeTool: (name, args, callId) => options.coordinator.executeForHandoff(
         config.agentId,
         name,

@@ -564,6 +564,83 @@ export const platformToolInvocations = pgTable('platform_tool_invocations', {
   ),
 }))
 
+export const platformApprovalRecords = pgTable('platform_approval_records', {
+  approvalId: text('approval_id').primaryKey(),
+  runId: text('run_id').notNull().references(() => platformRuns.runId, { onDelete: 'cascade' }),
+  threadId: text('thread_id').notNull().references(() => platformThreads.threadId, { onDelete: 'cascade' }),
+  sessionId: text('session_id').notNull().references(() => platformSessions.sessionId, { onDelete: 'cascade' }),
+  workspaceId: text('workspace_id').notNull().references(() => platformWorkspaces.workspaceId, { onDelete: 'cascade' }),
+  invocationId: text('invocation_id').notNull().references(() => platformToolInvocations.invocationId, { onDelete: 'cascade' }),
+  callId: text('call_id').notNull(),
+  stepId: text('step_id').notNull(),
+  contextDigest: text('context_digest').notNull(),
+  actionKey: text('action_key').notNull(),
+  actionJson: jsonb('action_json').notNull().$type<Record<string, unknown>>(),
+  status: text('status').notNull(),
+  decision: text('decision'),
+  decisionScope: text('decision_scope'),
+  decisionReason: text('decision_reason'),
+  decidedByUserId: text('decided_by_user_id').references(() => platformUsers.userId, { onDelete: 'set null' }),
+  sourceApprovalId: text('source_approval_id').references(
+    (): AnyPgColumn => platformApprovalRecords.approvalId,
+    { onDelete: 'set null' },
+  ),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+  consumedAt: timestamp('consumed_at', { withTimezone: true }),
+  version: integer('version').notNull().default(1),
+}, (table) => ({
+  runCallIdx: uniqueIndex('idx_approval_records_run_call_unique').on(table.runId, table.callId),
+  sessionActionIdx: index('idx_approval_records_session_action').on(
+    table.sessionId,
+    table.actionKey,
+    table.status,
+    table.createdAt,
+  ),
+  runStatusIdx: index('idx_approval_records_run_status').on(table.runId, table.status, table.createdAt),
+  statusCheck: check(
+    'platform_approval_records_status_check',
+    sql`${table.status} IN ('pending', 'resolved', 'consumed')`,
+  ),
+  decisionCheck: check(
+    'platform_approval_records_decision_check',
+    sql`${table.decision} IS NULL OR ${table.decision} IN ('approved', 'rejected')`,
+  ),
+  scopeCheck: check(
+    'platform_approval_records_scope_check',
+    sql`${table.decisionScope} IS NULL OR ${table.decisionScope} IN ('exact_call', 'session')`,
+  ),
+  versionCheck: check('platform_approval_records_version_check', sql`${table.version} > 0`),
+  stateCheck: check(
+    'platform_approval_records_state_check',
+    sql`(
+      ${table.status} = 'pending'
+      AND ${table.decision} IS NULL
+      AND ${table.decisionScope} IS NULL
+      AND ${table.resolvedAt} IS NULL
+      AND ${table.consumedAt} IS NULL
+    ) OR (
+      ${table.status} = 'resolved'
+      AND ${table.decision} IS NOT NULL
+      AND ${table.decisionScope} IS NOT NULL
+      AND ${table.resolvedAt} IS NOT NULL
+      AND ${table.consumedAt} IS NULL
+    ) OR (
+      ${table.status} = 'consumed'
+      AND ${table.decision} IS NOT NULL
+      AND ${table.decisionScope} IS NOT NULL
+      AND ${table.resolvedAt} IS NOT NULL
+      AND ${table.consumedAt} IS NOT NULL
+    )`,
+  ),
+  rejectedScopeCheck: check(
+    'platform_approval_records_rejected_scope_check',
+    sql`${table.decision} <> 'rejected' OR (
+      ${table.decisionScope} = 'exact_call' AND ${table.decisionReason} IS NOT NULL
+    )`,
+  ),
+}))
+
 export const platformToolResultCommits = pgTable('platform_tool_result_commits', {
   runId: text('run_id').notNull().references(() => platformRuns.runId, { onDelete: 'cascade' }),
   invocationId: text('invocation_id').notNull().references(

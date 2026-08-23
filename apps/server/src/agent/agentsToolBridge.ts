@@ -34,6 +34,8 @@ export interface AgentsExecutionContext {
   formatToolFailureForModel(toolName: string, message: string): string
   rejectPreparedToolCall(toolName: string, callId: string, message: string): Promise<void>
   prepareToolCall(toolName: string, args: Record<string, unknown>, callId: string): Promise<void>
+  requiresApproval(toolName: string, args: Record<string, unknown>, callId: string): Promise<boolean>
+  requiresSdkExtensionApproval(toolName: string, args: Record<string, unknown>, callId: string): Promise<boolean>
   executeTool(toolName: string, args: Record<string, unknown>, callId: string): Promise<string>
   runToolExecution<T>(lane: ToolExecutionLane, operation: () => Promise<T>): Promise<T>
   toolOutputMetadata(callId: string): AgentToolOutputMetadata
@@ -51,6 +53,8 @@ export interface AgentsToolExecutionScope {
   formatToolFailureForModel(toolName: string, message: string): string
   rejectPreparedToolCall(toolName: string, callId: string, message: string): Promise<void>
   prepareToolCall(toolName: string, args: Record<string, unknown>, callId: string): Promise<void>
+  requiresApproval(toolName: string, args: Record<string, unknown>, callId: string): Promise<boolean>
+  requiresSdkExtensionApproval(toolName: string, args: Record<string, unknown>, callId: string): Promise<boolean>
   executeTool(toolName: string, args: Record<string, unknown>, callId: string): Promise<string>
   runToolExecution<T>(lane: ToolExecutionLane, operation: () => Promise<T>): Promise<T>
   toolOutputMetadata(callId: string): AgentToolOutputMetadata
@@ -96,7 +100,7 @@ export function createAgentsTools(
       const args = normalizeArguments(input)
       if (!callId) throw new Error(`工具 '${definition.name}' 缺少 callId`)
       await execution.prepareToolCall(definition.name, args, callId)
-      return definition.requiresApproval === true || definition.isDestructive || approvalTools.has(definition.name)
+      return execution.requiresApproval(definition.name, args, callId)
     }
     const execute = async (
       input: unknown,
@@ -221,6 +225,8 @@ function requireContext(runContext?: RunContext<unknown>): AgentsExecutionContex
     || typeof context.formatToolFailureForModel !== 'function'
     || typeof context.rejectPreparedToolCall !== 'function'
     || typeof context.prepareToolCall !== 'function'
+    || typeof context.requiresApproval !== 'function'
+    || typeof context.requiresSdkExtensionApproval !== 'function'
     || typeof context.executeTool !== 'function'
     || typeof context.runToolExecution !== 'function'
     || typeof context.toolOutputMetadata !== 'function') {

@@ -25,10 +25,18 @@ import {
 } from '@openai/agents/sandbox'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
-import { UnixLocalSandboxClient } from '@openai/agents/sandbox/local'
+import {
+  DockerSandboxClient,
+  UnixLocalSandboxClient,
+} from '@openai/agents/sandbox/local'
 import type { RuntimeSandboxConfig } from '../schemas/types.js'
 
 export type SandboxClientFactory = (config: RuntimeSandboxConfig) => SandboxClient
+
+export interface SandboxBackendFactories {
+  unixLocal(): SandboxClient
+  docker(options: { networkMode: 'none' }): SandboxClient
+}
 
 export interface SandboxArtifactMount {
   artifactId: string
@@ -149,14 +157,28 @@ export async function prepareRunArtifactDirectory(runtimeRoot: string, runId: st
 
 export function createConfiguredSandboxClient(
   config: RuntimeSandboxConfig,
+  factories: SandboxBackendFactories = DEFAULT_SANDBOX_BACKEND_FACTORIES,
+  platform: NodeJS.Platform = process.platform,
 ): SandboxClient {
   if (config.backend === 'unix_local') {
-    if (process.platform === 'win32') {
-      throw new Error('Windows 不支持 OpenAI Agents SDK 的 Unix 本地沙箱；当前运行必须禁用沙箱能力。')
+    if (!isSandboxBackendAvailable(config, platform)) {
+      throw new Error('Windows 不支持 OpenAI Agents SDK 的 Unix 本地沙箱；请选择 sdk_docker 或禁用沙箱能力。')
     }
-    return new UnixLocalSandboxClient()
+    return factories.unixLocal()
+  }
+  if (config.backend === 'sdk_docker') {
+    return factories.docker({ networkMode: 'none' })
   }
   throw new Error('当前运行已禁用 SDK 沙箱，不能创建沙箱客户端。')
+}
+
+export function isSandboxBackendAvailable(
+  config: RuntimeSandboxConfig,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (config.backend === 'disabled') return false
+  if (config.backend === 'unix_local') return platform !== 'win32'
+  return config.backend === 'sdk_docker'
 }
 
 export function buildSandboxRunConfig(
@@ -168,8 +190,14 @@ export function buildSandboxRunConfig(
     throw new Error('当前运行已禁用 SDK 沙箱，不能构造沙箱运行配置。')
   }
   const client = factory(config)
-  if (client.backendId !== config.backend) {
+  const expectedBackend = config.backend === 'sdk_docker' ? 'docker' : config.backend
+  if (client.backendId !== expectedBackend) {
     throw new Error(`Sandbox client backend '${client.backendId}' 与运行配置 '${config.backend}' 不匹配`)
   }
   return { client, manifest }
+}
+
+const DEFAULT_SANDBOX_BACKEND_FACTORIES: SandboxBackendFactories = {
+  unixLocal: () => new UnixLocalSandboxClient(),
+  docker: options => new DockerSandboxClient(options),
 }

@@ -28,6 +28,10 @@ import type { WsDependencies } from './dependencies.js'
 import { optionalString, requiredRunProvider, requiredString } from './payload.js'
 import { resolveRuntimeConfig } from './runtimeConfig.js'
 import { sendRunSnapshot, subscribeToRun } from './subscriptions.js'
+import {
+  approvalDecisionInputSchema,
+  type ApprovalDecisionInput,
+} from '@geo-agent-platform/shared-types/approval-runtime'
 
 const CLARIFICATION_CONTINUATION_KIND = 'clarification_continuation'
 const ATTACHMENT_REFERENCE_KINDS = new Set(['image_attachment', 'map_screenshot'])
@@ -49,13 +53,14 @@ export async function respondDecision(
 
   if (initialDecision.kind === 'approval') {
     if (initialDecision.status !== 'pending') return initialRun
-    const approved = selectedApprovalValue(initialDecision, optionalString(payload.optionId))
+    const approvalDecision = selectedApprovalDecision(initialDecision, optionalString(payload.optionId))
+    const approved = approvalDecision.decision === 'approved'
     const approvalId = typeof initialDecision.payload.approvalId === 'string'
       ? initialDecision.payload.approvalId
       : decisionId
     if (approved) dependencies.usageStats.assertWorkspaceCanStartModelRun(auth)
     subscribeToRun(ws, runId, store, dependencies.events, subscriptions)
-    return runTasks.respondToApproval(runId, approvalId, approved, auth, {
+    return runTasks.respondToApproval(runId, approvalId, approvalDecision, auth, {
       onComplete: completedRunId => sendRunSnapshot(ws, completedRunId, store),
     })
   }
@@ -343,11 +348,18 @@ function requireDecision(run: AnalysisRun, decisionId: string): DecisionRequest 
   return decision
 }
 
-function selectedApprovalValue(decision: DecisionRequest, optionId: string | null): boolean {
+function selectedApprovalDecision(
+  decision: DecisionRequest,
+  optionId: string | null,
+): ApprovalDecisionInput {
   const option = optionId ? decision.options.find(item => item.optionId === optionId) : null
   if (!option) throw new Error('审批决策必须选择批准或拒绝')
   if (typeof option.payload.approved !== 'boolean') throw new Error('审批决策选项缺少 approved payload')
-  return option.payload.approved
+  return approvalDecisionInputSchema.parse({
+    decision: option.payload.approved ? 'approved' : 'rejected',
+    scope: option.payload.scope ?? 'exact_call',
+    reason: option.payload.reason ?? (option.payload.approved ? null : '用户拒绝执行该工具。'),
+  })
 }
 
 function selectedDecisionText(decision: DecisionRequest, optionId: string | null, text: string | null): string {

@@ -12,7 +12,6 @@
 import type { AgentStepContext } from '@geo-agent-platform/shared-types/agent-step-context'
 import type {
   AgentToolDescriptorSource,
-  AgentToolPlanEntry,
 } from '@geo-agent-platform/shared-types/tool-runtime'
 
 import type { ToolDef } from '../../framework/types.js'
@@ -25,7 +24,8 @@ export interface RoutedToolCall {
   contextDigest: string
   toolPlanDigest: string
   objectiveRevision: number
-  descriptor: AgentToolPlanEntry
+  context: AgentStepContext
+  descriptor: AgentToolDescriptorSource
   definition: ToolDef | null
 }
 
@@ -65,12 +65,13 @@ export class ToolRouter {
     }
     const context = this.currentContext
     if (!context) throw new Error(`工具调用 '${callId}' 发生前尚未捕获 StepContext`)
-    const descriptor = context.tools.entries.find(entry => entry.name === toolName)
-    if (!descriptor) {
+    const planned = context.tools.entries.find(entry => entry.name === toolName)
+    if (!planned) {
       throw new Error(`工具 '${toolName}' 不在 StepContext '${context.identity.stepId}' 的工具计划中`)
     }
+    const descriptor = descriptorSourceFromPlanEntry(planned)
     const definition = descriptor.kind === 'platform'
-      ? this.catalog.assertPlatformBinding(descriptorSource(descriptor))
+      ? this.catalog.assertPlatformBinding(descriptor)
       : null
     const binding = Object.freeze({
       callId,
@@ -79,6 +80,7 @@ export class ToolRouter {
       contextDigest: context.contextDigest,
       toolPlanDigest: context.toolPlanDigest,
       objectiveRevision: context.objectiveRevision,
+      context,
       descriptor,
       definition,
     })
@@ -89,6 +91,37 @@ export class ToolRouter {
   preparePlatformCall(callId: string, toolName: string): RoutedPlatformToolCall {
     const binding = this.prepareCall(callId, toolName)
     assertPlatformRoute(binding, toolName)
+    return binding
+  }
+
+  /**
+   * Agent-as-tool 与 Handoff 的内层工具继承父 Runner 当前采样的权限、世界和
+   * 审批快照，但拥有独立 callId 与目录描述符。调用者仍须先通过子 Agent 的
+   * allowedToolNames 校验；这里仅负责把已允许调用固定到同一 StepContext。
+   */
+  prepareNestedPlatformCall(callId: string, toolName: string): RoutedPlatformToolCall {
+    const existing = this.bindings.get(callId)
+    if (existing) {
+      if (existing.toolName !== toolName) {
+        throw new Error(`工具调用 '${callId}' 已绑定 '${existing.toolName}'，不能改为 '${toolName}'`)
+      }
+      assertPlatformRoute(existing, toolName)
+      return existing
+    }
+    const context = this.currentStepContext()
+    const descriptor = this.catalog.platformSource(toolName)
+    const binding = Object.freeze({
+      callId,
+      toolName,
+      stepId: context.identity.stepId,
+      contextDigest: context.contextDigest,
+      toolPlanDigest: context.toolPlanDigest,
+      objectiveRevision: context.objectiveRevision,
+      context,
+      descriptor,
+      definition: this.catalog.assertPlatformBinding(descriptor),
+    })
+    this.bindings.set(callId, binding)
     return binding
   }
 
@@ -112,7 +145,9 @@ export class ToolRouter {
   }
 }
 
-export function descriptorSourceFromPlanEntry(entry: AgentToolPlanEntry): AgentToolDescriptorSource {
+export function descriptorSourceFromPlanEntry(
+  entry: AgentStepContext['tools']['entries'][number],
+): AgentToolDescriptorSource {
   return {
     name: entry.name,
     namespace: entry.namespace,
@@ -128,8 +163,6 @@ export function descriptorSourceFromPlanEntry(entry: AgentToolPlanEntry): AgentT
     executionSurfaces: entry.executionSurfaces,
   }
 }
-
-const descriptorSource = descriptorSourceFromPlanEntry
 
 function assertPlatformRoute(
   binding: RoutedToolCall,

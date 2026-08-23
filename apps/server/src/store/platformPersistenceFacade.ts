@@ -18,6 +18,7 @@ import type {
   ModelRequestRecord,
 } from '../schemas/types.js'
 import type { ToolInvocationRecord } from '@geo-agent-platform/shared-types/tool-runtime'
+import type { ApprovalRecord } from '@geo-agent-platform/shared-types/approval-runtime'
 import type { ConversationItemStoreUpdate } from '../conversation/itemUpdates.js'
 import { ArtifactStore, type VisibleArtifactOptions } from './artifactStore.js'
 import { ConversationProjectionIndex } from './conversationProjectionIndex.js'
@@ -46,9 +47,12 @@ import {
 } from './postgres/conversationPersistence.js'
 import type {
   ConversationPersistence,
+  ApprovalRepository,
+  ConsumeApprovalRecordInput,
   ConversationSnapshotRepository,
   DeletedThreadRecord,
   RunInputRepository,
+  ResolveApprovalRecordInput,
   StartToolInvocationInput,
   TerminalToolInvocationInput,
   ToolEffectCommitResult,
@@ -80,6 +84,7 @@ export class PlatformPersistenceFacade {
   private readonly snapshotRepository: ConversationSnapshotRepository
   private readonly runInputRepository: RunInputRepository
   private readonly objectPublication: ObjectPublicationCoordinator
+  private readonly approvals: ApprovalRepository
 
   constructor(db: Database, storageRoot: string, options: {
     conversationPersistence?: ConversationPersistence
@@ -101,6 +106,7 @@ export class PlatformPersistenceFacade {
     const persistence = options.conversationPersistence ?? new PostgresConversationPersistence(db)
     this.snapshotRepository = persistence
     this.runInputRepository = persistence
+    this.approvals = persistence
     this.sessionStore = new SessionStore(this.index, persistence)
     this.threadStore = new ThreadStore(
       this.index,
@@ -219,6 +225,34 @@ export class PlatformPersistenceFacade {
 
   terminateToolInvocation(input: TerminalToolInvocationInput): Promise<ToolInvocationRecord> {
     return this.runStore.terminateToolInvocation(input)
+  }
+
+  prepareApprovalRecord(record: ApprovalRecord): Promise<ApprovalRecord> {
+    return this.approvals.prepareApprovalRecord(record)
+  }
+
+  getApprovalRecord(approvalId: string): Promise<ApprovalRecord | null> {
+    return this.approvals.getApprovalRecord(approvalId)
+  }
+
+  getApprovalRecordForCall(runId: string, callId: string): Promise<ApprovalRecord | null> {
+    return this.approvals.getApprovalRecordForCall(runId, callId)
+  }
+
+  listApprovalRecords(runId: string): Promise<ApprovalRecord[]> {
+    return this.approvals.listApprovalRecords(runId)
+  }
+
+  findSessionApproval(sessionId: string, actionKey: string): Promise<ApprovalRecord | null> {
+    return this.approvals.findSessionApproval(sessionId, actionKey)
+  }
+
+  resolveApprovalRecord(input: ResolveApprovalRecordInput): Promise<ApprovalRecord> {
+    return this.approvals.resolveApprovalRecord(input)
+  }
+
+  consumeApprovalRecord(input: ConsumeApprovalRecordInput): Promise<ApprovalRecord> {
+    return this.approvals.consumeApprovalRecord(input)
   }
 
   async listArtifactsVisibleToRun(

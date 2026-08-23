@@ -71,7 +71,11 @@ export async function createSubAgentTools(
           invocation,
           callId,
         )
-        return false
+        return options.coordinator.requiresExternalAgentApproval(
+          config.agentId,
+          invocation,
+          callId,
+        )
       },
       isEnabled: () => options.coordinator.isExternalAgentEnabled(config.agentId),
       runOptions: {

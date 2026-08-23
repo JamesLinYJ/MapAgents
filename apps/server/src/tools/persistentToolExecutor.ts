@@ -149,7 +149,7 @@ export async function executePersistedTool(
     args: input.args,
     executionSurface: input.executionSurface,
   })
-  await invocationLedger.start(callId)
+  await invocationLedger.start(callId, 'not_required')
   const itemSink = new ItemSink(item => deps.store.appendItem(item), run.id, run.threadId)
   const callItem = itemSink.startItem('function_call', {
     name: input.toolName,

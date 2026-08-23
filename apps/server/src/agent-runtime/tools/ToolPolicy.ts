@@ -11,11 +11,28 @@
 
 import type { AgentState } from '@geo-agent-platform/shared-types'
 import type { AgentRuntimeConfig } from '@geo-agent-platform/shared-types/runtime'
+import type { AgentPermissionSnapshot } from '@geo-agent-platform/shared-types/agent-step-context'
 
 import type { ToolRegistry } from '../../framework/registry.js'
 import { platformToolDescriptorSource } from './ToolCatalog.js'
 
 export const DEVELOPER_TOOL_PROVIDER_ID = 'geo-platform-developer-tools'
+
+export type ToolPermissionRule = AgentPermissionSnapshot['toolRules'][number]
+
+export function resolveToolPermission(
+  toolName: string,
+  rules: readonly ToolPermissionRule[],
+): ToolPermissionRule | null {
+  const matches = rules.filter(rule => toolPatternMatches(rule.toolPattern, toolName))
+  matches.sort((left, right) => (
+    right.priority - left.priority
+    || patternSpecificity(right.toolPattern) - patternSpecificity(left.toolPattern)
+    || decisionPrecedence(right.decision) - decisionPrecedence(left.decision)
+    || left.toolPattern.localeCompare(right.toolPattern)
+  ))
+  return matches[0] ?? null
+}
 
 export function developerToolsEnabledForRuntime(config: AgentRuntimeConfig): boolean {
   return config.developer.enabled && config.developer.allowedRoots.length > 0
@@ -212,3 +229,22 @@ const ACTIVE_WORKFLOW_CONTROL_TOOLS = new Set([
   'request_clarification',
   'revise_agent_workflow',
 ])
+
+function toolPatternMatches(pattern: string, toolName: string): boolean {
+  const expression = `^${pattern.split('*').map(escapeRegExp).join('.*')}$`
+  return new RegExp(expression, 'u').test(toolName)
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+}
+
+function patternSpecificity(pattern: string): number {
+  return pattern.replaceAll('*', '').length
+}
+
+function decisionPrecedence(decision: ToolPermissionRule['decision']): number {
+  if (decision === 'always_deny') return 3
+  if (decision === 'always_ask') return 2
+  return 1
+}

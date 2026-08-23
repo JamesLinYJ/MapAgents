@@ -47,6 +47,7 @@ const requiredTables = [
   'platform_run_records',
   'platform_run_inputs',
   'platform_tool_invocations',
+  'platform_approval_records',
   'platform_event_outbox',
   'platform_artifacts',
 ]
@@ -56,6 +57,7 @@ const resetTables = [
   'platform_artifacts',
   'platform_event_outbox',
   'platform_run_inputs',
+  'platform_approval_records',
   'platform_tool_invocations',
   'platform_run_records',
   'platform_conversation_entries',

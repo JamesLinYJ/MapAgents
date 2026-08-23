@@ -954,12 +954,52 @@ CREATE TABLE public.platform_tool_invocations (
     CONSTRAINT platform_tool_invocations_replay_policy_check CHECK ((replay_policy = ANY (ARRAY['safe'::text, 'idempotency_key'::text, 'manual_recovery'::text]))),
     CONSTRAINT platform_tool_invocations_approval_decision_check CHECK (((approval_decision IS NULL) OR (approval_decision = ANY (ARRAY['not_required'::text, 'approved'::text, 'rejected'::text])))),
     CONSTRAINT platform_tool_invocations_status_check CHECK ((status = ANY (ARRAY['prepared'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'rejected'::text, 'aborted'::text, 'checkpointed'::text]))),
-    CONSTRAINT platform_tool_invocations_state_check CHECK (((status = 'prepared'::text) AND (running_at IS NULL) AND (terminal_at IS NULL) AND (checkpointed_at IS NULL) AND (result_id IS NULL) AND (error IS NULL) AND (terminal_outcome IS NULL)) OR ((status = 'running'::text) AND (running_at IS NOT NULL) AND (terminal_at IS NULL) AND (checkpointed_at IS NULL) AND (result_id IS NULL) AND (error IS NULL) AND (terminal_outcome IS NULL)) OR ((status = 'succeeded'::text) AND (running_at IS NOT NULL) AND (terminal_at IS NOT NULL) AND (checkpointed_at IS NULL) AND (error IS NULL) AND (terminal_outcome = 'succeeded'::text)) OR ((status = ANY (ARRAY['failed'::text, 'rejected'::text, 'aborted'::text])) AND (terminal_at IS NOT NULL) AND (checkpointed_at IS NULL) AND (result_id IS NULL) AND (error IS NOT NULL) AND (terminal_outcome = status)) OR ((status = 'checkpointed'::text) AND (terminal_at IS NOT NULL) AND (checkpointed_at IS NOT NULL) AND (terminal_outcome = ANY (ARRAY['succeeded'::text, 'failed'::text, 'rejected'::text, 'aborted'::text])) AND (((terminal_outcome = 'succeeded'::text) AND (error IS NULL)) OR ((terminal_outcome <> 'succeeded'::text) AND (error IS NOT NULL))))),
-    CONSTRAINT platform_tool_invocations_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.platform_runs(run_id) ON DELETE CASCADE
+    CONSTRAINT platform_tool_invocations_state_check CHECK (((status = 'prepared'::text) AND (running_at IS NULL) AND (terminal_at IS NULL) AND (checkpointed_at IS NULL) AND (result_id IS NULL) AND (error IS NULL) AND (terminal_outcome IS NULL)) OR ((status = 'running'::text) AND (running_at IS NOT NULL) AND (terminal_at IS NULL) AND (checkpointed_at IS NULL) AND (result_id IS NULL) AND (error IS NULL) AND (terminal_outcome IS NULL)) OR ((status = 'succeeded'::text) AND (running_at IS NOT NULL) AND (terminal_at IS NOT NULL) AND (checkpointed_at IS NULL) AND (error IS NULL) AND (terminal_outcome = 'succeeded'::text)) OR ((status = ANY (ARRAY['failed'::text, 'rejected'::text, 'aborted'::text])) AND (terminal_at IS NOT NULL) AND (checkpointed_at IS NULL) AND (result_id IS NULL) AND (error IS NOT NULL) AND (terminal_outcome = status)) OR ((status = 'checkpointed'::text) AND (terminal_at IS NOT NULL) AND (checkpointed_at IS NOT NULL) AND (terminal_outcome = ANY (ARRAY['succeeded'::text, 'failed'::text, 'rejected'::text, 'aborted'::text])) AND (((terminal_outcome = 'succeeded'::text) AND (error IS NULL)) OR ((terminal_outcome <> 'succeeded'::text) AND (error IS NOT NULL)))))
 );
 
 
 CREATE INDEX idx_tool_invocations_run_status ON public.platform_tool_invocations USING btree (run_id, status, prepared_at);
+
+
+--
+-- Name: platform_approval_records; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.platform_approval_records (
+    approval_id text NOT NULL,
+    run_id text NOT NULL,
+    thread_id text NOT NULL,
+    session_id text NOT NULL,
+    workspace_id text NOT NULL,
+    invocation_id text NOT NULL,
+    call_id text NOT NULL,
+    step_id text NOT NULL,
+    context_digest text NOT NULL,
+    action_key text NOT NULL,
+    action_json jsonb NOT NULL,
+    status text NOT NULL,
+    decision text,
+    decision_scope text,
+    decision_reason text,
+    decided_by_user_id text,
+    source_approval_id text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    resolved_at timestamp with time zone,
+    consumed_at timestamp with time zone,
+    version integer DEFAULT 1 NOT NULL,
+    CONSTRAINT platform_approval_records_pkey PRIMARY KEY (approval_id),
+    CONSTRAINT platform_approval_records_run_call_unique UNIQUE (run_id, call_id),
+    CONSTRAINT platform_approval_records_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'resolved'::text, 'consumed'::text]))),
+    CONSTRAINT platform_approval_records_decision_check CHECK (((decision IS NULL) OR (decision = ANY (ARRAY['approved'::text, 'rejected'::text])))),
+    CONSTRAINT platform_approval_records_scope_check CHECK (((decision_scope IS NULL) OR (decision_scope = ANY (ARRAY['exact_call'::text, 'session'::text])))),
+    CONSTRAINT platform_approval_records_version_check CHECK ((version > 0)),
+    CONSTRAINT platform_approval_records_state_check CHECK (((status = 'pending'::text) AND (decision IS NULL) AND (decision_scope IS NULL) AND (resolved_at IS NULL) AND (consumed_at IS NULL)) OR ((status = 'resolved'::text) AND (decision IS NOT NULL) AND (decision_scope IS NOT NULL) AND (resolved_at IS NOT NULL) AND (consumed_at IS NULL)) OR ((status = 'consumed'::text) AND (decision IS NOT NULL) AND (decision_scope IS NOT NULL) AND (resolved_at IS NOT NULL) AND (consumed_at IS NOT NULL))),
+    CONSTRAINT platform_approval_records_rejected_scope_check CHECK (((decision <> 'rejected'::text) OR ((decision_scope = 'exact_call'::text) AND (decision_reason IS NOT NULL))))
+);
+
+
+CREATE INDEX idx_approval_records_run_status ON public.platform_approval_records USING btree (run_id, status, created_at);
+CREATE INDEX idx_approval_records_session_action ON public.platform_approval_records USING btree (session_id, action_key, status, created_at);
 
 
 --
@@ -2535,6 +2575,70 @@ ALTER TABLE ONLY public.platform_threads
 
 ALTER TABLE ONLY public.platform_threads
     ADD CONSTRAINT platform_threads_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES public.platform_workspaces(workspace_id) ON DELETE CASCADE;
+
+
+--
+-- Name: platform_tool_invocations platform_tool_invocations_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_tool_invocations
+    ADD CONSTRAINT platform_tool_invocations_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.platform_runs(run_id) ON DELETE CASCADE;
+
+
+--
+-- Name: platform_approval_records platform_approval_records_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_approval_records
+    ADD CONSTRAINT platform_approval_records_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.platform_runs(run_id) ON DELETE CASCADE;
+
+
+--
+-- Name: platform_approval_records platform_approval_records_thread_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_approval_records
+    ADD CONSTRAINT platform_approval_records_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES public.platform_threads(thread_id) ON DELETE CASCADE;
+
+
+--
+-- Name: platform_approval_records platform_approval_records_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_approval_records
+    ADD CONSTRAINT platform_approval_records_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.platform_sessions(session_id) ON DELETE CASCADE;
+
+
+--
+-- Name: platform_approval_records platform_approval_records_workspace_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_approval_records
+    ADD CONSTRAINT platform_approval_records_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES public.platform_workspaces(workspace_id) ON DELETE CASCADE;
+
+
+--
+-- Name: platform_approval_records platform_approval_records_invocation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_approval_records
+    ADD CONSTRAINT platform_approval_records_invocation_id_fkey FOREIGN KEY (invocation_id) REFERENCES public.platform_tool_invocations(invocation_id) ON DELETE CASCADE;
+
+
+--
+-- Name: platform_approval_records platform_approval_records_decided_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_approval_records
+    ADD CONSTRAINT platform_approval_records_decided_by_user_id_fkey FOREIGN KEY (decided_by_user_id) REFERENCES public.platform_users(user_id) ON DELETE SET NULL;
+
+
+--
+-- Name: platform_approval_records platform_approval_records_source_approval_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_approval_records
+    ADD CONSTRAINT platform_approval_records_source_approval_id_fkey FOREIGN KEY (source_approval_id) REFERENCES public.platform_approval_records(approval_id) ON DELETE SET NULL;
 
 
 --

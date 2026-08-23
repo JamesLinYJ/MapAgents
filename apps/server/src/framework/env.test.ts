@@ -23,6 +23,13 @@ describe('parseEnv', () => {
     expect(env.OPEN_METEO_AIR_QUALITY_BASE_URL).toBe('https://air-quality-api.open-meteo.com')
     expect(env.OPEN_METEO_TIMEOUT_MS).toBe(10_000)
   })
+
+  it('accepts the SDK Docker sandbox backend as an explicit deployment choice', () => {
+    expect(parseEnv({
+      ...minimalEnv(),
+      SANDBOX_BACKEND: 'sdk_docker',
+    }).SANDBOX_BACKEND).toBe('sdk_docker')
+  })
 })
 
 function minimalEnv(): NodeJS.ProcessEnv {

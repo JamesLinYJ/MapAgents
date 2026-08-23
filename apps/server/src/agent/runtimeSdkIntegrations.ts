@@ -44,7 +44,9 @@ import type {
   RuntimeMcpServerConfig,
 } from '../schemas/types.js'
 import type { AgentsExecutionContext } from './agentsToolBridge.js'
+import { applySdkExtensionApprovalPolicy } from './runtimeSdkApproval.js'
 import { ToolExecutionGate } from '../agent-runtime/tools/ToolExecutionGate.js'
+import { isSandboxBackendAvailable } from './runtimeSandbox.js'
 import {
   buildSkillRegistry,
   buildSkillSandboxEntry,
@@ -102,7 +104,7 @@ export function buildRuntimeSdkSandboxIntegration(
     }
     return { capabilities: [], pathGrants: [], activeSkills: [], skillMatches: [] }
   }
-  if (config.sandbox.backend === 'disabled') {
+  if (!isSandboxBackendAvailable(config.sandbox)) {
     throw new Error('SDK Skill 依赖沙箱工作区；当前平台已禁用沙箱，不能启用 Skill。')
   }
   const registry = buildSkillRegistry(skillConfig, options.baseDir ?? process.cwd())
@@ -187,7 +189,7 @@ export async function createRuntimeSdkIntegration(
       const appendedNames = appendUniqueFunctionTools(
         tools,
         serverTools.map(tool => applyMcpExecutionPolicy(
-          applyMcpApprovalPolicy(applyMcpOutputMetadata(tool, serverConfig), serverConfig),
+          applyMcpApprovalPolicy(applyMcpOutputMetadata(tool, serverConfig)),
           executionGate,
         )),
         exposedFunctionToolNames,
@@ -375,13 +377,8 @@ function appendUniqueFunctionTools(
 
 function applyMcpApprovalPolicy(
   tool: Tool<AgentsExecutionContext>,
-  config: RuntimeMcpServerConfig,
 ): Tool<AgentsExecutionContext> {
-  if (tool.type !== 'function' || config.approval === 'never') return tool
-  return {
-    ...tool,
-    needsApproval: async () => true,
-  }
+  return applySdkExtensionApprovalPolicy(tool)
 }
 
 function applyMcpOutputMetadata(

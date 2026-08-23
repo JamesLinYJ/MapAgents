@@ -59,10 +59,12 @@ import { ToolExecutionGate } from '../agent-runtime/tools/ToolExecutionGate.js'
 import {
   buildSandboxManifest,
   buildSandboxRunConfig,
+  isSandboxBackendAvailable,
   prepareRunArtifactDirectory,
   type SandboxArtifactMount,
   type SandboxClientFactory,
 } from './runtimeSandbox.js'
+import { applySdkExtensionApprovalPolicy } from './runtimeSdkApproval.js'
 import {
   conversationMessagesToAgentItems,
   errorMessage,
@@ -300,7 +302,7 @@ export class RuntimeAssemblyFactory {
 
     const valueState = createThreadValueState(store, threadId, options.runId)
     const executionGate = new ToolExecutionGate()
-    const sandboxEnabled = options.runtimeConfig.sandbox.backend !== 'disabled'
+    const sandboxEnabled = isSandboxBackendAvailable(options.runtimeConfig.sandbox)
     const coreSandboxCapabilities = sandboxEnabled
       ? planAwareSandboxCapabilities(executionGate)
       : []
@@ -314,6 +316,8 @@ export class RuntimeAssemblyFactory {
       formatToolFailureForModel: (toolName, message) => coordinator.formatToolFailureForModel(toolName, message),
       rejectPreparedToolCall: (toolName, callId, message) => coordinator.rejectPreparedToolCall(toolName, callId, message),
       prepareToolCall: (toolName, args, callId) => coordinator.prepare(toolName, args, callId),
+      requiresApproval: (toolName, args, callId) => coordinator.requiresApproval(toolName, args, callId),
+      requiresSdkExtensionApproval: (toolName, args, callId) => coordinator.requiresSdkExtensionApproval(toolName, args, callId),
       executeTool: (toolName, args, callId) => coordinator.executeForModel(toolName, args, callId),
       runToolExecution: (lane, operation) => executionGate.run(lane, operation),
       toolOutputMetadata: callId => coordinator.toolOutputMetadata(callId),
@@ -829,7 +833,7 @@ function gateSandboxTools<TContext>(
       }
       return executionGate.run('exclusive', () => tool.invoke(runContext, input, details))
     }
-    return { ...tool, isEnabled, invoke }
+    return applySdkExtensionApprovalPolicy({ ...tool, isEnabled, invoke })
   })
 }
 

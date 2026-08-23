@@ -102,7 +102,7 @@ describe('Run domain journal', () => {
       args: {},
       executionSurface: 'developer',
     })
-    const runningInvocation = await invocationLedger.start('call_tool_1')
+    const runningInvocation = await invocationLedger.start('call_tool_1', 'not_required')
     const invocationCommit = {
       invocationId: runningInvocation.invocationId,
       expectedVersion: runningInvocation.version,

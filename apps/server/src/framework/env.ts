@@ -85,7 +85,7 @@ const envSchema = z.object({
   AZURE_SPEECH_DEFAULT_LANGUAGE: z.string().default('zh-CN'),
   AZURE_SPEECH_SUPPORTED_LANGUAGES: z.string().default('zh-CN,en-US,ja-JP,ko-KR'),
   AZURE_SPEECH_DEFAULT_VOICE: z.string().default('zh-CN-XiaoxiaoNeural'),
-  SANDBOX_BACKEND: z.enum(['disabled', 'unix_local']).default('disabled'),
+  SANDBOX_BACKEND: z.enum(['disabled', 'unix_local', 'sdk_docker']).default('disabled'),
   ENABLED_TOOL_PROVIDERS: z.string(),
   DEVELOPER_TOOL_ALLOWED_ROOTS: z.string().optional(),
   OPEN_METEO_FORECAST_BASE_URL: z.string().url().default('https://api.open-meteo.com'),

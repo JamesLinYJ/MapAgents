@@ -59,16 +59,50 @@ describe('ToolRouter', () => {
     expect(() => router.preparePlatformCall('call_2', 'query_layer'))
       .toThrow(/目录策略已变化/u)
   })
+
+  it('binds an allowed nested platform call to the parent sampling snapshot', () => {
+    const { catalog, nestedDefinition, plan } = fixture()
+    const router = new ToolRouter(catalog)
+    router.bindStepContext(stepContext(plan, 1, 'step_parent'))
+
+    expect(plan.entries.map(entry => entry.name)).not.toContain(nestedDefinition.name)
+    const nested = router.prepareNestedPlatformCall('call_nested', nestedDefinition.name)
+
+    expect(nested).toMatchObject({
+      callId: 'call_nested',
+      toolName: nestedDefinition.name,
+      stepId: 'step_parent',
+      objectiveRevision: 1,
+      descriptor: { kind: 'platform', effect: 'world_write' },
+    })
+    expect(router.requirePlatformCall('call_nested', nestedDefinition.name)).toBe(nested)
+  })
 })
 
 function fixture(): {
   catalog: ToolCatalog
   definition: ToolDef
+  nestedDefinition: ToolDef
   plan: AgentStepContext['tools']
 } {
   const registry = new ToolRegistry()
   const definition = toolDefinition()
-  registry.register(providerFromTools([definition]))
+  const nestedDefinition: ToolDef = {
+    ...toolDefinition(),
+    name: 'update_layer',
+    label: '更新图层',
+    isReadOnly: false,
+    runtimePolicy: {
+      namespace: 'layers',
+      exposure: 'immediate',
+      effect: 'world_write',
+      parallelism: 'exclusive',
+      approvalAction: 'world_write',
+      replayPolicy: 'idempotency_key',
+      requiredCapabilities: ['world.layers.write'],
+    },
+  }
+  registry.register(providerFromTools([definition, nestedDefinition]))
   const catalog = new ToolCatalog(registry)
   const request: Pick<ModelRequest, 'tools' | 'handoffs'> = {
     tools: [{
@@ -85,7 +119,7 @@ function fixture(): {
     sources: [platformToolDescriptorSource(definition)],
     providerCapabilities: { nativeDeferredTools: false, nativeToolNamespaces: false },
   })
-  return { catalog, definition, plan }
+  return { catalog, definition, nestedDefinition, plan }
 }
 
 function stepContext(

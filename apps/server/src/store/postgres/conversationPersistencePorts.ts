@@ -31,6 +31,10 @@ import type {
   ToolInvocationRecord,
   ToolInvocationTerminalOutcome,
 } from '@geo-agent-platform/shared-types/tool-runtime'
+import type {
+  ApprovalDecisionInput,
+  ApprovalRecord,
+} from '@geo-agent-platform/shared-types/approval-runtime'
 
 export interface ConversationSnapshot {
   sessions: SessionRecord[]
@@ -261,6 +265,31 @@ export interface ToolInvocationRepository {
   terminateToolInvocation(input: TerminalToolInvocationInput): Promise<ToolInvocationRecord>
 }
 
+export interface ResolveApprovalRecordInput extends ApprovalDecisionInput {
+  runId: string
+  approvalId: string
+  expectedVersion: number
+  decidedByUserId: string | null
+  resolvedAt: string
+}
+
+export interface ConsumeApprovalRecordInput {
+  runId: string
+  approvalId: string
+  expectedVersion: number
+  consumedAt: string
+}
+
+export interface ApprovalRepository {
+  prepareApprovalRecord(record: ApprovalRecord): Promise<ApprovalRecord>
+  getApprovalRecord(approvalId: string): Promise<ApprovalRecord | null>
+  getApprovalRecordForCall(runId: string, callId: string): Promise<ApprovalRecord | null>
+  listApprovalRecords(runId: string): Promise<ApprovalRecord[]>
+  findSessionApproval(sessionId: string, actionKey: string): Promise<ApprovalRecord | null>
+  resolveApprovalRecord(input: ResolveApprovalRecordInput): Promise<ApprovalRecord>
+  consumeApprovalRecord(input: ConsumeApprovalRecordInput): Promise<ApprovalRecord>
+}
+
 export interface ObjectReferenceRepository {
   listReferencedObjectHashes(): Promise<string[]>
 }
@@ -295,5 +324,6 @@ export interface ConversationPersistence extends
   RunInputRepository,
   ModelRequestRepository,
   ToolInvocationRepository,
+  ApprovalRepository,
   ToolResultCommitter,
   RunDomainJournalRepository {}

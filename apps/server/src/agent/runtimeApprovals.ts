@@ -49,10 +49,18 @@ export function approvalDecisionFromRequest(request: {
       {
         optionId: 'approve',
         label: '批准执行',
-        description: '允许系统继续执行这个动作。',
+        description: '只允许当前这一次精确调用。',
         kind: 'approval',
         reason: null,
-        payload: { approved: true },
+        payload: { approved: true, scope: 'exact_call' },
+      },
+      {
+        optionId: 'approve_session',
+        label: '本次会话均允许',
+        description: '同一会话内，相同工具、资源和权限范围不再重复询问。',
+        kind: 'approval',
+        reason: null,
+        payload: { approved: true, scope: 'session' },
       },
       {
         optionId: 'reject',
@@ -60,7 +68,11 @@ export function approvalDecisionFromRequest(request: {
         description: '拒绝本次动作，运行会按拒绝结果继续。',
         kind: 'approval',
         reason: null,
-        payload: { approved: false },
+        payload: {
+          approved: false,
+          scope: 'exact_call',
+          reason: '用户拒绝执行该工具。',
+        },
       },
     ],
     allowFreeText: false,

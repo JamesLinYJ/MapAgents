@@ -149,7 +149,10 @@ export class ToolInvocationLedger {
     })
   }
 
-  async start(callId: string): Promise<ToolInvocationRecord> {
+  async start(
+    callId: string,
+    approvalDecision: StartToolInvocationInput['approvalDecision'],
+  ): Promise<ToolInvocationRecord> {
     const current = await this.require(callId)
     if (current.status === 'running') return current
     if (current.status !== 'prepared') {
@@ -160,7 +163,7 @@ export class ToolInvocationLedger {
       invocationId: current.invocationId,
       expectedVersion: current.version,
       runningAt: nowUtc(),
-      approvalDecision: current.approvalAction === null ? 'not_required' : 'approved',
+      approvalDecision,
     })
   }
 

@@ -27,6 +27,7 @@ import {
   type TranscriptEntry,
 } from '../../schemas/types.js'
 import type { ToolInvocationRecord } from '@geo-agent-platform/shared-types/tool-runtime'
+import type { ApprovalRecord } from '@geo-agent-platform/shared-types/approval-runtime'
 import type { Database } from '../../db/connection.js'
 import { RunMutationQueue } from '../runMutationQueue.js'
 import type {
@@ -46,6 +47,9 @@ import type {
   RunRepository,
   ToolResultCommitter,
   ToolInvocationRepository,
+  ApprovalRepository,
+  ConsumeApprovalRecordInput,
+  ResolveApprovalRecordInput,
   StartToolInvocationInput,
   TerminalToolInvocationInput,
   ToolEffectCommitResult,
@@ -67,6 +71,7 @@ import { PostgresRunRepository } from './runRepository.js'
 import { PostgresObjectReferenceRepository } from './objectReferenceRepository.js'
 import { PostgresRunDomainJournalRepository } from './runDomainJournalRepository.js'
 import { PostgresModelRequestRepository } from './modelRequestRepository.js'
+import { PostgresApprovalRepository } from './approvalRepository.js'
 
 // PostgreSQL 是结构化会话事实源。Repository 只处理数据库语义；Agent 运行时、
 // WS 推送和诊断导出通过更窄的 Service 组合这些原子操作。
@@ -81,6 +86,7 @@ export class PostgresConversationPersistence implements ConversationPersistence 
   private readonly runs: RunRepository & ToolResultCommitter & ToolInvocationRepository
   private readonly domainJournal: RunDomainJournalRepository
   private readonly objectReferences: ObjectReferenceRepository
+  private readonly approvals: ApprovalRepository
 
   constructor(db: Database) {
     const inputDelivery = new RunInputDeliveryRecorder(this.runRecords)
@@ -109,6 +115,7 @@ export class PostgresConversationPersistence implements ConversationPersistence 
       inputDelivery,
     )
     this.objectReferences = new PostgresObjectReferenceRepository(db)
+    this.approvals = new PostgresApprovalRepository(db, this.runMutations)
   }
 
   async loadSnapshot(): Promise<ConversationSnapshot> {
@@ -240,6 +247,34 @@ export class PostgresConversationPersistence implements ConversationPersistence 
 
   terminateToolInvocation(input: TerminalToolInvocationInput): Promise<ToolInvocationRecord> {
     return this.runs.terminateToolInvocation(input)
+  }
+
+  prepareApprovalRecord(record: ApprovalRecord): Promise<ApprovalRecord> {
+    return this.approvals.prepareApprovalRecord(record)
+  }
+
+  getApprovalRecord(approvalId: string): Promise<ApprovalRecord | null> {
+    return this.approvals.getApprovalRecord(approvalId)
+  }
+
+  getApprovalRecordForCall(runId: string, callId: string): Promise<ApprovalRecord | null> {
+    return this.approvals.getApprovalRecordForCall(runId, callId)
+  }
+
+  listApprovalRecords(runId: string): Promise<ApprovalRecord[]> {
+    return this.approvals.listApprovalRecords(runId)
+  }
+
+  findSessionApproval(sessionId: string, actionKey: string): Promise<ApprovalRecord | null> {
+    return this.approvals.findSessionApproval(sessionId, actionKey)
+  }
+
+  resolveApprovalRecord(input: ResolveApprovalRecordInput): Promise<ApprovalRecord> {
+    return this.approvals.resolveApprovalRecord(input)
+  }
+
+  consumeApprovalRecord(input: ConsumeApprovalRecordInput): Promise<ApprovalRecord> {
+    return this.approvals.consumeApprovalRecord(input)
   }
 
   async listToolValues(runId: string): Promise<ToolValueRef[]> {

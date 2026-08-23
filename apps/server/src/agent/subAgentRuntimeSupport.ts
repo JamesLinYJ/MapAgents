@@ -113,6 +113,16 @@ export function createSubAgentExecutionContext(
       args,
       callId,
     ),
+    requiresApproval: (toolName, args, callId) => dependencies.coordinator.requiresCatalogApproval(
+      toolName,
+      args,
+      callId,
+    ),
+    requiresSdkExtensionApproval: (toolName, args, callId) => dependencies.coordinator.requiresSdkExtensionApproval(
+      toolName,
+      args,
+      callId,
+    ),
     executeTool: (toolName, args, callId) => dependencies.coordinator.executeForSubAgent(
       config.agentId,
       toolName,

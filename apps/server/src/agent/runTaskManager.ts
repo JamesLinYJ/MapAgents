@@ -15,6 +15,7 @@ import { errorLogPayload, logger } from '../observability/logger.js'
 import type { OpenAIAgentsRuntime, RunOptions } from './runtime.js'
 import type { BackgroundTaskRegistry } from '../automations/backgroundTaskRegistry.js'
 import type { AuthContext } from '../security/types.js'
+import type { ApprovalDecisionInput } from '@geo-agent-platform/shared-types/approval-runtime'
 
 export interface RunTaskCompletionTarget {
   onComplete?: (runId: string) => Promise<void> | void
@@ -48,21 +49,24 @@ export class RunTaskManager {
   async respondToApproval(
     runId: string,
     approvalId: string,
-    approved: boolean,
+    decision: boolean | ApprovalDecisionInput,
     auth: AuthContext | null,
     target: RunTaskCompletionTarget = {},
   ): Promise<AnalysisRun> {
+    const approved = typeof decision === 'boolean'
+      ? decision
+      : decision.decision === 'approved'
     this.assertAvailable(runId)
     this.launchingRunIds.add(runId)
     try {
-      const receipt = await this.runtime.acceptApprovalDecision(runId, approvalId, approved)
+      const receipt = await this.runtime.acceptApprovalDecision(runId, approvalId, decision, auth)
       if (!receipt.accepted) return receipt.run
       this.startManagedTask({
         runId,
         backgroundTaskId: `${runId}:approval:${approvalId}`,
         label: `${approved ? '批准' : '拒绝'}审批后继续运行 ${runId}`,
         metadata: { runId, approvalId, approved },
-        run: signal => this.runtime.continueApprovalDecision(runId, approvalId, approved, auth, signal),
+        run: signal => this.runtime.continueApprovalDecision(runId, approvalId, decision, auth, signal),
         target,
         claimedLaunch: true,
       }).catch(error => {

@@ -553,7 +553,7 @@ async function persistToolExecutionResult(
     args,
     executionSurface: 'developer',
   })
-  if (prepared.status === 'prepared') await ledger.start(callId)
+  if (prepared.status === 'prepared') await ledger.start(callId, 'not_required')
   return new ToolEffectCommitter(
     ledger,
     new ToolResultCommitService(store),

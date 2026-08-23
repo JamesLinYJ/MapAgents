@@ -542,6 +542,78 @@ describe('OpenAIAgentsRuntime delivery boundaries', () => {
     }
   })
 
+  it('reuses a session approval for the same canonical action without a second interruption', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-session-approval-'))
+    try {
+      const store = createTestPersistenceFacade(root)
+      await store.initialize()
+      const session = await store.createSession()
+      const thread = await store.createThread(session.id, '会话审批复用')
+      const config = testRuntimeConfig()
+      config.supervisor.approvalInterruptTools = ['sensitive_tool']
+      const run = await store.createRun(session.id, '连续执行两次相同敏感动作', {
+        threadId: thread.id,
+        modelProvider: 'fake',
+        runtimeConfigSnapshot: config,
+      })
+      let executions = 0
+      const tools = new ToolRegistry()
+      tools.register(approvalProvider(() => { executions += 1 }))
+      const model = scriptedModel(request => {
+        const completedCalls = Array.isArray(request.input)
+          ? request.input.filter(item => (
+              item.type === 'function_call_result'
+              && isRecord(item)
+              && item.name === 'sensitive_tool'
+            )).length
+          : 0
+        if (completedCalls >= 2) return { text: '两次敏感动作均已完成。' }
+        return {
+          toolCalls: [{
+            id: `call_session_${completedCalls + 1}`,
+            name: 'sensitive_tool',
+            arguments: '{"value":1}',
+          }],
+        }
+      })
+      const runtime = testRuntime(store, tools, registryWith(fakeAdapter(model)))
+
+      const waiting = await runtime.run({
+        ...runOptions(run, thread.id),
+        runtimeConfig: config,
+      })
+      const approvalId = waiting.state.approvals[0]?.approvalId
+      if (!approvalId) throw new Error('测试没有生成首个精确调用审批')
+      const completed = await runtime.resolveApproval(run.id, approvalId, {
+        decision: 'approved',
+        scope: 'session',
+        reason: null,
+      })
+
+      expect(completed.status).toBe('completed')
+      expect(completed.state.errors).toEqual([])
+      expect(executions).toBe(2)
+      expect(completed.state.approvals).toHaveLength(1)
+      const durableApprovals = await store.listApprovalRecords(run.id)
+      expect(durableApprovals).toHaveLength(2)
+      expect(durableApprovals).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          callId: 'call_session_1',
+          decisionScope: 'session',
+          status: 'consumed',
+        }),
+        expect.objectContaining({
+          callId: 'call_session_2',
+          decisionScope: 'exact_call',
+          status: 'consumed',
+          sourceApprovalId: approvalId,
+        }),
+      ]))
+    } finally {
+      await removeTempRoot(root)
+    }
+  })
+
   it('exposes all read-only tools and hides write tools in explicit plan mode', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'geo-runtime-plan-boundary-'))
     try {
