@@ -36,7 +36,7 @@
     "make:linux:rpm:from-runtime": "npm --prefix ../.. run verify:runtime && npm --prefix ../.. run build:desktop && electron-forge make --platform linux --arch x64 --targets desktop-rpm"
   },
   "devDependencies": {
-    "@better-auth/electron": "1.6.29",
+    "@better-auth/electron": "1.7.1",
     "@dagrejs/dagre": "^3.1.1",
     "@electron-forge/cli": "7.11.2",
     "@electron-forge/maker-base": "7.11.2",
