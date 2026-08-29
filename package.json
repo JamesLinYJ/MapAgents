@@ -58,7 +58,7 @@
     "@better-auth/electron": "1.6.29",
     "@openai/agents": "0.17.0",
     "better-auth": "1.6.29",
-    "openai": "7.4.0"
+    "openai": "7.5.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

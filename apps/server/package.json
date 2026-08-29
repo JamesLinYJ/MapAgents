@@ -34,7 +34,7 @@
     "hono": "^4.13.2",
     "microsoft-cognitiveservices-speech-sdk": "^1.51.0",
     "mustache": "^4.2.0",
-    "openai": "7.4.0",
+    "openai": "7.5.0",
     "p-queue": "^9.3.3",
     "pg": "^8.23.0",
     "pg-boss": "^12.27.0",
