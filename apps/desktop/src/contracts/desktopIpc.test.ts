@@ -34,6 +34,8 @@ import {
   desktopImageBlobStageRequestSchema,
   desktopMicrophonePermissionRequestSchema,
   desktopMicrophonePermissionResultSchema,
+  desktopProductSetupConnectionSchema,
+  desktopProductSetupStatusSchema,
   desktopRendererDiagnosticSchema,
   desktopSupervisorCommandSchema,
   desktopSupervisorLogsQuerySchema,
@@ -421,6 +423,39 @@ describe('desktop IPC contracts', () => {
     expect(desktopAuthCommandSchema.safeParse({
       command: 'projection',
       payload: {},
+    }).success).toBe(true)
+  })
+
+  it('projects only Tianditu configuration state and keeps replacement mutually exclusive with clearing', () => {
+    expect(desktopProductSetupStatusSchema.safeParse({
+      state: 'configured',
+      deploymentMode: 'local_managed',
+      apiBaseUrl: 'http://127.0.0.1:8000',
+      productName: '本机地理工作台',
+      canReset: false,
+      canConfigureMapService: true,
+      tiandituConfigured: true,
+    }).success).toBe(true)
+    expect(desktopProductSetupStatusSchema.safeParse({
+      state: 'configured',
+      deploymentMode: 'local_managed',
+      apiBaseUrl: 'http://127.0.0.1:8000',
+      productName: '本机地理工作台',
+      canReset: false,
+      canConfigureMapService: true,
+      tiandituConfigured: true,
+      tiandituApiKey: 'must-not-cross-ipc',
+    }).success).toBe(false)
+    expect(desktopProductSetupConnectionSchema.safeParse({
+      apiBaseUrl: 'http://127.0.0.1:8000',
+      productName: '本机地理工作台',
+      tiandituApiKey: 'server-key-fixture-1234',
+      clearTiandituApiKey: true,
+    }).success).toBe(false)
+    expect(desktopProductSetupConnectionSchema.safeParse({
+      apiBaseUrl: 'http://127.0.0.1:8000',
+      productName: '本机地理工作台',
+      clearTiandituApiKey: true,
     }).success).toBe(true)
   })
 

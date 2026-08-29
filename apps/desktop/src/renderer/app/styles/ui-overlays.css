@@ -43,12 +43,24 @@
 }
 
 .ui-dialog-surface {
+  position: fixed;
+  top: 50%;
+  left: 50%;
   z-index: 801;
+  box-sizing: border-box;
   width: min(560px, calc(100vw - 32px));
   max-height: min(760px, calc(100vh - 32px));
   padding: 20px;
   overflow: auto;
+  overscroll-behavior: contain;
   border-radius: var(--ui-radius-xl);
+  translate: -50% -50%;
+}
+
+/* 旧玻璃材质的高光层使用负 inset；对话框开启滚动后不能让装饰层扩大滚动区域。 */
+.ui-dialog-surface::before {
+  inset: 0;
+  transform: none;
 }
 
 .ui-dialog-title,
@@ -75,7 +87,14 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 18px;
+  margin: 18px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--ui-border-soft);
+}
+
+.ui-dialog-actions button {
+  min-width: 78px;
+  padding-inline: 14px;
 }
 
 .ui-popover-surface {

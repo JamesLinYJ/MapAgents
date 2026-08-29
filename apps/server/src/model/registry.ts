@@ -26,6 +26,8 @@ export type AgentToolSchemaMode = 'strict' | 'compatible'
 /** 模型适配器的静态扩展点；运行时注册表必须为每个 ID 提供实现。 */
 export const MODEL_PROVIDER_IDS = ['deepseek', 'anthropic', 'gemini', 'ollama'] as const
 export type ModelProviderId = typeof MODEL_PROVIDER_IDS[number]
+export const CONFIGURABLE_BUILTIN_PROVIDER_IDS = ['deepseek', 'ollama'] as const
+export type ConfigurableBuiltinProviderId = typeof CONFIGURABLE_BUILTIN_PROVIDER_IDS[number]
 
 export interface ModelAdapter {
   readonly provider: string
@@ -56,6 +58,7 @@ export interface ModelAdapter {
 export class ModelAdapterRegistry {
   private adapters = new Map<string, ModelAdapter>()
   private readonly customProviderIds = new Set<string>()
+  private readonly builtinFactories = new Map<ModelProviderId, () => ModelAdapter>()
   readonly defaultProvider: string
   readonly defaultModelName: string | null
 
@@ -65,27 +68,33 @@ export class ModelAdapterRegistry {
 
     const dmf = (p: string) => env.DEFAULT_MODEL_PROVIDER === p ? (env.DEFAULT_MODEL_NAME ?? '') : ''
 
-    this.register(createDeepSeekAdapter({
-      baseUrl: env.DEEPSEEK_BASE_URL ?? '',
-      apiKey: env.DEEPSEEK_API_KEY ?? '',
-      defaultModel: (env.DEEPSEEK_MODEL ?? dmf('deepseek')),
-      toolSchemaMode: env.DEEPSEEK_TOOL_SCHEMA_MODE,
-    }))
-    this.register(createAnthropicAdapter({
-      baseUrl: env.ANTHROPIC_BASE_URL ?? '',
-      apiKey: env.ANTHROPIC_API_KEY ?? '',
-      defaultModel: (env.ANTHROPIC_MODEL ?? dmf('anthropic')),
-      version: env.ANTHROPIC_VERSION ?? '',
-    }))
-    this.register(createGeminiAdapter({
-      baseUrl: env.GEMINI_BASE_URL ?? '',
-      apiKey: env.GEMINI_API_KEY ?? '',
-      defaultModel: (env.GEMINI_MODEL ?? dmf('gemini')),
-    }))
-    this.register(createOllamaAdapter({
-      baseUrl: env.OLLAMA_BASE_URL ?? '',
-      defaultModel: (env.OLLAMA_MODEL ?? dmf('ollama')),
-    }))
+    const builtinFactories: Array<readonly [ModelProviderId, () => ModelAdapter]> = [
+      ['deepseek', () => createDeepSeekAdapter({
+        baseUrl: env.DEEPSEEK_BASE_URL ?? '',
+        apiKey: env.DEEPSEEK_API_KEY ?? '',
+        defaultModel: (env.DEEPSEEK_MODEL ?? dmf('deepseek')),
+        toolSchemaMode: env.DEEPSEEK_TOOL_SCHEMA_MODE,
+      })],
+      ['anthropic', () => createAnthropicAdapter({
+        baseUrl: env.ANTHROPIC_BASE_URL ?? '',
+        apiKey: env.ANTHROPIC_API_KEY ?? '',
+        defaultModel: (env.ANTHROPIC_MODEL ?? dmf('anthropic')),
+        version: env.ANTHROPIC_VERSION ?? '',
+      })],
+      ['gemini', () => createGeminiAdapter({
+        baseUrl: env.GEMINI_BASE_URL ?? '',
+        apiKey: env.GEMINI_API_KEY ?? '',
+        defaultModel: (env.GEMINI_MODEL ?? dmf('gemini')),
+      })],
+      ['ollama', () => createOllamaAdapter({
+        baseUrl: env.OLLAMA_BASE_URL ?? '',
+        defaultModel: (env.OLLAMA_MODEL ?? dmf('ollama')),
+      })],
+    ]
+    for (const [providerId, factory] of builtinFactories) {
+      this.builtinFactories.set(providerId, factory)
+      this.register(factory())
+    }
   }
 
   register(adapter: ModelAdapter): void {
@@ -93,8 +102,11 @@ export class ModelAdapterRegistry {
   }
 
   async installCustom(adapter: ModelAdapter): Promise<void> {
-    if (MODEL_PROVIDER_IDS.includes(adapter.provider as ModelProviderId)) {
-      throw new Error(`自定义 Provider ID '${adapter.provider}' 与内置 Provider 冲突。`)
+    if (
+      MODEL_PROVIDER_IDS.includes(adapter.provider as ModelProviderId)
+      && !CONFIGURABLE_BUILTIN_PROVIDER_IDS.includes(adapter.provider as ConfigurableBuiltinProviderId)
+    ) {
+      throw new Error(`内置 Provider '${adapter.provider}' 不支持在设置页覆盖。`)
     }
     if (adapter.source !== 'custom') {
       throw new Error(`动态 Provider '${adapter.provider}' 必须声明 source=custom。`)
@@ -108,9 +120,11 @@ export class ModelAdapterRegistry {
   async removeCustom(providerId: string): Promise<boolean> {
     if (!this.customProviderIds.has(providerId)) return false
     const adapter = this.adapters.get(providerId)
-    this.adapters.delete(providerId)
     this.customProviderIds.delete(providerId)
-    await adapter?.close?.()
+    const builtinFactory = this.builtinFactories.get(providerId as ModelProviderId)
+    if (builtinFactory) this.adapters.set(providerId, builtinFactory())
+    else this.adapters.delete(providerId)
+    await adapter?.close?.().catch(() => undefined)
     return true
   }
 

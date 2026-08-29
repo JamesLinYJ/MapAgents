@@ -34,6 +34,7 @@ describe('WebSocket runtime configuration authorization', () => {
   it.each([
     ['provider:custom:list', 'read'],
     ['provider:credential:stage', 'update'],
+    ['provider:custom:discover-models', 'update'],
     ['provider:custom:upsert', 'update'],
     ['provider:custom:delete', 'update'],
     ['tool-catalog:upsert', 'update'],

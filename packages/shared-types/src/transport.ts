@@ -52,6 +52,7 @@ import {
   layerDescriptorSchema,
   modelProviderDescriptorSchema,
   providerCredentialStageSchema,
+  providerModelDiscoverySchema,
   runAttachmentsSchema,
   scheduledTaskSchema,
   skillCatalogSnapshotSchema,
@@ -198,7 +199,8 @@ export const wsControlCommands = [
   'skill:list', 'skill:search',
   'runtime-config:get', 'runtime-config:update',
   'provider:list',
-  'provider:custom:list', 'provider:credential:stage', 'provider:custom:upsert', 'provider:custom:delete',
+  'provider:custom:list', 'provider:credential:stage', 'provider:custom:discover-models',
+  'provider:custom:upsert', 'provider:custom:delete',
   'system:get',
   'usage:summary',
   'speech:authorization',
@@ -293,16 +295,31 @@ const wsSubAgentCancelPayloadSchema = wsSubAgentIdentityPayloadSchema.extend({
 const wsProviderCredentialStagePayloadSchema = z.object({
   secret: z.string().min(1).max(8192),
 }).strict()
+const wsCustomProviderDiscoverModelsPayloadSchema = z.object({
+  providerId: z.string().trim().min(1).max(64),
+  baseUrl: z.string().trim().url().max(2_048),
+  networkAccess: z.enum(['public', 'loopback']),
+  credentialHandle: z.string().min(1).max(200).nullable().optional(),
+}).strict()
 const wsCustomProviderUpsertPayloadSchema = z.object({
   config: customProviderConfigSchema,
   credentialHandle: z.string().min(1).max(200).nullable().optional(),
-  clearCredential: z.boolean().default(false),
+  clearApiKey: z.boolean().optional(),
+  // 兼容 0.1.x 客户端；新客户端统一使用 clearApiKey。
+  clearCredential: z.boolean().optional(),
 }).strict().superRefine((payload, context) => {
-  if (payload.credentialHandle && payload.clearCredential) {
+  if (payload.clearApiKey && payload.clearCredential) {
+    context.addIssue({
+      code: 'custom',
+      path: ['clearApiKey'],
+      message: 'clearApiKey 与 clearCredential 不能同时使用',
+    })
+  }
+  if (payload.credentialHandle && (payload.clearApiKey || payload.clearCredential)) {
     context.addIssue({
       code: 'custom',
       path: ['credentialHandle'],
-      message: 'credentialHandle 与 clearCredential 不能同时使用',
+      message: 'credentialHandle 与清除凭据操作不能同时使用',
     })
   }
 })
@@ -624,6 +641,10 @@ export const wsCommandContracts = {
   'provider:list': readContract(wsEmptyPayloadSchema, z.array(modelProviderDescriptorSchema)),
   'provider:custom:list': readContract(wsEmptyPayloadSchema, z.array(customProviderRecordSchema)),
   'provider:credential:stage': writeContract(wsProviderCredentialStagePayloadSchema, providerCredentialStageSchema),
+  'provider:custom:discover-models': writeContract(
+    wsCustomProviderDiscoverModelsPayloadSchema,
+    providerModelDiscoverySchema,
+  ),
   'provider:custom:upsert': writeContract(wsCustomProviderUpsertPayloadSchema, customProviderSaveResultSchema),
   'provider:custom:delete': writeContract(
     wsCustomProviderDeletePayloadSchema,

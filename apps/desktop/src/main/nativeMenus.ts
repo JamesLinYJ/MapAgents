@@ -39,6 +39,7 @@ export interface NativeApplicationMenuOptions {
   authorization: NativeMenuAuthorization
   shutdown: Pick<DesktopShutdownCoordinator, 'requestStopAllAndQuit'>
   localServiceControl?: boolean
+  managedLocalIdentity?: boolean
   productName?: string
 }
 
@@ -53,6 +54,7 @@ export function installNativeApplicationMenu(
     const access = deriveNativeMenuAccess(
       options.authorization.currentAuthorizationContext(),
       options.localServiceControl ?? true,
+      options.managedLocalIdentity ?? false,
     )
     Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate(access, options)))
   }
@@ -130,12 +132,13 @@ export interface NativeMenuAccess {
 export function deriveNativeMenuAccess(
   identity: DesktopAuthenticatedIdentity | null,
   localServiceControl = true,
+  managedLocalIdentity = false,
 ): NativeMenuAccess {
   const platformAdministrator = identity?.platformRoles.includes('platform_admin') ?? false
   return {
-    canAccessAccount: identity !== null,
+    canAccessAccount: identity !== null && !managedLocalIdentity,
     canAccessDiagnostics: platformAdministrator,
-    canAccessSecurity: platformAdministrator,
+    canAccessSecurity: platformAdministrator && !managedLocalIdentity,
     canStopAllAndQuit: platformAdministrator && localServiceControl,
   }
 }

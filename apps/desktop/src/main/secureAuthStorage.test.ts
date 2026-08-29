@@ -14,10 +14,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const values = new Map<string, string>()
 const decryptString = vi.fn<(value: Buffer) => string>()
 const encryptString = vi.fn<(value: string) => Buffer>()
+const isEncryptionAvailable = vi.fn(() => true)
 
 vi.mock('electron', () => ({
   safeStorage: {
-    isEncryptionAvailable: () => true,
+    isEncryptionAvailable,
     decryptString,
     encryptString,
   },
@@ -46,6 +47,8 @@ describe('SecureAuthStorage', () => {
     values.clear()
     decryptString.mockReset()
     encryptString.mockReset()
+    isEncryptionAvailable.mockReset()
+    isEncryptionAvailable.mockReturnValue(true)
   })
 
   it('encrypts and decrypts Better Auth values without plaintext persistence', () => {
@@ -78,5 +81,16 @@ describe('SecureAuthStorage', () => {
 
     expect(storage.getItem('cookie')).toBeNull()
     expect(values.has('cookie')).toBe(false)
+  })
+
+  it('keeps the session only in process memory when OS encryption is unavailable', () => {
+    isEncryptionAvailable.mockReturnValue(false)
+    const storage = new SecureAuthStorage()
+
+    storage.setItem('cookie', { session: 'ephemeral-session' })
+
+    expect(storage.getItem('cookie')).toEqual({ session: 'ephemeral-session' })
+    expect(values.size).toBe(0)
+    expect(encryptString).not.toHaveBeenCalled()
   })
 })

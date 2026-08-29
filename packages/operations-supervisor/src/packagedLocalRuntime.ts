@@ -1,6 +1,6 @@
 // +-------------------------------------------------------------------------
 //
-//   地理智能平台 - Linux RPM 本机运行时首次部署
+//   地理智能平台 - 桌面安装包本机运行时首次部署
 //
 //   文件:       packagedLocalRuntime.ts
 //
@@ -10,7 +10,7 @@
 // --------------------------------------------------------------------------
 
 import { randomBytes, randomUUID } from 'node:crypto'
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import {
   chmod,
   lstat,
@@ -61,6 +61,7 @@ export interface PackagedLocalRuntimeResolution {
   runtimeManifestPath: string
   manifestProtection: PackagedRuntimeManifestProtectionOptions
   serviceEnvironmentFile: string
+  restartApiService(): Promise<void>
 }
 
 export interface PackagedRuntimeManifestProtectionOptions {
@@ -77,6 +78,26 @@ export interface PackagedLocalRuntimeOptions {
   systemRuntimeManifestPath: string
   isPortAvailable?: (port: number) => Promise<boolean>
   runSystemctl?: (arguments_: readonly string[]) => Promise<number>
+  runSupervisorCommand?: (input: PackagedSupervisorCommandInput) => Promise<number>
+  spawnSupervisorDaemon?: (input: PackagedSupervisorDaemonInput) => Promise<void>
+  delay?: (milliseconds: number) => Promise<void>
+}
+
+export interface PackagedSupervisorCommandInput {
+  executable: string
+  cliPath: string
+  command: readonly string[]
+  commonArguments: readonly string[]
+  cwd: string
+  environment: NodeJS.ProcessEnv
+}
+
+export interface PackagedSupervisorDaemonInput {
+  executable: string
+  cliPath: string
+  commonArguments: readonly string[]
+  cwd: string
+  environment: NodeJS.ProcessEnv
 }
 
 export interface PackagedLocalRuntimeUserSettings {
@@ -87,33 +108,37 @@ export interface PackagedLocalRuntimeUserSettingsOptions {
   serviceEnvironmentFile: string
   ownerUid?: number
   tiandituApiKey?: string
+  clearTiandituApiKey?: boolean
   runSystemctl?: (arguments_: readonly string[]) => Promise<number>
+  restartApiService?: () => Promise<void>
 }
 
 /**
- * RPM 只安装不可变程序和系统依赖。首次启动在当前用户边界内生成密钥、私有
- * PostgreSQL 数据目录和 systemd user 配置；升级复用数据与密钥，仅切换制品路径。
+ * 安装包只携带不可变程序和依赖。首次启动在当前用户边界内生成密钥与私有
+ * PostgreSQL 数据目录；Linux 使用 systemd user，macOS 使用内置监督器守护进程。
+ * 升级复用数据与密钥，仅切换制品路径。
  */
 export async function preparePackagedLocalRuntime(
   options: PackagedLocalRuntimeOptions,
 ): Promise<PackagedLocalRuntimeResolution | null> {
-  if (options.platform !== 'linux') return null
+  if (!['darwin', 'linux'].includes(options.platform)) return null
   if (await pathExists(options.systemRuntimeManifestPath)) return null
 
   const projectRoot = path.join(options.resourcesPath, 'runtime-service')
   const releaseManifestPath = path.join(projectRoot, 'runtime-service-manifest.json')
   if (!(await pathExists(releaseManifestPath))) return null
-  await assertBundledRuntime(projectRoot)
+  await assertBundledRuntime(projectRoot, options.platform)
   const releaseId = await readReleaseId(releaseManifestPath)
 
   const environment = options.environment ?? process.env
   const homeDirectory = path.resolve(options.homeDirectory ?? os.homedir())
   const ownerUid = options.ownerUid ?? process.getuid?.()
-  const configHome = resolveUserRoot(environment.XDG_CONFIG_HOME, path.join(homeDirectory, '.config'))
-  const stateHome = resolveUserRoot(
-    environment.XDG_STATE_HOME,
-    path.join(homeDirectory, '.local', 'state'),
-  )
+  const configHome = options.platform === 'darwin'
+    ? path.join(homeDirectory, 'Library', 'Application Support')
+    : resolveUserRoot(environment.XDG_CONFIG_HOME, path.join(homeDirectory, '.config'))
+  const stateHome = options.platform === 'darwin'
+    ? path.join(homeDirectory, 'Library', 'Application Support')
+    : resolveUserRoot(environment.XDG_STATE_HOME, path.join(homeDirectory, '.local', 'state'))
   const configRoot = path.join(configHome, PLATFORM_TECHNICAL_ID)
   const runtimeRoot = path.join(stateHome, PLATFORM_TECHNICAL_ID, 'runtime')
   const secretsRoot = path.join(runtimeRoot, 'secrets')
@@ -141,6 +166,7 @@ export async function preparePackagedLocalRuntime(
     runtimeRoot,
     supervisorTokenFile,
     rootSecretFile,
+    platform: options.platform,
     isPortAvailable: options.isPortAvailable ?? defaultIsPortAvailable,
   })
   const environmentSource = serializeEnvironment(values)
@@ -164,20 +190,41 @@ export async function preparePackagedLocalRuntime(
     ownerUid,
   )
 
-  const runSystemctl = options.runSystemctl ?? defaultRunSystemctl
-  await requireSystemctl(runSystemctl, ['--user', 'daemon-reload'])
-  await requireSystemctl(runSystemctl, ['--user', 'enable', USER_SERVICE_NAME])
-  const active = await runSystemctl(['--user', 'is-active', '--quiet', USER_SERVICE_NAME]) === 0
-  if (!active) {
-    await requireSystemctl(runSystemctl, ['--user', 'start', USER_SERVICE_NAME])
-  } else if (environmentChanged || manifestChanged) {
-    await requireSystemctl(runSystemctl, ['--user', 'restart', USER_SERVICE_NAME])
+  let restartApiService: () => Promise<void>
+  if (options.platform === 'linux') {
+    const runSystemctl = options.runSystemctl ?? defaultRunSystemctl
+    await requireSystemctl(runSystemctl, ['--user', 'daemon-reload'])
+    await requireSystemctl(runSystemctl, ['--user', 'enable', USER_SERVICE_NAME])
+    const active = await runSystemctl(['--user', 'is-active', '--quiet', USER_SERVICE_NAME]) === 0
+    if (!active) {
+      await requireSystemctl(runSystemctl, ['--user', 'start', USER_SERVICE_NAME])
+    } else if (environmentChanged || manifestChanged) {
+      await requireSystemctl(runSystemctl, ['--user', 'restart', USER_SERVICE_NAME])
+    }
+    restartApiService = () => requireSystemctl(
+      runSystemctl,
+      ['--user', 'restart', USER_SERVICE_NAME],
+    )
+  } else {
+    const controller = await ensureDarwinPackagedRuntime({
+      projectRoot,
+      runtimeRoot,
+      supervisorTokenFile,
+      rootSecretFile,
+      environment: Object.fromEntries(values),
+      releaseChanged: previousEnvironment !== null && (environmentChanged || manifestChanged),
+      runSupervisorCommand: options.runSupervisorCommand ?? defaultRunSupervisorCommand,
+      spawnSupervisorDaemon: options.spawnSupervisorDaemon ?? defaultSpawnSupervisorDaemon,
+      delay: options.delay ?? defaultDelay,
+    })
+    restartApiService = controller.restartApiService
   }
 
   return {
     runtimeManifestPath,
-    manifestProtection: { platform: 'linux', ...(ownerUid === undefined ? {} : { expectedOwnerUid: ownerUid }) },
+    manifestProtection: { platform: options.platform, ...(ownerUid === undefined ? {} : { expectedOwnerUid: ownerUid }) },
     serviceEnvironmentFile: environmentFile,
+    restartApiService,
   }
 }
 
@@ -198,7 +245,7 @@ export async function readPackagedLocalRuntimeUserSettings(
 }
 
 /**
- * 原子更新 RPM 用户运行时的地图凭据，并只在值改变时重启后台服务。
+ * 原子更新桌面用户运行时的地图凭据，并只在值改变时重启 API 服务。
  * runtime.env 始终保持 0600；调用者只传用户主动填写的新值。
  */
 export async function updatePackagedLocalRuntimeUserSettings(
@@ -208,21 +255,35 @@ export async function updatePackagedLocalRuntimeUserSettings(
   const values = await readOptionalProtectedEnvironment(environmentFile, options.ownerUid)
   if (!values) throw new Error('本机运行时配置尚未初始化。')
 
-  const apiKey = normalizeTiandituApiKey(options.tiandituApiKey)
-  const changed = values.get('TIANDITU_API_KEY') !== apiKey
+  if (options.tiandituApiKey && options.clearTiandituApiKey) {
+    throw new Error('新天地图 API KEY 与清除操作不能同时使用。')
+  }
+  const currentApiKey = values.get('TIANDITU_API_KEY')?.trim() || null
+  if (!options.clearTiandituApiKey && options.tiandituApiKey === undefined) {
+    return { tiandituConfigured: Boolean(currentApiKey) }
+  }
+  const apiKey = options.clearTiandituApiKey
+    ? null
+    : normalizeTiandituApiKey(options.tiandituApiKey)
+  const changed = currentApiKey !== apiKey
   if (changed) {
-    values.set('TIANDITU_API_KEY', apiKey)
+    if (apiKey) values.set('TIANDITU_API_KEY', apiKey)
+    else values.delete('TIANDITU_API_KEY')
     await writeProtectedFileIfChanged(
       environmentFile,
       serializeEnvironment(values),
       options.ownerUid,
     )
-    await requireSystemctl(
-      options.runSystemctl ?? defaultRunSystemctl,
-      ['--user', 'restart', USER_SERVICE_NAME],
-    )
+    if (options.restartApiService) {
+      await options.restartApiService()
+    } else {
+      await requireSystemctl(
+        options.runSystemctl ?? defaultRunSystemctl,
+        ['--user', 'restart', USER_SERVICE_NAME],
+      )
+    }
   }
-  return { tiandituConfigured: true }
+  return { tiandituConfigured: Boolean(apiKey) }
 }
 
 async function buildRuntimeEnvironment(input: {
@@ -232,6 +293,7 @@ async function buildRuntimeEnvironment(input: {
   runtimeRoot: string
   supervisorTokenFile: string
   rootSecretFile: string
+  platform: NodeJS.Platform
   isPortAvailable: (port: number) => Promise<boolean>
 }): Promise<Map<string, string>> {
   const previous = input.previousEnvironment
@@ -247,6 +309,11 @@ async function buildRuntimeEnvironment(input: {
   assertLocalDatabaseUrl(databaseUrl, ports.postgres)
 
   const values = new Map(previous ?? [])
+  const bundledNodeBin = path.join(input.projectRoot, 'node-runtime', 'bin')
+  const bundledPostgresBin = path.join(input.projectRoot, 'postgresql-portable', 'bin')
+  const workerPython = input.platform === 'darwin'
+    ? path.join(input.projectRoot, 'python-runtime', 'bin', 'python3.12')
+    : '/usr/bin/python3'
   const assignments: Record<string, string> = {
     NODE_ENV: 'production',
     GEO_AGENT_PLATFORM_ROOT: input.projectRoot,
@@ -260,7 +327,7 @@ async function buildRuntimeEnvironment(input: {
     WORKER_PORT: String(ports.worker),
     API_HOST: '127.0.0.1',
     API_PORT: String(ports.api),
-    WORKER_PYTHON: '/usr/bin/python3',
+    WORKER_PYTHON: workerPython,
     PYTHONPATH: [
       path.join(input.projectRoot, 'apps', 'worker', 'src'),
       path.join(input.projectRoot, 'packages', 'gis-meteorology', 'src'),
@@ -283,6 +350,11 @@ async function buildRuntimeEnvironment(input: {
     WORKER_SHARED_SECRET: previous?.get('WORKER_SHARED_SECRET') ?? randomSecret(),
     ENABLED_TOOL_PROVIDERS: resolvePackagedToolProviders(previous),
     LOG_LEVEL: previous?.get('LOG_LEVEL') ?? 'info',
+  }
+  if (input.platform === 'darwin') {
+    assignments.POSTGRES_BIN_DIR = bundledPostgresBin
+    assignments.PATH = [bundledNodeBin, bundledPostgresBin, process.env.PATH ?? '/usr/bin:/bin']
+      .join(path.delimiter)
   }
   for (const [name, value] of Object.entries(assignments)) values.set(name, value)
   for (const secretName of ['BETTER_AUTH_SECRET', 'WORKER_SHARED_SECRET']) {
@@ -337,6 +409,118 @@ async function defaultIsPortAvailable(port: number): Promise<boolean> {
   })
 }
 
+async function ensureDarwinPackagedRuntime(input: {
+  projectRoot: string
+  runtimeRoot: string
+  supervisorTokenFile: string
+  rootSecretFile: string
+  environment: NodeJS.ProcessEnv
+  releaseChanged: boolean
+  runSupervisorCommand: (input: PackagedSupervisorCommandInput) => Promise<number>
+  spawnSupervisorDaemon: (input: PackagedSupervisorDaemonInput) => Promise<void>
+  delay: (milliseconds: number) => Promise<void>
+}): Promise<{ restartApiService(): Promise<void> }> {
+  const executable = path.join(input.projectRoot, 'node-runtime', 'bin', 'node')
+  const cliPath = path.join(
+    input.projectRoot,
+    'packages',
+    'operations-supervisor',
+    'dist',
+    'cli.js',
+  )
+  const commonArguments = [
+    '--root', input.projectRoot,
+    '--runtime-root', input.runtimeRoot,
+    '--token-file', input.supervisorTokenFile,
+    '--root-secret-file', input.rootSecretFile,
+    '--profile', 'production',
+  ]
+  const context = {
+    executable,
+    cliPath,
+    commonArguments,
+    cwd: input.projectRoot,
+    environment: input.environment,
+  }
+  const run = (command: readonly string[]) => input.runSupervisorCommand({
+    ...context,
+    command,
+  })
+
+  if (await run(['status', '--json']) !== 0) {
+    await input.spawnSupervisorDaemon(context)
+    let ready = false
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      if (await run(['status', '--json']) === 0) {
+        ready = true
+        break
+      }
+      await input.delay(250)
+    }
+    if (!ready) throw new Error('macOS 本机监督服务未在 30 秒内就绪。')
+  }
+
+  const action = input.releaseChanged ? 'restart' : 'start'
+  if (await run([action, 'all', '--json']) !== 0) {
+    throw new Error(`macOS 本机服务${action === 'restart' ? '升级重启' : '启动'}失败。`)
+  }
+  return {
+    restartApiService: async () => {
+      if (await run(['restart', 'api', '--json']) !== 0) {
+        throw new Error('macOS 本机 API 服务重启失败。')
+      }
+    },
+  }
+}
+
+async function defaultRunSupervisorCommand(
+  input: PackagedSupervisorCommandInput,
+): Promise<number> {
+  try {
+    await execFileAsync(
+      input.executable,
+      [input.cliPath, ...input.command, ...input.commonArguments],
+      {
+        cwd: input.cwd,
+        env: input.environment,
+        timeout: 180_000,
+        windowsHide: true,
+      },
+    )
+    return 0
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'number') {
+      return error.code
+    }
+    return 1
+  }
+}
+
+async function defaultSpawnSupervisorDaemon(
+  input: PackagedSupervisorDaemonInput,
+): Promise<void> {
+  const child = spawn(
+    input.executable,
+    [input.cliPath, 'daemon', ...input.commonArguments],
+    {
+      cwd: input.cwd,
+      env: input.environment,
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    },
+  )
+  await new Promise<void>((resolve, reject) => {
+    child.once('spawn', resolve)
+    child.once('error', reject)
+  })
+  child.unref()
+}
+
+function defaultDelay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds))
+}
+
 async function defaultRunSystemctl(arguments_: readonly string[]): Promise<number> {
   try {
     // user service 的 TimeoutStopSec 是 120 秒；升级时 PostgreSQL/Worker 需要先
@@ -362,8 +546,11 @@ async function requireSystemctl(
   }
 }
 
-async function assertBundledRuntime(projectRoot: string): Promise<void> {
-  for (const relativePath of [
+async function assertBundledRuntime(
+  projectRoot: string,
+  platform: NodeJS.Platform,
+): Promise<void> {
+  const requiredPaths = [
     'apps/server/dist/main.js',
     'apps/operations-console/dist/installedCliEntry.js',
     'node-runtime/bin/node',
@@ -373,21 +560,36 @@ async function assertBundledRuntime(projectRoot: string): Promise<void> {
     'infra/seeds/layers/catalog.json',
     'infra/seeds/layers/hangzhou_districts.geojson',
     'node_modules/.package-lock.json',
-  ]) {
+  ]
+  if (platform === 'darwin') {
+    requiredPaths.push(
+      'darwin-runtime-bundle.json',
+      'python-runtime/bin/python3.12',
+      'python-packages/fastapi/__init__.py',
+      'postgresql-portable/bin/postgres',
+      'postgresql-portable/bin/initdb',
+      'postgresql-portable/bin/pg_ctl',
+      'postgresql-portable/bin/pg_isready',
+      'postgresql-portable/bin/psql',
+      'postgresql-portable/bin/createdb',
+      'postgresql-portable/share/postgresql/extension/postgis.control',
+    )
+  }
+  for (const relativePath of requiredPaths) {
     const metadata = await stat(path.join(projectRoot, relativePath)).catch(() => null)
-    if (!metadata?.isFile()) throw new Error(`RPM 内置运行时不完整：缺少 ${relativePath}。`)
+    if (!metadata?.isFile()) throw new Error(`桌面内置运行时不完整：缺少 ${relativePath}。`)
   }
 }
 
 async function readReleaseId(manifestPath: string): Promise<string> {
   const parsed: unknown = JSON.parse(await readFile(manifestPath, 'utf8'))
-  if (!parsed || typeof parsed !== 'object') throw new Error('RPM 内置运行时 manifest 无效。')
+  if (!parsed || typeof parsed !== 'object') throw new Error('桌面内置运行时 manifest 无效。')
   const values = parsed as Record<string, unknown>
   if (values.kind !== RUNTIME_SERVICE_KIND || values.schemaVersion !== 1) {
-    throw new Error('RPM 内置运行时 manifest 类型或版本不受支持。')
+    throw new Error('桌面内置运行时 manifest 类型或版本不受支持。')
   }
   if (typeof values.releaseId !== 'string' || !values.releaseId.trim()) {
-    throw new Error('RPM 内置运行时 manifest 缺少 releaseId。')
+    throw new Error('桌面内置运行时 manifest 缺少 releaseId。')
   }
   return values.releaseId.trim()
 }

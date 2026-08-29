@@ -30,7 +30,7 @@ import { seedLayersFromDirectory } from '../gis/seedLayers.js'
 import { ModelAdapterRegistry } from '../model/registry.js'
 import { ModelCompletionService, ModelResultCacheStore } from '../model/modelResultCache.js'
 import {
-  ProviderCredentialCipher,
+  ProviderCredentialPersistence,
   ProviderCredentialStagingService,
 } from '../model/customProviderCredentials.js'
 import { CustomProviderService } from '../model/customProviderService.js'
@@ -180,7 +180,7 @@ export async function createAppContainer(input: {
   const customProviderService = new CustomProviderService(
     store.customProviders,
     modelRegistry,
-    new ProviderCredentialCipher(env.BETTER_AUTH_SECRET),
+    new ProviderCredentialPersistence(),
     new ProviderCredentialStagingService(),
   )
   const security: SecurityServices = {

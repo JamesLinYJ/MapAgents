@@ -2,20 +2,26 @@ import { describe, expect, it } from 'vitest'
 
 import type { AuthContext } from '../security/types.js'
 import {
-  ProviderCredentialCipher,
+  ProviderCredentialPersistence,
   ProviderCredentialStagingService,
 } from './customProviderCredentials.js'
 
-describe('ProviderCredentialCipher', () => {
-  it('stores authenticated ciphertext bound to one provider ID', () => {
-    const cipher = new ProviderCredentialCipher('test-server-secret-that-is-at-least-32-bytes')
-    const encrypted = cipher.encrypt('custom-one', 'sk-sensitive-value')
+describe('ProviderCredentialPersistence', () => {
+  it('stores and reads the API Key as plaintext with an explicit format marker', () => {
+    const persistence = new ProviderCredentialPersistence()
+    const stored = persistence.store('sk-sensitive-value')
 
-    expect(JSON.stringify(encrypted)).not.toContain('sk-sensitive-value')
-    expect(cipher.decrypt('custom-one', encrypted)).toBe('sk-sensitive-value')
-    expect(() => cipher.decrypt('custom-two', encrypted)).toThrow()
-    expect(() => cipher.decrypt('custom-one', { ...encrypted, authTag: Buffer.alloc(16).toString('base64') }))
-      .toThrow()
+    expect(stored).toEqual({
+      value: 'sk-sensitive-value',
+      iv: 'not-used',
+      authTag: 'not-used',
+      storageVersion: 'plain-text-v1',
+    })
+    expect(persistence.read(stored)).toBe('sk-sensitive-value')
+    expect(() => persistence.read({ ...stored, storageVersion: 'legacy-encrypted-v1' }))
+      .toThrow('不再受支持')
+    expect(() => persistence.read({ ...stored, authTag: 'changed' }))
+      .toThrow('存储标记无效')
   })
 })
 

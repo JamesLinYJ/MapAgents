@@ -46,11 +46,13 @@
 }
 
 .markdown-renderer pre {
-  @apply my-2.5 overflow-hidden rounded-[14px] bg-[#1c1c1e];
+  @apply my-2.5 overflow-hidden rounded-[14px];
 }
 
 .markdown-renderer pre code {
-  @apply block overflow-auto p-3.5 font-mono text-[13px] leading-relaxed text-[#e5e5ea];
+  @apply block overflow-auto p-3.5 font-mono text-[13px] leading-relaxed;
+  color: inherit;
+  background: transparent;
   white-space: pre-wrap;
   word-break: break-word;
 }

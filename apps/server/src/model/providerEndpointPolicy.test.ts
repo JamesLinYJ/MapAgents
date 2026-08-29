@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   assertCustomProviderBaseUrl,
   createGuardedProviderDnsResolver,
+  isAllowedPublicProviderDnsAddress,
   isPublicAddress,
 } from './providerEndpointPolicy.js'
 
@@ -29,6 +30,28 @@ describe('custom Provider endpoint policy', () => {
 
     await expect(resolver('api.provider.com', 0)).resolves.toEqual([{ address: '8.8.8.8', family: 4 }])
     await expect(resolver('api.provider.com', 0)).rejects.toThrow('非公网地址')
+  })
+
+  it('allows proxy synthetic DNS answers for HTTPS hostnames without accepting the range as public', async () => {
+    const lookup = vi.fn().mockResolvedValue([
+      { address: '198.18.2.163', family: 4 },
+      { address: '198.19.255.254', family: 4 },
+    ])
+    const resolver = createGuardedProviderDnsResolver('public', { lookup: lookup as never })
+
+    await expect(resolver('api.deepseek.com', 0)).resolves.toEqual([
+      { address: '198.18.2.163', family: 4 },
+      { address: '198.19.255.254', family: 4 },
+    ])
+    expect(isPublicAddress('198.18.2.163')).toBe(false)
+    expect(isAllowedPublicProviderDnsAddress('api.deepseek.com', '198.18.2.163')).toBe(true)
+  })
+
+  it('keeps literal proxy addresses and real private DNS answers blocked', async () => {
+    expect(() => assertCustomProviderBaseUrl('https://198.18.2.163/v1', 'public')).toThrow('非公网')
+    expect(isAllowedPublicProviderDnsAddress('198.18.2.163', '198.18.2.163')).toBe(false)
+    expect(isAllowedPublicProviderDnsAddress('api.provider.com', '10.0.0.8')).toBe(false)
+    expect(isAllowedPublicProviderDnsAddress('api.provider.com', '169.254.169.254')).toBe(false)
   })
 
   it('classifies reserved ranges conservatively', () => {

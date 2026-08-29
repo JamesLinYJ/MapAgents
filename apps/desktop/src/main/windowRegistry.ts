@@ -132,7 +132,7 @@ export class WorkspaceWindowRegistry {
       ...(Number.isInteger(state.x) && Number.isInteger(state.y)
         ? { x: state.x, y: state.y }
         : {}),
-      minWidth: 1100,
+      minWidth: 1024,
       minHeight: 700,
       show: false,
       autoHideMenuBar: true,

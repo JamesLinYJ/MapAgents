@@ -27,16 +27,35 @@ export function supportsAgentSdkLiveSupervisor(provider?: ModelProviderDescripto
 export function providerUnavailableLabel(provider?: ModelProviderDescriptor | null): string {
   if (!provider) return '（不可用）'
   if (!provider.configured) return '（未配置）'
-  if (!supportsAgentSdkLiveSupervisor(provider)) return '（不支持 Agent 运行时）'
+  if (!supportsAgentSdkLiveSupervisor(provider)) return '（未接入智能分析）'
   return ''
+}
+
+export function modelRouteUnavailableReason(
+  provider: ModelProviderDescriptor | null | undefined,
+  model: string,
+): string | null {
+  if (!provider) return '尚未选择模型服务'
+  if (!provider.configured) return `${provider.displayName} 尚未配置`
+  if (!supportsAgentSdkLiveSupervisor(provider)) return `${provider.displayName} 尚未接入智能分析`
+
+  const normalizedModel = model.trim()
+  if (!normalizedModel) return '尚未选择可用模型'
+  const availableModels = new Set([
+    provider.defaultModel,
+    ...provider.availableModels,
+  ].filter((candidate): candidate is string => Boolean(candidate?.trim())))
+  if (!availableModels.has(normalizedModel)) return `模型 ${normalizedModel} 当前不可用`
+  return null
 }
 
 export function agentRuntimeCapabilitySummary(
   provider?: ModelProviderDescriptor | null,
 ): string {
-  if (!provider) return '尚未选择模型提供商。'
+  if (!provider) return '尚未选择模型服务。'
+  if (!provider.configured) return '该模型服务尚未配置。'
   const runtime = provider.agentRuntime
-  if (runtime.transport === 'none') return '该提供商当前未接入 Agent 运行时。'
+  if (runtime.transport === 'none') return '该模型服务当前未接入智能分析。'
 
   const multiTool = runtime.multiToolResponse ? '支持同轮多工具响应' : '不支持同轮多工具响应'
   const concurrency = runtime.providerParallelToolControl
@@ -45,8 +64,8 @@ export function agentRuntimeCapabilitySummary(
   const hostedTools = runtime.hostedTools ? '支持服务端联网搜索' : null
   const unavailable = [
     !runtime.hostedTools ? '服务端工具' : null,
-    !runtime.remoteConversation ? '远程 Conversation' : null,
-    !runtime.serverCompaction ? '服务端压缩' : null,
+    !runtime.remoteConversation ? '服务端连续会话' : null,
+    !runtime.serverCompaction ? '服务端上下文压缩' : null,
   ].filter((item): item is string => Boolean(item))
 
   return [
@@ -59,6 +78,8 @@ export function agentRuntimeCapabilitySummary(
 }
 
 function transportLabel(transport: ModelProviderDescriptor['agentRuntime']['transport']): string {
-  if (transport === 'deepseek_responses') return 'DeepSeek Responses API'
-  return transport
+  if (transport === 'deepseek_responses') return 'DeepSeek 响应接口'
+  if (transport === 'openai_responses') return '响应接口'
+  if (transport === 'openai_chat_completions') return '对话补全接口'
+  return '未接入智能分析'
 }

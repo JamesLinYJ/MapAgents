@@ -23,6 +23,7 @@ import type { AgentRuntimeConfig } from '@geo-agent-platform/shared-types/runtim
 import { describe, expect, it } from 'vitest'
 
 import { defaultRuntimeConfig } from '../../agent/defaultRuntimeConfig.js'
+import { runtimeConfigDigest } from '../../agent/agentsRuntimeMetadata.js'
 import { agentContextDigest } from './agentContextDigest.js'
 import {
   AgentStepContextFactory,
@@ -247,7 +248,7 @@ function captureInput(
     serviceTier: null,
     timeoutMs: 45_000,
     runtimeConfig,
-    runtimeConfigDigest: agentContextDigest(runtimeConfig),
+    runtimeConfigDigest: runtimeConfigDigest(runtimeConfig),
     toolPlan: plan,
     activeMcpServers: ['north', 'south'],
     mcpToolServers,

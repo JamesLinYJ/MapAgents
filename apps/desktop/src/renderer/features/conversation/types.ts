@@ -57,6 +57,7 @@ export interface ChatPanelProps {
   currentThreadTitle?: string
   runCreatedAt?: string
   providerLabel: string
+  submissionDisabledReason?: string
   runStatus?: string
   query: string
   isSubmitting: boolean

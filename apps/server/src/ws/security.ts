@@ -80,6 +80,7 @@ export function registerWsAuthorizationPolicies(registry: WsCommandRegistry): vo
   set('provider:list', workspaceRead)
   set('provider:custom:list', runtimeConfigurationRead)
   set('provider:credential:stage', runtimeConfigurationUpdate)
+  set('provider:custom:discover-models', runtimeConfigurationUpdate)
   set('provider:custom:upsert', runtimeConfigurationUpdate)
   set('provider:custom:delete', runtimeConfigurationUpdate)
   set('system:get', workspaceRead)

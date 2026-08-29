@@ -14,7 +14,7 @@
 // 维护聊天时间线的滚动、空状态和辅助面板渲染。输入只接受
 // ConversationEntry[]，诊断 RunEvent 面板不得接入这里。
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, m, type Variants } from 'framer-motion'
 import { AlertCircle, CheckCircle2, ChevronDown, Circle, LoaderCircle, PauseCircle } from 'lucide-react'
 import { useVirtualizer } from '@tanstack/react-virtual'
@@ -86,7 +86,6 @@ export function ConversationTimeline({
   const [activeJumpAnchorId, setActiveJumpAnchorId] = useState<string | null>(null)
   const timelineRef = useRef<HTMLDivElement>(null)
   const virtualListRef = useRef<HTMLDivElement>(null)
-  const nearBottom = useRef(true)
   const jumpItems = useMemo(() => buildConversationJumpItems(conversation), [conversation])
   const jumpItemIndices = useMemo(
     () => new Map(conversation.map((entry, index) => [entry.id, index])),
@@ -99,12 +98,13 @@ export function ConversationTimeline({
     overscan: 8,
     gap: CONVERSATION_TIMELINE_GAP_PX,
     getItemKey: index => conversation[index]?.id ?? index,
+    anchorTo: 'end',
+    scrollEndThreshold: 80,
   })
 
   const handleTimelineScroll = () => {
     const el = timelineRef.current
     if (!el) return
-    nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
     const virtualList = virtualListRef.current
     if (!virtualList) return
     const visibleOffset = Math.max(
@@ -145,12 +145,16 @@ export function ConversationTimeline({
     setActiveJumpAnchorId(anchorId)
   }
 
-  // 新消息到达时自动滚到底部，除非用户手动上滚。
-  useEffect(() => {
+  // 对话内容变化时在浏览器绘制前直接落到底部。时间线可能随新 run 重建，
+  // 这里必须使用即时滚动，不能先显示顶部再平滑经过整段历史。
+  useLayoutEffect(() => {
     const el = timelineRef.current
-    if (!el || !nearBottom.current) return
+    if (!el) return
     if (conversation.length > 0) {
-      virtualizer.scrollToIndex(conversation.length - 1, { align: 'end' })
+      virtualizer.scrollToIndex(conversation.length - 1, {
+        align: 'end',
+        behavior: 'auto',
+      })
     } else {
       el.scrollTop = el.scrollHeight
     }

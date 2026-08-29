@@ -12,7 +12,6 @@
 import type { TokenUsageBucket, TokenUsageLimit, TokenUsageRun, TokenUsageSummary } from '@geo-agent-platform/shared-types'
 import { AlertTriangle, BarChart3 } from 'lucide-react'
 
-import { LiquidGlassSurface } from '../../shared/components/LiquidGlassLayer'
 import { StatusPill } from '../../shared/components/StatusPill'
 
 interface UsageManagementPanelProps {
@@ -23,19 +22,19 @@ export function UsageManagementPanel({ summary }: UsageManagementPanelProps) {
   if (!summary) {
     return (
       <main className="tool-management__detail tool-management__detail--extensions">
-        <LiquidGlassSurface as="section" variant="strong" className="panel usage-panel">
+        <section className="panel usage-panel ui-page-section">
           <PanelTitle eyebrow="模型计量" title="词元用量" />
           <div className="panel__section">
             <div className="panel__empty">正在加载真实用量统计…</div>
           </div>
-        </LiquidGlassSurface>
+        </section>
       </main>
     )
   }
 
   return (
     <main className="tool-management__detail tool-management__detail--extensions">
-      <LiquidGlassSurface as="section" variant="strong" className="panel usage-panel">
+      <section className="panel usage-panel ui-page-section">
         <PanelTitle eyebrow="模型计量" title="词元用量" count={summary.totals.runCount} />
         <div className="usage-metric-grid">
           <MetricCard label="输入词元" value={formatNumber(summary.totals.inputTokens)} hint={`${summary.totals.runsWithUsage} 个运行已报告实际用量`} />
@@ -54,7 +53,7 @@ export function UsageManagementPanel({ summary }: UsageManagementPanelProps) {
             ))}
           </div>
         ) : null}
-      </LiquidGlassSurface>
+      </section>
 
       <div className="usage-grid">
         <UsageBucketPanel title="按服务提供方" buckets={summary.byProvider} />
@@ -62,8 +61,8 @@ export function UsageManagementPanel({ summary }: UsageManagementPanelProps) {
         <UsageBucketPanel title="按运行状态" buckets={summary.byStatus} />
       </div>
 
-      <LiquidGlassSurface as="section" variant="panel" className="panel usage-panel">
-        <PanelTitle eyebrow="Recent Runs" title="最近运行明细" count={summary.recentRuns.length} />
+      <section className="panel usage-panel ui-page-section">
+        <PanelTitle eyebrow="最近运行" title="最近运行明细" count={summary.recentRuns.length} />
         <div className="usage-run-table" role="table" aria-label="最近运行用量">
           <div className="usage-run-table__row usage-run-table__row--head" role="row">
             <span>运行</span>
@@ -77,7 +76,7 @@ export function UsageManagementPanel({ summary }: UsageManagementPanelProps) {
             <div className="panel__empty">当前工作区还没有运行记录。</div>
           )}
         </div>
-      </LiquidGlassSurface>
+      </section>
     </main>
   )
 }
@@ -99,8 +98,8 @@ function UsageLimitCard({ limit }: { limit: TokenUsageLimit }) {
 
 function UsageBucketPanel({ title, buckets }: { title: string; buckets: TokenUsageBucket[] }) {
   return (
-    <LiquidGlassSurface as="section" variant="panel" className="panel usage-panel">
-      <PanelTitle eyebrow="Breakdown" title={title} count={buckets.length} />
+    <section className="panel usage-panel ui-page-section">
+      <PanelTitle eyebrow="分类统计" title={title} count={buckets.length} />
       <div className="usage-bucket-list">
         {buckets.length ? buckets.slice(0, 8).map((bucket) => (
           <article className="usage-bucket-row" key={bucket.key}>
@@ -115,7 +114,7 @@ function UsageBucketPanel({ title, buckets }: { title: string; buckets: TokenUsa
           </article>
         )) : <div className="panel__empty">暂无分组数据。</div>}
       </div>
-    </LiquidGlassSurface>
+    </section>
   )
 }
 

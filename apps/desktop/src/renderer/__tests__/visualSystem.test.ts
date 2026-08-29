@@ -159,10 +159,48 @@ describe('desktop visual system guards', () => {
       expect(uiSystemSource, pageRoot).toContain(pageRoot)
     }
     expect(uiSystemSource).toContain('.ui-dialog-surface')
+    expect(uiSystemSource).toMatch(/\.ui-dialog-surface\s*\{[\s\S]*?position:\s*fixed;/u)
+    expect(uiSystemSource).toMatch(/\.ui-dialog-surface\s*\{[\s\S]*?translate:\s*-50% -50%;/u)
+    expect(uiSystemSource).toMatch(/\.ui-dialog-surface::before\s*\{[\s\S]*?inset:\s*0;/u)
     expect(uiSystemSource).toContain('.ui-popover-surface')
+    expect(overlaysSource).toMatch(/\.ui-dialog-actions,[\s\S]*?margin:\s*18px 0 0;/u)
+    expect(overlaysSource).toMatch(/\.ui-dialog-actions button\s*\{[\s\S]*?min-width:\s*78px;/u)
     expect(uiSystemSource).toContain('@media (prefers-contrast: more)')
     expect(uiSystemSource).toContain('@media (prefers-reduced-motion: reduce)')
     expect(uiSystemSource).toContain('@media (forced-colors: active)')
+  })
+
+  it('keeps one canonical desktop design specification and page skeleton', async () => {
+    const standardsRoot = path.join(repositoryRoot, 'docs', 'standards')
+    const [standardEntries, designSource, pageSources] = await Promise.all([
+      readdir(standardsRoot),
+      readFile(path.join(standardsRoot, 'DESIGN.md'), 'utf8'),
+      Promise.all([
+        'features/settings/ModelSettingsPage.tsx',
+        'features/account/AccountCenterPage.tsx',
+        'features/account/LegalPolicyPage.tsx',
+        'features/security/SecurityAdminPage.tsx',
+        'features/debug/DebugPage.tsx',
+        'features/tools/ToolManagementPage.tsx',
+      ].map(readRendererFile)),
+    ])
+
+    expect(standardEntries.filter(name => /^(?:design|desktop-ui-system)\.md$/iu.test(name))).toEqual(['DESIGN.md'])
+    expect(designSource).toContain('data-desktop-platform')
+    expect(designSource).toContain('`ui-page-header`')
+    expect(designSource).toContain('macOS：左侧至少预留 78 像素')
+    for (const source of pageSources) {
+      expect(source).toContain('ui-page')
+      expect(source).toContain('ui-page-header')
+    }
+  })
+
+  it('uses glass only for overlays rather than page content', async () => {
+    const featureFiles = (await collectRendererTsxFiles(path.join(rendererRoot, 'features')))
+      .filter(file => !file.includes(`${path.sep}__tests__${path.sep}`))
+    const featureSources = await Promise.all(featureFiles.map(file => readFile(file, 'utf8')))
+
+    expect(featureSources.join('\n')).not.toContain('LiquidGlassSurface')
   })
 
   it('gives every static semantic component class a CSS selector', async () => {
@@ -212,6 +250,19 @@ describe('desktop visual system guards', () => {
     }
   })
 
+  it('keeps Markdown code text paired with the final code-block surface', async () => {
+    const [markdownSource, contentSource] = await Promise.all([
+      readRendererFile('app/styles/markdown.css'),
+      readRendererFile('app/styles/ui-content.css'),
+    ])
+
+    expect(contentSource).toMatch(/#root pre\s*\{[^}]*color:\s*#243942;[^}]*background:\s*#f5f8f9;/s)
+    expect(markdownSource).toMatch(
+      /\.markdown-renderer pre code\s*\{[^}]*color:\s*inherit;[^}]*background:\s*transparent;/s,
+    )
+    expect(markdownSource).not.toMatch(/\.markdown-renderer pre code\s*\{[^}]*text-\[#e5e5ea\]/s)
+  })
+
   it('defines every named desktop animation', async () => {
     const cssFiles = await collectRendererCssFiles(rendererRoot)
     const cssSources = await Promise.all(cssFiles.map(file => readFile(file, 'utf8')))
@@ -255,13 +306,26 @@ describe('desktop visual system guards', () => {
   })
 
   it('keeps fullscreen chrome on one viewport grid', async () => {
-    const desktopSource = await readRendererFile('app/styles/desktop.css')
+    const [desktopSource, glassSource, entrySource, setupSource] = await Promise.all([
+      readRendererFile('app/styles/desktop.css'),
+      readRendererFile('app/styles/glass.css'),
+      readRendererFile('main.tsx'),
+      readRendererFile('app/styles/product-setup.css'),
+    ])
     const titlebarRule = desktopSource.match(/\.gf-titlebar-region \.workbench-chrome\s*\{(?<body>[^}]+)\}/u)?.groups?.body ?? ''
 
     expect(titlebarRule).toContain('width: 100%')
     expect(titlebarRule).toContain('max-width: none')
     expect(titlebarRule).toContain('margin: 0')
-    expect(titlebarRule).toContain('var(--gf-shell-inline-gutter)')
+    expect(titlebarRule).toContain('var(--ui-titlebar-start-safe')
+    expect(titlebarRule).toContain('var(--ui-titlebar-end-safe')
+    expect(desktopSource).not.toContain('--gf-window-controls-reserve')
+    expect(glassSource).toContain(":root[data-desktop-platform='darwin']")
+    expect(glassSource).toContain('--ui-titlebar-start-safe: 78px')
+    expect(glassSource).toContain('--ui-titlebar-end-safe: 8px')
+    expect(entrySource).toContain('document.documentElement.dataset.desktopPlatform = window.platformDesktop.platform')
+    expect(setupSource).toContain('var(--ui-titlebar-start-safe')
+    expect(setupSource).toContain('var(--ui-titlebar-end-safe')
     expect(desktopSource).toContain('.gf-panel-separator::before')
     expect(desktopSource).toContain('cursor: col-resize')
   })

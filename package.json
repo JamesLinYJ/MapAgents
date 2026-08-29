@@ -45,6 +45,7 @@
     "generate:glass": "node scripts/generate-liquid-glass-maps.mjs",
     "check:bundle": "node scripts/check-desktop-bundle-budget.mjs",
     "release:runtime": "node scripts/create-runtime-service-artifact.mjs --build",
+    "release:runtime:macos:arm64": "node scripts/create-runtime-service-artifact.mjs --build --force --materialize-darwin",
     "release:runtime:linux": "node scripts/create-runtime-service-artifact.mjs --build --force --materialize-linux",
     "verify:runtime": "node scripts/verify-runtime-service-artifact.mjs",
     "apply:repository-governance": "node scripts/apply-repository-governance.mjs",
@@ -69,8 +70,8 @@
   },
   "allowScripts": {
     "esbuild@0.25.12": true,
-    "esbuild@0.28.0": true,
-    "electron@43.2.0": true,
+    "esbuild@0.28.2": true,
+    "electron@43.4.0": true,
     "electron-winstaller@5.4.4": true
   }
 }

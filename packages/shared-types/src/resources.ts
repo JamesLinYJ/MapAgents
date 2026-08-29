@@ -85,10 +85,17 @@ export const modelCapabilityFlagsSchema = z.object({
 }).strict()
 
 export const modelCapabilitySnapshotSchema = z.object({
-  modelId: z.string().trim().min(1).max(200),
-  contextWindowTokens: z.number().int().min(1_024).max(10_000_000),
+  modelId: z.string().trim()
+    .min(1, '请输入模型 ID')
+    .max(200, '模型 ID 不能超过 200 个字符'),
+  contextWindowTokens: z.number({ error: '上下文词元必须是数字' })
+    .int('上下文词元必须是整数')
+    .min(1_024, '上下文词元不能少于 1024')
+    .max(10_000_000, '上下文词元不能超过 10000000'),
   capabilities: modelCapabilityFlagsSchema,
-  modalities: z.array(modelInputModalitySchema).min(1).max(4),
+  modalities: z.array(modelInputModalitySchema)
+    .min(1, '至少选择一种输入模态')
+    .max(4, '输入模态不能超过四种'),
 }).strict().superRefine((model, context) => {
   if (new Set(model.modalities).size !== model.modalities.length) {
     context.addIssue({ code: 'custom', path: ['modalities'], message: '模态声明不能重复' })
@@ -193,9 +200,9 @@ export const runAttachmentsSchema = z.array(runAttachmentInputSchema).max(12).su
 
 export const customProviderIdSchema = z.string()
   .trim()
-  .min(1)
-  .max(64)
-  .regex(/^[a-z0-9][a-z0-9_-]*$/u, 'Provider ID 只能包含小写字母、数字、连字符和下划线')
+  .min(1, '请输入服务标识')
+  .max(64, '服务标识不能超过 64 个字符')
+  .regex(/^[a-z0-9][a-z0-9_-]*$/u, '服务标识只能包含小写字母、数字、连字符和下划线')
 
 export const customProviderProtocolSchema = z.enum(['responses', 'chat_completions'])
 export const customProviderNetworkAccessSchema = z.enum(['public', 'loopback'])
@@ -203,11 +210,20 @@ export const customProviderModalitySchema = modelInputModalitySchema
 
 export const customProviderConfigSchema = z.object({
   providerId: customProviderIdSchema,
-  displayName: z.string().trim().min(1).max(120),
-  baseUrl: z.string().trim().url().max(2048),
+  displayName: z.string().trim()
+    .min(1, '请输入显示名称')
+    .max(120, '显示名称不能超过 120 个字符'),
+  baseUrl: z.string().trim()
+    .min(1, '请输入接口地址')
+    .url('请输入有效的接口地址')
+    .max(2048, '接口地址不能超过 2048 个字符'),
   protocol: customProviderProtocolSchema,
-  models: z.array(modelCapabilitySnapshotSchema).min(1).max(100),
-  defaultModel: z.string().trim().min(1).max(200),
+  models: z.array(modelCapabilitySnapshotSchema)
+    .min(1, '请至少添加一个模型')
+    .max(100, '最多只能保存 100 个模型'),
+  defaultModel: z.string().trim()
+    .min(1, '请选择默认模型')
+    .max(200, '默认模型 ID 不能超过 200 个字符'),
   toolSchemaMode: z.enum(['strict', 'compatible']),
   networkAccess: customProviderNetworkAccessSchema,
 }).strict().superRefine((config, context) => {
@@ -238,6 +254,17 @@ export const customProviderRecordSchema = customProviderConfigSchema.extend({
 export const providerCredentialStageSchema = z.object({
   credentialHandle: z.string().min(1),
   expiresAt: z.string(),
+}).strict()
+
+export const providerDiscoveredModelSchema = z.object({
+  modelId: z.string().trim().min(1).max(200),
+  ownedBy: z.string().trim().min(1).max(200).nullable(),
+}).strict()
+
+export const providerModelDiscoverySchema = z.object({
+  models: z.array(providerDiscoveredModelSchema).max(200),
+  latencyMs: z.number().nonnegative(),
+  testedAt: z.string().datetime({ offset: true }),
 }).strict()
 
 export const customProviderValidationSchema = z.object({
@@ -733,6 +760,8 @@ export type MapScreenshotContext = z.infer<typeof mapScreenshotContextSchema>
 export type RunAttachmentInput = z.infer<typeof runAttachmentInputSchema>
 export type CustomProviderConfig = z.infer<typeof customProviderConfigSchema>
 export type CustomProviderRecord = z.infer<typeof customProviderRecordSchema>
+export type ProviderDiscoveredModel = z.infer<typeof providerDiscoveredModelSchema>
+export type ProviderModelDiscovery = z.infer<typeof providerModelDiscoverySchema>
 export type CustomProviderValidation = z.infer<typeof customProviderValidationSchema>
 export type CustomProviderSaveResult = z.infer<typeof customProviderSaveResultSchema>
 export type AgentRuntimeCapabilities = z.infer<typeof agentRuntimeCapabilitiesSchema>

@@ -9,65 +9,39 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import {
-  createCipheriv,
-  createDecipheriv,
-  hkdfSync,
-  randomBytes,
-  randomUUID,
-} from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 
 import type { AuthContext } from '../security/types.js'
-import type { EncryptedProviderCredential } from '../store/postgres/customProviderStore.js'
+import type { StoredProviderCredential } from '../store/postgres/customProviderStore.js'
 
-const CREDENTIAL_KEY_VERSION = 'aes-256-gcm-v1'
+const CREDENTIAL_STORAGE_VERSION = 'plain-text-v1'
+const UNUSED_CREDENTIAL_FIELD = 'not-used'
 const HANDLE_TTL_MS = 5 * 60 * 1_000
 const MAX_STAGED_CREDENTIALS = 128
 
-export class ProviderCredentialCipher {
-  private readonly key: Buffer
-
-  constructor(serverSecret: string) {
-    if (Buffer.byteLength(serverSecret, 'utf8') < 32) {
-      throw new Error('Provider 凭据加密根密钥至少需要 32 字节。')
-    }
-    this.key = Buffer.from(hkdfSync(
-      'sha256',
-      Buffer.from(serverSecret, 'utf8'),
-      Buffer.from('geo-agent-platform/provider-credentials/v1', 'utf8'),
-      Buffer.from('model-provider-api-key', 'utf8'),
-      32,
-    ))
-  }
-
-  encrypt(providerId: string, plaintext: string): EncryptedProviderCredential {
-    if (!plaintext) throw new Error('不能加密空的 Provider 凭据。')
-    const iv = randomBytes(12)
-    const cipher = createCipheriv('aes-256-gcm', this.key, iv)
-    cipher.setAAD(credentialAad(providerId))
-    const ciphertext = Buffer.concat([
-      cipher.update(plaintext, 'utf8'),
-      cipher.final(),
-    ])
+/**
+ * 本地客户端按产品要求直接持久化 API Key，不做加密或可逆编码。数据库沿用
+ * 既有四列契约以避免迁移；版本标记让旧加密记录明确失败并要求用户重新填写。
+ */
+export class ProviderCredentialPersistence {
+  store(plaintext: string): StoredProviderCredential {
+    if (!plaintext) throw new Error('不能保存空的 Provider 凭据。')
     return {
-      ciphertext: ciphertext.toString('base64'),
-      iv: iv.toString('base64'),
-      authTag: cipher.getAuthTag().toString('base64'),
-      keyVersion: CREDENTIAL_KEY_VERSION,
+      value: plaintext,
+      iv: UNUSED_CREDENTIAL_FIELD,
+      authTag: UNUSED_CREDENTIAL_FIELD,
+      storageVersion: CREDENTIAL_STORAGE_VERSION,
     }
   }
 
-  decrypt(providerId: string, encrypted: EncryptedProviderCredential): string {
-    if (encrypted.keyVersion !== CREDENTIAL_KEY_VERSION) {
-      throw new Error(`不支持 Provider 凭据密钥版本 '${encrypted.keyVersion}'。`)
+  read(stored: StoredProviderCredential): string {
+    if (stored.storageVersion !== CREDENTIAL_STORAGE_VERSION) {
+      throw new Error('已有 Provider 凭据格式不再受支持，请在设置页重新填写 API Key。')
     }
-    const iv = decodeSizedBase64(encrypted.iv, 12, 'IV')
-    const authTag = decodeSizedBase64(encrypted.authTag, 16, '认证标签')
-    const ciphertext = Buffer.from(encrypted.ciphertext, 'base64')
-    const decipher = createDecipheriv('aes-256-gcm', this.key, iv)
-    decipher.setAAD(credentialAad(providerId))
-    decipher.setAuthTag(authTag)
-    return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8')
+    if (stored.iv !== UNUSED_CREDENTIAL_FIELD || stored.authTag !== UNUSED_CREDENTIAL_FIELD) {
+      throw new Error('Provider 凭据存储标记无效，请在设置页重新填写 API Key。')
+    }
+    return stored.value
   }
 }
 
@@ -120,14 +94,4 @@ export class ProviderCredentialStagingService {
       if (staged.expiresAtMs <= nowMs) this.staged.delete(handle)
     }
   }
-}
-
-function credentialAad(providerId: string): Buffer {
-  return Buffer.from(`geo-agent-platform:model-provider:${providerId}`, 'utf8')
-}
-
-function decodeSizedBase64(value: string, expectedBytes: number, label: string): Buffer {
-  const decoded = Buffer.from(value, 'base64')
-  if (decoded.byteLength !== expectedBytes) throw new Error(`Provider 凭据${label}长度无效。`)
-  return decoded
 }

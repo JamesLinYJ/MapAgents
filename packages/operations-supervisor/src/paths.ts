@@ -11,8 +11,7 @@
 
 import { execFile } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { chmod, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
-import os from 'node:os'
+import { chmod, lstat, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
 
@@ -20,6 +19,7 @@ import type { OperationsProfile } from '@geo-agent-platform/shared-types/operati
 import { z } from 'zod'
 
 const execFileAsync = promisify(execFile)
+const UNIX_ENDPOINT_MAX_BYTES = 100
 const windowsAclSchema = z.object({
   protected: z.boolean(),
   currentSid: z.string().min(1),
@@ -75,21 +75,30 @@ export async function resolveOperationsPaths(input: {
 }
 
 async function resolveUnixEndpoint(workspaceId: string): Promise<string> {
-  // Unix Socket 是当前登录会话的短生命 IPC，不是项目数据。按 XDG Base
-  // Directory 契约统一放入 $XDG_RUNTIME_DIR：登出后由系统清理，不会
-  // 受仓库路径长度或 UTF-8 字节数影响。数据、日志和密钥仍留在
-  // runtimeRoot，Supervisor/CLI/Desktop 通过同一 workspaceId 确定性解析同一 endpoint。
-  const runtimeBase = process.env.XDG_RUNTIME_DIR?.trim()
-    ? path.resolve(process.env.XDG_RUNTIME_DIR)
-    : path.join(os.tmpdir(), `geo-agent-platform-${process.getuid?.() ?? 'user'}`)
-  const endpointRoot = path.join(runtimeBase, 'geo-agent-platform')
-  await mkdir(endpointRoot, { recursive: true, mode: 0o700 })
-  if (process.platform !== 'win32') await chmod(endpointRoot, 0o700)
+  // Unix Socket 是当前登录会话的短生命 IPC，不是项目数据。Desktop 会
+  // 收敛 Supervisor 子进程的环境变量，因此地址不能依赖 TMPDIR 或
+  // XDG_RUNTIME_DIR，否则两个进程可能解析到不同位置。固定的 UID 隔离
+  // 目录兼顾跨进程确定性与 Unix Socket 字节长度限制；数据、日志和密钥
+  // 仍留在 runtimeRoot，不随 IPC 地址移动。
+  const userId = process.getuid?.() ?? 'user'
+  const endpointRoot = path.join('/tmp', `gap-${userId}`)
   const endpoint = path.join(endpointRoot, `${workspaceId}.sock`)
-  if (Buffer.byteLength(endpoint, 'utf8') > 100) {
-    throw new Error('本机运行时目录过长，无法创建 Supervisor IPC。')
+  if (Buffer.byteLength(endpoint, 'utf8') > UNIX_ENDPOINT_MAX_BYTES) {
+    throw new Error('无法为 Supervisor 创建长度合规的本机 IPC 地址。')
   }
+  await ensurePrivateEndpointRoot(endpointRoot)
   return endpoint
+}
+
+async function ensurePrivateEndpointRoot(endpointRoot: string): Promise<void> {
+  await mkdir(endpointRoot, { recursive: true, mode: 0o700 })
+  const details = await lstat(endpointRoot)
+  const userId = process.getuid?.()
+  if (!details.isDirectory() || details.isSymbolicLink()
+    || (userId !== undefined && details.uid !== userId)) {
+    throw new Error('Supervisor IPC 目录不属于当前用户或不是普通目录。')
+  }
+  await chmod(endpointRoot, 0o700)
 }
 
 export async function ensureSecretFile(filePath: string, allowCreate: boolean): Promise<string> {

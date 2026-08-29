@@ -7,15 +7,18 @@
 
 import { createContext, useContext } from 'react'
 import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
+import type { DesktopProductSetupStatus } from '../../contracts/desktopIpc'
 
 export interface ProductIdentityContextValue {
   productName: string
   openProductSettings: () => void
+  setupStatus: Extract<DesktopProductSetupStatus, { state: 'configured' }> | null
 }
 
 export const ProductIdentityContext = createContext<ProductIdentityContextValue>({
   productName: PRODUCT_CODENAME,
   openProductSettings: () => undefined,
+  setupStatus: null,
 })
 
 export function useProductIdentity(): ProductIdentityContextValue {

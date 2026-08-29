@@ -19,16 +19,30 @@ const emptyPayloadSchema = z.object({}).strict()
 const credentialStagePayloadSchema = z.object({
   secret: z.string().min(1).max(8192),
 }).strict()
+const discoverModelsPayloadSchema = z.object({
+  providerId: z.string().trim().min(1).max(64),
+  baseUrl: z.string().trim().url().max(2_048),
+  networkAccess: z.enum(['public', 'loopback']),
+  credentialHandle: z.string().min(1).max(200).nullable().optional(),
+}).strict()
 const upsertPayloadSchema = z.object({
   config: customProviderConfigSchema,
   credentialHandle: z.string().min(1).max(200).nullable().optional(),
-  clearCredential: z.boolean().default(false),
+  clearApiKey: z.boolean().optional(),
+  clearCredential: z.boolean().optional(),
 }).strict().superRefine((payload, context) => {
-  if (payload.credentialHandle && payload.clearCredential) {
+  if (payload.clearApiKey && payload.clearCredential) {
+    context.addIssue({
+      code: 'custom',
+      path: ['clearApiKey'],
+      message: 'clearApiKey 与 clearCredential 不能同时使用',
+    })
+  }
+  if (payload.credentialHandle && (payload.clearApiKey || payload.clearCredential)) {
     context.addIssue({
       code: 'custom',
       path: ['credentialHandle'],
-      message: 'credentialHandle 与 clearCredential 不能同时使用',
+      message: 'credentialHandle 与清除凭据操作不能同时使用',
     })
   }
 })
@@ -53,6 +67,21 @@ export function registerCustomProviderCommands(registry: WsCommandRegistry): voi
   })
 
   registry.register({
+    type: 'provider:custom:discover-models',
+    payloadSchema: discoverModelsPayloadSchema,
+    auth: 'required',
+    csrf: true,
+    handler: (payload, context) => requireService(context.dependencies.customProviderService)
+      .discoverModels({
+        providerId: payload.providerId,
+        baseUrl: payload.baseUrl,
+        networkAccess: payload.networkAccess,
+        ...(payload.credentialHandle !== undefined ? { credentialHandle: payload.credentialHandle } : {}),
+        auth: requireAuth(context.auth),
+      }),
+  })
+
+  registry.register({
     type: 'provider:custom:upsert',
     payloadSchema: upsertPayloadSchema,
     auth: 'required',
@@ -60,6 +89,7 @@ export function registerCustomProviderCommands(registry: WsCommandRegistry): voi
     handler: (payload, context) => requireService(context.dependencies.customProviderService).save({
       config: payload.config,
       ...(payload.credentialHandle !== undefined ? { credentialHandle: payload.credentialHandle } : {}),
+      ...(payload.clearApiKey !== undefined ? { clearApiKey: payload.clearApiKey } : {}),
       ...(payload.clearCredential !== undefined ? { clearCredential: payload.clearCredential } : {}),
       auth: requireAuth(context.auth),
     }),

@@ -13,6 +13,7 @@ playwright-report/
 test-results/
 artifacts/**/*.log
 artifacts/runtime-service/
+artifacts/runtime-dependencies/
 .DS_Store
 *.docx
 __pycache__/
@@ -30,6 +31,8 @@ runtime/*
 !runtime/.gitkeep
 apps/server/runtime/*
 !apps/server/runtime/.gitkeep
+apps/worker/build/
+packages/gis-meteorology/build/
 output/
 .playwright-cli/
 .claude/

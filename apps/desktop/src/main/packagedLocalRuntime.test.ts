@@ -28,7 +28,7 @@ afterEach(async () => {
   )))
 })
 
-describe('packaged Linux local runtime', () => {
+describe('packaged local runtime', () => {
   it('creates private user configuration and starts the packaged service without Docker', async () => {
     const root = await createTemporaryDirectory()
     const resourcesPath = path.join(root, 'resources')
@@ -169,10 +169,105 @@ describe('packaged Linux local runtime', () => {
       },
     })).resolves.toEqual({ tiandituConfigured: true })
 
-    const environmentSource = await readFile(resolution!.serviceEnvironmentFile, 'utf8')
-    expect(environmentSource).toContain('TIANDITU_API_KEY="server-key-fixture-1234"')
+    const configuredSource = await readFile(resolution!.serviceEnvironmentFile, 'utf8')
+    expect(configuredSource).toContain('TIANDITU_API_KEY="server-key-fixture-1234"')
     expect((await stat(resolution!.serviceEnvironmentFile)).mode & 0o777).toBe(0o600)
     expect(commands).toEqual([['--user', 'restart', 'geo-agent-platform-supervisor.service']])
+
+    await expect(updatePackagedLocalRuntimeUserSettings({
+      serviceEnvironmentFile: resolution!.serviceEnvironmentFile,
+      ownerUid: process.getuid?.(),
+      tiandituApiKey: 'server-key-fixture-1234',
+      runSystemctl: async arguments_ => {
+        commands.push([...arguments_])
+        return 0
+      },
+    })).resolves.toEqual({ tiandituConfigured: true })
+    await expect(updatePackagedLocalRuntimeUserSettings({
+      serviceEnvironmentFile: resolution!.serviceEnvironmentFile,
+      ownerUid: process.getuid?.(),
+      runSystemctl: async arguments_ => {
+        commands.push([...arguments_])
+        return 0
+      },
+    })).resolves.toEqual({ tiandituConfigured: true })
+    expect(commands).toHaveLength(1)
+
+    await expect(updatePackagedLocalRuntimeUserSettings({
+      serviceEnvironmentFile: resolution!.serviceEnvironmentFile,
+      ownerUid: process.getuid?.(),
+      clearTiandituApiKey: true,
+      runSystemctl: async arguments_ => {
+        commands.push([...arguments_])
+        return 0
+      },
+    })).resolves.toEqual({ tiandituConfigured: false })
+    const clearedSource = await readFile(resolution!.serviceEnvironmentFile, 'utf8')
+    expect(clearedSource).not.toContain('TIANDITU_API_KEY=')
+    expect((await stat(resolution!.serviceEnvironmentFile)).mode & 0o777).toBe(0o600)
+    expect(commands).toEqual([
+      ['--user', 'restart', 'geo-agent-platform-supervisor.service'],
+      ['--user', 'restart', 'geo-agent-platform-supervisor.service'],
+    ])
+  })
+
+  it('starts the bundled macOS service tree and exposes automatic local identity configuration', async () => {
+    const root = await createTemporaryDirectory()
+    const resourcesPath = path.join(root, 'resources')
+    const homeDirectory = path.join(root, 'home')
+    await createBundledRuntime(resourcesPath, 'release-macos', 'darwin')
+    const commands: string[][] = []
+    const daemonStarts: string[][] = []
+    let statusCalls = 0
+
+    const resolution = await preparePackagedLocalRuntime({
+      platform: 'darwin',
+      resourcesPath,
+      homeDirectory,
+      environment: { PATH: '/usr/bin:/bin' },
+      ownerUid: process.getuid?.(),
+      systemRuntimeManifestPath: path.join(root, 'missing-system-manifest.json'),
+      isPortAvailable: async () => true,
+      runSupervisorCommand: async input => {
+        commands.push([...input.command])
+        if (input.command[0] === 'status') {
+          statusCalls += 1
+          return statusCalls === 1 ? 1 : 0
+        }
+        return 0
+      },
+      spawnSupervisorDaemon: async input => {
+        daemonStarts.push([...input.commonArguments])
+      },
+      delay: async () => undefined,
+    })
+
+    expect(resolution).not.toBeNull()
+    const source = await readFile(resolution!.serviceEnvironmentFile, 'utf8')
+    expect(source).toContain(`POSTGRES_BIN_DIR="${path.join(
+      resourcesPath,
+      'runtime-service',
+      'postgresql-portable',
+      'bin',
+    )}"`)
+    expect(source).toContain(`WORKER_PYTHON="${path.join(
+      resourcesPath,
+      'runtime-service',
+      'python-runtime',
+      'bin',
+      'python3.12',
+    )}"`)
+    expect(source).toContain('APP_BASE_URL="http://127.0.0.1:8000"')
+    expect(commands).toEqual([
+      ['status', '--json'],
+      ['status', '--json'],
+      ['start', 'all', '--json'],
+    ])
+    expect(daemonStarts).toHaveLength(1)
+
+    await resolution!.restartApiService()
+    expect(commands.at(-1)).toEqual(['restart', 'api', '--json'])
+    expect(resolution!.manifestProtection).toMatchObject({ platform: 'darwin' })
   })
 })
 
@@ -182,7 +277,11 @@ async function createTemporaryDirectory(): Promise<string> {
   return directory
 }
 
-async function createBundledRuntime(resourcesPath: string, releaseId: string): Promise<void> {
+async function createBundledRuntime(
+  resourcesPath: string,
+  releaseId: string,
+  platform: 'darwin' | 'linux' = 'linux',
+): Promise<void> {
   const projectRoot = path.join(resourcesPath, 'runtime-service')
   const files = [
     'apps/server/dist/main.js',
@@ -195,6 +294,20 @@ async function createBundledRuntime(resourcesPath: string, releaseId: string): P
     'infra/seeds/layers/hangzhou_districts.geojson',
     'node_modules/.package-lock.json',
   ]
+  if (platform === 'darwin') {
+    files.push(
+      'darwin-runtime-bundle.json',
+      'python-runtime/bin/python3.12',
+      'python-packages/fastapi/__init__.py',
+      'postgresql-portable/bin/postgres',
+      'postgresql-portable/bin/initdb',
+      'postgresql-portable/bin/pg_ctl',
+      'postgresql-portable/bin/pg_isready',
+      'postgresql-portable/bin/psql',
+      'postgresql-portable/bin/createdb',
+      'postgresql-portable/share/postgresql/extension/postgis.control',
+    )
+  }
   for (const relativePath of files) {
     const filePath = path.join(projectRoot, relativePath)
     await mkdir(path.dirname(filePath), { recursive: true })

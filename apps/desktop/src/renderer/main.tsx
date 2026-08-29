@@ -36,6 +36,8 @@ if (!window.platformDesktop) {
   rootElement.textContent = `${PRODUCT_DESKTOP_NAME}只能通过 Electron 桌面应用启动。`
   rootElement.setAttribute('role', 'alert')
 } else {
+  // Main/Preload 是桌面平台信息的唯一来源；样式层据此避开原生窗口控制区。
+  document.documentElement.dataset.desktopPlatform = window.platformDesktop.platform
   createRoot(rootElement).render(
     <ErrorBoundary>
       <Suspense fallback={<BootScreen />}>

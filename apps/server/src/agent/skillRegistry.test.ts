@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -72,7 +72,7 @@ describe('GIS Skill registry', () => {
   })
 
   it('pins external content and invalidates trust when a loaded resource changes', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-skill-registry-digest-'))
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'geo-skill-registry-digest-')))
     try {
       const skillDir = path.join(root, 'external-check')
       await mkdir(path.join(skillDir, 'references'), { recursive: true })
@@ -108,7 +108,7 @@ describe('GIS Skill registry', () => {
   })
 
   it('reports wrong casing without hiding the rest of the catalog', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-skill-registry-case-'))
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'geo-skill-registry-case-')))
     try {
       const skillDir = path.join(root, 'wrong-case')
       await mkdir(skillDir, { recursive: true })
@@ -126,7 +126,7 @@ describe('GIS Skill registry', () => {
   })
 
   it('rejects duplicate names and symlinked resources', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-skill-registry-security-'))
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'geo-skill-registry-security-')))
     try {
       const duplicateDir = path.join(root, 'duplicate')
       await mkdir(duplicateDir, { recursive: true })

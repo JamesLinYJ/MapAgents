@@ -19,10 +19,22 @@ import { ProductIdentityProvider } from '../app/ProductIdentityProvider'
 describe('ModelSettingsPage', () => {
   it('shows only catalog models and keeps account management optional', () => {
     const html = renderToStaticMarkup(
-      <ProductIdentityProvider productName="团队地理工作台" onOpenSettings={vi.fn()}>
+      <ProductIdentityProvider
+        productName="团队地理工作台"
+        onOpenSettings={vi.fn()}
+        setupStatus={{
+          state: 'configured',
+          deploymentMode: 'local_managed',
+          apiBaseUrl: 'http://127.0.0.1:8000',
+          productName: '团队地理工作台',
+          canReset: false,
+          canConfigureMapService: true,
+          tiandituConfigured: false,
+        }}
+      >
         <ModelSettingsPage
           authMode="local_auto"
-          canAccessAccount
+          canAccessAccount={false}
           provider="deepseek"
           model="deepseek-v4-flash"
           providers={[deepSeek(), unavailableProvider()]}
@@ -34,15 +46,43 @@ describe('ModelSettingsPage', () => {
     )
 
     expect(html).toContain('本机身份由应用托管')
+    expect(html).toContain('服务与模型')
     expect(html).toContain('团队地理工作台')
-    expect(html).toContain('修改名称与连接')
+    expect(html).toContain('修改名称与地图')
+    expect(html).toContain('尚未配置天地图服务端密钥')
+    expect(html).toContain('配置密钥')
     expect(html).toContain('deepseek-v4-flash')
     expect(html).toContain('128,000 词元')
     expect(html).not.toContain('deepseek-v4-pro')
-    expect(html).toContain('DeepSeek Responses API')
-    expect(html).toContain('打开账号中心')
+    expect(html).toContain('DeepSeek 响应接口')
+    expect(html).not.toContain('打开账号中心')
     expect(html).not.toContain('任意模型名称')
     expect(html).toContain('disabled=""')
+  })
+
+  it('does not present an unavailable provider default as an executable model route', () => {
+    const html = renderToStaticMarkup(
+      <ProductIdentityProvider productName="本机工作台" onOpenSettings={vi.fn()}>
+        <ModelSettingsPage
+          authMode="local_auto"
+          canAccessAccount={false}
+          provider="disabled"
+          model="removed-model"
+          providers={[unavailableProvider()]}
+          onProviderChange={vi.fn()}
+          onModelChange={vi.fn()}
+          onOpenAccount={vi.fn()}
+        />
+      </ProductIdentityProvider>,
+    )
+
+    expect(html).toContain('尚未配置可执行模型')
+    expect(html).toContain('尚未选择可用模型')
+    expect(html).toContain('model-settings__summary is-unavailable')
+    expect(html).toContain('未接入智能分析')
+    expect(html).toContain('当前不可用')
+    expect(html).not.toContain('removed-model')
+    expect(html).not.toContain('辅助适配器')
   })
 })
 

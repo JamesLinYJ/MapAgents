@@ -10,7 +10,18 @@
 // --------------------------------------------------------------------------
 
 import { createHash, createPublicKey, verify } from 'node:crypto'
-import { lstat, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import {
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  readlink,
+  realpath,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from 'node:fs/promises'
 import path from 'node:path'
 
 export const RUNTIME_SERVICE_KIND = 'geo-agent-runtime-service'
@@ -64,6 +75,49 @@ export async function prepareArtifactOutput(repositoryRoot, outputPath, force) {
     `${JSON.stringify({ schemaVersion: 1, kind: RUNTIME_SERVICE_KIND }, null, 2)}\n`,
     'utf8',
   )
+}
+
+/**
+ * Postgres.app 的符号链接以挂载目录为绝对根。复制目录后必须把这些链接
+ * 改写到制品内部，否则卸载 DMG 后运行时会依赖已经消失的构建机路径。
+ */
+export async function rebaseCopiedAbsoluteSymlinks(sourceRoot, destinationRoot) {
+  const source = path.resolve(sourceRoot)
+  const destination = path.resolve(destinationRoot)
+  let rewrittenCount = 0
+
+  async function visit(directory) {
+    const entries = await readdir(directory, { withFileTypes: true })
+    for (const entry of entries) {
+      const candidate = path.join(directory, entry.name)
+      if (entry.isDirectory()) {
+        await visit(candidate)
+        continue
+      }
+      if (!entry.isSymbolicLink()) continue
+
+      const target = await readlink(candidate)
+      if (!path.isAbsolute(target)) continue
+      const sourceRelativeTarget = path.relative(source, path.resolve(target))
+      if (sourceRelativeTarget === '..'
+        || sourceRelativeTarget.startsWith(`..${path.sep}`)
+        || path.isAbsolute(sourceRelativeTarget)) {
+        throw new Error(`复制的运行时符号链接越过来源目录：${candidate} -> ${target}`)
+      }
+
+      const destinationTarget = path.join(destination, sourceRelativeTarget)
+      if (!await optionalLstat(destinationTarget)) {
+        throw new Error(`复制的运行时符号链接目标不存在：${candidate} -> ${target}`)
+      }
+      const relativeTarget = path.relative(path.dirname(candidate), destinationTarget) || '.'
+      await unlink(candidate)
+      await symlink(relativeTarget, candidate)
+      rewrittenCount += 1
+    }
+  }
+
+  await visit(destination)
+  return rewrittenCount
 }
 
 export function createRuntimeRootPackageManifest(source) {

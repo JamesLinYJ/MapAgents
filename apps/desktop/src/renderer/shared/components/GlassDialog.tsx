@@ -26,9 +26,18 @@ export interface GlassDialogProps {
   children: ReactNode
   /** 点击遮罩是否关闭，默认 true */
   modal?: boolean
+  variant?: string
 }
 
-export function GlassDialog({ open, onOpenChange, title, description, children, modal = true }: GlassDialogProps) {
+export function GlassDialog({
+  open,
+  onOpenChange,
+  title,
+  description,
+  children,
+  modal = true,
+  variant,
+}: GlassDialogProps) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange} modal={modal}>
       <AnimatePresence>
@@ -47,6 +56,7 @@ export function GlassDialog({ open, onOpenChange, title, description, children, 
               <m.div
                 className="ui-dialog-surface alert"
                 data-ui-surface="glass"
+                data-ui-dialog-variant={variant}
                 initial={{ opacity: 0, scale: 0.97, y: 8 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.97, y: 8 }}

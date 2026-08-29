@@ -83,6 +83,7 @@ import {
 } from '../../features/map/mapWorkbenchBridge'
 import {
   closeDesktopDocument,
+  isFocusedDesktopDocument,
   moveDesktopDocument,
   openDesktopDocument,
   stepDesktopDocument,
@@ -109,6 +110,7 @@ export interface WorkspaceLayoutProps {
   providerLabel: string
   modelLabel: string
   modelStatusLabel: string
+  modelRouteAvailable: boolean
   artifactCount: number
   selectedArtifactName?: string
   currentThreadId?: string
@@ -158,6 +160,7 @@ export function WorkspaceLayout(props: WorkspaceLayoutProps) {
     providerLabel,
     modelLabel,
     modelStatusLabel,
+    modelRouteAvailable,
     artifactCount,
     selectedArtifactName,
     currentThreadId,
@@ -206,6 +209,10 @@ export function WorkspaceLayout(props: WorkspaceLayoutProps) {
   const commandSearchRef = useRef<HTMLInputElement>(null)
   const contentsPanelRef = usePanelRef()
   const chatPanelRef = usePanelRef()
+  const focusedDocumentPanelStateRef = useRef<{
+    contentsCollapsed: boolean
+    assistantCollapsed: boolean
+  } | null>(null)
   useEffect(() => {
     const handleWorkbenchShortcut = (event: KeyboardEvent) => {
       if (
@@ -237,6 +244,27 @@ export function WorkspaceLayout(props: WorkspaceLayoutProps) {
     onlySaveAfterUserInteractions: true,
   })
   const visibleRibbonTabs = RIBBON_TABS
+
+  useEffect(() => {
+    const focused = isFocusedDesktopDocument(activeDocument)
+    if (focused && !focusedDocumentPanelStateRef.current) {
+      focusedDocumentPanelStateRef.current = {
+        contentsCollapsed: contentsPanelRef.current?.isCollapsed() ?? false,
+        assistantCollapsed: chatPanelRef.current?.isCollapsed() ?? false,
+      }
+      contentsPanelRef.current?.collapse()
+      chatPanelRef.current?.collapse()
+      return
+    }
+    if (focused || !focusedDocumentPanelStateRef.current) return
+
+    const previous = focusedDocumentPanelStateRef.current
+    focusedDocumentPanelStateRef.current = null
+    if (previous.contentsCollapsed) contentsPanelRef.current?.collapse()
+    else contentsPanelRef.current?.expand()
+    if (previous.assistantCollapsed) chatPanelRef.current?.collapse()
+    else chatPanelRef.current?.expand()
+  }, [activeDocument, chatPanelRef, contentsPanelRef])
 
   const effectiveRibbonTab = visibleRibbonTabs.some(tab => tab.id === ribbonTab)
     ? ribbonTab
@@ -656,8 +684,14 @@ export function WorkspaceLayout(props: WorkspaceLayoutProps) {
         <span>{uploadedLayerName ? `数据: ${uploadedLayerName}` : `引用 ${dataReferenceCount} 项`}</span>
         <span>{selectedArtifactName ?? `${artifactCount} 项成果`}</span>
         <span className="gf-statusbar__spacer" />
-        <span className={modelStatusLabel.includes('失败') ? 'is-error' : 'is-online'}>
-          <i aria-hidden="true" />{providerLabel} · {modelLabel}
+        <span
+          className={!modelRouteAvailable ? 'is-warning' : modelStatusLabel.includes('失败') ? 'is-error' : 'is-online'}
+          title={modelStatusLabel}
+        >
+          <i aria-hidden="true" />
+          {modelRouteAvailable
+            ? `${providerLabel} · ${modelLabel}${modelStatusLabel === '准备就绪' ? '' : ` · ${modelStatusLabel}`}`
+            : modelStatusLabel}
         </span>
       </footer>
     </main>
@@ -756,7 +790,7 @@ function RibbonContent(props: RibbonContentProps) {
     return (
       <div className="gf-ribbon-groups">
         <RibbonGroup label="平台">
-          <RibbonAction icon={<Settings2 />} label="模型与账号" large onClick={() => onOpenDocument('settings')} />
+          <RibbonAction icon={<Settings2 />} label="服务与模型" large onClick={() => onOpenDocument('settings')} />
           {canAccessDiagnostics ? (
             <RibbonAction icon={<Gauge />} label="运行诊断" onClick={() => onOpenDocument('debug')} />
           ) : null}
@@ -930,7 +964,7 @@ function documentTitleFor(document: DesktopDocument): string {
   if (document === 'tools') return '工具与自动化'
   if (document === 'workflow') return '智能体工作流'
   if (document === 'results') return '分析结果'
-  if (document === 'settings') return '模型与账号'
+  if (document === 'settings') return '服务与模型'
   if (document === 'account') return '账号中心'
   if (document === 'security') return '安全管理'
   if (document === 'terms') return '服务协议'

@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { RunContext, tool, type MCPServer } from '@openai/agents'
@@ -113,7 +113,7 @@ describe('runtime SDK integrations', () => {
   })
 
   it('materializes configured SDK skills through the Sandbox skills capability', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-sdk-skills-'))
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-sdk-skills-')))
     try {
       const skillRoot = path.join(root, 'skills')
       const skillDir = path.join(skillRoot, 'geo-skill')
@@ -223,7 +223,7 @@ describe('runtime SDK integrations', () => {
   })
 
   it('rejects enabled SDK skills when no SKILL.md exists', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-sdk-skills-empty-'))
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-sdk-skills-empty-')))
     try {
       const config = defaultRuntimeConfig({ sandbox: { backend: 'unix_local' } })
       config.sdk.skills = {
@@ -243,7 +243,7 @@ describe('runtime SDK integrations', () => {
   })
 
   it('rejects SDK skills whose SKILL.md casing is not exact', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-sdk-skills-case-'))
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-sdk-skills-case-')))
     try {
       const skillDir = path.join(root, 'geo-skill')
       await mkdir(skillDir, { recursive: true })

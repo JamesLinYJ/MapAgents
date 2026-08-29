@@ -35,6 +35,7 @@ import { desktopMenuCommandSchema } from '../../contracts/desktopIpc'
 import { BootScreen } from './AppLoader'
 import { ProductIdentityProvider } from './ProductIdentityProvider'
 import { StartupScreen } from './StartupScreen'
+import './styles/glass.css'
 import './styles/product-setup.css'
 
 export function ProductSetupGate({ children }: { children: ReactNode }) {
@@ -84,6 +85,7 @@ export function ProductSetupGate({ children }: { children: ReactNode }) {
         suggestedApiBaseUrl={status.suggestedApiBaseUrl}
         suggestedProductName={status.suggestedProductName}
         canConfigureMapService={status.canConfigureMapService}
+        tiandituConfigured={status.tiandituConfigured}
       />
     )
   }
@@ -91,12 +93,17 @@ export function ProductSetupGate({ children }: { children: ReactNode }) {
     <ProductIdentityProvider
       productName={status.productName}
       onOpenSettings={() => setSettingsOpen(true)}
+      setupStatus={status}
     >
       {children}
       {settingsOpen ? (
         <ConnectionSettings
           status={status}
           onClose={() => setSettingsOpen(false)}
+          onSaved={nextStatus => {
+            setStatus(nextStatus)
+            setSettingsOpen(false)
+          }}
         />
       ) : null}
     </ProductIdentityProvider>
@@ -108,11 +115,13 @@ function ProductSetupWizard({
   suggestedApiBaseUrl,
   suggestedProductName,
   canConfigureMapService,
+  tiandituConfigured,
 }: {
   deploymentMode: 'local_managed' | 'remote'
   suggestedApiBaseUrl: string
   suggestedProductName: string
   canConfigureMapService: boolean
+  tiandituConfigured: boolean | null
 }) {
   const [step, setStep] = useState<1 | 2 | 3>(1)
   const [apiBaseUrl, setApiBaseUrl] = useState(suggestedApiBaseUrl)
@@ -149,7 +158,11 @@ function ProductSetupWizard({
       await bridge.setup.save({
         apiBaseUrl,
         productName,
-        ...(deploymentMode === 'local_managed' && canConfigureMapService ? { tiandituApiKey } : {}),
+        ...(deploymentMode === 'local_managed'
+          && canConfigureMapService
+          && tiandituApiKey.trim()
+          ? { tiandituApiKey }
+          : {}),
       })
       await bridge.setup.restart()
     } catch (reason) {
@@ -204,7 +217,7 @@ function ProductSetupWizard({
               apiBaseUrl={apiBaseUrl}
               productName={productName}
               tiandituConfigured={deploymentMode === 'local_managed'
-                && (!canConfigureMapService || tiandituApiKey.trim().length >= 16)}
+                && (tiandituApiKey.trim().length >= 16 || tiandituConfigured === true)}
               busy={busy}
               error={error}
               result={testResult}
@@ -373,10 +386,9 @@ function ConnectionStep({
           <button
             type="button"
             className="product-setup__primary"
-            disabled={canConfigureMapService && tiandituApiKey.trim().length < 16}
             onClick={onContinue}
           >
-            下一步 <ArrowRight size={16} />
+            {tiandituApiKey.trim() ? '校验后继续' : '稍后配置'} <ArrowRight size={16} />
           </button>
         </div>
       </div>
@@ -449,13 +461,13 @@ function ReviewStep({
     <div className="product-setup__step">
       <span className="product-setup__eyebrow">准备就绪</span>
       <h1 id="product-setup-title">工作台已经准备好</h1>
-      <p>保存后应用会重新启动。模型供应商和 API 密钥可以在进入工作台后的设置页面填写。</p>
+      <p>保存后应用会重新启动。模型供应商、地图服务和 API 信息都可以稍后在“设置 → 服务与模型”中填写。</p>
       <dl className="product-setup__summary">
         <div><dt>产品名称</dt><dd>{productName.trim()}</dd></div>
         <div><dt>服务地址</dt><dd>{apiBaseUrl}</dd></div>
         <div><dt>部署方式</dt><dd>{deploymentMode === 'local_managed' ? '本机受管运行时' : '远程服务'}</dd></div>
         {deploymentMode === 'local_managed' ? (
-          <div><dt>地图服务</dt><dd>{tiandituConfigured ? '天地图服务端 Key 已填写' : '尚未配置'}</dd></div>
+          <div><dt>地图服务</dt><dd>{tiandituConfigured ? '天地图服务端密钥已填写' : '尚未配置'}</dd></div>
         ) : null}
         {deploymentMode === 'remote' ? (
           <>
@@ -468,7 +480,7 @@ function ReviewStep({
       {error ? <p className="product-setup__error" role="alert">{error}</p> : null}
       <div className="product-setup__next-note">
         <Settings2 size={18} />
-        <span><strong>下一步</strong> 登录或创建账号，然后在模型设置中添加 DeepSeek、OpenAI 兼容服务或其他供应商。</span>
+        <span><strong>下一步</strong> 登录后可使用配置向导，也可稍后从“设置 → 服务与模型”手动添加 Provider。</span>
       </div>
       <div className="product-setup__actions">
         <button type="button" className="product-setup__back" disabled={busy} onClick={onBack}>
@@ -507,12 +519,16 @@ function ConnectionResult({
 function ConnectionSettings({
   status,
   onClose,
+  onSaved,
 }: {
   status: Extract<DesktopProductSetupStatus, { state: 'configured' }>
   onClose: () => void
+  onSaved: (status: Extract<DesktopProductSetupStatus, { state: 'configured' }>) => void
 }) {
   const [productName, setProductName] = useState(status.productName)
+  const [apiBaseUrl, setApiBaseUrl] = useState(status.apiBaseUrl)
   const [tiandituApiKey, setTiandituApiKey] = useState('')
+  const [clearTiandituApiKey, setClearTiandituApiKey] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -522,16 +538,28 @@ function ConnectionSettings({
     setBusy(true)
     setError(null)
     try {
-      await bridge.setup.save({
-        apiBaseUrl: status.apiBaseUrl,
+      const nextStatus = await bridge.setup.save({
+        apiBaseUrl,
         productName,
         ...(status.deploymentMode === 'local_managed'
           && status.canConfigureMapService
           && tiandituApiKey.trim()
           ? { tiandituApiKey }
           : {}),
+        ...(status.deploymentMode === 'local_managed' && clearTiandituApiKey
+          ? { clearTiandituApiKey: true }
+          : {}),
       })
-      await bridge.setup.restart()
+      setTiandituApiKey('')
+      setClearTiandituApiKey(false)
+      if (
+        nextStatus.state === 'configured'
+        && nextStatus.apiBaseUrl !== status.apiBaseUrl
+      ) {
+        await bridge.setup.restart()
+        return
+      }
+      onSaved(nextStatus as Extract<DesktopProductSetupStatus, { state: 'configured' }>)
     } catch (reason) {
       setError(safeMessage(reason))
       setBusy(false)
@@ -564,9 +592,11 @@ function ConnectionSettings({
         <h2 id="connection-settings-title">工作台与服务设置</h2>
         <p>{status.deploymentMode === 'local_managed'
           ? status.canConfigureMapService
-            ? '当前由本机系统运行清单统一管理。显示名称和地图服务端 Key 都可以在这里修改。'
+            ? '当前由本机系统运行清单统一管理。显示名称和地图服务端 Key 都可以在这里修改，无需重启桌面应用。'
             : '当前由系统管理员的运行清单统一管理。这里只修改本机显示名称。'
-          : '当前工作台连接到以下远程部署。显示名称可以直接修改，也可以重新设置连接。'}</p>
+          : isLoopbackApiBaseUrl(status.apiBaseUrl)
+            ? '当前桌面端会自动连接本机服务。无需在首次启动时填写地址；也可以在这里切换到团队的 HTTPS 部署。'
+            : '当前工作台连接到团队或云端部署。显示名称可以直接修改，服务地址变更后会自动重启应用。'}</p>
         <label className="product-connection__field">
           <span>产品显示名称</span>
           <input
@@ -575,8 +605,21 @@ function ConnectionSettings({
             maxLength={80}
             onChange={event => setProductName(event.target.value)}
           />
-          <small>保存后重启桌面应用，后端服务不会停止。</small>
+          <small>保存后立即更新当前窗口，不需要重启桌面应用。</small>
         </label>
+        {status.deploymentMode === 'remote' ? (
+          <label className="product-connection__field">
+            <span>平台服务地址</span>
+            <input
+              inputMode="url"
+              spellCheck={false}
+              value={apiBaseUrl}
+              placeholder="http://127.0.0.1:8000"
+              onChange={event => setApiBaseUrl(event.target.value)}
+            />
+            <small>本机默认使用 127.0.0.1；非本机服务必须使用 HTTPS。地址变化后会先验证兼容性，再自动重启桌面应用。</small>
+          </label>
+        ) : null}
         {status.deploymentMode === 'local_managed' && status.canConfigureMapService ? (
           <label className="product-connection__field">
             <span>替换天地图服务端 API KEY</span>
@@ -585,12 +628,32 @@ function ConnectionSettings({
               autoComplete="off"
               spellCheck={false}
               value={tiandituApiKey}
+              disabled={clearTiandituApiKey}
               placeholder="留空则保留当前 Key"
-              onChange={event => setTiandituApiKey(event.target.value)}
+              onChange={event => {
+                setTiandituApiKey(event.target.value)
+                setClearTiandituApiKey(false)
+              }}
             />
-            <small>保存前会校验服务端权限；Key 仅写入本机 0600 运行配置。</small>
+            <small>
+              当前状态：{status.tiandituConfigured ? '已配置' : '未配置'}。
+              保存前会校验服务端权限；Key 仅写入本机 0600 运行配置。
+            </small>
           </label>
         ) : null}
+        {status.deploymentMode === 'local_managed'
+          && status.canConfigureMapService
+          && status.tiandituConfigured ? (
+            <label className="product-connection__clear">
+              <input
+                type="checkbox"
+                checked={clearTiandituApiKey}
+                disabled={Boolean(tiandituApiKey.trim())}
+                onChange={event => setClearTiandituApiKey(event.target.checked)}
+              />
+              清除已保存的天地图 API KEY
+            </label>
+          ) : null}
         <div className="product-connection__value">
           <span>当前服务</span><strong>{status.apiBaseUrl}</strong>
         </div>
@@ -601,15 +664,18 @@ function ConnectionSettings({
             type="button"
             className="is-primary"
             disabled={busy || !productName.trim() || (
-              productName.trim() === status.productName && !tiandituApiKey.trim()
+              productName.trim() === status.productName
+              && apiBaseUrl.trim() === status.apiBaseUrl
+              && !tiandituApiKey.trim()
+              && !clearTiandituApiKey
             )}
             onClick={() => { void save() }}
           >
-            {busy ? '正在校验并重启…' : '保存设置并重启'}
+            {busy ? '正在保存…' : '保存设置'}
           </button>
           {status.canReset ? (
             <button type="button" disabled={busy} onClick={reset}>
-              {busy ? '正在重启…' : '重新设置连接'}
+              {busy ? '正在重启…' : '恢复本机默认连接'}
             </button>
           ) : null}
         </div>
@@ -637,4 +703,13 @@ function safeMessage(error: unknown): string {
     return error.message.replace(/[\r\n]+/gu, ' ').slice(0, 800)
   }
   return '操作失败，请稍后重试。'
+}
+
+function isLoopbackApiBaseUrl(value: string): boolean {
+  try {
+    const hostname = new URL(value).hostname.toLowerCase()
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]'
+  } catch {
+    return false
+  }
 }

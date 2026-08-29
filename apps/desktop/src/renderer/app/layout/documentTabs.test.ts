@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   closeDesktopDocument,
+  isFocusedDesktopDocument,
   moveDesktopDocument,
   openDesktopDocument,
   stepDesktopDocument,
@@ -56,5 +57,15 @@ describe('desktop document tabs', () => {
     )).toEqual(['map', 'workflow', 'tools'])
     expect(moveDesktopDocument(['map', 'tools'], 'tools', 'map'))
       .toEqual(['map', 'tools'])
+  })
+
+  it('reserves the full document canvas for page-style documents', () => {
+    expect(['settings', 'account', 'security', 'debug', 'terms', 'privacy']
+      .every(document => isFocusedDesktopDocument(document as Parameters<typeof isFocusedDesktopDocument>[0])))
+      .toBe(true)
+    expect(isFocusedDesktopDocument('map')).toBe(false)
+    expect(isFocusedDesktopDocument('tools')).toBe(false)
+    expect(isFocusedDesktopDocument('workflow')).toBe(false)
+    expect(isFocusedDesktopDocument('results')).toBe(false)
   })
 })

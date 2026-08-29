@@ -12,7 +12,6 @@
 import type { Storage } from '@better-auth/electron/client'
 import {
   PLATFORM_TECHNICAL_ID,
-  PRODUCT_CODENAME,
 } from '@geo-agent-platform/shared-types/product-identity'
 import { safeStorage } from 'electron'
 import Conf from 'conf'
@@ -21,23 +20,35 @@ import { z } from 'zod'
 const storedCipherSchema = z.string().min(1)
 
 /**
- * Better Auth 官方 Electron 客户端只要求同步 Storage 契约。这里用 Conf 管理
- * 生命周期，用 Electron safeStorage 加密每个值；系统加密不可用时硬失败。
+ * Better Auth 官方 Electron 客户端只要求同步 Storage 契约。系统安全存储
+ * 可用时用 Conf 管理生命周期并加密每个值；不可用时只保留进程内 JSON，
+ * 退出即清空，绝不降级为明文文件。
  */
 export class SecureAuthStorage implements Storage {
-  private readonly store = new Conf<Record<string, string>>({
-    projectName: PLATFORM_TECHNICAL_ID,
-    configName: 'desktop-auth',
-    clearInvalidConfig: false,
-  })
+  private readonly store: Conf<Record<string, string>> | null
+  private readonly ephemeralValues = new Map<string, string>()
 
   constructor() {
-    if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error(`系统安全存储不可用，${PRODUCT_CODENAME} 不会把认证会话降级为明文保存。`)
-    }
+    this.store = safeStorage.isEncryptionAvailable()
+      ? new Conf<Record<string, string>>({
+          projectName: PLATFORM_TECHNICAL_ID,
+          configName: 'desktop-auth',
+          clearInvalidConfig: false,
+        })
+      : null
   }
 
   getItem(name: string): unknown {
+    if (!this.store) {
+      const serialized = this.ephemeralValues.get(name)
+      if (serialized === undefined) return null
+      try {
+        return JSON.parse(serialized) as unknown
+      } catch {
+        this.ephemeralValues.delete(name)
+        return null
+      }
+    }
     const encrypted = this.store.get(name)
     if (encrypted === undefined) return null
     try {
@@ -57,6 +68,10 @@ export class SecureAuthStorage implements Storage {
 
   setItem(name: string, value: unknown): void {
     const plaintext = JSON.stringify(value)
+    if (!this.store) {
+      this.ephemeralValues.set(name, plaintext)
+      return
+    }
     const encrypted = safeStorage.encryptString(plaintext).toString('base64')
     this.store.set(name, encrypted)
   }

@@ -297,8 +297,8 @@ export function DebugPage({
   ]
 
   return (
-    <m.div className="debug-shell" {...buildFadeUpMotion(reducedMotion, 0, 12)}>
-      <m.header className="debug-shell__header" layout {...buildFadeUpMotion(reducedMotion, 0.02, 12)}>
+    <m.div className="debug-shell ui-page" {...buildFadeUpMotion(reducedMotion, 0, 12)}>
+      <m.header className="debug-shell__header ui-page-header" layout {...buildFadeUpMotion(reducedMotion, 0.02, 12)}>
         <div>
           <div className="panel__eyebrow">内部调试页</div>
           <h1>运行诊断与数据管理台</h1>
@@ -326,7 +326,7 @@ export function DebugPage({
         animate="visible"
       >
         {overviewItems.map((item) => (
-          <m.article key={item.label} className="overview-card" layout variants={panelVariants}>
+          <m.article key={item.label} className="overview-card ui-card" layout variants={panelVariants}>
             <div className="overview-card__label">{item.label}</div>
             <div className="overview-card__value">{item.value}</div>
             <div className="overview-card__footer">

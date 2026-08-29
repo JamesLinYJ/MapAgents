@@ -46,6 +46,8 @@ describe('desktop packaging contract', () => {
     expect(desktopPackage.scripts['make:windows']).toContain('--platform win32 --arch x64')
     expect(desktopPackage.scripts['make:macos:x64']).toContain('--platform darwin --arch x64')
     expect(desktopPackage.scripts['make:macos:arm64']).toContain('--platform darwin --arch arm64')
+    expect(desktopPackage.scripts['make:macos:arm64']).toContain('release:runtime:macos:arm64')
+    expect(desktopPackage.scripts['package:macos:arm64']).toContain('verify:runtime')
     expect(desktopPackage.scripts['make:linux']).toContain('run release:runtime:linux')
     expect(desktopPackage.scripts['make:linux']).toContain('make:linux:from-runtime')
     expect(desktopPackage.scripts['make:linux:from-runtime']).toContain('run verify:runtime')
@@ -56,6 +58,7 @@ describe('desktop packaging contract', () => {
     expect(rootPackage.scripts['test:release-pipeline']).toBe(
       'node --test scripts/release-pipeline.test.mjs',
     )
+    expect(rootPackage.scripts['release:runtime:macos:arm64']).toContain('--materialize-darwin')
     expect(rootPackage.scripts['apply:repository-governance']).toBe(
       'node scripts/apply-repository-governance.mjs',
     )
@@ -118,6 +121,7 @@ describe('desktop packaging contract', () => {
       "'postgis'",
       "'python3 >= 3.11'",
       'extraResource:',
+      'darwin-runtime-bundle.json',
       'remoteClientMarkerPath',
       "schemes: [PLATFORM_DESKTOP_PROTOCOL_SCHEME]",
       "/\\.(?:AppImage|dmg|zip)$/iu",

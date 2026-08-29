@@ -15,13 +15,20 @@ import {
   copyFile,
   cp,
   mkdir,
+  mkdtemp,
   readFile,
   readdir,
   readlink,
+  rename,
+  rm,
   stat,
   writeFile,
 } from 'node:fs/promises'
+import { createWriteStream } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
@@ -32,6 +39,7 @@ import {
   createRuntimeWorkspacePackageManifest,
   prepareArtifactOutput,
   publicKeyFingerprint,
+  rebaseCopiedAbsoluteSymlinks,
   RUNTIME_SERVICE_KIND,
   RUNTIME_WORKSPACE_PATHS,
 } from './runtime-service-artifact-core.mjs'
@@ -39,6 +47,21 @@ import {
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const args = parseArgs(process.argv.slice(2))
 const output = path.resolve(root, args.out ?? path.join('artifacts', 'runtime-service'))
+
+const DARWIN_RUNTIME_CACHE = path.join(root, 'artifacts', 'runtime-dependencies', 'darwin-arm64')
+const DARWIN_POSTGRES = {
+  version: '16.15',
+  postgisVersion: '3.4.6',
+  appVersion: '2.9.6',
+  url: 'https://github.com/PostgresApp/PostgresApp/releases/download/v2.9.6/Postgres-2.9.6-16.dmg',
+  sha256: '2689dc64d6a02e0a66e4585616919060d8fbf5bb06886fccc05b7f87638bf081',
+}
+const DARWIN_UV = {
+  version: '0.12.7',
+  url: 'https://github.com/astral-sh/uv/releases/download/0.12.7/uv-aarch64-apple-darwin.tar.gz',
+  sha256: '127ebdda7ad953cdf198e964b570ea5771b85467ea93eb7cb6d6f8e6f55408f3',
+}
+const DARWIN_PYTHON_VERSION = '3.12.14'
 
 if (args.build) {
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
@@ -131,6 +154,7 @@ for (const workspacePath of RUNTIME_WORKSPACE_PATHS) {
 }
 
 if (args.materializeLinux) await materializeLinuxRuntime(output)
+if (args.materializeDarwin) await materializeDarwinRuntime(output)
 
 const serverPackagePath = path.join(output, 'apps/server/package.json')
 const serverPackage = JSON.parse(await readFile(serverPackagePath, 'utf8'))
@@ -189,6 +213,7 @@ function parseArgs(argv) {
   const result = {
     build: false,
     force: false,
+    materializeDarwin: false,
     materializeLinux: false,
     out: null,
     signingKey: null,
@@ -197,6 +222,7 @@ function parseArgs(argv) {
     const argument = argv[index]
     if (argument === '--build') result.build = true
     else if (argument === '--force') result.force = true
+    else if (argument === '--materialize-darwin') result.materializeDarwin = true
     else if (argument === '--materialize-linux') result.materializeLinux = true
     else if (argument === '--out') {
       result.out = argv[index + 1]
@@ -209,6 +235,9 @@ function parseArgs(argv) {
     } else {
       throw new Error(`未知参数：${argument}`)
     }
+  }
+  if (result.materializeDarwin && result.materializeLinux) {
+    throw new Error('Runtime Service 不能同时物化 Linux 与 macOS 运行时。')
   }
   return result
 }
@@ -304,10 +333,208 @@ async function materializeLinuxRuntime(artifactRoot) {
   }, null, 2)}\n`, 'utf8')
 }
 
+/**
+ * macOS 桌面包必须在离线状态下拥有完整本机服务。构建机下载的第三方制品
+ * 都固定版本并校验 SHA256；最终应用只携带运行文件，不在用户首次启动时联网。
+ */
+async function materializeDarwinRuntime(artifactRoot) {
+  if (process.platform !== 'darwin' || process.arch !== 'arm64') {
+    throw new Error('--materialize-darwin 当前只支持 macOS arm64 构建主机。')
+  }
+
+  await materializeNodeRuntime(artifactRoot)
+  runRequired('npm', [
+    'ci',
+    '--omit=dev',
+    '--ignore-scripts',
+    '--no-audit',
+    '--no-fund',
+  ], { cwd: artifactRoot })
+
+  await mkdir(DARWIN_RUNTIME_CACHE, { recursive: true })
+  const postgresDmg = path.join(
+    DARWIN_RUNTIME_CACHE,
+    `Postgres-${DARWIN_POSTGRES.appVersion}-16.dmg`,
+  )
+  await downloadVerified(DARWIN_POSTGRES.url, postgresDmg, DARWIN_POSTGRES.sha256)
+  await materializeDarwinPostgres(artifactRoot, postgresDmg)
+
+  const uvArchive = path.join(DARWIN_RUNTIME_CACHE, `uv-${DARWIN_UV.version}.tar.gz`)
+  await downloadVerified(DARWIN_UV.url, uvArchive, DARWIN_UV.sha256)
+  const uvExecutable = path.join(
+    DARWIN_RUNTIME_CACHE,
+    `uv-${DARWIN_UV.version}`,
+    'uv-aarch64-apple-darwin',
+    'uv',
+  )
+  if (!await isRegularFile(uvExecutable)) {
+    const extractionRoot = path.dirname(path.dirname(uvExecutable))
+    await rm(extractionRoot, { recursive: true, force: true })
+    await mkdir(extractionRoot, { recursive: true })
+    runRequired('tar', ['-xzf', uvArchive, '-C', extractionRoot], { cwd: root })
+  }
+  runRequired(uvExecutable, ['--version'], { cwd: root })
+
+  const pythonInstallRoot = path.join(DARWIN_RUNTIME_CACHE, 'python')
+  runRequired(uvExecutable, [
+    'python', 'install', DARWIN_PYTHON_VERSION,
+    '--install-dir', pythonInstallRoot,
+    '--no-bin',
+    '--compile-bytecode',
+  ], { cwd: root })
+  const pythonSource = path.join(
+    pythonInstallRoot,
+    `cpython-${DARWIN_PYTHON_VERSION}-macos-aarch64-none`,
+  )
+  const pythonRoot = path.join(artifactRoot, 'python-runtime')
+  await cp(pythonSource, pythonRoot, { recursive: true, dereference: false })
+  await rebaseCopiedAbsoluteSymlinks(pythonSource, pythonRoot)
+  const pythonExecutable = path.join(pythonRoot, 'bin', `python${pythonMinorVersion()}`)
+
+  const workerBuildEnvironment = path.join(artifactRoot, '.worker-build-environment')
+  await rm(workerBuildEnvironment, { recursive: true, force: true })
+  runRequired(uvExecutable, [
+    'sync',
+    '--project', 'apps/worker',
+    '--frozen',
+    '--no-dev',
+    '--no-editable',
+    '--compile-bytecode',
+    '--python', pythonExecutable,
+  ], {
+    cwd: artifactRoot,
+    environment: { UV_PROJECT_ENVIRONMENT: workerBuildEnvironment },
+  })
+  const sitePackages = path.join(
+    workerBuildEnvironment,
+    'lib',
+    `python${pythonMinorVersion()}`,
+    'site-packages',
+  )
+  const pythonPackages = path.join(artifactRoot, 'python-packages')
+  await cp(sitePackages, pythonPackages, { recursive: true, dereference: false })
+  await rebaseCopiedAbsoluteSymlinks(sitePackages, pythonPackages)
+  await rm(workerBuildEnvironment, { recursive: true, force: true })
+
+  const pythonPath = [
+    path.join(artifactRoot, 'apps', 'worker', 'src'),
+    path.join(artifactRoot, 'packages', 'gis-meteorology', 'src'),
+    pythonPackages,
+  ].join(path.delimiter)
+  runRequired(pythonExecutable, [
+    '-c',
+    [
+      'import fastapi, pydantic, uvicorn',
+      'import numpy, pandas, rasterio, scipy, shapely, xarray',
+      'import worker_app.sidecar',
+    ].join('; '),
+  ], { cwd: artifactRoot, environment: { PYTHONPATH: pythonPath } })
+  runRequired(path.join(artifactRoot, 'postgresql-portable', 'bin', 'postgres'), [
+    '--version',
+  ], { cwd: artifactRoot })
+  runRequired(path.join(artifactRoot, 'node-runtime', 'bin', 'node'), [
+    '--input-type=module',
+    '--eval',
+    "await import('sharp'); await import('@geo-agent-platform/operations-supervisor')",
+  ], { cwd: path.join(artifactRoot, 'apps', 'server') })
+
+  await writeFile(path.join(artifactRoot, 'darwin-runtime-bundle.json'), `${JSON.stringify({
+    schemaVersion: 1,
+    platform: 'darwin',
+    architecture: 'arm64',
+    nodeVersion: process.version,
+    pythonVersion: DARWIN_PYTHON_VERSION,
+    postgresVersion: DARWIN_POSTGRES.version,
+    postgisVersion: DARWIN_POSTGRES.postgisVersion,
+    sources: {
+      postgresApp: DARWIN_POSTGRES.url,
+      uv: DARWIN_UV.url,
+    },
+  }, null, 2)}\n`, 'utf8')
+}
+
+async function materializeDarwinPostgres(artifactRoot, imagePath) {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-postgres-app-'))
+  const mountPoint = path.join(temporaryRoot, 'mount')
+  await mkdir(mountPoint)
+  let mounted = false
+  try {
+    runRequired('hdiutil', [
+      'attach', '-readonly', '-nobrowse', '-mountpoint', mountPoint, imagePath,
+    ], { cwd: root, quiet: true })
+    mounted = true
+    const postgresSource = path.join(
+      mountPoint,
+      'Postgres.app',
+      'Contents',
+      'Versions',
+      '16',
+    )
+    const postgresRoot = path.join(artifactRoot, 'postgresql-portable')
+    await mkdir(postgresRoot, { recursive: true })
+    for (const directory of ['bin', 'lib', 'share']) {
+      await cp(path.join(postgresSource, directory), path.join(postgresRoot, directory), {
+        recursive: true,
+        dereference: false,
+      })
+    }
+    await rebaseCopiedAbsoluteSymlinks(postgresSource, postgresRoot)
+    await cp(
+      path.join(mountPoint, 'Postgres.app', 'Contents', 'Resources', 'Credits.rtf'),
+      path.join(postgresRoot, 'PostgresApp-Credits.rtf'),
+    )
+  } finally {
+    if (mounted) {
+      runRequired('hdiutil', ['detach', mountPoint], { cwd: root, quiet: true })
+    }
+    await rm(temporaryRoot, { recursive: true, force: true })
+  }
+}
+
+async function downloadVerified(url, destination, expectedSha256) {
+  if (await isRegularFile(destination)) {
+    const currentHash = await sha256File(destination)
+    if (currentHash === expectedSha256) return
+    await rm(destination, { force: true })
+  }
+  await mkdir(path.dirname(destination), { recursive: true })
+  const temporaryPath = `${destination}.${process.pid}.download`
+  await rm(temporaryPath, { force: true })
+  const response = await fetch(url, { redirect: 'follow' })
+  if (!response.ok || !response.body) {
+    throw new Error(`运行时依赖下载失败：${url}（HTTP ${response.status}）`)
+  }
+  try {
+    await pipeline(
+      Readable.fromWeb(response.body),
+      createWriteStream(temporaryPath, { flags: 'wx', mode: 0o600 }),
+    )
+    const actualSha256 = await sha256File(temporaryPath)
+    if (actualSha256 !== expectedSha256) {
+      throw new Error(`运行时依赖 SHA256 不匹配：${url}`)
+    }
+    await rename(temporaryPath, destination)
+  } finally {
+    await rm(temporaryPath, { force: true })
+  }
+}
+
+async function sha256File(filePath) {
+  return createHash('sha256').update(await readFile(filePath)).digest('hex')
+}
+
+async function isRegularFile(filePath) {
+  return (await stat(filePath).catch(() => null))?.isFile() === true
+}
+
+function pythonMinorVersion() {
+  return DARWIN_PYTHON_VERSION.split('.').slice(0, 2).join('.')
+}
+
 async function materializeNodeRuntime(artifactRoot) {
   const major = Number(process.versions.node.split('.')[0])
   if (!Number.isInteger(major) || major < 24) {
-    throw new Error(`Linux 发布必须由 Node 24+ 构建，当前为 ${process.version}。`)
+    throw new Error(`本机运行时发布必须由 Node 24+ 构建，当前为 ${process.version}。`)
   }
   const compatibilityProbe = spawnSync(process.execPath, [
     '-e',
@@ -333,7 +560,7 @@ async function materializeNodeRuntime(artifactRoot) {
   }, null, 2)}\n`, 'utf8')
 }
 
-function runRequired(file, commandArguments, options) {
+function runRequired(file, commandArguments, options = {}) {
   const stdio = options.capture
     ? ['ignore', 'pipe', 'inherit']
     : (options.quiet ? ['ignore', 'ignore', 'inherit'] : 'inherit')

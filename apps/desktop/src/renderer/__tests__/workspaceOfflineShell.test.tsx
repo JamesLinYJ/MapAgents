@@ -68,6 +68,7 @@ describe('offline desktop workspace', () => {
         mainSlot={<WorkspaceRestrictedConversation reason={offlineReason} onRetry={() => undefined} />}
         mapSlot={<section aria-label="本地地图画布">地图画布（本地）</section>}
         modelLabel="不可用"
+        modelRouteAvailable={false}
         modelStatusLabel="离线工作台"
         onContentsModeChange={() => undefined}
         onDesktopDocumentChange={() => undefined}
@@ -135,6 +136,7 @@ describe('offline desktop workspace', () => {
     })
 
     expect(access.backendActionsEnabled).toBe(true)
+    expect(access.canAccessAccount).toBe(false)
     expect(access.canManageRuntimeConfiguration).toBe(true)
     expect(access.canAccessDiagnostics).toBe(false)
     expect(access.canAccessSecurity).toBe(false)

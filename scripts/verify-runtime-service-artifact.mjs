@@ -51,7 +51,10 @@ for (const requiredPath of requiredRuntimePaths(entryPaths)) {
   if (!entryPaths.has(requiredPath)) throw new Error(`运行服务制品缺少必需文件：${requiredPath}`)
 }
 
-if (entryPaths.has('linux-runtime-bundle.json')) verifyBundledNode(artifactRoot)
+if (entryPaths.has('linux-runtime-bundle.json') || entryPaths.has('darwin-runtime-bundle.json')) {
+  verifyBundledNode(artifactRoot)
+}
+if (entryPaths.has('darwin-runtime-bundle.json')) verifyDarwinRuntime(artifactRoot)
 
 const runtimePackage = JSON.parse(await readFile(path.join(artifactRoot, 'package.json'), 'utf8'))
 const runtimeLock = JSON.parse(await readFile(path.join(artifactRoot, 'package-lock.json'), 'utf8'))
@@ -260,6 +263,25 @@ function requiredRuntimePaths(entryPaths) {
       'python-packages/docx/__init__.py',
     )
   }
+  if (entryPaths.has('darwin-runtime-bundle.json')) {
+    paths.push(
+      'node-runtime/bin/node',
+      'node-runtime-version.json',
+      'node_modules/.package-lock.json',
+      'python-runtime/bin/python3.12',
+      'python-packages/fastapi/__init__.py',
+      'python-packages/pydantic/__init__.py',
+      'python-packages/rasterio/__init__.py',
+      'postgresql-portable/bin/postgres',
+      'postgresql-portable/bin/initdb',
+      'postgresql-portable/bin/pg_ctl',
+      'postgresql-portable/bin/pg_isready',
+      'postgresql-portable/bin/psql',
+      'postgresql-portable/bin/createdb',
+      'postgresql-portable/share/postgresql/extension/postgis.control',
+      'postgresql-portable/PostgresApp-Credits.rtf',
+    )
+  }
   return paths
 }
 
@@ -271,5 +293,37 @@ function verifyBundledNode(artifactRoot) {
   ], { encoding: 'utf8', timeout: 10_000 })
   if (probe.error || probe.status !== 0 || probe.signal) {
     throw new Error('运行服务内置 Node 24+ 兼容性探针失败。')
+  }
+}
+
+function verifyDarwinRuntime(artifactRoot) {
+  if (process.platform !== 'darwin' || process.arch !== 'arm64') {
+    throw new Error('macOS arm64 Runtime Service 只能在同平台执行兼容性探针。')
+  }
+  const pythonExecutable = path.join(artifactRoot, 'python-runtime', 'bin', 'python3.12')
+  const pythonPath = [
+    path.join(artifactRoot, 'apps', 'worker', 'src'),
+    path.join(artifactRoot, 'packages', 'gis-meteorology', 'src'),
+    path.join(artifactRoot, 'python-packages'),
+  ].join(path.delimiter)
+  const pythonProbe = spawnSync(pythonExecutable, [
+    '-c',
+    'import fastapi, pydantic, rasterio, worker_app.sidecar',
+  ], {
+    cwd: artifactRoot,
+    encoding: 'utf8',
+    timeout: 30_000,
+    env: { ...process.env, PYTHONPATH: pythonPath },
+  })
+  if (pythonProbe.error || pythonProbe.status !== 0 || pythonProbe.signal) {
+    throw new Error('运行服务内置 Python Worker 兼容性探针失败。')
+  }
+  const postgresProbe = spawnSync(
+    path.join(artifactRoot, 'postgresql-portable', 'bin', 'postgres'),
+    ['--version'],
+    { encoding: 'utf8', timeout: 10_000 },
+  )
+  if (postgresProbe.error || postgresProbe.status !== 0 || postgresProbe.signal) {
+    throw new Error('运行服务内置 PostgreSQL/PostGIS 兼容性探针失败。')
   }
 }

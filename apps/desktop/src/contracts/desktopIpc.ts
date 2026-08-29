@@ -165,6 +165,7 @@ export const desktopProductSetupStatusSchema = z.discriminatedUnion('state', [
     suggestedApiBaseUrl: z.string().url(),
     suggestedProductName: z.string().trim().min(1).max(80),
     canConfigureMapService: z.boolean(),
+    tiandituConfigured: z.boolean().nullable(),
   }).strict(),
   z.object({
     state: z.literal('configured'),
@@ -173,6 +174,7 @@ export const desktopProductSetupStatusSchema = z.discriminatedUnion('state', [
     productName: z.string().trim().min(1).max(80),
     canReset: z.boolean(),
     canConfigureMapService: z.boolean(),
+    tiandituConfigured: z.boolean().nullable(),
   }).strict(),
 ])
 
@@ -183,7 +185,17 @@ export const desktopProductSetupConnectionSchema = z.object({
   tiandituApiKey: z.string().trim().min(16).max(256)
     .regex(/^[A-Za-z0-9_-]+$/u, '天地图 API KEY 格式无效。')
     .optional(),
-}).strict().superRefine(enforceDesktopControlFrameSize)
+  clearTiandituApiKey: z.boolean().optional(),
+}).strict().superRefine((value, context) => {
+  if (value.tiandituApiKey && value.clearTiandituApiKey) {
+    context.addIssue({
+      code: 'custom',
+      path: ['clearTiandituApiKey'],
+      message: '新天地图 API KEY 与清除操作不能同时使用。',
+    })
+  }
+  enforceDesktopControlFrameSize(value, context)
+})
 
 export const desktopProductSetupTestResultSchema = z.object({
   ok: z.boolean(),

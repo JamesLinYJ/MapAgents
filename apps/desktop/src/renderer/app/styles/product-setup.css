@@ -50,7 +50,8 @@
   align-items: center;
   gap: 9px;
   height: 72px;
-  padding: 0 clamp(24px, 4vw, 64px);
+  padding-inline-start: max(var(--ui-titlebar-start-safe, 8px), clamp(24px, 4vw, 64px));
+  padding-inline-end: max(var(--ui-titlebar-end-safe, 8px), clamp(24px, 4vw, 64px));
   font-size: 14px;
   font-weight: 760;
   letter-spacing: .04em;
@@ -549,6 +550,16 @@
   color: #718386;
   font-size: 9px;
   font-weight: 450;
+}
+
+.product-connection__clear {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: -2px 0 12px;
+  color: #8b4a43;
+  font-size: 10px;
+  font-weight: 650;
 }
 
 .product-connection__icon {

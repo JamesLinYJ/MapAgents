@@ -27,6 +27,7 @@ import {
   followUpSubAgent,
   getSubAgent,
   listAdminWorkspaces,
+  listProviders,
 } from '../api/client'
 import {
   WorkspaceRestrictedDocument,
@@ -94,6 +95,8 @@ import {
 } from './workspaceInspectorDetails'
 import { useProductIdentity } from './ProductIdentityContext'
 import { AutoAuthScreen } from './auth/AutoAuthScreen'
+import { ServiceConfigurationOnboarding } from '../features/settings/ServiceConfigurationOnboarding'
+import { modelRouteUnavailableReason } from '../shared/providerCapabilities'
 
 function useVoidCallback<Args extends unknown[]>(fn: (...args: Args) => Promise<void>): (...args: Args) => void {
   return useCallback((...args: Args) => { void fn(...args) }, [fn])
@@ -296,7 +299,9 @@ function AppShell() {
     () => artifacts.find((artifact) => artifact.artifactId === selectedArtifactId),
     [artifacts, selectedArtifactId],
   )
-  const providerLabel = providers.find((item) => item.provider === provider)?.displayName ?? provider
+  const selectedProvider = providers.find((item) => item.provider === provider)
+  const providerLabel = selectedProvider?.displayName ?? provider
+  const routeUnavailableReason = modelRouteUnavailableReason(selectedProvider, model)
   const currentThreadTitle = sessionThreads.find((item) => item.id === currentThreadId)?.title
   const progressItems = buildProgressItems({
     runStatus: run?.status,
@@ -745,8 +750,9 @@ function AppShell() {
                   selectedBasemapName: selectedBasemap.name,
                   uploadedLayerName,
                   providerLabel,
-                  modelLabel: model || '默认',
-                  modelStatusLabel: formatModelRunStatus(run?.status),
+                  modelLabel: model || '未选择',
+                  modelRouteAvailable: routeUnavailableReason === null,
+                  modelStatusLabel: routeUnavailableReason ?? formatModelRunStatus(run?.status),
                   artifactCount: artifacts.length,
                   selectedArtifactName: selectedArtifact?.name,
                   currentThreadId,
@@ -771,7 +777,8 @@ function AppShell() {
                   authMe,
                   workspaces: visibleWorkspacesQuery.data ?? [],
                   activeWorkspaceId: session?.workspaceId ?? authMe?.defaultWorkspace?.workspaceId ?? null,
-                  onLogout: handleLogout,
+                  managedLocalIdentity: authMode === 'local_auto',
+                  onLogout: authMode === 'interactive' ? handleLogout : undefined,
                   unavailableReason: workspaceAccess.unavailableReason,
                   onOpenDocument: setActiveDesktopDocument,
                   onOpenWorkspace: handleOpenWorkspace,
@@ -874,6 +881,7 @@ function AppShell() {
                     artifacts,
                     runStatus: run?.status,
                     providerLabel,
+                    submissionDisabledReason: routeUnavailableReason ?? undefined,
                     query,
                     currentRunId: run?.id,
                     currentThreadId,
@@ -1022,6 +1030,16 @@ function AppShell() {
                 }}
               />
             )}
+          />
+          <ServiceConfigurationOnboarding
+            providers={providers}
+            canManageProviders={workspaceAccess.canManageRuntimeConfiguration}
+            onSaved={async result => {
+              const nextProviders = await listProviders()
+              applyProviders(nextProviders)
+              handleProviderChange(result.provider.providerId)
+              setModel(result.provider.defaultModel)
+            }}
           />
         </MotionConfig>
       </LazyMotion>

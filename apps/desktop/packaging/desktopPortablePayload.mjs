@@ -20,9 +20,9 @@ const remoteClientMarkerSource = fileURLToPath(new URL(
  * portable formats must remove it so first launch cannot enter the systemd-only
  * local-runtime path on a machine where no service unit was installed.
  *
- * Windows/macOS receive the same canonical marker before code signing through
- * packagerConfig.extraResource. Linux copies that exact source file here. The
- * marker therefore has one fact source across all platforms.
+ * Windows remote clients receive the same canonical marker before signing through
+ * packagerConfig.extraResource. Linux portable outputs copy that exact source here;
+ * macOS arm64 carries the managed Runtime Service instead of this remote marker.
  */
 export async function stagePortableClientDirectory(
   sourceDirectory,

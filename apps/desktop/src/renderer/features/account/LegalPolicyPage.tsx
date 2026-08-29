@@ -142,15 +142,17 @@ export function LegalPolicyPage({ kind }: LegalPolicyPageProps) {
   const sections = isTerms ? TERMS_SECTIONS : PRIVACY_SECTIONS
 
   return (
-    <main className="legal-page" aria-labelledby="legal-title">
-      <article className="legal-shell">
-        <header className="legal-hero">
-          <span className="account-eyebrow">{isTerms ? '服务条款' : '隐私与数据'}</span>
-          <h1 id="legal-title">{title}</h1>
-          <p>
-            最近更新：2026年7月9日。本文面向地理智能工作台使用场景，覆盖账号、权限、气象数据、
-            模型工具、自动化流程、语音服务、审计和运行历史等能力。
-          </p>
+    <main className="legal-page ui-page" aria-labelledby="legal-title">
+      <article className="legal-shell ui-page__content">
+        <header className="legal-hero ui-page-header">
+          <div>
+            <span className="account-eyebrow">{isTerms ? '服务条款' : '隐私与数据'}</span>
+            <h1 id="legal-title">{title}</h1>
+            <p>
+              最近更新：2026年7月9日。本文面向地理智能工作台使用场景，覆盖账号、权限、气象数据、
+              模型工具、自动化流程、语音服务、审计和运行历史等能力。
+            </p>
+          </div>
           <div className="legal-actions">
             <button type="button" onClick={() => requestDesktopDocument('account')}>返回账号中心</button>
             <button type="button" onClick={() => requestDesktopDocument('map')}>返回工作台</button>
@@ -160,7 +162,7 @@ export function LegalPolicyPage({ kind }: LegalPolicyPageProps) {
           </div>
         </header>
 
-        <nav className="legal-toc" aria-label="章节目录">
+        <nav className="legal-toc ui-card" aria-label="章节目录">
           {sections.map(section => (
             <a key={section.title} href={`#${slug(section.title)}`}>{section.title}</a>
           ))}
@@ -168,7 +170,7 @@ export function LegalPolicyPage({ kind }: LegalPolicyPageProps) {
 
         <div className="legal-sections">
           {sections.map(section => (
-            <section key={section.title} id={slug(section.title)} className="legal-section">
+            <section key={section.title} id={slug(section.title)} className="legal-section ui-page-section">
               <h2>{section.title}</h2>
               {section.body.map(paragraph => <p key={paragraph}>{paragraph}</p>)}
             </section>

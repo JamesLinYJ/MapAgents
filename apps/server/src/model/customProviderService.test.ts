@@ -5,14 +5,14 @@ import type { CustomProviderConfig } from '@geo-agent-platform/shared-types'
 import type { AuthContext } from '../security/types.js'
 import type { StoredCustomProvider } from '../store/postgres/customProviderStore.js'
 import {
-  ProviderCredentialCipher,
+  ProviderCredentialPersistence,
   ProviderCredentialStagingService,
 } from './customProviderCredentials.js'
 import { CustomProviderService } from './customProviderService.js'
 import { resolveAdapterModelCapabilities, type ModelAdapter } from './registry.js'
 
 describe('CustomProviderService', () => {
-  it('tests before saving, persists only encrypted credentials, and installs through the registry', async () => {
+  it('tests before saving, persists the plaintext credential, and installs through the registry', async () => {
     const records = new Map<string, StoredCustomProvider>()
     const repository = repositoryFor(records)
     const installed: ModelAdapter[] = []
@@ -24,14 +24,18 @@ describe('CustomProviderService', () => {
     const service = new CustomProviderService(
       repository,
       registry,
-      new ProviderCredentialCipher('test-server-secret-that-is-at-least-32-bytes'),
+      new ProviderCredentialPersistence(),
       credentials,
       () => adapter(chat),
     )
 
     const result = await service.save({ config: config(), credentialHandle: staged.credentialHandle, auth })
 
-    expect(chat).toHaveBeenCalledOnce()
+    expect(chat).toHaveBeenCalledWith('Reply with exactly OK.', {
+      model: 'model-1',
+      reasoning: false,
+      maxOutputTokens: 128,
+    })
     expect(result.provider.hasApiKey).toBe(true)
     expect(result.validation).toMatchObject({ connectivityOk: true, modelCallOk: true })
     expect(result.provider.models).toEqual([
@@ -39,7 +43,7 @@ describe('CustomProviderService', () => {
       expect.objectContaining({ modelId: 'model-2', contextWindowTokens: 32_000, modalities: ['text'] }),
     ])
     expect(installed).toHaveLength(1)
-    expect(JSON.stringify(records.get('my-provider'))).not.toContain('sk-sensitive-provider-key')
+    expect(records.get('my-provider')?.credential?.value).toBe('sk-sensitive-provider-key')
     expect(() => credentials.resolve(staged.credentialHandle, auth)).toThrow('不存在或已经过期')
   })
 
@@ -50,7 +54,7 @@ describe('CustomProviderService', () => {
     const service = new CustomProviderService(
       repository,
       registryFor(installed),
-      new ProviderCredentialCipher('test-server-secret-that-is-at-least-32-bytes'),
+      new ProviderCredentialPersistence(),
       new ProviderCredentialStagingService(),
       () => adapter(vi.fn(async () => { throw new Error('provider unavailable') })),
     )
@@ -58,6 +62,109 @@ describe('CustomProviderService', () => {
     await expect(service.save({ config: config(), auth: fakeAuth() })).rejects.toThrow('provider unavailable')
     expect(records.size).toBe(0)
     expect(installed).toHaveLength(0)
+  })
+
+  it('discovers models with the stored credential or a staged replacement without consuming it', async () => {
+    const records = new Map<string, StoredCustomProvider>()
+    const persistence = new ProviderCredentialPersistence()
+    const credentials = new ProviderCredentialStagingService()
+    const auth = fakeAuth()
+    const storedConfig = config()
+    const now = new Date().toISOString()
+    records.set(storedConfig.providerId, {
+      ...storedConfig,
+      credential: persistence.store('stored-secret'),
+      createdByUserId: auth.userId,
+      lastValidatedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    })
+    const discovery = vi.fn(async () => ({
+      models: [{ modelId: 'model-1', ownedBy: 'provider' }],
+      latencyMs: 12,
+      testedAt: now,
+    }))
+    const service = new CustomProviderService(
+      repositoryFor(records),
+      registryFor([]),
+      persistence,
+      credentials,
+      () => adapter(vi.fn(async () => ({ content: 'OK' }))),
+      discovery,
+    )
+
+    await service.discoverModels({
+      providerId: storedConfig.providerId,
+      baseUrl: storedConfig.baseUrl,
+      networkAccess: storedConfig.networkAccess,
+      auth,
+    })
+    expect(discovery).toHaveBeenLastCalledWith(expect.objectContaining({ apiKey: 'stored-secret' }))
+
+    const staged = credentials.stage('replacement-secret', auth)
+    await service.discoverModels({
+      providerId: storedConfig.providerId,
+      baseUrl: storedConfig.baseUrl,
+      networkAccess: storedConfig.networkAccess,
+      credentialHandle: staged.credentialHandle,
+      auth,
+    })
+    expect(discovery).toHaveBeenLastCalledWith(expect.objectContaining({ apiKey: 'replacement-secret' }))
+    expect(credentials.resolve(staged.credentialHandle, auth)).toBe('replacement-secret')
+  })
+
+  it('retains, replaces, and explicitly clears a saved API key', async () => {
+    const records = new Map<string, StoredCustomProvider>()
+    const persistence = new ProviderCredentialPersistence()
+    const credentials = new ProviderCredentialStagingService()
+    const auth = fakeAuth()
+    const usedSecrets: string[] = []
+    const installed: ModelAdapter[] = []
+    const service = new CustomProviderService(
+      repositoryFor(records),
+      registryFor(installed),
+      persistence,
+      credentials,
+      ({ apiKey }) => {
+        usedSecrets.push(apiKey)
+        return adapter(vi.fn(async () => ({ content: 'OK' })))
+      },
+    )
+
+    const original = credentials.stage('original-secret', auth)
+    await service.save({ config: config(), credentialHandle: original.credentialHandle, auth })
+    const originalCredential = records.get('my-provider')?.credential
+    expect(originalCredential).not.toBeNull()
+
+    await service.save({ config: config({ displayName: 'Renamed' }), auth })
+    expect(records.get('my-provider')?.credential).toEqual(originalCredential)
+
+    const replacement = credentials.stage('replacement-secret', auth)
+    await service.save({
+      config: config(),
+      credentialHandle: replacement.credentialHandle,
+      auth,
+    })
+    expect(persistence.read(records.get('my-provider')!.credential!))
+      .toBe('replacement-secret')
+
+    const cleared = await service.save({ config: config(), clearApiKey: true, auth })
+    expect(cleared.provider.hasApiKey).toBe(false)
+    expect(records.get('my-provider')?.credential).toBeNull()
+    expect(usedSecrets).toEqual([
+      'original-secret',
+      'original-secret',
+      'replacement-secret',
+      '',
+    ])
+
+    const conflicting = credentials.stage('conflicting-secret', auth)
+    await expect(service.save({
+      config: config(),
+      credentialHandle: conflicting.credentialHandle,
+      clearApiKey: true,
+      auth,
+    })).rejects.toThrow('不能同时使用')
   })
 
   it('serializes mutations per provider without blocking a different provider', async () => {
@@ -69,7 +176,7 @@ describe('CustomProviderService', () => {
     const service = new CustomProviderService(
       repositoryFor(records),
       registryFor(installed),
-      new ProviderCredentialCipher('test-server-secret-that-is-at-least-32-bytes'),
+      new ProviderCredentialPersistence(),
       new ProviderCredentialStagingService(),
       ({ config: providerConfig }) => {
         created.push(providerConfig.displayName)
@@ -112,7 +219,7 @@ describe('CustomProviderService', () => {
     const service = new CustomProviderService(
       repository,
       registry,
-      new ProviderCredentialCipher('test-server-secret-that-is-at-least-32-bytes'),
+      new ProviderCredentialPersistence(),
       new ProviderCredentialStagingService(),
       ({ config: providerConfig }) => adapter(vi.fn(async () => {
         saveStarted.resolve(undefined)

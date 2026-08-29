@@ -345,3 +345,11 @@
 .gf-statusbar .is-error {
   color: var(--ui-danger);
 }
+
+.gf-statusbar .is-warning {
+  color: var(--ui-warning);
+}
+
+.gf-statusbar .is-warning i {
+  background: var(--ui-warning);
+}

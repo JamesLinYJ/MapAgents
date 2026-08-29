@@ -25,9 +25,9 @@ export function AccountCenterPage({ authMe, onLogout }: AccountCenterPageProps) 
   const canOpenSecurity = authMe.platformRoles.includes('platform_admin')
 
   return (
-    <main className="account-page" aria-labelledby="account-page-title">
-      <section className="account-shell">
-        <header className="account-hero">
+    <main className="account-page ui-page" aria-labelledby="account-page-title">
+      <section className="account-shell ui-page__content">
+        <header className="account-hero ui-page-header">
           <div>
             <span className="account-eyebrow">工作台账号</span>
             <h1 id="account-page-title">{displayName}</h1>
@@ -43,7 +43,7 @@ export function AccountCenterPage({ authMe, onLogout }: AccountCenterPageProps) 
         </header>
 
         <section className="account-grid" aria-label="账号详细信息">
-          <article className="account-panel">
+          <article className="account-panel ui-card">
             <PanelHead icon={<UserRound size={18} />} title="身份信息" />
             <dl className="account-kv">
               <Row label="显示名称" value={displayName} />
@@ -54,7 +54,7 @@ export function AccountCenterPage({ authMe, onLogout }: AccountCenterPageProps) 
             </dl>
           </article>
 
-          <article className="account-panel">
+          <article className="account-panel ui-card">
             <PanelHead icon={<UsersRound size={18} />} title="工作区" />
             {defaultWorkspace ? (
               <div className="account-workspace">
@@ -76,7 +76,7 @@ export function AccountCenterPage({ authMe, onLogout }: AccountCenterPageProps) 
             </div>
           </article>
 
-          <article className="account-panel">
+          <article className="account-panel ui-card">
             <PanelHead icon={<ShieldCheck size={18} />} title="权限与安全" />
             <div className="account-pills" aria-label="平台角色">
               {authMe.platformRoles.length
@@ -95,7 +95,7 @@ export function AccountCenterPage({ authMe, onLogout }: AccountCenterPageProps) 
             </div>
           </article>
 
-          <article className="account-panel">
+          <article className="account-panel ui-card">
             <PanelHead icon={<Fingerprint size={18} />} title="数据与隐私" />
             <p className="account-copy">
               本服务使用账号、工作区、运行记录、上传文件、工具调用和审计日志来提供气象分析、地图浏览、
@@ -108,7 +108,7 @@ export function AccountCenterPage({ authMe, onLogout }: AccountCenterPageProps) 
             </div>
           </article>
 
-          <article className="account-panel account-panel--wide">
+          <article className="account-panel account-panel--wide ui-card">
             <PanelHead icon={<CalendarClock size={18} />} title="当前版本账号能力" />
             <ul className="account-capabilities">
               <li><strong>已启用：</strong>邮箱密码登录、注册、退出、工作区 RBAC、后台禁用用户、审计记录。</li>

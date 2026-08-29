@@ -69,7 +69,10 @@ export function createGuardedProviderDnsResolver(
     if (!addresses.length) throw new Error(`自定义 Provider 域名 '${normalized}' 没有可用地址。`)
 
     for (const address of addresses) {
-      if (networkAccess === 'public' ? !isPublicAddress(address.address) : !isLoopbackAddress(address.address)) {
+      const allowed = networkAccess === 'public'
+        ? isAllowedPublicProviderDnsAddress(normalized, address.address)
+        : isLoopbackAddress(address.address)
+      if (!allowed) {
         throw new Error(
           networkAccess === 'public'
             ? `自定义 Provider 域名 '${normalized}' 解析到了非公网地址 '${address.address}'。`
@@ -95,6 +98,16 @@ export function isLoopbackAddress(address: string): boolean {
   return false
 }
 
+/**
+ * 透明代理常把公网域名解析到 RFC 2544 基准测试网段，再在本机接管连接。
+ * 仅当请求目标仍是域名时放行 198.18.0.0/15，TLS 主机名校验和真实连通性验证保持不变；
+ * 用户直接填写该网段的 IP、内网地址和后续 DNS 重绑定结果仍会被拒绝。
+ */
+export function isAllowedPublicProviderDnsAddress(hostname: string, address: string): boolean {
+  return isPublicAddress(address)
+    || (isIP(normalizeHostname(hostname)) === 0 && isProxySyntheticIpv4Address(address))
+}
+
 function isPublicIpv4(address: string): boolean {
   const octets = address.split('.').map(Number)
   const [a = -1, b = -1, c = -1] = octets
@@ -108,6 +121,12 @@ function isPublicIpv4(address: string): boolean {
   if (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) return false
   if (a === 203 && b === 0 && c === 113) return false
   return true
+}
+
+function isProxySyntheticIpv4Address(address: string): boolean {
+  if (isIP(address) !== 4) return false
+  const octets = address.split('.').map(Number)
+  return octets[0] === 198 && (octets[1] === 18 || octets[1] === 19)
 }
 
 function isPublicIpv6(address: string): boolean {

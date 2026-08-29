@@ -52,14 +52,15 @@ export function deriveDesktopWorkspaceAccess(
   const backendActionsEnabled = unavailableReason === undefined
   const platformAdmin = backendActionsEnabled
     && Boolean(input.platformRoles?.includes('platform_admin'))
+  const interactiveIdentity = input.authMode !== 'local_auto'
   const managedLocalConfiguration = backendActionsEnabled && input.authMode === 'local_auto'
 
   return {
     backendActionsEnabled,
-    canAccessAccount: backendActionsEnabled,
+    canAccessAccount: backendActionsEnabled && interactiveIdentity,
     canAccessDiagnostics: platformAdmin,
     canManageRuntimeConfiguration: platformAdmin || managedLocalConfiguration,
-    canAccessSecurity: platformAdmin,
+    canAccessSecurity: platformAdmin && interactiveIdentity,
     statusLabel: backendActionsEnabled ? '工作台就绪' : statusLabelFor(input),
     ...(unavailableReason ? { unavailableReason } : {}),
   }

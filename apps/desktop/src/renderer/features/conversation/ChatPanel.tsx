@@ -55,6 +55,7 @@ export function ChatPanel(props: ChatPanelProps) {
     currentThreadTitle,
     runCreatedAt,
     providerLabel,
+    submissionDisabledReason,
     runStatus,
     query,
     isSubmitting,
@@ -196,6 +197,7 @@ export function ChatPanel(props: ChatPanelProps) {
     const canSteerActiveRun = isSubmitting && runStatus === 'running'
     if (
       !conversationReady
+      || Boolean(submissionDisabledReason)
       || submittingRef.current
       || (isSubmitting && !canSteerActiveRun)
       || composing
@@ -310,7 +312,13 @@ export function ChatPanel(props: ChatPanelProps) {
         >
           <ChatPanelHeader
             title={displayCurrentThreadTitle}
-            statusLine={formatStatusLine(runStatus, providerLabel, artifactCount, uploadedLayerName)}
+            statusLine={formatStatusLine(
+              runStatus,
+              providerLabel,
+              artifactCount,
+              uploadedLayerName,
+              submissionDisabledReason,
+            )}
             isHistoryView={taskView === 'history'}
             sessionCount={sessionThreads.length}
             isPanelExpanded={isPanelExpanded}
@@ -346,7 +354,7 @@ export function ChatPanel(props: ChatPanelProps) {
               <m.div key="chat" className="cc-chat-view" layout {...viewMotion}>
                 <Suspense fallback={<div className="cc-feed cc-feed--loading" aria-hidden="true" />}>
                   <ConversationTimeline
-                    key={`chat-${currentRunId ?? 'idle'}`}
+                    key={`chat-${currentThreadId ?? 'idle'}`}
                     conversation={conversation}
                     artifacts={artifacts}
                     activeDecision={activeServerDecision}
@@ -410,6 +418,7 @@ export function ChatPanel(props: ChatPanelProps) {
             <Composer
               query={query}
               providerLabel={providerLabel}
+              submissionDisabledReason={submissionDisabledReason}
               isSubmitting={isSubmitting}
               conversationReady={conversationReady}
               canSteerActiveRun={runStatus === 'running'}

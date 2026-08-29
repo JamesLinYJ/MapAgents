@@ -28,21 +28,41 @@ afterEach(async () => {
 })
 
 describe('operations IPC endpoint', () => {
-  it('always uses the per-user XDG runtime directory instead of the data directory', async () => {
+  it('always uses a short per-user endpoint instead of the data directory', async () => {
     if (process.platform === 'win32') return
-    const directory = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-long-root-'))
+    const directory = await mkdtemp('/tmp/geo-agent-platform-paths-')
     cleanupPaths.push(directory)
     const projectRoot = path.join(directory, '长路径'.repeat(24))
     await mkdir(projectRoot, { recursive: true })
-
     const paths = await resolveOperationsPaths({ projectRoot, profile: 'development' })
 
     expect(Buffer.byteLength(paths.endpoint, 'utf8')).toBeLessThanOrEqual(100)
     expect(paths.endpoint).not.toContain(projectRoot)
-    if (process.env.XDG_RUNTIME_DIR?.trim()) {
-      expect(paths.endpoint).toContain(path.resolve(process.env.XDG_RUNTIME_DIR))
-    }
+    expect(paths.endpoint).toContain(`/tmp/gap-${process.getuid?.() ?? 'user'}`)
     expect(paths.operationsRoot).toContain(projectRoot)
+  })
+
+  it('resolves the same endpoint when parent and supervised processes have different environments', async () => {
+    if (process.platform === 'win32') return
+    const directory = await mkdtemp('/tmp/geo-agent-platform-paths-')
+    cleanupPaths.push(directory)
+    const projectRoot = path.join(directory, 'workspace')
+    await mkdir(projectRoot, { recursive: true })
+    const previousRuntimeDirectory = process.env.XDG_RUNTIME_DIR
+    process.env.XDG_RUNTIME_DIR = path.join(directory, '很长'.repeat(80))
+
+    try {
+      const parentPaths = await resolveOperationsPaths({ projectRoot, profile: 'production' })
+      delete process.env.XDG_RUNTIME_DIR
+      const supervisedPaths = await resolveOperationsPaths({ projectRoot, profile: 'production' })
+
+      expect(parentPaths.endpoint).toBe(supervisedPaths.endpoint)
+      expect(Buffer.byteLength(parentPaths.endpoint, 'utf8')).toBeLessThanOrEqual(100)
+      expect(path.basename(parentPaths.endpoint)).toMatch(/^[a-f0-9]{24}\.sock$/u)
+    } finally {
+      if (previousRuntimeDirectory === undefined) delete process.env.XDG_RUNTIME_DIR
+      else process.env.XDG_RUNTIME_DIR = previousRuntimeDirectory
+    }
   })
 })
 

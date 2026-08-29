@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -150,7 +150,12 @@ describe('desktop runtime manifest', () => {
 })
 
 async function createTemporaryDirectory(): Promise<string> {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-runtime-manifest-'))
+  // macOS 的 os.tmpdir() 以 /var 开头，而 /var 是 /private/var 的系统链接。
+  // 清单边界有意拒绝任何链接父路径，测试夹具先规范化系统临时目录，避免
+  // 把操作系统别名误当成待测清单自身的链接。
+  const directory = await realpath(await mkdtemp(
+    path.join(os.tmpdir(), 'geo-agent-platform-runtime-manifest-'),
+  ))
   temporaryDirectories.push(directory)
   return directory
 }

@@ -13,6 +13,7 @@ import type {
   CustomProviderConfig,
   CustomProviderRecord,
   CustomProviderSaveResult,
+  ProviderModelDiscovery,
 } from '@geo-agent-platform/shared-types'
 
 import { requestControl } from './transport'
@@ -31,12 +32,26 @@ export function stageProviderCredential(secret: string): Promise<{
 export function saveCustomProvider(
   config: CustomProviderConfig,
   credentialHandle?: string | null,
-  clearCredential = false,
+  clearApiKey = false,
 ): Promise<CustomProviderSaveResult> {
   return requestControl('provider:custom:upsert', {
     config,
     ...(credentialHandle ? { credentialHandle } : {}),
-    clearCredential,
+    clearApiKey,
+  })
+}
+
+export function discoverCustomProviderModels(input: {
+  providerId: string
+  baseUrl: string
+  networkAccess: CustomProviderConfig['networkAccess']
+  credentialHandle?: string | null
+}): Promise<ProviderModelDiscovery> {
+  return requestControl('provider:custom:discover-models', {
+    providerId: input.providerId,
+    baseUrl: input.baseUrl,
+    networkAccess: input.networkAccess,
+    ...(input.credentialHandle ? { credentialHandle: input.credentialHandle } : {}),
   })
 }
 

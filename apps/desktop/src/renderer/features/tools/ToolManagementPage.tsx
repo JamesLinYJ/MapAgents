@@ -47,7 +47,6 @@ import type {
 } from '@geo-agent-platform/shared-types'
 
 import { StatusPill } from '../../shared/components/StatusPill'
-import { LiquidGlassSurface } from '../../shared/components/LiquidGlassLayer'
 import {
   ToolCatalogEditor,
   ToolParameterForm,
@@ -211,8 +210,8 @@ export function ToolManagementPage({
   ]
 
   return (
-    <section className="tool-management">
-      <LiquidGlassSurface as="section" variant="strong" className="tool-management__hero">
+    <section className="tool-management ui-page">
+      <section className="tool-management__hero ui-page-header">
         <div className="tool-management__hero-copy">
           <div className="tool-management__hero-icon">
             <Sparkles size={20} aria-hidden="true" />
@@ -240,7 +239,7 @@ export function ToolManagementPage({
             <DocShortcut icon={Code2} title="Provider Demo" pathValue="demo/tool-provider-demo" />
           </div>
         </div>
-      </LiquidGlassSurface>
+      </section>
 
       <div className="tool-management__tabs" role="tablist" aria-label="能力管理视图">
         {viewTabs.map((tab) => (
@@ -268,7 +267,7 @@ export function ToolManagementPage({
 
       {activeView === 'tools' ? (
         <div className="tool-management__grid">
-        <LiquidGlassSurface as="aside" variant="strong" className="tool-management__sidebar">
+        <aside className="tool-management__sidebar ui-card">
           <div className="tool-management__sidebar-header">
             <div>
               <div className="panel__eyebrow">目录</div>
@@ -318,16 +317,16 @@ export function ToolManagementPage({
               <div className="panel__empty">没有匹配的工具。</div>
             )}
           </div>
-        </LiquidGlassSurface>
+        </aside>
 
         <main className="tool-management__detail">
-          <LiquidGlassSurface as="section" variant="panel" className="panel">
+          <section className="panel ui-page-section">
             <div className="panel__header">
               <div>
-                <div className="panel__eyebrow">Provider Health</div>
+                <div className="panel__eyebrow">服务状态</div>
                 <h2>能力服务状态</h2>
               </div>
-              <StatusPill label={providers.length ? `${providers.length} 个 Provider` : '等待系统状态'} tone="accent" />
+              <StatusPill label={providers.length ? `${providers.length} 个服务` : '等待系统状态'} tone="accent" />
             </div>
             <div className="panel__section">
               <div className="tool-provider-list">
@@ -353,12 +352,12 @@ export function ToolManagementPage({
                 )}
               </div>
             </div>
-          </LiquidGlassSurface>
+          </section>
 
-          <LiquidGlassSurface as="section" variant="strong" className="panel tool-management__primary-panel">
+          <section className="panel tool-management__primary-panel ui-page-section">
             <div className="panel__header">
               <div>
-                <div className="panel__eyebrow">Tool Detail</div>
+                <div className="panel__eyebrow">工具详情</div>
                 <h2>{selectedTool?.label ?? '未选择工具'}</h2>
               </div>
               {selectedTool ? (
@@ -430,17 +429,17 @@ export function ToolManagementPage({
                 <div className="panel__empty">当前还没有工具 descriptor。</div>
               </div>
             )}
-          </LiquidGlassSurface>
+          </section>
 
           {selectedTool ? (
-            <LiquidGlassSurface as="section" variant="panel" className="panel">
+            <section className="panel ui-page-section">
               <div className="panel__header">
                 <div>
-                  <div className="panel__eyebrow">Catalog Override</div>
+                  <div className="panel__eyebrow">目录展示配置</div>
                   <h2>目录展示配置</h2>
                 </div>
                 <StatusPill
-                  label={selectedToolCatalogEntry ? '已有 override' : '使用默认 descriptor'}
+                  label={selectedToolCatalogEntry ? '已有覆盖配置' : '使用默认说明'}
                   tone={selectedToolCatalogEntry ? 'success' : 'accent'}
                 />
               </div>
@@ -460,16 +459,16 @@ export function ToolManagementPage({
                   </p>
                 )}
                 <p className="panel__muted">
-                  Override 只改变目录展示、排序和管理元数据；工具的 handler、schema 和审批边界仍来自 in-repo Provider。
+                  覆盖配置只改变目录展示、排序和管理元数据；工具处理器、参数结构和审批边界仍来自仓库内服务实现。
                 </p>
               </div>
-            </LiquidGlassSurface>
+            </section>
           ) : null}
 
-          <LiquidGlassSurface as="section" variant="panel" className="panel">
+          <section className="panel ui-page-section">
             <div className="panel__header">
               <div>
-                <div className="panel__eyebrow">Trial Run</div>
+                <div className="panel__eyebrow">试运行</div>
                 <h2>最近试运行结果</h2>
               </div>
               <Activity size={16} aria-hidden="true" />
@@ -477,7 +476,7 @@ export function ToolManagementPage({
             <div className="panel__section">
               <pre className="debug-pre">{toolRunResult ? JSON.stringify(toolRunResult, null, 2) : '暂无工具运行结果。'}</pre>
             </div>
-          </LiquidGlassSurface>
+          </section>
         </main>
         </div>
       ) : activeView === 'automations' || activeView === 'scheduled' || activeView === 'background' ? (
@@ -541,7 +540,7 @@ function OverviewCard({
   hint: string
 }) {
   return (
-    <LiquidGlassSurface as="article" variant="chip" className="overview-card tool-management__overview-card">
+    <article className="overview-card tool-management__overview-card ui-card">
       <span className="tool-management__overview-icon">
         <Icon size={17} aria-hidden="true" />
       </span>
@@ -550,7 +549,7 @@ function OverviewCard({
         <strong className="overview-card__value">{value}</strong>
         <p className="overview-card__footer">{hint}</p>
       </div>
-    </LiquidGlassSurface>
+    </article>
   )
 }
 

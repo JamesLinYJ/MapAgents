@@ -200,9 +200,9 @@ export default function SecurityAdminPage() {
   const hasActions = view === 'users' || view === 'memberships'
 
   return (
-    <main className="digital-cartographer dc-security-page">
-      <section className="dc-security-shell">
-        <header className="dc-security-header">
+    <main className="digital-cartographer dc-security-page ui-page">
+      <section className="dc-security-shell ui-page__content">
+        <header className="dc-security-header ui-page-header">
           <div>
             <span className="dc-card__eyebrow">安全管理</span>
             <h1>身份、工作区与权限</h1>
@@ -236,9 +236,9 @@ export default function SecurityAdminPage() {
               {users.map(user => <option key={user.userId} value={user.userId}>{user.email}</option>)}
             </select>
             <select aria-label="工作区角色" value={memberRole} onChange={event => setMemberRole(event.target.value as PlatformRole)}>
-              <option value="workspace_admin">workspace_admin</option>
-              <option value="analyst">analyst</option>
-              <option value="viewer">viewer</option>
+              <option value="workspace_admin">工作区管理员</option>
+              <option value="analyst">分析员</option>
+              <option value="viewer">只读用户</option>
             </select>
             <button className="dc-action-button dc-action-button--primary" type="submit">添加成员</button>
           </form>

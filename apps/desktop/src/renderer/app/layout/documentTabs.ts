@@ -27,6 +27,19 @@ export interface DesktopDocumentCloseResult {
 }
 
 const PINNED_DOCUMENT: DesktopDocument = 'map'
+const FOCUSED_DOCUMENTS = new Set<DesktopDocument>([
+  'settings',
+  'account',
+  'security',
+  'debug',
+  'terms',
+  'privacy',
+])
+
+// 页面型文档需要完整的文档画布；地图、工具、工作流和成果仍保留停靠面板语义。
+export function isFocusedDesktopDocument(document: DesktopDocument): boolean {
+  return FOCUSED_DOCUMENTS.has(document)
+}
 
 export function openDesktopDocument(
   documents: readonly DesktopDocument[],

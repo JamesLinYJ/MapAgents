@@ -10,8 +10,16 @@
 // --------------------------------------------------------------------------
 
 import type { ModelProviderDescriptor } from '@geo-agent-platform/shared-types'
+import { z } from 'zod'
 import { create } from 'zustand'
 import { supportsAgentSdkLiveSupervisor } from '../../shared/providerCapabilities'
+
+const MODEL_SELECTION_STORAGE_KEY = 'geo-agent-platform:model-selection:v1'
+const persistedModelSelectionSchema = z.object({
+  provider: z.string().trim().min(1).max(200),
+  model: z.string().trim().max(200),
+}).strict()
+const initialSelection = readPersistedSelection()
 
 interface ModelConnectionState {
   providers: ModelProviderDescriptor[]
@@ -25,36 +33,89 @@ interface ModelConnectionState {
 
 export const useModelConnectionStore = create<ModelConnectionState>((set, get) => ({
   providers: [],
-  provider: 'deepseek',
-  model: '',
+  provider: initialSelection?.provider ?? 'deepseek',
+  model: initialSelection?.model ?? '',
   applyProviders: providers => {
     const currentProvider = get().provider
     const currentModel = get().model
     const current = providers.find(item => (
       item.provider === currentProvider && supportsAgentSdkLiveSupervisor(item)
     ))
-    const preferred =
+    const executable =
       current ??
       providers.find(item => item.provider === 'deepseek' && supportsAgentSdkLiveSupervisor(item)) ??
-      providers.find(item => supportsAgentSdkLiveSupervisor(item)) ??
-      (providers.length > 0 ? providers[0] : undefined)
-    const availableModels = preferred
-      ? new Set([preferred.defaultModel, ...preferred.availableModels].filter(Boolean))
+      providers.find(item => supportsAgentSdkLiveSupervisor(item))
+    const visible = executable
+      ?? providers.find(item => item.provider === currentProvider)
+      ?? providers.find(item => item.provider === 'deepseek')
+      ?? providers[0]
+    const availableModels = executable
+      ? new Set([executable.defaultModel, ...executable.availableModels].filter(Boolean))
       : new Set<string>()
+    const nextProvider = visible?.provider ?? currentProvider
+    const nextModel = executable
+      ? executable.provider === currentProvider && availableModels.has(currentModel)
+        ? currentModel
+        : executable.defaultModel ?? ''
+      : ''
     set({
       providers,
-      ...(preferred ? {
-        provider: preferred.provider,
-        model: preferred.provider === currentProvider && availableModels.has(currentModel)
-          ? currentModel
-          : preferred.defaultModel ?? '',
+      model: nextModel,
+      ...(visible ? {
+        provider: nextProvider,
       } : {}),
     })
+    if (executable) {
+      persistSelection(nextProvider, nextModel)
+    } else {
+      clearPersistedSelection()
+    }
   },
   changeProvider: provider => {
     const selected = get().providers.find(item => item.provider === provider)
-    set({ provider, model: selected?.defaultModel ?? '' })
+    const available = supportsAgentSdkLiveSupervisor(selected)
+    const model = available ? selected?.defaultModel ?? '' : ''
+    set({ provider, model })
+    if (available) persistSelection(provider, model)
+    else clearPersistedSelection()
   },
-  setProvider: provider => set({ provider }),
-  setModel: model => set({ model }),
+  setProvider: provider => {
+    set({ provider })
+    persistSelection(provider, get().model)
+  },
+  setModel: model => {
+    set({ model })
+    persistSelection(get().provider, model)
+  },
 }))
+
+function readPersistedSelection(): { provider: string; model: string } | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(MODEL_SELECTION_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = persistedModelSelectionSchema.safeParse(JSON.parse(raw))
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
+}
+
+function persistSelection(provider: string, model: string): void {
+  const parsed = persistedModelSelectionSchema.safeParse({ provider, model })
+  if (!parsed.success || typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(MODEL_SELECTION_STORAGE_KEY, JSON.stringify(parsed.data))
+  } catch {
+    // localStorage 不可用时仍保留当前会话内的 Zustand 状态。
+  }
+}
+
+function clearPersistedSelection(): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.removeItem(MODEL_SELECTION_STORAGE_KEY)
+  } catch {
+    // 存储不可用时，内存状态仍会清空无效模型选择。
+  }
+}

@@ -27,6 +27,7 @@ interface TopBarProps {
   authMe: DesktopAuthProjection | null
   workspaces: readonly PlatformWorkspace[]
   activeWorkspaceId: string | null
+  managedLocalIdentity?: boolean
   onLogout?: () => Promise<void> | void
   unavailableReason?: string
   onOpenDocument: (document: DesktopDocument) => void
@@ -37,6 +38,7 @@ export function TopBar({
   authMe,
   workspaces,
   activeWorkspaceId,
+  managedLocalIdentity = false,
   onLogout,
   unavailableReason,
   onOpenDocument,
@@ -107,7 +109,22 @@ export function TopBar({
             </select>
           </label>
         ) : null}
-        {authMe ? <div className="workbench-account">
+        {authMe && managedLocalIdentity ? (
+          <div
+            className="workbench-account"
+            role="status"
+            aria-label="本机身份：应用自动连接"
+            title="由本机客户端自动建立服务会话，无需登录"
+          >
+            <span className="workbench-account__button">
+              <span className="workbench-account__avatar" aria-hidden="true"><ShieldCheck size={14} /></span>
+              <span className="workbench-account__copy">
+                <strong>本机工作台</strong>
+                <small>自动连接</small>
+              </span>
+            </span>
+          </div>
+        ) : authMe ? <div className="workbench-account">
           <button
             className="workbench-account__button"
             type="button"

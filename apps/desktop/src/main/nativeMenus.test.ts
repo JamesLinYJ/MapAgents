@@ -49,7 +49,7 @@ vi.mock('electron', () => {
 
 import { BrowserWindow } from 'electron'
 import type { DesktopAuthenticatedIdentity } from './authGateway.js'
-import { installNativeApplicationMenu } from './nativeMenus.js'
+import { deriveNativeMenuAccess, installNativeApplicationMenu } from './nativeMenus.js'
 
 describe('native application menu authorization', () => {
   beforeEach(() => {
@@ -109,6 +109,15 @@ describe('native application menu authorization', () => {
 
     dispose()
     expect(unsubscribe).toHaveBeenCalledOnce()
+  })
+
+  it('hides account and security actions for the app-managed local identity', () => {
+    expect(deriveNativeMenuAccess(authenticated(['platform_admin']), true, true)).toEqual({
+      canAccessAccount: false,
+      canAccessDiagnostics: true,
+      canAccessSecurity: false,
+      canStopAllAndQuit: true,
+    })
   })
 })
 

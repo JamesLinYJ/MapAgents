@@ -10,7 +10,17 @@
 // --------------------------------------------------------------------------
 
 import { generateKeyPairSync, sign } from 'node:crypto'
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readlink,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -25,6 +35,7 @@ import {
   createRuntimeWorkspacePackageManifest,
   prepareArtifactOutput,
   publicKeyFingerprint,
+  rebaseCopiedAbsoluteSymlinks,
   RUNTIME_OUTPUT_MARKER,
   RUNTIME_SERVICE_KIND,
   RUNTIME_WORKSPACE_PATHS,
@@ -66,6 +77,62 @@ test('force 只能覆盖已标记的专用制品目录', async () => {
     await prepareArtifactOutput(root, managed, true)
     await access(path.join(managed, RUNTIME_OUTPUT_MARKER))
     await assert.rejects(access(path.join(managed, 'stale.txt')))
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('复制的运行时绝对符号链接会改写到制品内部', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'geo-runtime-symlinks-'))
+  try {
+    const source = path.join(root, 'mounted', 'Versions', '16')
+    const destination = path.join(root, 'artifact', 'postgresql-portable')
+    await mkdir(path.join(source, 'bin'), { recursive: true })
+    await mkdir(path.join(source, 'lib'), { recursive: true })
+    await mkdir(path.join(destination, 'bin'), { recursive: true })
+    await mkdir(path.join(destination, 'lib'), { recursive: true })
+    await writeFile(path.join(source, 'bin', 'proj'), 'binary')
+    await writeFile(path.join(source, 'lib', 'libzstd.1.5.7.dylib'), 'library')
+    await writeFile(path.join(destination, 'bin', 'proj'), 'binary')
+    await writeFile(path.join(destination, 'lib', 'libzstd.1.5.7.dylib'), 'library')
+    await symlink(path.join(source, 'bin', 'proj'), path.join(destination, 'bin', 'invproj'))
+    await symlink(
+      path.join(source, 'lib', 'libzstd.1.5.7.dylib'),
+      path.join(destination, 'lib', 'libzstd.1.dylib'),
+    )
+    await symlink('libzstd.1.5.7.dylib', path.join(destination, 'lib', 'libzstd.dylib'))
+
+    assert.equal(await rebaseCopiedAbsoluteSymlinks(source, destination), 2)
+    assert.equal(await readlink(path.join(destination, 'bin', 'invproj')), 'proj')
+    assert.equal(
+      await readlink(path.join(destination, 'lib', 'libzstd.1.dylib')),
+      'libzstd.1.5.7.dylib',
+    )
+    assert.equal(await readlink(path.join(destination, 'lib', 'libzstd.dylib')), 'libzstd.1.5.7.dylib')
+    assert.equal(
+      await realpath(path.join(destination, 'lib', 'libzstd.1.dylib')),
+      await realpath(path.join(destination, 'lib', 'libzstd.1.5.7.dylib')),
+    )
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('复制的运行时符号链接不得逃逸来源目录', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'geo-runtime-symlink-escape-'))
+  try {
+    const source = path.join(root, 'mounted', 'Versions', '16')
+    const destination = path.join(root, 'artifact', 'postgresql-portable')
+    const outside = path.join(root, 'host-library.dylib')
+    await mkdir(path.join(source, 'lib'), { recursive: true })
+    await mkdir(path.join(destination, 'lib'), { recursive: true })
+    await writeFile(outside, 'host')
+    await symlink(outside, path.join(destination, 'lib', 'libhost.dylib'))
+
+    await assert.rejects(
+      rebaseCopiedAbsoluteSymlinks(source, destination),
+      /符号链接越过来源目录/u,
+    )
   } finally {
     await rm(root, { recursive: true, force: true })
   }

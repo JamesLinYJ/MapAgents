@@ -9,7 +9,7 @@
 //   协助:       OpenAI Codex:GPT-5.6 Sol
 // --------------------------------------------------------------------------
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -149,7 +149,9 @@ describe('resolveDesktopRuntimeConfig', () => {
   })
 
   it('uses the protected production manifest instead of ambient legacy variables', async () => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-desktop-config-'))
+    const directory = await realpath(await mkdtemp(
+      path.join(os.tmpdir(), 'geo-agent-platform-desktop-config-'),
+    ))
     try {
       const runtimeRoot = path.join(directory, 'runtime')
       const projectRoot = path.join(directory, 'project')

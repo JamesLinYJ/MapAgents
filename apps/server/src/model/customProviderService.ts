@@ -11,11 +11,13 @@
 
 import {
   customProviderConfigSchema,
+  customProviderIdSchema,
   customProviderRecordSchema,
   customProviderSaveResultSchema,
   type CustomProviderConfig,
   type CustomProviderRecord,
   type CustomProviderSaveResult,
+  type ProviderModelDiscovery,
 } from '@geo-agent-platform/shared-types'
 
 import type { AuthContext } from '../security/types.js'
@@ -24,16 +26,27 @@ import type {
   StoredCustomProvider,
 } from '../store/postgres/customProviderStore.js'
 import {
-  ProviderCredentialCipher,
+  ProviderCredentialPersistence,
   ProviderCredentialStagingService,
 } from './customProviderCredentials.js'
 import type { ModelAdapter, ModelAdapterRegistry } from './registry.js'
-import { MODEL_PROVIDER_IDS } from './registry.js'
+import {
+  CONFIGURABLE_BUILTIN_PROVIDER_IDS,
+  MODEL_PROVIDER_IDS,
+} from './registry.js'
 import { createCustomOpenAIAdapter } from './providers/customOpenAI.js'
+import {
+  discoverCustomProviderModels,
+  type CustomProviderModelDiscoveryInput,
+} from './customProviderModelDiscovery.js'
 
 type CustomProviderRepository = Pick<CustomProviderStore, 'list' | 'get' | 'upsert' | 'delete'>
 type CustomProviderRegistry = Pick<ModelAdapterRegistry, 'installCustom' | 'removeCustom' | 'descriptors'>
 type AdapterFactory = (input: { config: CustomProviderConfig; apiKey: string }) => ModelAdapter
+type ModelDiscovery = (input: CustomProviderModelDiscoveryInput) => Promise<ProviderModelDiscovery>
+
+// 推理模型会先消耗一部分输出词元生成内部推理；预算过小会在正文出现前被截断。
+const MINIMAL_MODEL_CALL_OUTPUT_TOKENS = 128
 
 export class CustomProviderService {
   private readonly providerMutationTails = new Map<string, Promise<void>>()
@@ -41,15 +54,16 @@ export class CustomProviderService {
   constructor(
     private readonly repository: CustomProviderRepository,
     private readonly registry: CustomProviderRegistry,
-    private readonly cipher: ProviderCredentialCipher,
+    private readonly credentialPersistence: ProviderCredentialPersistence,
     readonly credentials: ProviderCredentialStagingService,
     private readonly adapterFactory: AdapterFactory = createCustomOpenAIAdapter,
+    private readonly modelDiscovery: ModelDiscovery = discoverCustomProviderModels,
   ) {}
 
   async loadPersistedProviders(): Promise<void> {
     for (const stored of await this.repository.list()) {
       const apiKey = stored.credential
-        ? this.cipher.decrypt(stored.providerId, stored.credential)
+        ? this.credentialPersistence.read(stored.credential)
         : ''
       await this.registry.installCustom(this.adapterFactory({ config: publicConfig(stored), apiKey }))
     }
@@ -59,24 +73,50 @@ export class CustomProviderService {
     return (await this.repository.list()).map(publicRecord)
   }
 
+  async discoverModels(input: {
+    providerId: string
+    baseUrl: string
+    networkAccess: CustomProviderConfig['networkAccess']
+    credentialHandle?: string | null
+    auth: AuthContext
+  }): Promise<ProviderModelDiscovery> {
+    const providerId = customProviderIdSchema.parse(input.providerId)
+    const existing = await this.repository.get(providerId)
+    const apiKey = input.credentialHandle
+      ? this.credentials.resolve(input.credentialHandle, input.auth)
+      : existing?.credential
+        ? this.credentialPersistence.read(existing.credential)
+        : ''
+    return this.modelDiscovery({
+      baseUrl: input.baseUrl,
+      networkAccess: input.networkAccess,
+      apiKey,
+    })
+  }
+
   async save(input: {
     config: CustomProviderConfig
     credentialHandle?: string | null
+    clearApiKey?: boolean
     clearCredential?: boolean
     auth: AuthContext
   }): Promise<CustomProviderSaveResult> {
     const config = customProviderConfigSchema.parse(input.config)
-    if (MODEL_PROVIDER_IDS.includes(config.providerId as (typeof MODEL_PROVIDER_IDS)[number])) {
-      throw new Error(`Provider ID '${config.providerId}' 已由内置适配器使用。`)
+    if (input.credentialHandle && (input.clearApiKey || input.clearCredential)) {
+      throw new Error('新 API Key 与清除操作不能同时使用。')
+    }
+    if (isNonConfigurableBuiltin(config.providerId)) {
+      throw new Error(`内置 Provider '${config.providerId}' 不支持在设置页覆盖。`)
     }
     return this.runProviderMutation(config.providerId, async () => {
       const existing = await this.repository.get(config.providerId)
+      const clearApiKey = Boolean(input.clearApiKey || input.clearCredential)
       const secret = input.credentialHandle
         ? this.credentials.resolve(input.credentialHandle, input.auth)
-        : input.clearCredential
+        : clearApiKey
           ? ''
           : existing?.credential
-            ? this.cipher.decrypt(config.providerId, existing.credential)
+            ? this.credentialPersistence.read(existing.credential)
             : ''
       const candidate = this.adapterFactory({ config, apiKey: secret })
       const startedAt = performance.now()
@@ -86,15 +126,15 @@ export class CustomProviderService {
         const response = await candidate.chat('Reply with exactly OK.', {
           model: config.defaultModel,
           reasoning: false,
-          maxOutputTokens: 8,
+          maxOutputTokens: MINIMAL_MODEL_CALL_OUTPUT_TOKENS,
         })
         if (typeof response.content !== 'string' || !response.content.trim()) {
           throw new Error('最小模型调用没有返回文本内容。')
         }
         const testedAt = new Date().toISOString()
         const credential = input.credentialHandle
-          ? this.cipher.encrypt(config.providerId, secret)
-          : input.clearCredential
+          ? this.credentialPersistence.store(secret)
+          : clearApiKey
             ? null
             : existing?.credential ?? null
         const stored = await this.repository.upsert({
@@ -126,9 +166,7 @@ export class CustomProviderService {
   }
 
   async delete(providerId: string): Promise<boolean> {
-    if (MODEL_PROVIDER_IDS.includes(providerId as (typeof MODEL_PROVIDER_IDS)[number])) {
-      throw new Error('不能删除内置模型 Provider。')
-    }
+    if (isNonConfigurableBuiltin(providerId)) throw new Error('不能删除该内置模型 Provider。')
     return this.runProviderMutation(providerId, async () => {
       const deleted = await this.repository.delete(providerId)
       if (deleted) await this.registry.removeCustom(providerId)
@@ -148,6 +186,13 @@ export class CustomProviderService {
     })
     return result
   }
+}
+
+function isNonConfigurableBuiltin(providerId: string): boolean {
+  return MODEL_PROVIDER_IDS.includes(providerId as (typeof MODEL_PROVIDER_IDS)[number])
+    && !CONFIGURABLE_BUILTIN_PROVIDER_IDS.includes(
+      providerId as (typeof CONFIGURABLE_BUILTIN_PROVIDER_IDS)[number],
+    )
 }
 
 function publicConfig(stored: StoredCustomProvider): CustomProviderConfig {

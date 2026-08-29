@@ -129,7 +129,7 @@ export function MapCanvas({
     ?? availableBasemaps[0]
   const basemapConfigurationWarning = availableBasemaps.length === 0
     && basemaps.some(item => item.available === false)
-    ? '天地图服务端 Key 尚未配置或不可用。请打开“帮助 → 服务连接设置”完成配置。'
+    ? '天地图服务端密钥尚未配置或不可用。请打开“帮助 → 服务连接设置”完成配置。'
     : null
   const selectedLayer = layers.find(layer => layer.manifest.mapLayerId === selectedMapLayerId)
     ?? layers.find(layer => layer.manifest.artifactId === selectedArtifactId)

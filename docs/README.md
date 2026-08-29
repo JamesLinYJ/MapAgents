@@ -9,6 +9,7 @@
 - [完整项目架构图](architecture/project-architecture-complete.svg)
 - [本地运维台](operations/operations-console.md)
 - [本机 Agent CLI](operations/local-agent-cli.md)
+- [桌面设计规范](standards/DESIGN.md)
 - [工具接入标准](standards/tool-integration-standard.md)
 
 ## 汇报材料

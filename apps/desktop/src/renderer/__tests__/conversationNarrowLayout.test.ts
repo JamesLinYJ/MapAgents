@@ -36,6 +36,36 @@ describe('窄宽对话面板布局', () => {
     )
   })
 
+  it('虚拟时间线保留测量高度，不被滚动容器压缩', async () => {
+    const conversationCss = await readFile(path.join(styleRoot, 'conversation.css'), 'utf8')
+
+    expect(conversationCss).toMatch(
+      /\.cc-timeline__virtual-list\s*\{[^}]*flex:\s*0 0 auto;/s,
+    )
+  })
+
+  it('对话变化时在绘制前直接定位底部，不重播整段历史', async () => {
+    const [timelineSource, conversationCss, legacyCss] = await Promise.all([
+      readFile(path.join(conversationRoot, 'ConversationTimeline.tsx'), 'utf8'),
+      readFile(path.join(styleRoot, 'conversation.css'), 'utf8'),
+      readFile(path.resolve(styleRoot, '..', 'AppShell.css'), 'utf8'),
+    ])
+
+    expect(timelineSource).toContain('useLayoutEffect(() => {')
+    expect(timelineSource).toContain("anchorTo: 'end'")
+    expect(timelineSource).toContain("behavior: 'auto'")
+    expect(timelineSource).not.toContain('nearBottom')
+    expect(conversationCss).toMatch(/\.cc-timeline\s*\{[^}]*scroll-behavior:\s*auto;/s)
+    expect(legacyCss).not.toMatch(/\.cc-timeline\s*\{[^}]*scroll-behavior:\s*smooth;/s)
+  })
+
+  it('同一对话内的新运行不会重建整条时间线', async () => {
+    const chatPanelSource = await readFile(path.join(conversationRoot, 'ChatPanel.tsx'), 'utf8')
+
+    expect(chatPanelSource).toContain("key={`chat-${currentThreadId ?? 'idle'}`}")
+    expect(chatPanelSource).not.toContain("key={`chat-${currentRunId ?? 'idle'}`}")
+  })
+
   it('极窄输入栏分行排列操作，不让模式与发送按钮相互覆盖', async () => {
     const desktopCss = await readFile(path.join(styleRoot, 'desktop.css'), 'utf8')
 

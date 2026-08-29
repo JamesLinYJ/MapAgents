@@ -114,11 +114,19 @@ async function startDesktop(logger: DesktopSystemLogger): Promise<void> {
               serviceEnvironmentFile: packagedLocalRuntime.serviceEnvironmentFile,
               ownerUid: process.getuid?.(),
             }),
-            update: async ({ tiandituApiKey }: { tiandituApiKey: string }) => {
+            update: async ({
+              tiandituApiKey,
+              clearTiandituApiKey,
+            }: {
+              tiandituApiKey?: string
+              clearTiandituApiKey?: boolean
+            }) => {
               await updatePackagedLocalRuntimeUserSettings({
                 serviceEnvironmentFile: packagedLocalRuntime.serviceEnvironmentFile,
                 ownerUid: process.getuid?.(),
-                tiandituApiKey,
+                restartApiService: packagedLocalRuntime.restartApiService,
+                ...(tiandituApiKey ? { tiandituApiKey } : {}),
+                ...(clearTiandituApiKey ? { clearTiandituApiKey: true } : {}),
               })
             },
           },
@@ -157,8 +165,8 @@ async function startDesktop(logger: DesktopSystemLogger): Promise<void> {
       }, 120)
     },
   })
-  registerWindowLifecycle(windows)
   if (startup.state === 'required') {
+    registerWindowLifecycle(windows)
     windows.openBootstrap()
     logger.info('desktop_setup_required')
     app.once('before-quit', () => logger.close())
@@ -201,6 +209,7 @@ async function startDesktop(logger: DesktopSystemLogger): Promise<void> {
     authorization: auth,
     shutdown,
     localServiceControl: startup.deploymentMode === 'local_managed',
+    managedLocalIdentity: autoAuth !== null,
     productName,
   })
   installDesktopIpcHandlers({
@@ -217,6 +226,9 @@ async function startDesktop(logger: DesktopSystemLogger): Promise<void> {
     windows,
   })
 
+  // macOS 可能在异步启动仍在装配网关时发送 activate。只有完整 IPC 边界
+  // 注册完成后才允许 activate 创建 Renderer，避免首屏先调用不存在的 handler。
+  registerWindowLifecycle(windows)
   windows.openBootstrap()
   logger.info('desktop_ready', {
     profile: runtime?.profile ?? 'production',

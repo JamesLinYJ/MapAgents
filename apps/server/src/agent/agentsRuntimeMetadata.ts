@@ -9,13 +9,13 @@
 //   协助:       OpenAI Codex:GPT-5.5
 // --------------------------------------------------------------------------
 
-import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import {
   AGENTS_SDK_STATE_SCHEMA_VERSION,
   type AgentRuntimeConfig,
 } from '../schemas/types.js'
+import { agentContextDigest } from '../agent-runtime/step/agentContextDigest.js'
 
 export const SDK_STATE_SCHEMA_VERSION = AGENTS_SDK_STATE_SCHEMA_VERSION
 export const SUPPORTED_AGENTS_SDK_VERSION = '0.17.0'
@@ -36,7 +36,7 @@ export function assertAgentsSdkVersionSupported(version: string): void {
 }
 
 export function runtimeConfigDigest(config: AgentRuntimeConfig): string {
-  return createHash('sha256').update(stableStringify(config)).digest('hex')
+  return agentContextDigest(config)
 }
 
 async function readInstalledVersion(): Promise<string> {
@@ -45,13 +45,4 @@ async function readInstalledVersion(): Promise<string> {
   const parsed = JSON.parse(await readFile(fileURLToPath(packageUrl), 'utf8')) as { version?: unknown }
   if (typeof parsed.version !== 'string' || !parsed.version) throw new Error('无法读取 @openai/agents 安装版本')
   return parsed.version
-}
-
-function stableStringify(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
-  if (value && typeof value === 'object') {
-    const record = value as Record<string, unknown>
-    return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(',')}}`
-  }
-  return JSON.stringify(value) ?? 'null'
 }

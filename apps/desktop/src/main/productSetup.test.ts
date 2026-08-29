@@ -5,11 +5,18 @@
 //   文件:       productSetup.test.ts
 // --------------------------------------------------------------------------
 
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PRODUCT_CODENAME } from '@geo-agent-platform/shared-types/product-identity'
+
+vi.mock('electron', () => ({
+  app: {
+    getAppPath: () => process.cwd(),
+    isPackaged: true,
+  },
+}))
 
 import {
   DesktopProductSetupService,
@@ -25,20 +32,22 @@ afterEach(async () => {
 })
 
 describe('DesktopProductSetupService', () => {
-  it('turns a production package without a system manifest into first-run setup', async () => {
+  it('connects a local desktop package to the loopback service without a first-run address form', async () => {
     const fixture = await createFixture()
     const service = fixture.service(vi.fn())
 
     await expect(service.status()).resolves.toEqual({
-      state: 'required',
+      state: 'configured',
       deploymentMode: 'remote',
-      suggestedApiBaseUrl: 'http://127.0.0.1:8000',
-      suggestedProductName: PRODUCT_CODENAME,
+      apiBaseUrl: 'http://127.0.0.1:8000',
+      productName: PRODUCT_CODENAME,
+      canReset: false,
       canConfigureMapService: false,
+      tiandituConfigured: null,
     })
   })
 
-  it('tests both readiness and release compatibility before saving a non-secret user config', async () => {
+  it('persists a confirmed loopback default without rechecking an unchanged address', async () => {
     const fixture = await createFixture()
     const fetch = vi.fn(async (input: string, init?: RequestInit) => {
       expect(init).toMatchObject({ method: 'GET', redirect: 'error' })
@@ -76,6 +85,7 @@ describe('DesktopProductSetupService', () => {
         productName: '山河工作台',
         canReset: true,
         canConfigureMapService: false,
+        tiandituConfigured: null,
       })
 
     const saved = await readFile(fixture.userSetupPath, 'utf8')
@@ -90,7 +100,7 @@ describe('DesktopProductSetupService', () => {
     if (process.platform !== 'win32') {
       expect((await stat(fixture.userSetupPath)).mode & 0o777).toBe(0o600)
     }
-    expect(fetch).toHaveBeenCalledTimes(4)
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
 
   it('keeps an invalid or unavailable endpoint out of the saved product state', async () => {
@@ -109,7 +119,11 @@ describe('DesktopProductSetupService', () => {
       productName: PRODUCT_CODENAME,
     }))
       .rejects.toThrow('ECONNREFUSED')
-    await expect(service.status()).resolves.toMatchObject({ state: 'required' })
+    await expect(service.status()).resolves.toMatchObject({
+      state: 'configured',
+      apiBaseUrl: 'http://127.0.0.1:8000',
+      canReset: false,
+    })
   })
 
   it('loads a legacy remote setup with the default display name and updates only the name offline', async () => {
@@ -130,7 +144,13 @@ describe('DesktopProductSetupService', () => {
       productName: PRODUCT_CODENAME,
       canReset: true,
       canConfigureMapService: false,
+      tiandituConfigured: null,
     })
+    await expect(service.save({
+      apiBaseUrl: 'https://geo.example.com',
+      productName: PRODUCT_CODENAME,
+      clearTiandituApiKey: true,
+    })).rejects.toThrow('由服务器管理员管理')
     await expect(service.save({
       apiBaseUrl: 'https://geo.example.com',
       productName: '团队地理工作台',
@@ -151,7 +171,11 @@ describe('DesktopProductSetupService', () => {
       apiBaseUrl: 'https://geo.example.com',
     }), { encoding: 'utf8', mode: 0o600 })
     const remote = fixture.service(vi.fn())
-    await expect(remote.reset()).resolves.toMatchObject({ state: 'required' })
+    await expect(remote.reset()).resolves.toMatchObject({
+      state: 'configured',
+      apiBaseUrl: 'http://127.0.0.1:8000',
+      canReset: false,
+    })
 
     const runtimeRoot = path.join(fixture.directory, 'runtime')
     const projectRoot = path.join(fixture.directory, 'project')
@@ -170,7 +194,14 @@ describe('DesktopProductSetupService', () => {
       allowedEnvironmentOverrides: [],
     }), 'utf8')
 
-    const updateLocalRuntime = vi.fn(async () => undefined)
+    let tiandituConfigured = false
+    const updateLocalRuntime = vi.fn(async (input: {
+      tiandituApiKey?: string
+      clearTiandituApiKey?: boolean
+    }) => {
+      if (input.tiandituApiKey) tiandituConfigured = true
+      if (input.clearTiandituApiKey) tiandituConfigured = false
+    })
     const local = fixture.service(
       vi.fn(async () => new Response(new Uint8Array([137, 80, 78, 71]), {
         status: 200,
@@ -178,16 +209,18 @@ describe('DesktopProductSetupService', () => {
       })),
       undefined,
       {
-        read: vi.fn(async () => ({ tiandituConfigured: false })),
+        read: vi.fn(async () => ({ tiandituConfigured })),
         update: updateLocalRuntime,
       },
     )
     await expect(local.status()).resolves.toEqual({
-      state: 'required',
+      state: 'configured',
       deploymentMode: 'local_managed',
-      suggestedApiBaseUrl: 'http://127.0.0.1:9000',
-      suggestedProductName: PRODUCT_CODENAME,
+      apiBaseUrl: 'http://127.0.0.1:9000',
+      productName: PRODUCT_CODENAME,
+      canReset: false,
       canConfigureMapService: true,
+      tiandituConfigured: false,
     })
     const rejectedUpdate = vi.fn(async () => undefined)
     const browserKeyOnly = fixture.service(
@@ -211,6 +244,15 @@ describe('DesktopProductSetupService', () => {
     await expect(local.save({
       apiBaseUrl: 'http://127.0.0.1:9000',
       productName: '本机地理工作台',
+    })).resolves.toMatchObject({
+      state: 'configured',
+      tiandituConfigured: false,
+    })
+    expect(updateLocalRuntime).not.toHaveBeenCalled()
+
+    await expect(local.save({
+      apiBaseUrl: 'http://127.0.0.1:9000',
+      productName: '本机地理工作台',
       tiandituApiKey: 'server-key-fixture-1234',
     })).resolves.toEqual({
       state: 'configured',
@@ -219,11 +261,22 @@ describe('DesktopProductSetupService', () => {
       productName: '本机地理工作台',
       canReset: false,
       canConfigureMapService: true,
+      tiandituConfigured: true,
     })
     expect(updateLocalRuntime).toHaveBeenCalledWith({
       tiandituApiKey: 'server-key-fixture-1234',
     })
     expect(await readFile(fixture.userSetupPath, 'utf8')).not.toContain('server-key-fixture-1234')
+
+    await expect(local.save({
+      apiBaseUrl: 'http://127.0.0.1:9000',
+      productName: '本机地理工作台',
+      clearTiandituApiKey: true,
+    })).resolves.toMatchObject({
+      state: 'configured',
+      tiandituConfigured: false,
+    })
+    expect(updateLocalRuntime).toHaveBeenLastCalledWith({ clearTiandituApiKey: true })
   })
 })
 
@@ -238,7 +291,7 @@ describe('parseDesktopApiBaseUrl', () => {
 })
 
 async function createFixture() {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-product-setup-'))
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), 'geo-agent-product-setup-')))
   temporaryDirectories.push(directory)
   const userSetupPath = path.join(directory, 'user', 'product-setup.v1.json')
   const runtimeManifestPath = path.join(directory, 'system', 'runtime-manifest.v1.json')
@@ -252,7 +305,7 @@ async function createFixture() {
       times?: number[],
       localRuntimeSettings?: {
         read(): Promise<{ tiandituConfigured: boolean }>
-        update(input: { tiandituApiKey: string }): Promise<void>
+        update(input: { tiandituApiKey?: string; clearTiandituApiKey?: boolean }): Promise<void>
       },
     ) {
       const readings = [...(times ?? [])]

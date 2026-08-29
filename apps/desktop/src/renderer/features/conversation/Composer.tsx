@@ -24,6 +24,7 @@ import type { SpeechRecognitionStatus } from './useSpeechRecognition'
 interface ComposerProps {
   query: string
   providerLabel: string
+  submissionDisabledReason?: string
   isSubmitting: boolean
   conversationReady: boolean
   canSteerActiveRun: boolean
@@ -72,6 +73,7 @@ interface ComposerProps {
 export function Composer({
   query,
   providerLabel,
+  submissionDisabledReason,
   isSubmitting,
   conversationReady,
   canSteerActiveRun,
@@ -117,7 +119,11 @@ export function Composer({
   const modeShortLabel = mode.shortLabel
   const [pasteBusy, setPasteBusy] = useState(false)
   const [pasteError, setPasteError] = useState<string | null>(null)
-  const canSubmit = conversationReady && !pasteBusy && Boolean(query.trim()) && (!isSubmitting || canSteerActiveRun)
+  const canSubmit = conversationReady
+    && !submissionDisabledReason
+    && !pasteBusy
+    && Boolean(query.trim())
+    && (!isSubmitting || canSteerActiveRun)
   const speechEnabled = Boolean(onStartSpeechRecognition && onStopSpeechRecognition)
   const speechBusy = speechStatus === 'authorizing' || speechStatus === 'stopping'
   const speechActive = speechStatus === 'recognizing' || speechBusy
@@ -251,7 +257,7 @@ export function Composer({
         </div>
 
         <div className="cc-composer-toolbar__secondary" aria-label="执行方式与发送">
-          <span className="cc-composer-provider" title={providerLabel}>
+          <span className="cc-composer-provider" title={submissionDisabledReason ?? providerLabel}>
             {providerLabel}
           </span>
 
@@ -334,8 +340,8 @@ export function Composer({
             className="cc-composer-tool cc-composer-tool--send"
             type="submit"
             disabled={!canSubmit}
-            title={!conversationReady ? '正在初始化会话' : canSteerActiveRun ? '发送引导消息' : isSubmitting ? '运行中' : '发送'}
-            aria-label={!conversationReady ? '正在初始化会话' : canSteerActiveRun ? '发送引导消息' : isSubmitting ? '运行中' : '发送'}
+            title={!conversationReady ? '正在初始化会话' : submissionDisabledReason ?? (canSteerActiveRun ? '发送引导消息' : isSubmitting ? '运行中' : '发送')}
+            aria-label={!conversationReady ? '正在初始化会话' : submissionDisabledReason ?? (canSteerActiveRun ? '发送引导消息' : isSubmitting ? '运行中' : '发送')}
           >
             <AppIcon name="send" size={17} />
           </button>

@@ -1081,7 +1081,6 @@
     --cc-rail-x: calc(var(--cc-rail-col) / 2);
     --cc-dot-size: 8px;
     --cc-dot-y: 8px;
-    scroll-behavior: smooth;
     overflow-anchor: auto;
   }
 

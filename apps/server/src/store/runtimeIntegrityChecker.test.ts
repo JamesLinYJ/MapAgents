@@ -10,7 +10,7 @@
 // --------------------------------------------------------------------------
 
 import { createHash } from 'node:crypto'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -150,7 +150,7 @@ function catalog(
 }
 
 async function createRoot(): Promise<string> {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-integrity-'))
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'geo-agent-platform-integrity-')))
   roots.push(root)
   return root
 }

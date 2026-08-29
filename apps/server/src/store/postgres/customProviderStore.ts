@@ -20,15 +20,15 @@ import { platformModelProviders } from '../../db/schema.js'
 
 type CustomProviderRow = typeof platformModelProviders.$inferSelect
 
-export interface EncryptedProviderCredential {
-  ciphertext: string
+export interface StoredProviderCredential {
+  value: string
   iv: string
   authTag: string
-  keyVersion: string
+  storageVersion: string
 }
 
 export interface StoredCustomProvider extends CustomProviderConfig {
-  credential: EncryptedProviderCredential | null
+  credential: StoredProviderCredential | null
   createdByUserId: string
   lastValidatedAt: string
   createdAt: string
@@ -126,27 +126,28 @@ function mapRow(row: CustomProviderRow): StoredCustomProvider {
   }
 }
 
-function readCredential(row: CustomProviderRow): EncryptedProviderCredential | null {
+function readCredential(row: CustomProviderRow): StoredProviderCredential | null {
   const fields = [row.apiKeyCiphertext, row.apiKeyIv, row.apiKeyAuthTag, row.credentialKeyVersion]
   if (fields.every(value => value === null)) return null
   if (fields.some(value => value === null)) {
-    throw new Error(`自定义 Provider '${row.providerId}' 的加密凭据字段不完整。`)
+    throw new Error(`自定义 Provider '${row.providerId}' 的凭据字段不完整。`)
   }
   return {
-    ciphertext: row.apiKeyCiphertext as string,
+    value: row.apiKeyCiphertext as string,
     iv: row.apiKeyIv as string,
     authTag: row.apiKeyAuthTag as string,
-    keyVersion: row.credentialKeyVersion as string,
+    storageVersion: row.credentialKeyVersion as string,
   }
 }
 
-function credentialColumns(credential: EncryptedProviderCredential | null) {
+function credentialColumns(credential: StoredProviderCredential | null) {
+  // 旧列名继续沿用以避免数据库迁移；plain-text-v1 记录的 value 就是原始 API Key。
   return credential
     ? {
-        apiKeyCiphertext: credential.ciphertext,
+        apiKeyCiphertext: credential.value,
         apiKeyIv: credential.iv,
         apiKeyAuthTag: credential.authTag,
-        credentialKeyVersion: credential.keyVersion,
+        credentialKeyVersion: credential.storageVersion,
       }
     : {
         apiKeyCiphertext: null,

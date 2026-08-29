@@ -44,6 +44,7 @@ const USER_SETUP_KIND = 'geo-agent-platform.desktop-setup' as const
 const USER_SETUP_SCHEMA_VERSION = 2 as const
 const SETUP_RESPONSE_MAX_BYTES = 64 * 1024
 const SETUP_REQUEST_TIMEOUT_MS = 8_000
+const DEFAULT_LOCAL_API_BASE_URL = 'http://127.0.0.1:8000'
 
 const desktopProductNameSchema = z.string().trim().min(1).max(80)
 const desktopUserSetupConfigSchema = z.discriminatedUnion('mode', [
@@ -93,7 +94,7 @@ export type DesktopProductSetupResolution =
       deploymentMode: 'remote'
       apiBaseUrl: string
       productName: string
-      canReset: true
+      canReset: boolean
       canConfigureMapService: false
       runtime: null
     }
@@ -109,7 +110,7 @@ export interface DesktopProductSetupOptions {
   fetch: (input: string, init?: RequestInit) => Promise<Response>
   localRuntimeSettings?: {
     read(): Promise<{ tiandituConfigured: boolean }>
-    update(input: { tiandituApiKey: string }): Promise<void>
+    update(input: { tiandituApiKey?: string; clearTiandituApiKey?: boolean }): Promise<void>
   }
   now?: () => number
 }
@@ -142,19 +143,9 @@ export class DesktopProductSetupService {
         runtimeManifestPath,
         manifestProtection: this.options.manifestProtection,
       })
-      if (!configured) {
-        return {
-          state: 'required',
-          deploymentMode: 'local_managed',
-          suggestedApiBaseUrl: runtime.apiBaseUrl,
-          suggestedProductName: PRODUCT_CODENAME,
-          canConfigureMapService: Boolean(this.options.localRuntimeSettings),
-          runtime,
-        }
-      }
       return localResolution(
         runtime,
-        configured.productName,
+        configured?.productName ?? PRODUCT_CODENAME,
         Boolean(this.options.localRuntimeSettings),
       )
     }
@@ -170,18 +161,23 @@ export class DesktopProductSetupService {
         runtime: null,
       }
     }
+    // macOS/Windows 当前是本地桌面客户端：没有受管运行清单时直接采用
+    // 回环服务约定，避免把开发/本机部署细节暴露成首次启动必填项。
+    // 用户之后仍可从“服务与模型”显式切换到 HTTPS 团队部署。
     return {
-      state: 'required',
+      state: 'configured',
       deploymentMode: 'remote',
-      suggestedApiBaseUrl: 'http://127.0.0.1:8000',
-      suggestedProductName: configured?.productName ?? PRODUCT_CODENAME,
+      apiBaseUrl: DEFAULT_LOCAL_API_BASE_URL,
+      productName: configured?.productName ?? PRODUCT_CODENAME,
+      canReset: configured !== null,
       canConfigureMapService: false,
       runtime: null,
     }
   }
 
   async status(): Promise<DesktopProductSetupStatus> {
-    return publicStatus(await this.resolve())
+    const resolution = await this.resolve()
+    return publicStatus(resolution, await this.readTiandituConfigured(resolution))
   }
 
   async test(input: DesktopProductSetupConnection): Promise<DesktopProductSetupTestResult> {
@@ -247,12 +243,11 @@ export class DesktopProductSetupService {
         }
         await this.validateTiandituApiKey(tiandituApiKey)
         await this.options.localRuntimeSettings.update({ tiandituApiKey })
-      } else if (
-        current.state === 'required'
-        && this.options.localRuntimeSettings
-        && !(await this.options.localRuntimeSettings?.read())?.tiandituConfigured
-      ) {
-        throw new Error('首次使用前请填写天地图服务端 API KEY。')
+      } else if (input.clearTiandituApiKey) {
+        if (!this.options.localRuntimeSettings) {
+          throw new Error('当前本机部署不允许由桌面应用修改地图服务配置。')
+        }
+        await this.options.localRuntimeSettings.update({ clearTiandituApiKey: true })
       }
       await this.writeUserSetup({
         kind: USER_SETUP_KIND,
@@ -260,7 +255,10 @@ export class DesktopProductSetupService {
         mode: 'local_managed',
         productName,
       })
-      return publicStatus(await this.resolve())
+      return this.status()
+    }
+    if (input.tiandituApiKey || input.clearTiandituApiKey) {
+      throw new Error('远程部署的地图服务配置由服务器管理员管理。')
     }
     const apiBaseUrl = parseDesktopApiBaseUrl(input.apiBaseUrl)
     if (
@@ -278,12 +276,23 @@ export class DesktopProductSetupService {
       productName,
       apiBaseUrl,
     })
-    return publicStatus(await this.resolve())
+    return this.status()
   }
 
   async reset(): Promise<DesktopProductSetupStatus> {
     await rm(this.options.userSetupPath, { force: true })
-    return publicStatus(await this.resolve())
+    return this.status()
+  }
+
+  private async readTiandituConfigured(
+    resolution: DesktopProductSetupResolution,
+  ): Promise<boolean | null> {
+    if (
+      resolution.deploymentMode !== 'local_managed'
+      || !resolution.canConfigureMapService
+      || !this.options.localRuntimeSettings
+    ) return null
+    return (await this.options.localRuntimeSettings.read()).tiandituConfigured
   }
 
   private async readUserSetup(): Promise<DesktopUserSetupConfig | null> {
@@ -415,7 +424,10 @@ function localResolution(
   }
 }
 
-function publicStatus(resolution: DesktopProductSetupResolution): DesktopProductSetupStatus {
+function publicStatus(
+  resolution: DesktopProductSetupResolution,
+  tiandituConfigured: boolean | null,
+): DesktopProductSetupStatus {
   if (resolution.state === 'required') {
     return {
       state: 'required',
@@ -423,6 +435,7 @@ function publicStatus(resolution: DesktopProductSetupResolution): DesktopProduct
       suggestedApiBaseUrl: resolution.suggestedApiBaseUrl,
       suggestedProductName: resolution.suggestedProductName,
       canConfigureMapService: resolution.canConfigureMapService,
+      tiandituConfigured,
     }
   }
   return {
@@ -432,6 +445,7 @@ function publicStatus(resolution: DesktopProductSetupResolution): DesktopProduct
     productName: resolution.productName,
     canReset: resolution.canReset,
     canConfigureMapService: resolution.canConfigureMapService,
+    tiandituConfigured,
   }
 }
 

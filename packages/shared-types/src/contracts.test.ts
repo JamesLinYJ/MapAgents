@@ -151,6 +151,27 @@ describe('shared boundary contracts', () => {
       secret: 'must-not-return',
     }).success).toBe(false)
 
+    const modelDiscovery = wsCommandContract('provider:custom:discover-models')
+    expect(modelDiscovery.category).toBe('write')
+    expect(modelDiscovery.csrf).toBe(true)
+    expect(modelDiscovery.payload.safeParse({
+      providerId: 'openai',
+      baseUrl: 'https://api.openai.com/v1',
+      networkAccess: 'public',
+      credentialHandle: 'provider_credential_1',
+    }).success).toBe(true)
+    expect(modelDiscovery.response.safeParse({
+      models: [{ modelId: 'model-1', ownedBy: 'openai' }],
+      latencyMs: 25,
+      testedAt: '2099-01-01T00:00:00.000Z',
+    }).success).toBe(true)
+    expect(modelDiscovery.response.safeParse({
+      models: [{ modelId: 'model-1', ownedBy: null }],
+      latencyMs: 25,
+      testedAt: '2099-01-01T00:00:00.000Z',
+      apiKey: 'must-not-return',
+    }).success).toBe(false)
+
     const customProviderUpsert = wsCommandContract('provider:custom:upsert')
     expect(customProviderUpsert.category).toBe('write')
     expect(customProviderUpsert.csrf).toBe(true)
@@ -171,6 +192,24 @@ describe('shared boundary contracts', () => {
         networkAccess: 'public',
       },
       credentialHandle: 'provider_credential_1',
+    }).success).toBe(true)
+    expect(customProviderUpsert.payload.safeParse({
+      config: {
+        providerId: 'my-provider',
+        displayName: 'My Provider',
+        baseUrl: 'https://api.provider.com/v1',
+        protocol: 'responses',
+        models: [{
+          modelId: 'model-1',
+          contextWindowTokens: 128_000,
+          capabilities: { reasoning: false, structuredOutput: true, toolCalls: true },
+          modalities: ['text'],
+        }],
+        defaultModel: 'model-1',
+        toolSchemaMode: 'compatible',
+        networkAccess: 'public',
+      },
+      clearApiKey: true,
     }).success).toBe(true)
     expect(customProviderUpsert.payload.safeParse({
       config: {

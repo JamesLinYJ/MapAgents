@@ -52,7 +52,8 @@ const desktopVersion = JSON.parse(readFileSync(
 )).version
 const executableFilename = `${PRODUCT_EXECUTABLE_BASENAME}.exe`
 const setupFilename = `${PRODUCT_EXECUTABLE_BASENAME}-${desktopVersion}-Setup.exe`
-const linuxRuntimeServicePath = fileURLToPath(new URL('../../artifacts/runtime-service', import.meta.url))
+const runtimeServicePath = fileURLToPath(new URL('../../artifacts/runtime-service', import.meta.url))
+const targetArchitecture = resolveTargetArchitecture(process.argv, process.env)
 const linuxSystemDependencies = [
   'bash',
   'postgresql',
@@ -93,9 +94,7 @@ export default {
     asar: true,
     executableName: PRODUCT_EXECUTABLE_BASENAME,
     icon: packageIconPath,
-    extraResource: process.platform === 'linux'
-      ? existsSync(linuxRuntimeServicePath) ? [linuxRuntimeServicePath] : []
-      : [remoteClientMarkerPath],
+    extraResource: resolveExtraResources(process.platform, targetArchitecture),
     osxSign: macosPackagingOptions.sign,
     osxNotarize: macosPackagingOptions.notarize,
     usageDescription: {
@@ -277,6 +276,30 @@ function isPackagedApplicationFile(filePath) {
     || normalized === '/package.json'
     || normalized === '/out'
     || normalized.startsWith('/out/')
+}
+
+function resolveExtraResources(platform, architecture) {
+  if (platform === 'linux') return existsSync(runtimeServicePath) ? [runtimeServicePath] : []
+  if (platform !== 'darwin' || architecture !== 'arm64') return [remoteClientMarkerPath]
+  const bundlePath = path.join(runtimeServicePath, 'darwin-runtime-bundle.json')
+  if (!existsSync(bundlePath)) {
+    throw new Error(
+      'macOS arm64 打包前必须先运行 release:runtime:macos:arm64，禁止生成无法启动本机服务的空壳客户端。',
+    )
+  }
+  const bundle = JSON.parse(readFileSync(bundlePath, 'utf8'))
+  if (bundle.platform !== 'darwin' || bundle.architecture !== 'arm64') {
+    throw new Error('macOS Runtime Service 的平台或架构与 Electron 目标不一致。')
+  }
+  return [runtimeServicePath]
+}
+
+function resolveTargetArchitecture(arguments_, environment) {
+  const inline = arguments_.find(value => value.startsWith('--arch='))?.slice('--arch='.length)
+  if (inline) return inline
+  const index = arguments_.indexOf('--arch')
+  if (index >= 0 && arguments_[index + 1]) return arguments_[index + 1]
+  return environment.npm_config_arch?.trim() || process.arch
 }
 
 function resolvePackageIconPath(platform, environment, isReleaseBuild) {

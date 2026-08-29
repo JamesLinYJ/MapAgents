@@ -32,7 +32,7 @@ body,
 #root {
   width: 100%;
   height: 100%;
-  min-width: 1100px;
+  min-width: 1024px;
   min-height: 700px;
   margin: 0;
   overflow: hidden;
@@ -605,7 +605,6 @@ select {
 
 .gf-desktop-shell {
   --gf-shell-inline-gutter: 8px;
-  --gf-window-controls-reserve: 142px;
   display: grid;
   grid-template-rows: 34px 86px minmax(0, 1fr) 25px;
   width: 100%;
@@ -638,7 +637,11 @@ select {
   height: 34px;
   min-height: 34px;
   margin: 0;
-  padding: 0 var(--gf-window-controls-reserve) 0 var(--gf-shell-inline-gutter);
+  padding:
+    0
+    var(--ui-titlebar-end-safe, 142px)
+    0
+    var(--ui-titlebar-start-safe, var(--gf-shell-inline-gutter));
   border: 0;
   border-bottom: 1px solid #dce3e6;
   border-radius: 0;
